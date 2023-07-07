@@ -142,11 +142,6 @@ jobs:
         run: |
           cd ../build
           sudo make install
-          sudo make install-info
-          sudo make install-dvi
-          sudo make install-pdf
-          sudo make install-html
-          sudo make dir.info
 
       - name: Tests
         if: success()
@@ -194,4 +189,3 @@ jobs:
             build/*.log
             path/*.log
             testsuite/*.log
-            **/*.log
