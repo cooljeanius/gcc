@@ -86,6 +86,8 @@ jobs:
                 --prefix=/usr \
                 --with-gcc-major-version-only \
                 --program-prefix=x86_64-linux-gnu- \
+                --enable-shared \
+                --enable-linker-build-id \
                 --libexecdir=/usr/lib \
                 --without-included-gettext \
                 --enable-threads=posix \
@@ -192,4 +194,3 @@ jobs:
             build/*.log
             path/*.log
             testsuite/*.log
-            **/*.log
