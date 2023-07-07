@@ -21,7 +21,6 @@ jobs:
   build:
     name: ${{ matrix.name }}-build
     runs-on: ubuntu-latest
-    timeout-minutes: 720
     strategy:
       matrix:
         include:
