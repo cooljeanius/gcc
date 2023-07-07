@@ -1,14 +1,13 @@
 name: Linux
 on:
   push:
-    branches: 
-      - master
+    branches:
       - me/*
       - releases/gcc-*
     tags:
       - releases/gcc-*
   pull_request:
-    branches: 
+    branches:
       - master
       - me/*
       - releases/gcc-*
