@@ -107,8 +107,7 @@ jobs:
         if: success()
         run: |
           cd ../build
-          echo "make pdf" && (time make pdf-fixincludes) && echo "pdfs done"
-          echo "make html" && (time make html) && echo "html done"
+          echo "make html" && (time make html-fixincludes) && echo "html done"
 
       - name: Make
         if: success()
@@ -137,20 +136,10 @@ jobs:
         if: success()
         run: |
           cd ../build
-<<<<<<< HEAD
           echo "make info" && (time make info) && find . -name "*.info" -print
           echo "make dvi" && (time make dvi) && find . -name "*.dvi" -print
           echo "make pdf" && (time make pdf) && find . -name "*.pdf" -print
           echo "make html" && (time make html) && find . -name "*.html" -print
-=======
-          echo "make info" && (time make info) && echo "info done"
-          echo "make dvi" && (time make dvi) && echo "dvi done"
-
-      - name: Debug failure
-        if: failure()
-        run: |
-          if test -r build.log; then grep -i "error:" build.log; elif test -r ../build/build.log; then grep -i "error:" ../build/build.log; fi
->>>>>>> 07b5623e1a0 (Update linux.yaml)
 
       - name: Make install (plus docs)
         if: success()
