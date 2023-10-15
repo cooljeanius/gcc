@@ -93,6 +93,8 @@ jobs:
                 --disable-vtable-verify \
                 --with-system-zlib \
                 --with-target-system-zlib=auto \
+                --enable-objc-gc=auto \
+                --enable-multiarch \
                 --disable-bootstrap \
                 --disable-werror \
                 --with-tune=generic \
@@ -110,52 +112,6 @@ jobs:
           if test -x "$(which nproc)"; then echo "nproc says that we can use $(nproc) build jobs"; else echo "error: missing nproc!" >&2 && exit 1; fi
           time (make -j"$(nproc)" | tee build.log)
           if test -e build.log; then stat build.log && wc -l build.log; fi
-
-      - name: Debug failure
-        if: failure()
-        run: |
-          if test -r build.log; then grep -i "error:" build.log; \
-          elif test -r ../build/build.log; then grep -i "error:" ../build/build.log; \
-          elif test -e ../build/Makefile; then \
-            sudo apt install remake; \
-            cd ../build; \
-            remake -dpPw --trace=full; \
-          elif test -d ../build; then \
-            cd ../build && ls; \
-          else \
-            pwd && ls; \
-          fi
-
-      - name: Make docs (post-build)
-        if: success()
-        run: |
-          cd ../build
-          echo "make info" && (time make info) && find . -name "*.info" -print
-          echo "make dvi" && (time make dvi) && find . -name "*.dvi" -print
-          echo "make pdf" && (time make pdf) && echo "pdfs done"
-
-      - name: Debug failure
-        if: failure()
-        run: |
-          if test -r build.log; then grep -i "error:" build.log; \
-          elif test -r ../build/build.log; then grep -i "error:" ../build/build.log; \
-          elif test -e ../build/Makefile; then \
-            sudo apt install remake; \
-            cd ../build; \
-            remake -dpPw --trace=full; \
-          elif test -d ../build; then \
-            cd ../build && ls; \
-          else \
-            pwd && ls; \
-          fi
-
-      - name: Make docs (post-build)
-        if: success()
-        run: |
-          cd ../build
-          echo "make info" && (time make info) && find . -name "*.info" -print
-          echo "make dvi" && (time make dvi) && find . -name "*.dvi" -print
-          echo "make pdf" && (time make pdf) && echo "pdfs done"
 
       - name: Debug failure
         if: failure()
