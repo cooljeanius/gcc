@@ -103,12 +103,6 @@ jobs:
                 --host=x86_64-linux-gnu \
                 --target=x86_64-linux-gnu
 
-      - name: Make docs (pre-build)
-        if: success()
-        run: |
-          cd ../build
-          echo "make html" && (time make html-fixincludes) && echo "html done"
-
       - name: Make
         if: success()
         run: |
@@ -116,6 +110,17 @@ jobs:
           if test -x "$(which nproc)"; then echo "nproc says that we can use $(nproc) build jobs"; else echo "error: missing nproc!" >&2 && exit 1; fi
           time (make -j"$(nproc)" | tee build.log)
           if test -e build.log; then stat build.log && wc -l build.log; fi
+
+      - name: Debug failure
+        if: failure()
+        run: |
+          if test -r build.log; then grep -i "error:" build.log; \
+          elif test -r ../build/build.log; then grep -i "error:" ../build/build.log; \
+          else \
+            sudo apt install remake; \
+            cd ../build; \
+            remake -dpPw --trace=full; \
+          fi
 
       - name: Make docs (post-build)
         if: success()
