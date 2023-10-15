@@ -103,6 +103,14 @@ jobs:
                 --host=x86_64-linux-gnu \
                 --target=x86_64-linux-gnu
 
+      - name: Make docs (pre-build)
+        if: success()
+        run: |
+          cd ../build
+          echo "make dvi-fixincludes" && time make dvi-fixincludes
+          echo "make pdf" && time make pdf
+          echo "make html" && time make html
+
       - name: Make
         if: success()
         run: |
