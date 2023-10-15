@@ -111,13 +111,6 @@ jobs:
           time (make -j"$(nproc)" | tee build.log)
           if test -e build.log; then stat build.log && wc -l build.log; fi
 
-      - name: Make docs (post-build)
-        if: success()
-        run: |
-          cd ../build
-          echo "make info" && (time make info) && echo "info done"
-          echo "make dvi" && (time make dvi) && echo "dvi done"
-
       - name: Debug failure
         if: failure()
         run: |
