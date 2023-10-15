@@ -85,8 +85,6 @@ jobs:
                 --prefix=/usr \
                 --with-gcc-major-version-only \
                 --program-prefix=x86_64-linux-gnu- \
-                --enable-shared \
-                --enable-linker-build-id \
                 --libexecdir=/usr/lib \
                 --without-included-gettext \
                 --enable-threads=posix \
@@ -111,6 +109,12 @@ jobs:
           if test -x "$(which nproc)"; then echo "nproc says that we can use $(nproc) build jobs"; else echo "error: missing nproc!" >&2 && exit 1; fi
           time (make -j"$(nproc)" | tee build.log)
           if test -e build.log; then stat build.log && wc -l build.log; fi
+
+      - name: Make docs (post-build)
+        if: success()
+        run: |
+          cd ../build
+          echo "make info" && time make info
 
       - name: Debug failure
         if: failure()
