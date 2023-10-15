@@ -36,11 +36,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get -qq update
-<<<<<<< HEAD
           sudo apt install -y gcc-multilib build-essential flex zlib1g-dev gnat gdc expect dejagnu libc-dev libc-devtools texlive findutils binutils autogen gettext autopoint libasprintf-dev libgettextpo-dev mailutils mailutils-mh procmail emacs exim4-base msmtp bsd-mailx
-=======
-          sudo apt install -y gcc-multilib build-essential flex zlib1g-dev gnat gdc expect dejagnu libc-devtools
->>>>>>> 0e35a4546f1 (Update linux.yaml)
 
       - name: Install dependencies for aarch64
         if: success() && contains(matrix.target, 'aarch64')
@@ -107,18 +103,14 @@ jobs:
                 --host=x86_64-linux-gnu \
                 --target=x86_64-linux-gnu
 
-<<<<<<< HEAD
-=======
       - name: Make docs
         if: success()
         run: |
           cd ../build
-          make info
-          make dvi
-          make pdf
-          make html
+          echo "make dvi" && time make dvi
+          echo "make pdf" && time make pdf
+          echo "make html" && time make html
 
->>>>>>> 0e35a4546f1 (Update linux.yaml)
       - name: Make
         if: success()
         run: |
@@ -126,6 +118,12 @@ jobs:
           if test -x "$(which nproc)"; then echo "nproc says that we can use $(nproc) build jobs"; else echo "error: missing nproc!" >&2 && exit 1; fi
           time (make -j"$(nproc)" | tee build.log)
           if test -e build.log; then stat build.log && wc -l build.log; fi
+
+      - name: Make docs (post-build)
+        if: success()
+        run: |
+          cd ../build
+          echo "make info" && time make info
 
       - name: Debug failure
         if: failure()
