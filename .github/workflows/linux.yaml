@@ -102,16 +102,6 @@ jobs:
                 --host=x86_64-linux-gnu \
                 --target=x86_64-linux-gnu
 
-<<<<<<< HEAD
-=======
-      - name: Make docs (pre-build)
-        if: success()
-        run: |
-          cd ../build
-          echo "make pdf" && (time make pdf-fixincludes) && echo "pdfs done"
-          echo "make html" && (time make html) && echo "html done"
-
->>>>>>> 624f7917bb6 (Update linux.yaml)
       - name: Make
         if: success()
         run: |
@@ -119,13 +109,6 @@ jobs:
           if test -x "$(which nproc)"; then echo "nproc says that we can use $(nproc) build jobs"; else echo "error: missing nproc!" >&2 && exit 1; fi
           time (make -j"$(nproc)" | tee build.log)
           if test -e build.log; then stat build.log && wc -l build.log; fi
-
-      - name: Make docs (post-build)
-        if: success()
-        run: |
-          cd ../build
-          echo "make info" && (time make info) && echo "info done"
-          echo "make dvi" && (time make dvi) && echo "dvi done"
 
       - name: Debug failure
         if: failure()
