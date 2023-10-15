@@ -36,15 +36,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get -qq update
-<<<<<<< HEAD
-<<<<<<< HEAD
           sudo apt install -y gcc-multilib build-essential flex zlib1g-dev gnat gdc expect dejagnu libc-dev libc-devtools texlive findutils binutils autogen gettext autopoint libasprintf-dev libgettextpo-dev mailutils mailutils-mh procmail emacs exim4-base msmtp bsd-mailx
-=======
-          sudo apt install -y gcc-multilib build-essential flex zlib1g-dev gnat gdc expect dejagnu libc-devtools
->>>>>>> 5fa75e0ebc3 (Update linux.yaml)
-=======
-          sudo apt install -y gcc-multilib build-essential flex zlib1g-dev gnat gdc expect dejagnu libc-devtools texlive
->>>>>>> 7557fec990d (Update linux.yaml)
 
       - name: Install dependencies for aarch64
         if: success() && contains(matrix.target, 'aarch64')
@@ -104,10 +96,6 @@ jobs:
                 --disable-multiarch \
                 --disable-bootstrap \
                 --disable-werror \
-<<<<<<< HEAD
-=======
-                --disable-multilib \
->>>>>>> 7557fec990d (Update linux.yaml)
                 --with-tune=generic \
                 --without-cuda-driver \
                 --enable-checking=release \
@@ -116,17 +104,6 @@ jobs:
                 --host=x86_64-linux-gnu \
                 --target=x86_64-linux-gnu
 
-<<<<<<< HEAD
-=======
-      - name: Make docs
-        if: success()
-        run: |
-          cd ../build
-          echo "make dvi" && time make dvi
-          echo "make pdf" && time make pdf
-          echo "make html" && time make html
-
->>>>>>> 5fa75e0ebc3 (Update linux.yaml)
       - name: Make
         if: success()
         run: |
@@ -134,12 +111,6 @@ jobs:
           if test -x "$(which nproc)"; then echo "nproc says that we can use $(nproc) build jobs"; else echo "error: missing nproc!" >&2 && exit 1; fi
           time (make -j"$(nproc)" | tee build.log)
           if test -e build.log; then stat build.log && wc -l build.log; fi
-
-      - name: Make docs (post-build)
-        if: success()
-        run: |
-          cd ../build
-          echo "make info" && time make info
 
       - name: Debug failure
         if: failure()
