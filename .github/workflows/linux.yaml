@@ -102,17 +102,6 @@ jobs:
                 --host=x86_64-linux-gnu \
                 --target=x86_64-linux-gnu
 
-<<<<<<< HEAD
-=======
-      - name: Make docs (pre-build)
-        if: success()
-        run: |
-          cd ../build
-          echo "make dvi-fixincludes" && time make dvi-fixincludes
-          echo "make pdf" && time make pdf
-          echo "make html" && time make html
-
->>>>>>> 99ebed81ce9 (Update linux.yaml)
       - name: Make
         if: success()
         run: |
@@ -140,20 +129,10 @@ jobs:
         if: success()
         run: |
           cd ../build
-<<<<<<< HEAD
           echo "make info" && (time make info) && find . -name "*.info" -print
           echo "make dvi" && (time make dvi) && find . -name "*.dvi" -print
           echo "make pdf" && (time make pdf) && find . -name "*.pdf" -print
           echo "make html" && (time make html) && find . -name "*.html" -print
-=======
-          echo "make info" && time make info
-          echo "make dvi" && time make dvi
-
-      - name: Debug failure
-        if: failure()
-        run: |
-          if test -r build.log; then grep -i "error:" build.log; elif test -r ../build/build.log; then grep -i "error:" ../build/build.log; fi
->>>>>>> 99ebed81ce9 (Update linux.yaml)
 
       - name: Make install (plus docs)
         if: success()
