@@ -21,6 +21,7 @@ jobs:
   build:
     name: ${{ matrix.name }}-build
     runs-on: ubuntu-latest
+    timeout-minutes: 720
     strategy:
       matrix:
         include:
@@ -123,17 +124,6 @@ jobs:
             cd ../build && ls; \
           else \
             pwd && ls; \
-          fi
-
-      - name: Debug failure
-        if: failure()
-        run: |
-          if test -r build.log; then grep -i "error:" build.log; \
-          elif test -r ../build/build.log; then grep -i "error:" ../build/build.log; \
-          else \
-            sudo apt install remake; \
-            cd ../build; \
-            remake -dpPw --trace=full; \
           fi
 
       - name: Make docs (post-build)
