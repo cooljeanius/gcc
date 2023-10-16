@@ -164,13 +164,6 @@ jobs:
               echo "attempting to send mail-report.log"; \
               ./mail-report.log; \
               stat mail-report.log; \
-              echo "attempting to send mail-report-with-warnings.log"; \
-              ./mail-report-with-warnings.log; \
-              stat mail-report-with-warnings.log; \
-            elif test -x mail-report.log; then \
-              echo "attempting to send mail-report.log"; \
-              ./mail-report.log; \
-              stat mail-report.log; \
             elif test -e testsuite_output.log; then \
               echo "TODO: figure out a way to send testsuite_output.log"; \
             else \
@@ -199,4 +192,3 @@ jobs:
             build/*.log
             path/*.log
             testsuite/*.log
-            **/*.log
