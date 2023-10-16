@@ -36,11 +36,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get -qq update
-<<<<<<< HEAD
           sudo apt install -y gcc-multilib build-essential flex zlib1g-dev gnat gdc expect dejagnu libc-dev libc-devtools texlive findutils binutils autogen gettext autopoint libasprintf-dev libgettextpo-dev mailutils mailutils-mh procmail emacs exim4-base msmtp bsd-mailx
-=======
-          sudo apt install -y gcc-multilib build-essential flex zlib1g-dev gnat gdc expect dejagnu libc-dev libc-devtools texlive findutils binutils autogen gettext
->>>>>>> 6a8a307d7ee (Update linux.yaml)
 
       - name: Install dependencies for aarch64
         if: success() && contains(matrix.target, 'aarch64')
@@ -114,7 +110,6 @@ jobs:
           if test -x "$(which nproc)"; then echo "nproc says that we can use $(nproc) build jobs"; else echo "error: missing nproc!" >&2 && exit 1; fi
           time (make -j"$(nproc)" | tee build.log)
           if test -e build.log; then stat build.log && wc -l build.log; fi
-<<<<<<< HEAD
 
       - name: Debug failure
         if: failure()
@@ -129,19 +124,6 @@ jobs:
             cd ../build && ls; \
           else \
             pwd && ls; \
-          fi
-=======
->>>>>>> 6a8a307d7ee (Update linux.yaml)
-
-      - name: Debug failure
-        if: failure()
-        run: |
-          if test -r build.log; then grep -i "error:" build.log; \
-          elif test -r ../build/build.log; then grep -i "error:" ../build/build.log; \
-          else \
-            sudo apt install remake; \
-            cd ../build; \
-            remake -dpPw --trace=full; \
           fi
 
       - name: Make docs (post-build)
