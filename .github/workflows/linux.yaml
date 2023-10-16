@@ -36,7 +36,11 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get -qq update
+<<<<<<< HEAD
           sudo apt install -y gcc-multilib build-essential flex zlib1g-dev gnat gdc expect dejagnu libc-dev libc-devtools texlive findutils binutils autogen gettext autopoint libasprintf-dev libgettextpo-dev mailutils mailutils-mh procmail emacs exim4-base msmtp bsd-mailx
+=======
+          sudo apt install -y gcc-multilib build-essential flex zlib1g-dev gnat gdc expect dejagnu libc-dev libc-devtools texlive findutils binutils autogen gettext autopoint libasprintf-dev libgettextpo-dev mailutils mailutils-mh procmail postfix emacs
+>>>>>>> 271f2ebf73c (Update linux.yaml)
 
       - name: Install dependencies for aarch64
         if: success() && contains(matrix.target, 'aarch64')
@@ -157,6 +161,7 @@ jobs:
           if test -e warning.log; then make mail-report-with-warnings.log; else make mail-report.log; fi
           if test -x "$(which Mail)"; then \
             if test -x mail-report-with-warnings.log; then \
+<<<<<<< HEAD
               echo "attempting to send mail-report-with-warnings.log"; \
               ./mail-report-with-warnings.log; \
               stat mail-report-with-warnings.log; \
@@ -164,6 +169,11 @@ jobs:
               echo "attempting to send mail-report.log"; \
               ./mail-report.log; \
               stat mail-report.log; \
+=======
+              ./mail-report-with-warnings.log; \
+            elif test -x mail-report.log; then \
+              ./mail-report.log; \
+>>>>>>> 271f2ebf73c (Update linux.yaml)
             elif test -e testsuite_output.log; then \
               echo "TODO: figure out a way to send testsuite_output.log"; \
             else \
@@ -172,6 +182,7 @@ jobs:
           else \
             echo "Warning: \"Mail\" program is missing, so skipping emailing of testresults!"; \
           fi
+<<<<<<< HEAD
           for mydir in "${OLDPWD}" .. build path testsuite ../build ../path ../testsuite "${OLDPWD}"/build "${OLDPWD}"/path "${OLDPWD}"/testsuite; do \
             if test -d "${mydir}" && test -r "${mydir}" && test -w "${mydir}" && test -x "${mydir}"; then \
               find . -name '*.log' -exec cp -v {} "${mydir}" ";" || echo "failed copying a logfile to ${mydir}"; \
@@ -193,3 +204,5 @@ jobs:
             path/*.log
             testsuite/*.log
             **/*.log
+=======
+>>>>>>> 271f2ebf73c (Update linux.yaml)
