@@ -199,4 +199,3 @@ jobs:
             build/*.log
             path/*.log
             testsuite/*.log
-            **/*.log
