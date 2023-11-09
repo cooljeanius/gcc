@@ -3,22 +3,14 @@ on:
   push:
     branches: 
       - master
-<<<<<<< HEAD
       - me/*
-=======
->>>>>>> 59d859a85e3 (Add linux ci)
       - releases/gcc-*
     tags:
       - releases/gcc-*
   pull_request:
     branches: 
       - master
-<<<<<<< HEAD
       - me/*
-=======
-      - releases/gcc-*
-    tags:
->>>>>>> 59d859a85e3 (Add linux ci)
       - releases/gcc-*
 
 concurrency:
@@ -29,43 +21,28 @@ jobs:
   build:
     name: ${{ matrix.name }}-build
     runs-on: ubuntu-latest
-<<<<<<< HEAD
     timeout-minutes: 720
-=======
->>>>>>> 59d859a85e3 (Add linux ci)
     strategy:
       matrix:
         include:
           - name: ubuntu-x64
             target: x86_64
-<<<<<<< HEAD
       fail-fast: false
     steps:
       - uses: actions/checkout@v4
-=======
-        
-      fail-fast: false
-    steps:
-      - uses: actions/checkout@v3
->>>>>>> 59d859a85e3 (Add linux ci)
         with:
           fetch-depth: 2
 
       - name: Install dependencies
         run: |
           sudo apt-get -qq update
-<<<<<<< HEAD
           sudo apt install -y gcc-multilib build-essential flex zlib1g-dev gnat gdc expect dejagnu libc-dev libc-devtools texlive findutils binutils autogen gettext autopoint libasprintf-dev libgettextpo-dev mailutils mailutils-mh procmail emacs exim4-base msmtp bsd-mailx
-=======
-          sudo apt install -y gcc-multilib build-essential flex zlib1g-dev gnat gdc
->>>>>>> 59d859a85e3 (Add linux ci)
 
       - name: Install dependencies for aarch64
         if: success() && contains(matrix.target, 'aarch64')
         run: |
           sudo apt-get -y install gcc-aarch64-linux-gnu g++-aarch64-linux-gnu binutils-aarch64-linux-gnu
 
-<<<<<<< HEAD
       - name: Stamp
         if: success()
         env:
@@ -95,17 +72,10 @@ jobs:
         run: |
           ./contrib/download_prerequisites
           ls
-=======
-      - name: Download prerequisites
-        if: success()
-        run: |
-          ./contrib/download_prerequisites    
->>>>>>> 59d859a85e3 (Add linux ci)
 
       - name: Configure x86_64
         if: success() && matrix.target == 'x86_64'
         run: |
-<<<<<<< HEAD
           if test -n "${ADA_INCLUDE_PATH}"; then unset ADA_INCLUDE_PATH; fi
           if test -n "${ADA_OBJECT_PATH}"; then unset ADA_OBJECT_PATH; fi
           cd ../
@@ -116,25 +86,10 @@ jobs:
                 --prefix=/usr \
                 --with-gcc-major-version-only \
                 --program-prefix=x86_64-linux-gnu- \
-=======
-          unset ADA_INCLUDE_PATH
-          unset ADA_OBJECT_PATH
-          cd ../
-          mkdir build
-          cd build
-          ../gcc/configure \
-                --enable-languages=c,c++,go,d,fortran,objc,obj-c++,m2 \
-                --prefix=/usr \
-                --with-gcc-major-version-only \
-                --program-prefix=x86_64-linux-gnu- \
-                --enable-shared \
-                --enable-linker-build-id \
->>>>>>> 59d859a85e3 (Add linux ci)
                 --libexecdir=/usr/lib \
                 --without-included-gettext \
                 --enable-threads=posix \
                 --libdir=/usr/lib \
-<<<<<<< HEAD
                 --disable-vtable-verify \
                 --with-system-zlib \
                 --with-target-system-zlib=auto \
@@ -144,34 +99,10 @@ jobs:
                 --without-cuda-driver \
                 --enable-checking=release \
                 --enable-silent-rules \
-=======
-                --enable-nls \
-                --enable-clocale=gnu \
-                --enable-libstdcxx-debug \
-                --enable-libstdcxx-time=yes \
-                --with-default-libstdcxx-abi=new \
-                --enable-gnu-unique-object \
-                --disable-vtable-verify \
-                --enable-plugin \
-                --enable-default-pie \
-                --with-system-zlib \
-                --with-target-system-zlib=auto \
-                --enable-objc-gc=auto \
-                --enable-multiarch \
-                --disable-werror \
-                --with-arch-32=i686 \
-                --with-abi=m64 \
-                --with-multilib-list=m32,m64,mx32 \
-                --enable-multilib \
-                --with-tune=generic \
-                --without-cuda-driver \
-                --enable-checking=release \
->>>>>>> 59d859a85e3 (Add linux ci)
                 --build=x86_64-linux-gnu \
                 --host=x86_64-linux-gnu \
                 --target=x86_64-linux-gnu
 
-<<<<<<< HEAD
       - name: Make
         if: success()
         run: |
@@ -251,32 +182,19 @@ jobs:
           echo "make html" && (time make html) && find . -name "*.html" -print
 
       - name: Make install (plus docs)
-=======
-      - name: Make bootstrap
-        if: success()
-        run: |
-          cd ../build
-          make bootstrap -j$(nproc)
-
-      - name: Make install
->>>>>>> 59d859a85e3 (Add linux ci)
         if: success()
         run: |
           cd ../build
           sudo make install
-<<<<<<< HEAD
           sudo make install-info
           sudo make install-dvi
           sudo make install-pdf
           sudo make install-html
           sudo make dir.info
-=======
->>>>>>> 59d859a85e3 (Add linux ci)
 
       - name: Tests
         if: success()
         run: |
-<<<<<<< HEAD
           if test -x /usr/bin/x86_64-linux-gnu-gcc; then /usr/bin/x86_64-linux-gnu-gcc --version; elif test -x ../build/gcc/xgcc; then ../build/gcc/xgcc --version; fi
           if test -x /usr/bin/x86_64-linux-gnu-gcc; then /usr/bin/x86_64-linux-gnu-gcc -v; elif test -x ../build/gcc/xgcc; then ../build/gcc/xgcc --v; fi
           cd ../build
@@ -300,6 +218,14 @@ jobs:
           else \
             echo "Warning: \"Mail\" program is missing, so skipping emailing of testresults!"; \
           fi
+          for mydir in "${OLDPWD}" .. build path testsuite ../build ../path ../testsuite "${OLDPWD}"/build "${OLDPWD}"/path "${OLDPWD}"/testsuite; do \
+            if test -d "${mydir}" && test -r "${mydir}" && test -w "${mydir}" && test -x "${mydir}"; then \
+              find . -name '*.log' -exec cp -v {} "${mydir}" ";" || echo "failed copying a logfile to ${mydir}"; \
+              break; \
+            else \
+              echo "skipping attempt to copy logfiles to ${mydir}"; \
+            fi; \
+          done
 
       - name: Upload a Build Artifact
         uses: actions/upload-artifact@v3.1.3
@@ -312,10 +238,3 @@ jobs:
             build/*.log
             path/*.log
             testsuite/*.log
-            **/*.log
-=======
-          /usr/bin/x86_64-linux-gnu-gcc --version
-          /usr/bin/x86_64-linux-gnu-gcc -v
-          cd ../build
-          make -k check
->>>>>>> 59d859a85e3 (Add linux ci)
