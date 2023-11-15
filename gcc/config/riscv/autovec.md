@@ -373,7 +373,19 @@
 ;; -------------------------------------------------------------------------
 
 (define_expand "vec_init<mode><vel>"
-  [(match_operand:V_VLS 0 "register_operand")
+  [(match_operand:V_VLSI 0 "register_operand")
+   (match_operand 1 "")]
+  "TARGET_VECTOR"
+  {
+    riscv_vector::expand_vec_init (operands[0], operands[1]);
+    DONE;
+  }
+)
+
+;; We split RVV floating-point because we are going to
+;; use vfslide1down/vfslide1up for FP16 which need TARGET_ZVFH.
+(define_expand "vec_init<mode><vel>"
+  [(match_operand:V_VLSF 0 "register_operand")
    (match_operand 1 "")]
   "TARGET_VECTOR"
   {
@@ -1809,6 +1821,28 @@
 })
 
 ;; -------------------------------------------------------------------------
+;; ---- [FP] Conditional copysign operations
+;; -------------------------------------------------------------------------
+;; Includes:
+;; - vfsgnj
+;; -------------------------------------------------------------------------
+
+(define_expand "cond_copysign<mode>"
+  [(match_operand:V_VLSF 0 "register_operand")
+   (match_operand:<VM> 1 "register_operand")
+   (match_operand:V_VLSF 2 "register_operand")
+   (match_operand:V_VLSF 3 "register_operand")
+   (match_operand:V_VLSF 4 "register_operand")]
+  "TARGET_VECTOR"
+{
+  insn_code icode = code_for_pred (UNSPEC_VCOPYSIGN, <MODE>mode);
+  rtx ops[] = {operands[0], operands[1], operands[2], operands[3], operands[4],
+               gen_int_mode (GET_MODE_NUNITS (<MODE>mode), Pmode)};
+  riscv_vector::expand_cond_len_binop (icode, ops);
+  DONE;
+})
+
+;; -------------------------------------------------------------------------
 ;; ---- [INT] Conditional ternary operations
 ;; -------------------------------------------------------------------------
 ;; Includes:
@@ -2421,14 +2455,13 @@
   }
 )
 
-;; Add mode_size equal check as we opened the modes for different sizes.
-;; The check will be removed soon after related codegen implemented
 (define_expand "lrint<mode><v_f2si_convert>2"
   [(match_operand:<V_F2SI_CONVERT>   0 "register_operand")
    (match_operand:V_VLS_F_CONVERT_SI 1 "register_operand")]
   "TARGET_VECTOR && !flag_trapping_math && !flag_rounding_math"
   {
-    riscv_vector::expand_vec_lrint (operands[0], operands[1], <MODE>mode, <V_F2SI_CONVERT>mode);
+    riscv_vector::expand_vec_lrint (operands[0], operands[1], <MODE>mode,
+				    <V_F2SI_CONVERT>mode, VOIDmode);
     DONE;
   }
 )
@@ -2438,7 +2471,9 @@
    (match_operand:V_VLS_F_CONVERT_DI 1 "register_operand")]
   "TARGET_VECTOR && !flag_trapping_math && !flag_rounding_math"
   {
-    riscv_vector::expand_vec_lrint (operands[0], operands[1], <MODE>mode, <V_F2DI_CONVERT>mode);
+    riscv_vector::expand_vec_lrint (operands[0], operands[1], <MODE>mode,
+				    <V_F2DI_CONVERT>mode,
+				    <V_F2DI_CONVERT_BRIDGE>mode);
     DONE;
   }
 )
@@ -2448,7 +2483,8 @@
    (match_operand:V_VLS_F_CONVERT_SI 1 "register_operand")]
   "TARGET_VECTOR && !flag_trapping_math && !flag_rounding_math"
   {
-    riscv_vector::expand_vec_lround (operands[0], operands[1], <MODE>mode, <V_F2SI_CONVERT>mode);
+    riscv_vector::expand_vec_lround (operands[0], operands[1], <MODE>mode,
+				     <V_F2SI_CONVERT>mode, VOIDmode);
     DONE;
   }
 )
@@ -2458,7 +2494,10 @@
    (match_operand:V_VLS_F_CONVERT_DI 1 "register_operand")]
   "TARGET_VECTOR && !flag_trapping_math && !flag_rounding_math"
   {
-    riscv_vector::expand_vec_lround (operands[0], operands[1], <MODE>mode, <V_F2DI_CONVERT>mode);
+    riscv_vector::expand_vec_lround (operands[0], operands[1], <MODE>mode,
+				     <V_F2DI_CONVERT>mode,
+				     <V_F2DI_CONVERT_BRIDGE>mode);
+
     DONE;
   }
 )

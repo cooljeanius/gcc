@@ -1440,7 +1440,7 @@ loop_distribution::data_dep_in_cycle_p (struct graph *rdg,
   else if (DDR_NUM_DIST_VECTS (ddr) > 1)
     return true;
   else if (DDR_REVERSED_P (ddr)
-	   || lambda_vector_zerop (DDR_DIST_VECT (ddr, 0), 1))
+	   || lambda_vector_zerop (DDR_DIST_VECT (ddr, 0), DDR_NB_LOOPS (ddr)))
     return false;
 
   return true;
@@ -2163,9 +2163,10 @@ loop_distribution::pg_add_dependence_edges (struct graph *rdg, int dir,
 		 gcc.dg/tree-ssa/pr94969.c.  */
 	      if (DDR_NUM_DIST_VECTS (ddr) != 1)
 		this_dir = 2;
-	      /* If the overlap is exact preserve stmt order.  */
-	      else if (lambda_vector_zerop (DDR_DIST_VECT (ddr, 0),
-					    DDR_NB_LOOPS (ddr)))
+	      /* If the dependence distance is zero in the innermost
+		 loop preserve stmt order.  */
+	      else if (DDR_DIST_VECT (ddr, 0)
+			 [DDR_LOOP_NEST (ddr).length () - 1] == 0)
 		;
 	      /* Else as the distance vector is lexicographic positive swap
 		 the dependence direction.  */

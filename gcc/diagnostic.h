@@ -179,6 +179,14 @@ typedef void (*diagnostic_finalizer_fn) (diagnostic_context *,
 					 diagnostic_info *,
 					 diagnostic_t);
 
+typedef int (*diagnostic_option_enabled_cb) (int, unsigned, void *);
+typedef char *(*diagnostic_make_option_name_cb) (const diagnostic_context *,
+						 int,
+						 diagnostic_t,
+						 diagnostic_t);
+typedef char *(*diagnostic_make_option_url_cb) (const diagnostic_context *,
+						int);
+
 class edit_context;
 namespace json { class value; }
 class diagnostic_client_data_hooks;
@@ -352,6 +360,14 @@ struct diagnostic_source_printing_options
 class diagnostic_context
 {
 public:
+  /* Give access to m_text_callbacks.  */
+  friend diagnostic_starter_fn &
+  diagnostic_starter (diagnostic_context *context);
+  friend diagnostic_start_span_fn &
+  diagnostic_start_span (diagnostic_context *context);
+  friend diagnostic_finalizer_fn &
+  diagnostic_finalizer (diagnostic_context *context);
+
   typedef void (*ice_handler_callback_t) (diagnostic_context *);
   typedef void (*set_locations_callback_t) (diagnostic_context *,
 					    diagnostic_info *);
@@ -359,8 +375,6 @@ public:
   void initialize (int n_opts);
   void color_init (int value);
   void urls_init (int value);
-
-  void file_cache_init ();
 
   void finish ();
 
@@ -410,6 +424,10 @@ public:
     m_option_classifier.pop (where);
   }
 
+  void maybe_show_locus (const rich_location &richloc,
+			 diagnostic_t diagnostic_kind,
+			 pretty_printer *pp);
+
   void emit_diagram (const diagnostic_diagram &diagram);
 
   /* Various setters for use by option-handling logic.  */
@@ -457,10 +475,11 @@ public:
     return m_escape_format;
   }
 
-  file_cache *
+  file_cache &
   get_file_cache () const
   {
-    return m_file_cache;
+    gcc_assert (m_file_cache);
+    return *m_file_cache;
   }
 
   edit_context *get_edit_context () const
@@ -480,6 +499,41 @@ public:
     return m_diagnostic_count[kind];
   }
 
+  /* Option-related member functions.  */
+  inline bool option_enabled_p (int option_index) const
+  {
+    if (!m_option_callbacks.m_option_enabled_cb)
+      return true;
+    return m_option_callbacks.m_option_enabled_cb
+      (option_index,
+       m_lang_mask,
+       m_option_callbacks.m_option_state);
+  }
+
+  inline char *make_option_name (int option_index,
+				diagnostic_t orig_diag_kind,
+				diagnostic_t diag_kind) const
+  {
+    if (!m_option_callbacks.m_make_option_name_cb)
+      return nullptr;
+    return m_option_callbacks.m_make_option_name_cb (this, option_index,
+						     orig_diag_kind,
+						     diag_kind);
+  }
+
+  inline char *make_option_url (int option_index) const
+  {
+    if (!m_option_callbacks.m_make_option_url_cb)
+      return nullptr;
+    return m_option_callbacks.m_make_option_url_cb (this, option_index);
+  }
+
+  void
+  set_option_hooks (diagnostic_option_enabled_cb option_enabled_cb,
+		    void *option_state,
+		    diagnostic_make_option_name_cb make_option_name_cb,
+		    diagnostic_make_option_url_cb make_option_url_cb);
+
 private:
   bool includes_seen_p (const line_map_ordinary *map);
 
@@ -495,6 +549,10 @@ private:
   bool diagnostic_enabled (diagnostic_info *diagnostic);
 
   void get_any_inlining_info (diagnostic_info *diagnostic);
+
+  void show_locus (const rich_location &richloc,
+		   diagnostic_t diagnostic_kind,
+		   pretty_printer *pp);
 
   /* Data members.
      Ideally, all of these would be private and have "m_" prefixes.  */
@@ -567,7 +625,6 @@ private:
   /* Maximum number of errors to report.  */
   int m_max_errors;
 
-public:
   /* Client-supplied callbacks for use in text output.  */
   struct {
     /* This function is called before any message is printed out.  It is
@@ -577,46 +634,47 @@ public:
        from "/home/gdr/src/nifty_printer.h:56:
        ...
     */
-    diagnostic_starter_fn begin_diagnostic;
+    diagnostic_starter_fn m_begin_diagnostic;
 
     /* This function is called by diagnostic_show_locus in between
        disjoint spans of source code, so that the context can print
        something to indicate that a new span of source code has begun.  */
-    diagnostic_start_span_fn start_span;
+    diagnostic_start_span_fn m_start_span;
 
     /* This function is called after the diagnostic message is printed.  */
-    diagnostic_finalizer_fn end_diagnostic;
+    diagnostic_finalizer_fn m_end_diagnostic;
   } m_text_callbacks;
 
+public:
   /* Client hook to report an internal error.  */
   void (*m_internal_error) (diagnostic_context *, const char *, va_list *);
 
-  /* Client hook to say whether the option controlling a diagnostic is
-     enabled.  Returns nonzero if enabled, zero if disabled.  */
-  int (*m_option_enabled) (int, unsigned, void *);
-
-  /* Client information to pass as second argument to
-     option_enabled.  */
-  void *m_option_state;
-
-  /* Client hook to return the name of an option that controls a
-     diagnostic.  Returns malloced memory.  The first diagnostic_t
-     argument is the kind of diagnostic before any reclassification
-     (of warnings as errors, etc.); the second is the kind after any
-     reclassification.  May return NULL if no name is to be printed.
-     May be passed 0 as well as the index of a particular option.  */
-  char *(*m_option_name) (diagnostic_context *,
-			  int,
-			  diagnostic_t,
-			  diagnostic_t);
-
-  /* Client hook to return a URL describing the option that controls
-     a diagnostic.  Returns malloced memory.  May return NULL if no URL
-     is available.  May be passed 0 as well as the index of a
-     particular option.  */
-  char *(*m_get_option_url) (diagnostic_context *, int);
-
 private:
+  /* Client-supplied callbacks for working with options.  */
+  struct {
+    /* Client hook to say whether the option controlling a diagnostic is
+       enabled.  Returns nonzero if enabled, zero if disabled.  */
+    diagnostic_option_enabled_cb m_option_enabled_cb;
+
+    /* Client information to pass as second argument to
+       m_option_enabled_cb.  */
+    void *m_option_state;
+
+    /* Client hook to return the name of an option that controls a
+       diagnostic.  Returns malloced memory.  The first diagnostic_t
+       argument is the kind of diagnostic before any reclassification
+       (of warnings as errors, etc.); the second is the kind after any
+       reclassification.  May return NULL if no name is to be printed.
+       May be passed 0 as well as the index of a particular option.  */
+    diagnostic_make_option_name_cb m_make_option_name_cb;
+
+    /* Client hook to return a URL describing the option that controls
+       a diagnostic.  Returns malloced memory.  May return NULL if no URL
+       is available.  May be passed 0 as well as the index of a
+       particular option.  */
+    diagnostic_make_option_url_cb m_make_option_url_cb;
+  } m_option_callbacks;
+
   /* An optional hook for adding URLs to quoted text strings in
      diagnostics.  Only used for the main diagnostic message.  */
   urlifier *m_urlifier;
@@ -727,11 +785,28 @@ diagnostic_inhibit_notes (diagnostic_context * context)
 
 /* Client supplied function to announce a diagnostic
    (for text-based diagnostic output).  */
-#define diagnostic_starter(DC) (DC)->m_text_callbacks.begin_diagnostic
+inline diagnostic_starter_fn &
+diagnostic_starter (diagnostic_context *context)
+{
+  return context->m_text_callbacks.m_begin_diagnostic;
+}
+
+/* Client supplied function called between disjoint spans of source code,
+   so that the context can print
+   something to indicate that a new span of source code has begun.  */
+inline diagnostic_start_span_fn &
+diagnostic_start_span (diagnostic_context *context)
+{
+  return context->m_text_callbacks.m_start_span;
+}
 
 /* Client supplied function called after a diagnostic message is
    displayed (for text-based diagnostic output).  */
-#define diagnostic_finalizer(DC) (DC)->m_text_callbacks.end_diagnostic
+inline diagnostic_finalizer_fn &
+diagnostic_finalizer (diagnostic_context *context)
+{
+  return context->m_text_callbacks.m_end_diagnostic;
+}
 
 /* Extension hooks for client.  */
 #define diagnostic_context_auxiliary_data(DC) (DC)->m_client_aux_data
@@ -757,7 +832,11 @@ extern diagnostic_context *global_dc;
 
 /* Returns whether the diagnostic framework has been intialized already and is
    ready for use.  */
-#define diagnostic_ready_p() (global_dc->printer != NULL)
+inline bool
+diagnostic_ready_p ()
+{
+  return global_dc->printer != nullptr;
+}
 
 /* The number of errors that have been issued so far.  Ideally, these
    would take a diagnostic_context as an argument.  */
@@ -816,10 +895,15 @@ diagnostic_report_current_module (diagnostic_context *context,
   context->report_current_module (where);
 }
 
-extern void diagnostic_show_locus (diagnostic_context *,
-				   rich_location *richloc,
-				   diagnostic_t diagnostic_kind,
-				   pretty_printer *pp = nullptr);
+inline void
+diagnostic_show_locus (diagnostic_context *context,
+		       rich_location *richloc,
+		       diagnostic_t diagnostic_kind,
+		       pretty_printer *pp = nullptr)
+{
+  gcc_assert (richloc);
+  context->maybe_show_locus (*richloc, diagnostic_kind, pp);
+}
 
 /* Because we read source files a second time after the frontend did it the
    first time, we need to know how the frontend handled things like character

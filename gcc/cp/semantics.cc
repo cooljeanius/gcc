@@ -3932,6 +3932,9 @@ baselink_for_fns (tree fns)
 static bool
 outer_var_p (tree decl)
 {
+  /* These should have been stripped or otherwise handled by the caller.  */
+  gcc_checking_assert (!REFERENCE_REF_P (decl));
+
   return ((VAR_P (decl) || TREE_CODE (decl) == PARM_DECL)
 	  && DECL_FUNCTION_SCOPE_P (decl)
 	  /* Don't get confused by temporaries.  */
@@ -11643,8 +11646,28 @@ finish_decltype_type (tree expr, bool id_expression_or_member_access_p,
           /* Fall through for fields that aren't bitfields.  */
 	  gcc_fallthrough ();
 
-        case FUNCTION_DECL:
         case VAR_DECL:
+	  if (is_capture_proxy (expr))
+	    {
+	      if (is_normal_capture_proxy (expr))
+		{
+		  expr = DECL_CAPTURED_VARIABLE (expr);
+		  type = TREE_TYPE (expr);
+		  type = non_reference (type);
+		}
+	      else
+		{
+		  expr = DECL_VALUE_EXPR (expr);
+		  gcc_assert (TREE_CODE (expr) == COMPONENT_REF);
+		  expr = TREE_OPERAND (expr, 1);
+		  type = TREE_TYPE (expr);
+		}
+	      break;
+	    }
+	  /* Fall through for variables that aren't capture proxies.  */
+	  gcc_fallthrough ();
+
+	case FUNCTION_DECL:
         case CONST_DECL:
         case PARM_DECL:
         case RESULT_DECL:
@@ -11699,10 +11722,10 @@ finish_decltype_type (tree expr, bool id_expression_or_member_access_p,
 	 transformed into an access to a corresponding data member
 	 of the closure type that would have been declared if x
 	 were a use of the denoted entity.  */
-      if (outer_automatic_var_p (expr)
+      if (outer_automatic_var_p (STRIP_REFERENCE_REF (expr))
 	  && current_function_decl
 	  && LAMBDA_FUNCTION_P (current_function_decl))
-	type = capture_decltype (expr);
+	type = capture_decltype (STRIP_REFERENCE_REF (expr));
       else if (error_operand_p (expr))
 	type = error_mark_node;
       else if (expr == current_class_ptr)

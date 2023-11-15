@@ -1462,7 +1462,10 @@ vect_verify_full_masking_avx512 (loop_vec_info loop_vinfo)
       if (!mask_type)
 	continue;
 
-      if (TYPE_PRECISION (TREE_TYPE (mask_type)) != 1)
+      /* For now vect_get_loop_mask only supports integer mode masks
+	 when we need to split it.  */
+      if (GET_MODE_CLASS (TYPE_MODE (mask_type)) != MODE_INT
+	  || TYPE_PRECISION (TREE_TYPE (mask_type)) != 1)
 	{
 	  ok = false;
 	  break;
@@ -7084,7 +7087,7 @@ vectorize_fold_left_reduction (loop_vec_info loop_vinfo,
 					 opmask, &vec_opmask);
     }
 
-  gimple *sdef = scalar_dest_def_info->stmt;
+  gimple *sdef = vect_orig_stmt (scalar_dest_def_info)->stmt;
   tree scalar_dest = gimple_get_lhs (sdef);
   tree scalar_type = TREE_TYPE (scalar_dest);
   tree reduc_var = gimple_phi_result (reduc_def_stmt);
@@ -9566,9 +9569,16 @@ vectorizable_nonlinear_induction (loop_vec_info loop_vinfo,
 
   if (TREE_CODE (init_expr) == INTEGER_CST)
     init_expr = fold_convert (TREE_TYPE (vectype), init_expr);
-  else
-    gcc_assert (tree_nop_conversion_p (TREE_TYPE (vectype),
-				       TREE_TYPE (init_expr)));
+  else if (!tree_nop_conversion_p (TREE_TYPE (vectype), TREE_TYPE (init_expr)))
+    {
+      /* INIT_EXPR could be a bit_field, bail out for such case.  */
+      if (dump_enabled_p ())
+	dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location,
+			 "nonlinear induction vectorization failed:"
+			 " component type of vectype is not a nop conversion"
+			 " from type of init_expr.\n");
+      return false;
+    }
 
   switch (induction_type)
     {
@@ -10303,10 +10313,36 @@ vectorizable_induction (loop_vec_info loop_vinfo,
 
 
   /* Create the vector that holds the step of the induction.  */
+  gimple_stmt_iterator *step_iv_si = NULL;
   if (nested_in_vect_loop)
     /* iv_loop is nested in the loop to be vectorized. Generate:
        vec_step = [S, S, S, S]  */
     new_name = step_expr;
+  else if (LOOP_VINFO_USING_SELECT_VL_P (loop_vinfo))
+    {
+      /* When we're using loop_len produced by SELEC_VL, the non-final
+	 iterations are not always processing VF elements.  So vectorize
+	 induction variable instead of
+
+	   _21 = vect_vec_iv_.6_22 + { VF, ... };
+
+	 We should generate:
+
+	   _35 = .SELECT_VL (ivtmp_33, VF);
+	   vect_cst__22 = [vec_duplicate_expr] _35;
+	   _21 = vect_vec_iv_.6_22 + vect_cst__22;  */
+      gcc_assert (!slp_node);
+      gimple_seq seq = NULL;
+      vec_loop_lens *lens = &LOOP_VINFO_LENS (loop_vinfo);
+      tree len = vect_get_loop_len (loop_vinfo, NULL, lens, 1, vectype, 0, 0);
+      expr = force_gimple_operand (fold_convert (TREE_TYPE (step_expr),
+						 unshare_expr (len)),
+				   &seq, true, NULL_TREE);
+      new_name = gimple_build (&seq, MULT_EXPR, TREE_TYPE (step_expr), expr,
+			       step_expr);
+      gsi_insert_seq_before (&si, seq, GSI_SAME_STMT);
+      step_iv_si = &si;
+    }
   else
     {
       /* iv_loop is the loop to be vectorized. Generate:
@@ -10333,7 +10369,7 @@ vectorizable_induction (loop_vec_info loop_vinfo,
 	      || TREE_CODE (new_name) == SSA_NAME);
   new_vec = build_vector_from_val (step_vectype, t);
   vec_step = vect_init_vector (loop_vinfo, stmt_info,
-			       new_vec, step_vectype, NULL);
+			       new_vec, step_vectype, step_iv_si);
 
 
   /* Create the following def-use cycle:
@@ -10379,6 +10415,8 @@ vectorizable_induction (loop_vec_info loop_vinfo,
       gimple_seq seq = NULL;
       /* FORNOW. This restriction should be relaxed.  */
       gcc_assert (!nested_in_vect_loop);
+      /* We expect LOOP_VINFO_USING_SELECT_VL_P to be false if ncopies > 1.  */
+      gcc_assert (!LOOP_VINFO_USING_SELECT_VL_P (loop_vinfo));
 
       /* Create the vector that holds the step of the induction.  */
       if (SCALAR_FLOAT_TYPE_P (TREE_TYPE (step_expr)))
