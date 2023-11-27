@@ -58,8 +58,8 @@ task:
 # Mac
 task:
   name: Darwin $TASK_NAME_SUFFIX
-  osx_instance:
-    image: catalina-xcode
+  macos_instance:
+    image: ghcr.io/cirruslabs/macos-ventura-base:latest
   environment:
     matrix:
       - TASK_NAME_SUFFIX: Testsuite
