@@ -14,7 +14,7 @@
 #
 ## Top-level build system configration.
 gcc_prereqs="gmp-6.1.0.tar.bz2 mpfr-3.1.6.tar.bz2 mpc-1.0.3.tar.gz isl-0.18.tar.bz2"
-host_package="9"
+host_package="11"
 
 export CC="gcc-${host_package}"
 export CXX="g++-${host_package}"
@@ -301,7 +301,9 @@ installdeps() {
                 autogen autoconf automake autotools bison coreutils curl dejagnu flex gmake patch || exit 1
         elif [ "${CIRRUS_OS}" = "darwin" ]; then
             brew update-reset
-            brew install gcc@11 autogen deja-gnu xz || exit 1
+            export HOMEBREW_NO_EMOJI=1
+            export HOMEBREW_VERBOSE_USING_DOTS=1
+            brew install gcc@${host_package} autogen deja-gnu xz gawk || exit 1
         else
             echo "Unhandled CI environment"
             exit 1
