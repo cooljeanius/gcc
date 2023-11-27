@@ -301,7 +301,7 @@ installdeps() {
                 autogen autoconf automake autotools bison coreutils curl dejagnu flex gmake patch || exit 1
         elif [ "${CIRRUS_OS}" = "darwin" ]; then
             brew update-reset
-            brew install gcc@${host_package} autogen deja-gnu xz || exit 1
+            brew install gcc@11 autogen deja-gnu xz || exit 1
         else
             echo "Unhandled CI environment"
             exit 1
