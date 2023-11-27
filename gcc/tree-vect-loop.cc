@@ -7071,7 +7071,7 @@ vectorize_fold_left_reduction (loop_vec_info loop_vinfo,
     op0 = ops[1 - reduc_index];
   else
     {
-      op0 = ops[2];
+      op0 = ops[2 + (1 - reduc_index)];
       opmask = ops[0];
       gcc_assert (!slp_node);
     }
@@ -7385,7 +7385,6 @@ vectorizable_reduction (loop_vec_info loop_vinfo,
 			stmt_vector_for_cost *cost_vec)
 {
   tree vectype_in = NULL_TREE;
-  tree vectype_op[3] = { NULL_TREE, NULL_TREE, NULL_TREE };
   class loop *loop = LOOP_VINFO_LOOP (loop_vinfo);
   enum vect_def_type cond_reduc_dt = vect_unknown_def_type;
   stmt_vec_info cond_stmt_vinfo = NULL;
@@ -7617,6 +7616,7 @@ vectorizable_reduction (loop_vec_info loop_vinfo,
      assumption is not true: we use reduc_index to record the index of the
      reduction variable.  */
   slp_tree *slp_op = XALLOCAVEC (slp_tree, op.num_ops);
+  tree *vectype_op = XALLOCAVEC (tree, op.num_ops);
   /* We need to skip an extra operand for COND_EXPRs with embedded
      comparison.  */
   unsigned opno_adjust = 0;
@@ -8456,7 +8456,9 @@ vect_transform_reduction (loop_vec_info loop_vinfo,
       gcc_assert (code == IFN_COND_ADD || code == IFN_COND_SUB
 		  || code == IFN_COND_MUL || code == IFN_COND_AND
 		  || code == IFN_COND_IOR || code == IFN_COND_XOR);
-      gcc_assert (op.num_ops == 4 && (op.ops[1] == op.ops[3]));
+      gcc_assert (op.num_ops == 4
+		  && (op.ops[reduc_index]
+		      == op.ops[internal_fn_else_index ((internal_fn) code)]));
     }
 
   bool masked_loop_p = LOOP_VINFO_FULLY_MASKED_P (loop_vinfo);
@@ -8499,12 +8501,14 @@ vect_transform_reduction (loop_vec_info loop_vinfo,
     {
       /* For a conditional operation pass the truth type as mask
 	 vectype.  */
-      gcc_assert (single_defuse_cycle && reduc_index == 1);
+      gcc_assert (single_defuse_cycle
+		  && (reduc_index == 1 || reduc_index == 2));
       vect_get_vec_defs (loop_vinfo, stmt_info, slp_node, ncopies,
-			 op.ops[0], &vec_oprnds0,
-			 truth_type_for (vectype_in),
-			 NULL_TREE, &vec_oprnds1, NULL_TREE,
-			 op.ops[2], &vec_oprnds2, NULL_TREE);
+			 op.ops[0], &vec_oprnds0, truth_type_for (vectype_in),
+			 reduc_index == 1 ? NULL_TREE : op.ops[1],
+			 &vec_oprnds1, NULL_TREE,
+			 reduc_index == 2 ? NULL_TREE : op.ops[2],
+			 &vec_oprnds2, NULL_TREE);
     }
 
   /* For single def-use cycles get one copy of the vectorized reduction

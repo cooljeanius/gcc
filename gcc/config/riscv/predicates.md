@@ -41,6 +41,12 @@
   (ior (match_operand 0 "arith_operand")
        (match_operand 0 "lui_operand")))
 
+(define_predicate "movcc_operand"
+  (if_then_else (match_test "TARGET_SFB_ALU || TARGET_XTHEADCONDMOV
+			     || TARGET_ZICOND_LIKE")
+		(match_operand 0 "sfb_alu_operand")
+		(match_operand 0 "arith_operand")))
+
 (define_predicate "const_csr_operand"
   (and (match_code "const_int")
        (match_test "IN_RANGE (INTVAL (op), 0, 31)")))
@@ -327,11 +333,11 @@
 (define_predicate "modular_operator"
   (match_code "plus,minus,mult,ashift"))
 
+(define_predicate "ne_operator"
+  (match_code "ne"))
+
 (define_predicate "equality_operator"
   (match_code "eq,ne"))
-
-(define_predicate "order_operator"
-  (match_code "eq,ne,lt,ltu,le,leu,ge,geu,gt,gtu"))
 
 (define_predicate "signed_order_operator"
   (match_code "eq,ne,lt,le,ge,gt"))

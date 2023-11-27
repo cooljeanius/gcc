@@ -132,8 +132,10 @@ riscv_zcmp_valid_stack_adj_bytes_p (HOST_WIDE_INT, int);
 
 #ifdef RTX_CODE
 extern void riscv_expand_int_scc (rtx, enum rtx_code, rtx, rtx, bool *invert_ptr = 0);
-extern void riscv_expand_float_scc (rtx, enum rtx_code, rtx, rtx);
+extern void riscv_expand_float_scc (rtx, enum rtx_code, rtx, rtx,
+				    bool *invert_ptr = nullptr);
 extern void riscv_expand_conditional_branch (rtx, enum rtx_code, rtx, rtx);
+extern rtx riscv_emit_unary (enum rtx_code code, rtx dest, rtx x);
 extern rtx riscv_emit_binary (enum rtx_code code, rtx dest, rtx x, rtx y);
 #endif
 extern bool riscv_expand_conditional_move (rtx, rtx, rtx, rtx);
@@ -556,6 +558,7 @@ void expand_cond_binop (unsigned, rtx *);
 void expand_cond_ternop (unsigned, rtx *);
 void expand_popcount (rtx *);
 void expand_rawmemchr (machine_mode, rtx, rtx, rtx);
+void emit_vec_extract (rtx, rtx, poly_int64);
 
 /* Rounding mode bitfield for fixed point VXRM.  */
 enum fixed_point_rounding_mode
