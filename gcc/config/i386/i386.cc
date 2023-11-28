@@ -10367,6 +10367,7 @@ ix86_expand_split_stack_prologue (void)
   rtx_code_label *label;
   rtx limit, current, allocate_rtx, call_fusage;
   rtx_insn *call_insn;
+  unsigned int scratch_regno = INVALID_REGNUM;
   rtx scratch_reg = NULL_RTX;
   rtx_code_label *varargs_label = NULL;
   rtx fn;
@@ -10389,11 +10390,16 @@ ix86_expand_split_stack_prologue (void)
 
   limit = ix86_split_stack_guard ();
 
-  if (allocate < SPLIT_STACK_AVAILABLE)
-    current = stack_pointer_rtx;
-  else
+  if (allocate >= SPLIT_STACK_AVAILABLE
+      || flag_force_indirect_call)
     {
-      unsigned int scratch_regno;
+      scratch_regno = split_stack_prologue_scratch_regno ();
+      if (scratch_regno == INVALID_REGNUM)
+	return;
+    }
+
+  if (allocate >= SPLIT_STACK_AVAILABLE)
+    {
       rtx offset;
 
       /* We need a scratch register to hold the stack pointer minus
@@ -10401,9 +10407,7 @@ ix86_expand_split_stack_prologue (void)
 	 function, the scratch register can be any caller-saved
 	 register which is not used for parameters.  */
       offset = GEN_INT (- allocate);
-      scratch_regno = split_stack_prologue_scratch_regno ();
-      if (scratch_regno == INVALID_REGNUM)
-	return;
+
       scratch_reg = gen_rtx_REG (Pmode, scratch_regno);
       if (!TARGET_64BIT || x86_64_immediate_operand (offset, Pmode))
 	{
@@ -10421,6 +10425,8 @@ ix86_expand_split_stack_prologue (void)
 	}
       current = scratch_reg;
     }
+  else
+    current = stack_pointer_rtx;
 
   ix86_expand_branch (GEU, current, limit, label);
   rtx_insn *jump_insn = get_last_insn ();
@@ -10449,8 +10455,8 @@ ix86_expand_split_stack_prologue (void)
     {
       rtx reg10, reg11;
 
-      reg10 = gen_rtx_REG (Pmode, R10_REG);
-      reg11 = gen_rtx_REG (Pmode, R11_REG);
+      reg10 = gen_rtx_REG (DImode, R10_REG);
+      reg11 = gen_rtx_REG (DImode, R11_REG);
 
       /* If this function uses a static chain, it will be in %r10.
 	 Preserve it across the call to __morestack.  */
@@ -10463,12 +10469,43 @@ ix86_expand_split_stack_prologue (void)
 	  use_reg (&call_fusage, rax);
 	}
 
-      if ((ix86_cmodel == CM_LARGE || ix86_cmodel == CM_LARGE_PIC)
-          && !TARGET_PECOFF)
+      if (flag_force_indirect_call
+	  || ix86_cmodel == CM_LARGE || ix86_cmodel == CM_LARGE_PIC)
 	{
 	  HOST_WIDE_INT argval;
 
-	  gcc_assert (Pmode == DImode);
+	  if (split_stack_fn_large == NULL_RTX)
+	    {
+	      split_stack_fn_large
+		= gen_rtx_SYMBOL_REF (Pmode, "__morestack_large_model");
+	      SYMBOL_REF_FLAGS (split_stack_fn_large) |= SYMBOL_FLAG_LOCAL;
+	    }
+
+	  fn = split_stack_fn_large;
+
+	  if (ix86_cmodel == CM_LARGE_PIC)
+	    {
+	      rtx_code_label *label;
+	      rtx x;
+
+	      gcc_assert (Pmode == DImode);
+
+	      label = gen_label_rtx ();
+	      emit_label (label);
+	      LABEL_PRESERVE_P (label) = 1;
+	      emit_insn (gen_set_rip_rex64 (reg10, label));
+	      emit_insn (gen_set_got_offset_rex64 (reg11, label));
+	      emit_insn (gen_add2_insn (reg10, reg11));
+	      x = gen_rtx_UNSPEC (Pmode, gen_rtvec (1, fn), UNSPEC_GOT);
+	      x = gen_rtx_CONST (Pmode, x);
+	      emit_move_insn (reg11, x);
+	      x = gen_rtx_PLUS (Pmode, reg10, reg11);
+	      x = gen_const_mem (Pmode, x);
+	      fn = copy_to_suggested_reg (x, reg11, Pmode);
+	    }
+	  else if (ix86_cmodel == CM_LARGE)
+	    fn = copy_to_suggested_reg (fn, reg11, Pmode);
+
 	  /* When using the large model we need to load the address
 	     into a register, and we've run out of registers.  So we
 	     switch to a different calling convention, and we call a
@@ -10477,36 +10514,6 @@ ix86_expand_split_stack_prologue (void)
 	     frame size in the lower 32 bits.  */
 	  gcc_assert ((allocate & HOST_WIDE_INT_C (0xffffffff)) == allocate);
 	  gcc_assert ((args_size & 0xffffffff) == args_size);
-
-	  if (split_stack_fn_large == NULL_RTX)
-	    {
-	      split_stack_fn_large
-		= gen_rtx_SYMBOL_REF (Pmode, "__morestack_large_model");
-	      SYMBOL_REF_FLAGS (split_stack_fn_large) |= SYMBOL_FLAG_LOCAL;
-	    }
-	  if (ix86_cmodel == CM_LARGE_PIC)
-	    {
-	      rtx_code_label *label;
-	      rtx x;
-
-	      label = gen_label_rtx ();
-	      emit_label (label);
-	      LABEL_PRESERVE_P (label) = 1;
-	      emit_insn (gen_set_rip_rex64 (reg10, label));
-	      emit_insn (gen_set_got_offset_rex64 (reg11, label));
-	      emit_insn (gen_add2_insn (reg10, reg11));
-	      x = gen_rtx_UNSPEC (Pmode, gen_rtvec (1, split_stack_fn_large),
-				  UNSPEC_GOT);
-	      x = gen_rtx_CONST (Pmode, x);
-	      emit_move_insn (reg11, x);
-	      x = gen_rtx_PLUS (Pmode, reg10, reg11);
-	      x = gen_const_mem (Pmode, x);
-	      emit_move_insn (reg11, x);
-	    }
-	  else
-	    emit_move_insn (reg11, split_stack_fn_large);
-
-	  fn = reg11;
 
 	  argval = ((args_size << 16) << 16) + allocate;
 	  emit_move_insn (reg10, GEN_INT (argval));
@@ -10522,12 +10529,40 @@ ix86_expand_split_stack_prologue (void)
     }
   else
     {
+      if (flag_force_indirect_call && flag_pic)
+	{
+	  rtx x;
+
+	  gcc_assert (Pmode == SImode);
+
+	  scratch_reg = gen_rtx_REG (Pmode, scratch_regno);
+
+	  emit_insn (gen_set_got (scratch_reg));
+	  x = gen_rtx_UNSPEC (Pmode, gen_rtvec (1, split_stack_fn),
+			      UNSPEC_GOT);
+	  x = gen_rtx_CONST (Pmode, x);
+	  x = gen_rtx_PLUS (Pmode, scratch_reg, x);
+	  x = gen_const_mem (Pmode, x);
+	  fn = copy_to_suggested_reg (x, scratch_reg, Pmode);
+	}
+
       rtx_insn *insn = emit_insn (gen_push (GEN_INT (args_size)));
       add_reg_note (insn, REG_ARGS_SIZE, GEN_INT (UNITS_PER_WORD));
       insn = emit_insn (gen_push (allocate_rtx));
       add_reg_note (insn, REG_ARGS_SIZE, GEN_INT (2 * UNITS_PER_WORD));
       pop = GEN_INT (2 * UNITS_PER_WORD);
     }
+
+  if (flag_force_indirect_call && !register_operand (fn, VOIDmode))
+    {
+      scratch_reg = gen_rtx_REG (word_mode, scratch_regno);
+
+      if (GET_MODE (fn) != word_mode)
+	fn = gen_rtx_ZERO_EXTEND (word_mode, fn);
+
+      fn = copy_to_suggested_reg (fn, scratch_reg, word_mode);
+    }
+
   call_insn = ix86_expand_call (NULL_RTX, gen_rtx_MEM (QImode, fn),
 				GEN_INT (UNITS_PER_WORD), constm1_rtx,
 				pop, false);
@@ -10572,7 +10607,6 @@ ix86_expand_split_stack_prologue (void)
      slot.  */
   if (cfun->machine->split_stack_varargs_pointer != NULL_RTX)
     {
-      unsigned int scratch_regno;
       rtx frame_reg;
       int words;
 

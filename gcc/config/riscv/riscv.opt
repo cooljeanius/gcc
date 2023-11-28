@@ -65,6 +65,9 @@ EnumValue
 Enum(abi_type) String(lp64) Value(ABI_LP64)
 
 EnumValue
+Enum(abi_type) String(lp64e) Value(ABI_LP64E)
+
+EnumValue
 Enum(abi_type) String(lp64f) Value(ABI_LP64F)
 
 EnumValue
@@ -459,6 +462,10 @@ Enum(isa_spec_class) String(20191213) Value(ISA_SPEC_CLASS_20191213)
 misa-spec=
 Target RejectNegative Joined Enum(isa_spec_class) Var(riscv_isa_spec) Init(TARGET_DEFAULT_ISA_SPEC)
 Set the version of RISC-V ISA spec.
+
+mmovcc
+Target Var(TARGET_MOVCC)
+Enable conditional moves unconditionally.
 
 minline-atomics
 Target Var(TARGET_INLINE_SUBWORD_ATOMIC) Init(1)

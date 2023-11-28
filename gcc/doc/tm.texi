@@ -3507,6 +3507,18 @@ If you want to support call frame exception handling, you must
 define either this macro or the @code{eh_return} instruction pattern.
 @end defmac
 
+@defmac EH_RETURN_TAKEN_RTX
+A C expression whose value is RTL representing a location in which
+to store if the EH return path was taken instead of a normal return.
+This macro allows conditionally executing different code in the
+epilogue for the EH and normal return cases.
+
+When this macro is defined, the macros @code{EH_RETURN_STACKADJ_RTX}
+and @code{EH_RETURN_HANDLER_RTX} are only meaningful in the epilogue
+when 1 is stored to the specified location. The value 0 means normal
+return.
+@end defmac
+
 @defmac RETURN_ADDR_OFFSET
 If defined, an integer-valued C expression for which rtl will be generated
 to add it to the exception handler address before it is searched in the
@@ -5821,6 +5833,11 @@ specific type.
 @deftypefn {Target Hook} bool TARGET_LIBC_HAS_FAST_FUNCTION (int @var{fcode})
 This hook determines whether a function from a class of functions
 @code{(enum function_class)}@var{fcode} has a fast implementation.
+@end deftypefn
+
+@deftypefn {Target Hook} unsigned TARGET_FORTIFY_SOURCE_DEFAULT_LEVEL (void)
+This hook determines what value _FORTIFY_SOURCE will be set to when using
+the command-line option -fhardened.
 @end deftypefn
 
 @deftypefn {Target Hook} unsigned TARGET_LIBM_FUNCTION_MAX_ERROR (unsigned @var{cfn}, machine_mode @var{mode}, bool @var{boundary_p})
