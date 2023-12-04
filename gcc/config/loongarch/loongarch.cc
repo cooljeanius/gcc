@@ -142,12 +142,16 @@ struct loongarch_address_info
 
    METHOD_LU52I:
      Load 52-63 bit of the immediate number.
+
+   METHOD_MIRROR:
+     Copy 0-31 bit of the immediate number to 32-63bit.
 */
 enum loongarch_load_imm_method
 {
   METHOD_NORMAL,
   METHOD_LU32I,
-  METHOD_LU52I
+  METHOD_LU52I,
+  METHOD_MIRROR
 };
 
 struct loongarch_integer_op
@@ -1556,11 +1560,23 @@ loongarch_build_integer (struct loongarch_integer_op *codes,
 
       int sign31 = (value & (HOST_WIDE_INT_1U << 31)) >> 31;
       int sign51 = (value & (HOST_WIDE_INT_1U << 51)) >> 51;
+
+      uint32_t hival = (uint32_t) (value >> 32);
+      uint32_t loval = (uint32_t) value;
+
       /* Determine whether the upper 32 bits are sign-extended from the lower
 	 32 bits. If it is, the instructions to load the high order can be
 	 ommitted.  */
       if (lu32i[sign31] && lu52i[sign31])
 	return cost;
+      /* If the lower 32 bits are the same as the upper 32 bits, just copy
+	 the lower 32 bits to the upper 32 bits.  */
+      else if (loval == hival)
+	{
+	  codes[cost].method = METHOD_MIRROR;
+	  codes[cost].curr_value = value;
+	  return cost + 1;
+	}
       /* Determine whether bits 32-51 are sign-extended from the lower 32
 	 bits. If so, directly load 52-63 bits.  */
       else if (lu32i[sign31])
@@ -3234,6 +3250,10 @@ loongarch_move_integer (rtx temp, rtx dest, unsigned HOST_WIDE_INT value)
 			   gen_rtx_AND (DImode, x, GEN_INT (0xfffffffffffff)),
 			   GEN_INT (codes[i].value));
 	  break;
+	case METHOD_MIRROR:
+	  gcc_assert (mode == DImode);
+	  emit_insn (gen_insvdi (x, GEN_INT (32), GEN_INT (32), x));
+	  break;
 	default:
 	  gcc_unreachable ();
 	}
@@ -4249,7 +4269,7 @@ loongarch_split_plus_constant (rtx *op, machine_mode mode)
   else if (loongarch_addu16i_imm12_operand_p (v, mode))
     a = (v & ~HWIT_UC_0xFFF) + ((v & 0x800) << 1);
   else if (mode == DImode && DUAL_ADDU16I_OPERAND (v))
-    a = (v > 0 ? 0x7fff : -0x8000) << 16;
+    a = (v > 0 ? 0x7fff0000 : ~0x7fffffff);
   else
     gcc_unreachable ();
 
@@ -7820,15 +7840,13 @@ loongarch_handle_model_attribute (tree *node, tree name, tree arg, int,
   return NULL_TREE;
 }
 
-static const struct attribute_spec loongarch_attribute_table[] =
+TARGET_GNU_ATTRIBUTES (loongarch_attribute_table,
 {
   /* { name, min_len, max_len, decl_req, type_req, fn_type_req,
        affects_type_identity, handler, exclude } */
   { "model", 1, 1, true, false, false, false,
-    loongarch_handle_model_attribute, NULL },
-  /* The last attribute spec is set to be NULL.  */
-  {}
-};
+    loongarch_handle_model_attribute, NULL }
+});
 
 bool
 loongarch_use_anchors_for_symbol_p (const_rtx symbol)
@@ -8653,6 +8671,12 @@ loongarch_expand_vec_perm (rtx target, rtx op0, rtx op1, rtx sel)
 }
 
 static bool
+loongarch_is_odd_extraction (struct expand_vec_perm_d *);
+
+static bool
+loongarch_is_even_extraction (struct expand_vec_perm_d *);
+
+static bool
 loongarch_try_expand_lsx_vshuf_const (struct expand_vec_perm_d *d)
 {
   int i;
@@ -8673,6 +8697,24 @@ loongarch_try_expand_lsx_vshuf_const (struct expand_vec_perm_d *d)
 
       if (d->testing_p)
 	return true;
+
+      /* If match extract-even and extract-odd permutations pattern, use
+       * vselect much better than vshuf.  */
+      if (loongarch_is_odd_extraction (d)
+	  || loongarch_is_even_extraction (d))
+	{
+	  if (loongarch_expand_vselect_vconcat (d->target, d->op0, d->op1,
+						d->perm, d->nelt))
+	    return true;
+
+	  unsigned char perm2[MAX_VECT_LEN];
+	  for (i = 0; i < d->nelt; ++i)
+	    perm2[i] = (d->perm[i] + d->nelt) & (2 * d->nelt - 1);
+
+	  if (loongarch_expand_vselect_vconcat (d->target, d->op1, d->op0,
+						perm2, d->nelt))
+	    return true;
+	}
 
       for (i = 0; i < d->nelt; i += 1)
 	{
@@ -8858,7 +8900,7 @@ loongarch_is_even_extraction (struct expand_vec_perm_d *d)
 	  result = false;
 	  break;
 	}
-      buf += 1;
+      buf += 2;
     }
 
   return result;
@@ -8880,7 +8922,7 @@ loongarch_is_extraction_permutation (struct expand_vec_perm_d *d)
 	  result = false;
 	  break;
 	}
-      buf += 2;
+      buf += 1;
     }
 
   return result;
@@ -9357,6 +9399,11 @@ loongarch_expand_vec_perm_const_2 (struct expand_vec_perm_d *d)
 	 Selector after: { 1, 3, 1, 3 }.
 	 Even extraction selector sample: E_V4DImode, { 0, 2, 4, 6 }
 	 Selector after: { 0, 2, 0, 2 }.  */
+
+      /* Better implement of extract-even and extract-odd permutations.  */
+      if (loongarch_expand_vec_perm_even_odd (d))
+	return true;
+
       for (i = 0; i < d->nelt / 2; i += 1)
 	{
 	  idx = d->perm[i];

@@ -1033,12 +1033,16 @@ DEFINE_INT_AND_FLOAT_ROUND_FN (RINT)
 /* (nop_outer_cast)-(inner_cast)var -> -(outer_cast)(var)
    if var is smaller in precision.
    This is always safe for both doing the negative in signed or unsigned
-   as the value for undefined will not show up.  */
+   as the value for undefined will not show up.
+   Note the outer cast cannot be a boolean type as the only valid values
+   are 0,-1/1 (depending on the signedness of the boolean) and the negative
+   is there to get the correct value.  */
 (simplify
  (convert (negate:s@1 (convert:s @0)))
  (if (INTEGRAL_TYPE_P (type)
       && tree_nop_conversion_p (type, TREE_TYPE (@1))
-      && TYPE_PRECISION (type) > TYPE_PRECISION (TREE_TYPE (@0)))
+      && TYPE_PRECISION (type) > TYPE_PRECISION (TREE_TYPE (@0))
+      && TREE_CODE (type) != BOOLEAN_TYPE)
     (negate (convert @0))))
 
 (for op (negate abs)
@@ -2596,6 +2600,15 @@ DEFINE_INT_AND_FLOAT_ROUND_FN (RINT)
        && (TYPE_OVERFLOW_UNDEFINED (TREE_TYPE (@0))
 	   || TYPE_OVERFLOW_WRAPS (TREE_TYPE (@0))))
    (op @0 @1))))
+/* And similar for pointers.  */
+(for op (eq ne)
+ (simplify
+  (op (pointer_plus @0 @1) (pointer_plus @0 @2))
+  (op @1 @2)))
+(simplify
+ (pointer_diff (pointer_plus @0 @1) (pointer_plus @0 @2))
+ (if (TYPE_OVERFLOW_WRAPS (TREE_TYPE (@1)))
+  (convert (minus @1 @2))))
 
 /* X - Z < Y - Z is the same as X < Y when there is no overflow.  */
 (for op (lt le ge gt)
@@ -8723,8 +8736,13 @@ DEFINE_INT_AND_FLOAT_ROUND_FN (RINT)
 (simplify
   (plus (POPCOUNT:s @0) (POPCOUNT:s @1))
   (if (INTEGRAL_TYPE_P (type)
-       && wi::bit_and (tree_nonzero_bits (@0), tree_nonzero_bits (@1)) == 0)
-    (POPCOUNT (bit_ior @0 @1))))
+       && (wi::bit_and (widest_int::from (tree_nonzero_bits (@0), UNSIGNED),
+			widest_int::from (tree_nonzero_bits (@1), UNSIGNED))
+	   == 0))
+   (with { tree utype = TREE_TYPE (@0);
+	   if (TYPE_PRECISION (utype) < TYPE_PRECISION (TREE_TYPE (@1)))
+	     utype = TREE_TYPE (@1); }
+    (POPCOUNT (bit_ior (convert:utype @0) (convert:utype @1))))))
 
 /* popcount(X) == 0 is X == 0, and related (in)equalities.  */
 (for popcount (POPCOUNT)
@@ -8868,7 +8886,14 @@ DEFINE_INT_AND_FLOAT_ROUND_FN (RINT)
 /* parity(X)^parity(Y) is parity(X^Y).  */
 (simplify
   (bit_xor (PARITY:s @0) (PARITY:s @1))
-  (PARITY (bit_xor @0 @1)))
+  (if (types_match (TREE_TYPE (@0), TREE_TYPE (@1)))
+   (PARITY (bit_xor @0 @1))
+   (if (INTEGRAL_TYPE_P (TREE_TYPE (@0))
+	&& INTEGRAL_TYPE_P (TREE_TYPE (@1)))
+    (with { tree utype = TREE_TYPE (@0);
+	    if (TYPE_PRECISION (utype) < TYPE_PRECISION (TREE_TYPE (@1)))
+	      utype = TREE_TYPE (@1); }
+     (PARITY (bit_xor (convert:utype @0) (convert:utype @1)))))))
 
 #if GIMPLE
 /* parity(zext(X)) == parity(X).  */

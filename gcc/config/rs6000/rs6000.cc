@@ -1255,7 +1255,7 @@ static const char alt_reg_names[][8] =
 
 /* Table of valid machine attributes.  */
 
-static const struct attribute_spec rs6000_attribute_table[] =
+static const attribute_spec rs6000_gnu_attributes[] =
 {
   /* { name, min_len, max_len, decl_req, type_req, fn_type_req,
        affects_type_identity, handler, exclude } */
@@ -1272,7 +1272,16 @@ static const struct attribute_spec rs6000_attribute_table[] =
 #ifdef SUBTARGET_ATTRIBUTE_TABLE
   SUBTARGET_ATTRIBUTE_TABLE,
 #endif
-  { NULL,        0, 0, false, false, false, false, NULL, NULL }
+};
+
+static const scoped_attribute_specs rs6000_gnu_attribute_table =
+{
+  "gnu", rs6000_gnu_attributes
+};
+
+static const scoped_attribute_specs *const rs6000_attribute_table[] =
+{
+  &rs6000_gnu_attribute_table
 };
 
 #ifndef TARGET_PROFILE_KERNEL
@@ -24389,7 +24398,8 @@ invalid_arg_for_unprototyped_fn (const_tree typelist, const_tree funcdecl, const
 	  && VECTOR_TYPE_P (TREE_TYPE (val))
           && (funcdecl == NULL_TREE
               || (TREE_CODE (funcdecl) == FUNCTION_DECL
-                  && DECL_BUILT_IN_CLASS (funcdecl) != BUILT_IN_MD)))
+                  && DECL_BUILT_IN_CLASS (funcdecl) != BUILT_IN_MD
+                  && !fndecl_built_in_p (funcdecl, BUILT_IN_CLASSIFY_TYPE))))
 	  ? N_("AltiVec argument passed to unprototyped function")
 	  : NULL;
 }

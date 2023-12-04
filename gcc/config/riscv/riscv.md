@@ -501,6 +501,30 @@
   ]
   (const_string "no")))
 
+;; Widening instructions have group-overlap constraints.  Those are only
+;; valid for certain register-group sizes.  This attribute marks the
+;; alternatives not matching the required register-group size as disabled.
+(define_attr "group_overlap" "none,W21,W42,W84,W43,W86,W87"
+  (const_string "none"))
+
+(define_attr "group_overlap_valid" "no,yes"
+  (cond [(eq_attr "group_overlap" "none")
+         (const_string "yes")
+
+         (and (eq_attr "group_overlap" "W21")
+	      (match_test "riscv_get_v_regno_alignment (GET_MODE (operands[0])) != 2"))
+	 (const_string "no")
+
+         (and (eq_attr "group_overlap" "W42,W43")
+	      (match_test "riscv_get_v_regno_alignment (GET_MODE (operands[0])) != 4"))
+	 (const_string "no")
+
+         (and (eq_attr "group_overlap" "W84,W86,W87")
+	      (match_test "riscv_get_v_regno_alignment (GET_MODE (operands[0])) != 8"))
+	 (const_string "no")
+        ]
+       (const_string "yes")))
+
 ;; Attribute to control enable or disable instructions.
 (define_attr "enabled" "no,yes"
   (cond [
@@ -508,6 +532,9 @@
     (const_string "no")
 
     (eq_attr "fp_vector_disabled" "yes")
+    (const_string "no")
+
+    (eq_attr "group_overlap_valid" "no")
     (const_string "no")
   ]
   (const_string "yes")))

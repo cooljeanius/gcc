@@ -3364,6 +3364,15 @@ expand_vec_perm_const (machine_mode vmode, machine_mode op_mode, rtx target,
      mask to do the iteration loop control. Just disable it directly.  */
   if (GET_MODE_CLASS (vmode) == MODE_VECTOR_BOOL)
     return false;
+  /* FIXME: Explicitly disable VLA interleave SLP vectorization when we
+     may encounter ICE for poly size (1, 1) vectors in loop vectorizer.
+     Ideally, middle-end loop vectorizer should be able to disable it
+     itself, We can remove the codes here when middle-end code is able
+     to disable VLA SLP vectorization for poly size (1, 1) VF.  */
+  if (!BYTES_PER_RISCV_VECTOR.is_constant ()
+      && maybe_lt (BYTES_PER_RISCV_VECTOR * TARGET_MAX_LMUL,
+		   poly_int64 (16, 16)))
+    return false;
 
   struct expand_vec_perm_d d;
 
@@ -3676,7 +3685,7 @@ expand_gather_scatter (rtx *ops, bool is_load)
 	 offset elements.
 
 	 RVV spec only refers to the scale_log == 0 case.  */
-      if (!zero_extend_p || (zero_extend_p && scale_log2 != 0))
+      if (!zero_extend_p || scale_log2 != 0)
 	{
 	  if (zero_extend_p)
 	    inner_idx_mode
@@ -4048,21 +4057,6 @@ vls_mode_valid_p (machine_mode vls_mode)
       return GET_MODE_PRECISION (vls_mode).to_constant () < min_vlmax_bitsize;
     }
 
-  return false;
-}
-
-/* Return true if the gather/scatter offset mode is valid.  */
-bool
-gather_scatter_valid_offset_mode_p (machine_mode mode)
-{
-  machine_mode new_mode;
-  /* RISC-V V Spec 18.3:
-     The V extension supports all vector load and store instructions (Section
-     Vector Loads and Stores), except the V extension does not support EEW=64
-     for index values when XLEN=32.  */
-
-  if (GET_MODE_BITSIZE (GET_MODE_INNER (mode)) <= GET_MODE_BITSIZE (Pmode))
-    return get_vector_mode (Pmode, GET_MODE_NUNITS (mode)).exists (&new_mode);
   return false;
 }
 
