@@ -2391,15 +2391,15 @@ static tree cp_parser_selection_statement
 static tree cp_parser_condition
   (cp_parser *);
 static tree cp_parser_iteration_statement
-  (cp_parser *, bool *, bool, unsigned short, bool);
+  (cp_parser *, bool *, bool, tree, bool);
 static bool cp_parser_init_statement
   (cp_parser *, tree *decl);
 static tree cp_parser_for
-  (cp_parser *, bool, unsigned short, bool);
+  (cp_parser *, bool, tree, bool);
 static tree cp_parser_c_for
-  (cp_parser *, tree, tree, bool, unsigned short, bool);
+  (cp_parser *, tree, tree, bool, tree, bool);
 static tree cp_parser_range_for
-  (cp_parser *, tree, tree, tree, bool, unsigned short, bool, bool);
+  (cp_parser *, tree, tree, tree, bool, tree, bool, bool);
 static void do_range_for_auto_deduction
   (tree, tree, cp_decomp *);
 static tree cp_parser_perform_range_for_lookup
@@ -11381,6 +11381,7 @@ cp_parser_lambda_introducer (cp_parser* parser, tree lambda_expr)
 
   hash_set<tree, true> ids;
   tree first_capture_id = NULL_TREE;
+  unsigned name_independent_cnt = 0;
   while (cp_lexer_next_token_is_not (parser->lexer, CPP_CLOSE_SQUARE))
     {
       cp_token* capture_token;
@@ -11425,7 +11426,7 @@ cp_parser_lambda_introducer (cp_parser* parser, tree lambda_expr)
 	  else
 	    add_capture (lambda_expr, /*id=*/this_identifier,
 			 /*initializer=*/finish_this_expr (),
-			 /*by_reference_p=*/true, explicit_init_p);
+			 /*by_reference_p=*/true, explicit_init_p, NULL);
 	  continue;
 	}
 
@@ -11447,7 +11448,7 @@ cp_parser_lambda_introducer (cp_parser* parser, tree lambda_expr)
 	  else
 	    add_capture (lambda_expr, /*id=*/this_identifier,
 			 /*initializer=*/finish_this_expr (),
-			 /*by_reference_p=*/false, explicit_init_p);
+			 /*by_reference_p=*/false, explicit_init_p, NULL);
 	  continue;
 	}
 
@@ -11634,13 +11635,15 @@ cp_parser_lambda_introducer (cp_parser* parser, tree lambda_expr)
 	  ids.add (first_capture_id);
 	  ids.add (capture_id);
 	}
+      if (found && explicit_init_p && id_equal (capture_id, "_"))
+	found = false;
       if (found)
 	pedwarn (input_location, 0,
 		 "already captured %qD in lambda expression", capture_id);
       else
 	add_capture (lambda_expr, capture_id, capture_init_expr,
 		     /*by_reference_p=*/capture_kind == BY_REFERENCE,
-		     explicit_init_p);
+		     explicit_init_p, &name_independent_cnt);
 
       /* If there is any qualification still in effect, clear it
 	 now; we will be starting fresh with the next capture.  */
@@ -11770,7 +11773,6 @@ cp_parser_lambda_declarator_opt (cp_parser* parser, tree lambda_expr)
 
   if (lambda_specs.storage_class == sc_mutable)
     {
-      LAMBDA_EXPR_MUTABLE_P (lambda_expr) = 1;
       quals = TYPE_UNQUALIFIED;
     }
   else if (lambda_specs.storage_class == sc_static)
@@ -12519,8 +12521,8 @@ cp_parser_statement (cp_parser* parser, tree in_statement_expr,
 	case RID_DO:
 	case RID_FOR:
 	  std_attrs = process_stmt_hotness_attribute (std_attrs, attrs_loc);
-	  statement = cp_parser_iteration_statement (parser, if_p, false, 0,
-						     false);
+	  statement = cp_parser_iteration_statement (parser, if_p, false,
+						     NULL_TREE, false);
 	  break;
 
 	case RID_BREAK:
@@ -13804,8 +13806,7 @@ cp_parser_condition (cp_parser* parser)
    not included. */
 
 static tree
-cp_parser_for (cp_parser *parser, bool ivdep, unsigned short unroll,
-	       bool novector)
+cp_parser_for (cp_parser *parser, bool ivdep, tree unroll, bool novector)
 {
   tree init, scope, decl;
   bool is_range_for;
@@ -13842,7 +13843,7 @@ cp_parser_for (cp_parser *parser, bool ivdep, unsigned short unroll,
 
 static tree
 cp_parser_c_for (cp_parser *parser, tree scope, tree init, bool ivdep,
-		 unsigned short unroll, bool novector)
+		 tree unroll, bool novector)
 {
   /* Normal for loop */
   tree condition = NULL_TREE;
@@ -13893,8 +13894,7 @@ cp_parser_c_for (cp_parser *parser, tree scope, tree init, bool ivdep,
 
 static tree
 cp_parser_range_for (cp_parser *parser, tree scope, tree init, tree range_decl,
-		     bool ivdep, unsigned short unroll, bool novector,
-		     bool is_omp)
+		     bool ivdep, tree unroll, bool novector, bool is_omp)
 {
   tree stmt, range_expr;
   auto_vec <cxx_binding *, 16> bindings;
@@ -13967,7 +13967,7 @@ cp_parser_range_for (cp_parser *parser, tree scope, tree init, tree range_decl,
       if (ivdep)
 	RANGE_FOR_IVDEP (stmt) = 1;
       if (unroll)
-	RANGE_FOR_UNROLL (stmt) = build_int_cst (integer_type_node, unroll);
+	RANGE_FOR_UNROLL (stmt) = unroll;
       if (novector)
 	RANGE_FOR_NOVECTOR (stmt) = 1;
       finish_range_for_decl (stmt, range_decl, range_expr);
@@ -14156,7 +14156,7 @@ warn_for_range_copy (tree decl, tree expr)
 
 tree
 cp_convert_range_for (tree statement, tree range_decl, tree range_expr,
-		      cp_decomp *decomp, bool ivdep, unsigned short unroll,
+		      cp_decomp *decomp, bool ivdep, tree unroll,
 		      bool novector)
 {
   tree begin, end;
@@ -14381,7 +14381,7 @@ cp_parser_range_for_member_function (tree range, tree identifier)
 
 static tree
 cp_parser_iteration_statement (cp_parser* parser, bool *if_p, bool ivdep,
-			       unsigned short unroll, bool novector)
+			       tree unroll, bool novector)
 {
   cp_token *token;
   enum rid keyword;
@@ -15874,6 +15874,8 @@ cp_parser_decomposition_declaration (cp_parser *parser,
   cp_decl_specifier_seq decl_specs;
   clear_decl_specs (&decl_specs);
   decl_specs.type = make_auto ();
+  if (decl_specifiers->storage_class == sc_static)
+    decl_specs.storage_class = sc_static;
   tree prev = decl;
   FOR_EACH_VEC_ELT (v, i, e)
     {
@@ -44299,7 +44301,7 @@ cp_parser_omp_loop_nest (cp_parser *parser, bool *if_p)
 	  cp_parser_require (parser, CPP_COLON, RT_COLON);
 
 	  init = cp_parser_range_for (parser, NULL_TREE, NULL_TREE, decl,
-				      false, 0, false, true);
+				      false, NULL_TREE, false, true);
 
 	  cp_convert_omp_range_for (this_pre_body, sl, decl,
 				    orig_decl, init, orig_init,
@@ -50236,29 +50238,31 @@ cp_parser_pragma_ivdep (cp_parser *parser, cp_token *pragma_tok)
 
 /* Parse a pragma GCC unroll.  */
 
-static unsigned short
+static tree
 cp_parser_pragma_unroll (cp_parser *parser, cp_token *pragma_tok)
 {
   location_t location = cp_lexer_peek_token (parser->lexer)->location;
-  tree expr = cp_parser_constant_expression (parser);
-  unsigned short unroll;
-  expr = maybe_constant_value (expr);
+  tree unroll = cp_parser_constant_expression (parser);
+  unroll = fold_non_dependent_expr (unroll);
   HOST_WIDE_INT lunroll = 0;
-  if (!INTEGRAL_TYPE_P (TREE_TYPE (expr))
-      || TREE_CODE (expr) != INTEGER_CST
-      || (lunroll = tree_to_shwi (expr)) < 0
-      || lunroll >= USHRT_MAX)
+  if (type_dependent_expression_p (unroll))
+    ;
+  else if (!INTEGRAL_TYPE_P (TREE_TYPE (unroll))
+	   || (!value_dependent_expression_p (unroll)
+	       && (!tree_fits_shwi_p (unroll)
+		   || (lunroll = tree_to_shwi (unroll)) < 0
+		   || lunroll >= USHRT_MAX)))
     {
       error_at (location, "%<#pragma GCC unroll%> requires an"
 		" assignment-expression that evaluates to a non-negative"
 		" integral constant less than %u", USHRT_MAX);
-      unroll = 0;
+      unroll = NULL_TREE;
     }
-  else
+  else if (TREE_CODE (unroll) == INTEGER_CST)
     {
-      unroll = (unsigned short)lunroll;
-      if (unroll == 0)
-	unroll = 1;
+      unroll = fold_convert (integer_type_node, unroll);
+      if (integer_zerop (unroll))
+	unroll = integer_one_node;
     }
   cp_parser_skip_to_pragma_eol (parser, pragma_tok);
   return unroll;
@@ -50593,7 +50597,7 @@ cp_parser_pragma (cp_parser *parser, enum pragma_context context, bool *if_p)
     case PRAGMA_NOVECTOR:
       {
 	bool ivdep;
-	unsigned short unroll = 0;
+	tree unroll = NULL_TREE;
 	bool novector = false;
 	const char *pragma_str;
 

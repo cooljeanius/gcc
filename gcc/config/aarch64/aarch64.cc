@@ -375,6 +375,7 @@ static const struct aarch64_flag_desc aarch64_tuning_flags[] =
 #include "tuning_models/neoversen1.h"
 #include "tuning_models/ampere1.h"
 #include "tuning_models/ampere1a.h"
+#include "tuning_models/ampere1b.h"
 #include "tuning_models/neoversev1.h"
 #include "tuning_models/neoverse512tvb.h"
 #include "tuning_models/neoversen2.h"
@@ -464,7 +465,7 @@ handle_aarch64_vector_pcs_attribute (tree *node, tree name, tree,
 }
 
 /* Table of machine attributes.  */
-static const struct attribute_spec aarch64_attribute_table[] =
+TARGET_GNU_ATTRIBUTES (aarch64_attribute_table,
 {
   /* { name, min_len, max_len, decl_req, type_req, fn_type_req,
        affects_type_identity, handler, exclude } */
@@ -475,9 +476,8 @@ static const struct attribute_spec aarch64_attribute_table[] =
 			  NULL },
   { "Advanced SIMD type", 1, 1, false, true,  false, true,  NULL, NULL },
   { "SVE type",		  3, 3, false, true,  false, true,  NULL, NULL },
-  { "SVE sizeless type",  0, 0, false, true,  false, true,  NULL, NULL },
-  { NULL,                 0, 0, false, false, false, false, NULL, NULL }
-};
+  { "SVE sizeless type",  0, 0, false, true,  false, true,  NULL, NULL }
+});
 
 typedef enum aarch64_cond_code
 {
@@ -6137,8 +6137,7 @@ aarch64_output_probe_sve_stack_clash (rtx base, rtx adjustment,
 static bool
 aarch64_needs_frame_chain (void)
 {
-  /* Force a frame chain for EH returns so the return address is at FP+8.  */
-  if (frame_pointer_needed || crtl->calls_eh_return)
+  if (frame_pointer_needed)
     return true;
 
   /* A leaf function cannot have calls or write LR.  */
@@ -6757,17 +6756,6 @@ aarch64_return_address_signing_enabled (void)
 {
   /* This function should only be called after frame laid out.   */
   gcc_assert (cfun->machine->frame.laid_out);
-
-  /* Turn return address signing off in any function that uses
-     __builtin_eh_return.  The address passed to __builtin_eh_return
-     is not signed so either it has to be signed (with original sp)
-     or the code path that uses it has to avoid authenticating it.
-     Currently eh return introduces a return to anywhere gadget, no
-     matter what we do here since it uses ret with user provided
-     address. An ideal fix for that is to use indirect branch which
-     can be protected with BTI j (to some extent).  */
-  if (crtl->calls_eh_return)
-    return false;
 
   /* If signing scope is AARCH_FUNCTION_NON_LEAF, we only sign a leaf function
      if its LR is pushed onto stack.  */
@@ -8113,6 +8101,30 @@ aarch64_expand_epilogue (bool for_sibcall)
       RTX_FRAME_RELATED_P (insn) = 1;
     }
 
+  /* Stack adjustment for exception handler.  */
+  if (crtl->calls_eh_return && !for_sibcall)
+    {
+      /* If the EH_RETURN_TAKEN_RTX flag is set then we need
+	 to unwind the stack and jump to the handler, otherwise
+	 skip this eh_return logic and continue with normal
+	 return after the label.  We have already reset the CFA
+	 to be SP; letting the CFA move during this adjustment
+	 is just as correct as retaining the CFA from the body
+	 of the function.  Therefore, do nothing special.  */
+      rtx label = gen_label_rtx ();
+      rtx x = gen_rtx_EQ (VOIDmode, EH_RETURN_TAKEN_RTX, const0_rtx);
+      x = gen_rtx_IF_THEN_ELSE (VOIDmode, x,
+				gen_rtx_LABEL_REF (Pmode, label), pc_rtx);
+      rtx jump = emit_jump_insn (gen_rtx_SET (pc_rtx, x));
+      JUMP_LABEL (jump) = label;
+      LABEL_NUSES (label)++;
+      emit_insn (gen_add2_insn (stack_pointer_rtx,
+				EH_RETURN_STACKADJ_RTX));
+      emit_jump_insn (gen_indirect_jump (EH_RETURN_HANDLER_RTX));
+      emit_barrier ();
+      emit_label (label);
+    }
+
   /* We prefer to emit the combined return/authenticate instruction RETAA,
      however there are three cases in which we must instead emit an explicit
      authentication instruction.
@@ -8142,56 +8154,9 @@ aarch64_expand_epilogue (bool for_sibcall)
       RTX_FRAME_RELATED_P (insn) = 1;
     }
 
-  /* Stack adjustment for exception handler.  */
-  if (crtl->calls_eh_return && !for_sibcall)
-    {
-      /* We need to unwind the stack by the offset computed by
-	 EH_RETURN_STACKADJ_RTX.  We have already reset the CFA
-	 to be SP; letting the CFA move during this adjustment
-	 is just as correct as retaining the CFA from the body
-	 of the function.  Therefore, do nothing special.  */
-      emit_insn (gen_add2_insn (stack_pointer_rtx, EH_RETURN_STACKADJ_RTX));
-    }
-
   emit_use (gen_rtx_REG (DImode, LR_REGNUM));
   if (!for_sibcall)
     emit_jump_insn (ret_rtx);
-}
-
-/* Implement EH_RETURN_HANDLER_RTX.  EH returns need to either return
-   normally or return to a previous frame after unwinding.
-
-   An EH return uses a single shared return sequence.  The epilogue is
-   exactly like a normal epilogue except that it has an extra input
-   register (EH_RETURN_STACKADJ_RTX) which contains the stack adjustment
-   that must be applied after the frame has been destroyed.  An extra label
-   is inserted before the epilogue which initializes this register to zero,
-   and this is the entry point for a normal return.
-
-   An actual EH return updates the return address, initializes the stack
-   adjustment and jumps directly into the epilogue (bypassing the zeroing
-   of the adjustment).  Since the return address is typically saved on the
-   stack when a function makes a call, the saved LR must be updated outside
-   the epilogue.
-
-   This poses problems as the store is generated well before the epilogue,
-   so the offset of LR is not known yet.  Also optimizations will remove the
-   store as it appears dead, even after the epilogue is generated (as the
-   base or offset for loading LR is different in many cases).
-
-   To avoid these problems this implementation forces the frame pointer
-   in eh_return functions so that the location of LR is fixed and known early.
-   It also marks the store volatile, so no optimization is permitted to
-   remove the store.  */
-rtx
-aarch64_eh_return_handler_rtx (void)
-{
-  rtx tmp = gen_frame_mem (Pmode,
-    plus_constant (Pmode, hard_frame_pointer_rtx, UNITS_PER_WORD));
-
-  /* Mark the store volatile, so no optimization is permitted to remove it.  */
-  MEM_VOLATILE_P (tmp) = true;
-  return tmp;
 }
 
 /* Output code to add DELTA to the first argument, and then jump
@@ -11641,6 +11606,18 @@ aarch64_if_then_else_costs (rtx op0, rtx op1, rtx op2, int *cost, bool speed)
 	  if (GET_CODE (inner) == NEG || GET_CODE (inner) == NOT)
 	    /* CSINV/NEG with zero extend + const 0 (*csinv3_uxtw_insn3).  */
 	    op1 = XEXP (inner, 0);
+	}
+      else if (op1 == constm1_rtx || op1 == const1_rtx)
+	{
+	  /* Use CSINV or CSINC.  */
+	  *cost += rtx_cost (op2, VOIDmode, IF_THEN_ELSE, 2, speed);
+	  return true;
+	}
+      else if (op2 == constm1_rtx || op2 == const1_rtx)
+	{
+	  /* Use CSINV or CSINC.  */
+	  *cost += rtx_cost (op1, VOIDmode, IF_THEN_ELSE, 1, speed);
+	  return true;
 	}
 
       *cost += rtx_cost (op1, VOIDmode, IF_THEN_ELSE, 1, speed);
@@ -16104,6 +16081,12 @@ aarch64_override_options_internal (struct gcc_options *opts)
       && aarch64_tune_params.prefetch->default_opt_level >= 0
       && opts->x_optimize >= aarch64_tune_params.prefetch->default_opt_level)
     opts->x_flag_prefetch_loop_arrays = 1;
+
+  /* Avoid loop-dependant FMA chains.  */
+  if (aarch64_tune_params.extra_tuning_flags
+      & AARCH64_EXTRA_TUNE_AVOID_CROSS_LOOP_FMA)
+    SET_OPTION_IF_UNSET (opts, &global_options_set, param_avoid_fma_max_bits,
+			 512);
 
   aarch64_override_options_after_change_1 (opts);
 }
@@ -21294,11 +21277,11 @@ aarch64_split_compare_and_swap (rtx operands[])
   mem = operands[1];
   oldval = operands[2];
   newval = operands[3];
-  is_weak = (operands[4] != const0_rtx);
   model_rtx = operands[5];
   scratch = operands[7];
   mode = GET_MODE (mem);
   model = memmodel_from_int (INTVAL (model_rtx));
+  is_weak = operands[4] != const0_rtx && mode != TImode;
 
   /* When OLDVAL is zero and we want the strong version we can emit a tighter
     loop:
@@ -21358,6 +21341,33 @@ aarch64_split_compare_and_swap (rtx operands[])
     }
   else
     aarch64_gen_compare_reg (NE, scratch, const0_rtx);
+
+  /* 128-bit LDAXP is not atomic unless STLXP succeeds.  So for a mismatch,
+     store the returned value and loop if the STLXP fails.  */
+  if (mode == TImode)
+    {
+      rtx_code_label *label3 = gen_label_rtx ();
+      emit_jump_insn (gen_rtx_SET (pc_rtx, gen_rtx_LABEL_REF (Pmode, label3)));
+      emit_barrier ();
+
+      emit_label (label2);
+      aarch64_emit_store_exclusive (mode, scratch, mem, rval, model_rtx);
+
+      if (aarch64_track_speculation)
+	{
+	  /* Emit an explicit compare instruction, so that we can correctly
+	     track the condition codes.  */
+	  rtx cc_reg = aarch64_gen_compare_reg (NE, scratch, const0_rtx);
+	  x = gen_rtx_NE (GET_MODE (cc_reg), cc_reg, const0_rtx);
+	}
+      else
+	x = gen_rtx_NE (VOIDmode, scratch, const0_rtx);
+      x = gen_rtx_IF_THEN_ELSE (VOIDmode, x,
+				gen_rtx_LABEL_REF (Pmode, label1), pc_rtx);
+      aarch64_emit_unlikely_jump (gen_rtx_SET (pc_rtx, x));
+
+      label2 = label3;
+    }
 
   emit_label (label2);
 
@@ -23127,27 +23137,23 @@ aarch64_expand_cpymem (rtx *operands)
   int mode_bits;
   rtx dst = operands[0];
   rtx src = operands[1];
+  unsigned align = UINTVAL (operands[3]);
   rtx base;
   machine_mode cur_mode = BLKmode;
-
-  /* Variable-sized memcpy can go through the MOPS expansion if available.  */
-  if (!CONST_INT_P (operands[2]))
-    return aarch64_expand_cpymem_mops (operands);
-
-  unsigned HOST_WIDE_INT size = INTVAL (operands[2]);
-
-  /* Try to inline up to 256 bytes or use the MOPS threshold if available.  */
-  unsigned HOST_WIDE_INT max_copy_size
-    = TARGET_MOPS ? aarch64_mops_memcpy_size_threshold : 256;
-
   bool size_p = optimize_function_for_size_p (cfun);
 
-  /* Large constant-sized cpymem should go through MOPS when possible.
-     It should be a win even for size optimization in the general case.
-     For speed optimization the choice between MOPS and the SIMD sequence
-     depends on the size of the copy, rather than number of instructions,
-     alignment etc.  */
-  if (size > max_copy_size)
+  /* Variable-sized or strict-align copies may use the MOPS expansion.  */
+  if (!CONST_INT_P (operands[2]) || (STRICT_ALIGNMENT && align < 16))
+    return aarch64_expand_cpymem_mops (operands);
+
+  unsigned HOST_WIDE_INT size = UINTVAL (operands[2]);
+
+  /* Try to inline up to 256 bytes.  */
+  unsigned max_copy_size = 256;
+  unsigned mops_threshold = aarch64_mops_memcpy_size_threshold;
+
+  /* Large copies use MOPS when available or a library call.  */
+  if (size > max_copy_size || (TARGET_MOPS && size > mops_threshold))
     return aarch64_expand_cpymem_mops (operands);
 
   int copy_bits = 256;
@@ -23311,12 +23317,13 @@ aarch64_expand_setmem (rtx *operands)
   unsigned HOST_WIDE_INT len;
   rtx dst = operands[0];
   rtx val = operands[2], src;
+  unsigned align = UINTVAL (operands[3]);
   rtx base;
   machine_mode cur_mode = BLKmode, next_mode;
 
-  /* If we don't have SIMD registers or the size is variable use the MOPS
-     inlined sequence if possible.  */
-  if (!CONST_INT_P (operands[1]) || !TARGET_SIMD)
+  /* Variable-sized or strict-align memset may use the MOPS expansion.  */
+  if (!CONST_INT_P (operands[1]) || !TARGET_SIMD
+      || (STRICT_ALIGNMENT && align < 16))
     return aarch64_expand_setmem_mops (operands);
 
   bool size_p = optimize_function_for_size_p (cfun);
@@ -23324,10 +23331,13 @@ aarch64_expand_setmem (rtx *operands)
   /* Default the maximum to 256-bytes when considering only libcall vs
      SIMD broadcast sequence.  */
   unsigned max_set_size = 256;
+  unsigned mops_threshold = aarch64_mops_memset_size_threshold;
 
-  len = INTVAL (operands[1]);
-  if (len > max_set_size && !TARGET_MOPS)
-    return false;
+  len = UINTVAL (operands[1]);
+
+  /* Large memset uses MOPS when available or a library call.  */
+  if (len > max_set_size || (TARGET_MOPS && len > mops_threshold))
+    return aarch64_expand_setmem_mops (operands);
 
   int cst_val = !!(CONST_INT_P (val) && (INTVAL (val) != 0));
   /* The MOPS sequence takes:
@@ -23339,12 +23349,6 @@ aarch64_expand_setmem (rtx *operands)
   /* A libcall to memset in the worst case takes 3 instructions to prepare
      the arguments + 1 for the call.  */
   unsigned libcall_cost = 4;
-
-  /* Upper bound check.  For large constant-sized setmem use the MOPS sequence
-     when available.  */
-  if (TARGET_MOPS
-      && len >= (unsigned HOST_WIDE_INT) aarch64_mops_memset_size_threshold)
-    return aarch64_expand_setmem_mops (operands);
 
   /* Attempt a sequence with a vector broadcast followed by stores.
      Count the number of operations involved to see if it's worth it
@@ -23387,10 +23391,8 @@ aarch64_expand_setmem (rtx *operands)
       simd_ops++;
       n -= mode_bits;
 
-      /* Do certain trailing copies as overlapping if it's going to be
-	 cheaper.  i.e. less instructions to do so.  For instance doing a 15
-	 byte copy it's more efficient to do two overlapping 8 byte copies than
-	 8 + 4 + 2 + 1.  Only do this when -mstrict-align is not supplied.  */
+      /* Emit trailing writes using overlapping unaligned accesses
+	(when !STRICT_ALIGNMENT) - this is smaller and faster.  */
       if (n > 0 && n < copy_limit / 2 && !STRICT_ALIGNMENT)
 	{
 	  next_mode = smallest_mode_for_size (n, MODE_INT);

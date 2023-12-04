@@ -987,11 +987,11 @@ public:
 
     /* Determine the demand info of the RVV insn.  */
     m_max_sew = get_max_int_sew ();
-    unsigned demand_flags = 0;
+    unsigned dflags = 0;
     if (vector_config_insn_p (insn->rtl ()))
       {
-	demand_flags |= demand_flags::DEMAND_AVL_P;
-	demand_flags |= demand_flags::DEMAND_RATIO_P;
+	dflags |= demand_flags::DEMAND_AVL_P;
+	dflags |= demand_flags::DEMAND_RATIO_P;
       }
     else
       {
@@ -1006,39 +1006,39 @@ public:
 		   available.
 		 */
 		if (has_non_zero_avl ())
-		  demand_flags |= demand_flags::DEMAND_NON_ZERO_AVL_P;
+		  dflags |= demand_flags::DEMAND_NON_ZERO_AVL_P;
 		else
-		  demand_flags |= demand_flags::DEMAND_AVL_P;
+		  dflags |= demand_flags::DEMAND_AVL_P;
 	      }
 	    else
-	      demand_flags |= demand_flags::DEMAND_AVL_P;
+	      dflags |= demand_flags::DEMAND_AVL_P;
 	  }
 
 	if (get_attr_ratio (insn->rtl ()) != INVALID_ATTRIBUTE)
-	  demand_flags |= demand_flags::DEMAND_RATIO_P;
+	  dflags |= demand_flags::DEMAND_RATIO_P;
 	else
 	  {
 	    if (scalar_move_insn_p (insn->rtl ()) && m_ta)
 	      {
-		demand_flags |= demand_flags::DEMAND_GE_SEW_P;
+		dflags |= demand_flags::DEMAND_GE_SEW_P;
 		m_max_sew = get_attr_type (insn->rtl ()) == TYPE_VFMOVFV
 			      ? get_max_float_sew ()
 			      : get_max_int_sew ();
 	      }
 	    else
-	      demand_flags |= demand_flags::DEMAND_SEW_P;
+	      dflags |= demand_flags::DEMAND_SEW_P;
 
 	    if (!ignore_vlmul_insn_p (insn->rtl ()))
-	      demand_flags |= demand_flags::DEMAND_LMUL_P;
+	      dflags |= demand_flags::DEMAND_LMUL_P;
 	  }
 
 	if (!m_ta)
-	  demand_flags |= demand_flags::DEMAND_TAIL_POLICY_P;
+	  dflags |= demand_flags::DEMAND_TAIL_POLICY_P;
 	if (!m_ma)
-	  demand_flags |= demand_flags::DEMAND_MASK_POLICY_P;
+	  dflags |= demand_flags::DEMAND_MASK_POLICY_P;
       }
 
-    normalize_demand (demand_flags);
+    normalize_demand (dflags);
 
     /* Optimize AVL from the vsetvl instruction.  */
     insn_info *def_insn = extract_single_source (get_avl_def ());
@@ -1433,9 +1433,23 @@ private:
 
   inline bool modify_or_use_vl_p (insn_info *i, const vsetvl_info &info)
   {
-    return info.has_vl ()
-	   && (find_access (i->uses (), REGNO (info.get_vl ()))
-	       || find_access (i->defs (), REGNO (info.get_vl ())));
+    if (info.has_vl ())
+      {
+	if (find_access (i->defs (), REGNO (info.get_vl ())))
+	  return true;
+	if (find_access (i->uses (), REGNO (info.get_vl ())))
+	  {
+	    resource_info resource = full_register (REGNO (info.get_vl ()));
+	    def_lookup dl1 = crtl->ssa->find_def (resource, i);
+	    def_lookup dl2 = crtl->ssa->find_def (resource, info.get_insn ());
+	    if (dl1.matching_set () || dl2.matching_set ())
+	      return true;
+	    /* If their VLs are coming from same def, we still want to fuse
+	       their VSETVL demand info to gain better performance.  */
+	    return dl1.prev_def (i) != dl2.prev_def (i);
+	  }
+      }
+    return false;
   }
   inline bool modify_avl_p (insn_info *i, const vsetvl_info &info)
   {
@@ -1482,9 +1496,6 @@ private:
   inline bool avl_equal_p (const vsetvl_info &prev, const vsetvl_info &next)
   {
     gcc_assert (prev.valid_p () && next.valid_p ());
-
-    if (prev.get_ratio () != next.get_ratio ())
-      return false;
 
     if (next.has_vl () && next.vl_used_by_non_rvv_insn_p ())
       return false;
@@ -1702,7 +1713,7 @@ public:
 	for (insn_info *i = next_insn->prev_nondebug_insn (); i != prev_insn;
 	     i = i->prev_nondebug_insn ())
 	  {
-	    // no def amd use of vl
+	    // no def and use of vl
 	    if (!ignore_vl && modify_or_use_vl_p (i, info))
 	      return false;
 
@@ -2174,7 +2185,7 @@ private:
     return true;
   }
 
-  bool preds_has_same_avl_p (const vsetvl_info &curr_info)
+  bool preds_all_same_avl_and_ratio_p (const vsetvl_info &curr_info)
   {
     gcc_assert (
       !bitmap_empty_p (m_vsetvl_def_in[curr_info.get_bb ()->index ()]));
@@ -2186,7 +2197,8 @@ private:
       {
 	const vsetvl_info &prev_info = *m_vsetvl_def_exprs[expr_index];
 	if (!prev_info.valid_p ()
-	    || !m_dem.avl_available_p (prev_info, curr_info))
+	    || !m_dem.avl_available_p (prev_info, curr_info)
+	    || prev_info.get_ratio () != curr_info.get_ratio ())
 	  return false;
       }
 
@@ -2635,11 +2647,8 @@ pre_vsetvl::compute_lcm_local_properties ()
 
 	      for (const insn_info *insn : bb->real_nondebug_insns ())
 		{
-		  if ((info.has_nonvlmax_reg_avl ()
-		       && find_access (insn->defs (), REGNO (info.get_avl ())))
-		      || (info.has_vl ()
-			  && find_access (insn->uses (),
-					  REGNO (info.get_vl ()))))
+		  if (info.has_nonvlmax_reg_avl ()
+		      && find_access (insn->defs (), REGNO (info.get_avl ())))
 		    {
 		      bitmap_clear_bit (m_transp[bb_index], i);
 		      break;
@@ -3160,7 +3169,7 @@ pre_vsetvl::pre_global_vsetvl_info ()
 	  curr_info = block_info.local_infos[0];
 	}
       if (curr_info.valid_p () && !curr_info.vl_used_by_non_rvv_insn_p ()
-	  && preds_has_same_avl_p (curr_info))
+	  && preds_all_same_avl_and_ratio_p (curr_info))
 	curr_info.set_change_vtype_only ();
 
       vsetvl_info prev_info = vsetvl_info ();
@@ -3168,7 +3177,8 @@ pre_vsetvl::pre_global_vsetvl_info ()
       for (auto &curr_info : block_info.local_infos)
 	{
 	  if (prev_info.valid_p () && curr_info.valid_p ()
-	      && m_dem.avl_available_p (prev_info, curr_info))
+	      && m_dem.avl_available_p (prev_info, curr_info)
+	      && prev_info.get_ratio () == curr_info.get_ratio ())
 	    curr_info.set_change_vtype_only ();
 	  prev_info = curr_info;
 	}

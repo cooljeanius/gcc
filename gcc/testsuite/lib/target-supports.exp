@@ -10082,6 +10082,18 @@ proc check_effective_target_c99_runtime { } {
     }]
 }
 
+# Return 1 if the target supports DWARF CFI directives.
+
+proc check_effective_target_cfi { } {
+    return [check_no_compiler_messages cfi assembly {
+	#ifdef __GCC_HAVE_DWARF2_CFI_ASM
+        /* ok */
+	#else
+	#error unsupported
+	#endif
+    } ""]
+}
+
 # Return 1 if the target provides the D runtime.
 
 proc check_effective_target_d_runtime { } {
@@ -10212,6 +10224,7 @@ proc check_effective_target_avx512fp16 { } {
 	void foo (void)
 	{
 	  asm volatile ("vmovw %edi, %xmm0");
+	  asm volatile ("vfcmulcph %xmm1, %xmm2, %xmm3{%k1}");
 	}
     } "-O2 -mavx512fp16" ]
 }

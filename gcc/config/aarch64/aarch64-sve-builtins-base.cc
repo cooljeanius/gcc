@@ -1105,19 +1105,6 @@ public:
   bool is_lasta () const { return m_unspec == UNSPEC_LASTA; }
   bool is_lastb () const { return m_unspec == UNSPEC_LASTB; }
 
-  bool vect_all_same (tree v, int step) const
-  {
-    int i;
-    int nelts = vector_cst_encoded_nelts (v);
-    tree first_el = VECTOR_CST_ENCODED_ELT (v, 0);
-
-    for (i = 0; i < nelts; i += step)
-      if (!operand_equal_p (VECTOR_CST_ENCODED_ELT (v, i), first_el, 0))
-	return false;
-
-    return true;
-  }
-
   /* Fold a svlast{a/b} call with constant predicate to a BIT_FIELD_REF.
      BIT_FIELD_REF lowers to Advanced SIMD element extract, so we have to
      ensure the index of the element being accessed is in the range of a
@@ -1142,7 +1129,7 @@ public:
 	   without a linear search of the predicate vector:
 	   1.  LASTA if predicate is all true, return element 0.
 	   2.  LASTA if predicate all false, return element 0.  */
-	if (is_lasta () && vect_all_same (pred, step_1))
+	if (is_lasta () && vector_cst_all_same (pred, step_1))
 	  {
 	    b = build3 (BIT_FIELD_REF, TREE_TYPE (f.lhs), val,
 			bitsize_int (step * BITS_PER_UNIT), bitsize_int (0));
@@ -1152,7 +1139,7 @@ public:
 	/* Handle the all-false case for LASTB where SVE VL == 128b -
 	   return the highest numbered element.  */
 	if (is_lastb () && known_eq (BYTES_PER_SVE_VECTOR, 16)
-	    && vect_all_same (pred, step_1)
+	    && vector_cst_all_same (pred, step_1)
 	    && integer_zerop (VECTOR_CST_ENCODED_ELT (pred, 0)))
 	  {
 	    b = build3 (BIT_FIELD_REF, TREE_TYPE (f.lhs), val,
@@ -1506,7 +1493,7 @@ public:
   rtx
   expand (function_expander &e) const override
   {
-    machine_mode tuple_mode = TYPE_MODE (TREE_TYPE (e.call_expr));
+    machine_mode tuple_mode = e.result_mode ();
     insn_code icode = convert_optab_handler (vec_mask_load_lanes_optab,
 					     tuple_mode, e.vector_mode (0));
     return e.use_contiguous_load_insn (icode);

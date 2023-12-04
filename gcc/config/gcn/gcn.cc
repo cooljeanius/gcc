@@ -358,14 +358,12 @@ gcn_handle_amdgpu_hsa_kernel_attribute (tree *node, tree name,
  
    Create target-specific __attribute__ types.  */
 
-static const struct attribute_spec gcn_attribute_table[] = {
+TARGET_GNU_ATTRIBUTES (gcn_attribute_table, {
   /* { name, min_len, max_len, decl_req, type_req, fn_type_req, handler,
      affects_type_identity } */
   {"amdgpu_hsa_kernel", 0, GCN_KERNEL_ARG_TYPES, false, true,
-   true, true, gcn_handle_amdgpu_hsa_kernel_attribute, NULL},
-  /* End element.  */
-  {NULL, 0, 0, false, false, false, false, NULL, NULL}
-};
+   true, true, gcn_handle_amdgpu_hsa_kernel_attribute, NULL}
+});
 
 /* }}}  */
 /* {{{ Registers and modes.  */
@@ -5050,7 +5048,9 @@ gcn_vectorize_vec_perm_const (machine_mode vmode, machine_mode op_mode,
 			      rtx dst, rtx src0, rtx src1,
 			      const vec_perm_indices & sel)
 {
-  if (vmode != op_mode)
+  if (vmode != op_mode
+      || !VECTOR_MODE_P (vmode)
+      || GET_MODE_INNER (vmode) == TImode)
     return false;
 
   unsigned int nelt = GET_MODE_NUNITS (vmode);

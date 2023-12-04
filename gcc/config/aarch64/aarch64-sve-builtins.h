@@ -500,6 +500,8 @@ public:
   tree load_store_cookie (tree);
 
   gimple *redirect_call (const function_instance &);
+  gimple *redirect_pred_x ();
+
   gimple *fold_to_cstu (poly_uint64);
   gimple *fold_to_pfalse ();
   gimple *fold_to_ptrue ();
@@ -527,6 +529,8 @@ public:
   insn_code direct_optab_handler (optab, unsigned int = 0);
   insn_code direct_optab_handler_for_sign (optab, optab, unsigned int = 0,
 					   machine_mode = E_VOIDmode);
+
+  machine_mode result_mode () const;
 
   bool overlaps_input_p (rtx);
 
@@ -671,6 +675,9 @@ extern tree scalar_types[NUM_VECTOR_TYPES];
 extern tree acle_vector_types[MAX_TUPLE_SIZE][NUM_VECTOR_TYPES + 1];
 extern tree acle_svpattern;
 extern tree acle_svprfop;
+
+bool vector_cst_all_same (tree, unsigned int);
+bool is_ptrue (tree, unsigned int);
 
 /* Return the ACLE type svbool_t.  */
 inline tree
@@ -875,6 +882,13 @@ function_base::call_properties (const function_instance &instance) const
   if (instance.type_suffix (0).float_p || instance.type_suffix (1).float_p)
     flags |= CP_READ_FPCR | CP_RAISE_FP_EXCEPTIONS;
   return flags;
+}
+
+/* Return the mode of the result of a call.  */
+inline machine_mode
+function_expander::result_mode () const
+{
+  return TYPE_MODE (TREE_TYPE (TREE_TYPE (fndecl)));
 }
 
 }
