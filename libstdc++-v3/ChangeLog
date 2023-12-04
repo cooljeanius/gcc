@@ -1,3 +1,41 @@
+2023-12-02  Alexandre Oliva  <oliva@adacore.com>
+
+	* libsupc++/atexit_thread.cc [__GXX_WEAK__]: Add dynamic
+	detection of __cxa_thread_atexit_impl.
+
+2023-12-01  Jason Merrill  <jason@redhat.com>
+
+	* include/std/bit: Avoid builtins in requires-clauses.
+	* include/std/variant: Likewise.
+
+2023-12-01  Rainer Orth  <ro@CeBiTec.Uni-Bielefeld.DE>
+
+	* configure: Regenerate.
+
+2023-11-30  Jonathan Wakely  <jwakely@redhat.com>
+
+	* include/std/ranges (__detail::__toable): Fix incorrect use of
+	_Range instead of _Cont.
+	(__detail::_ToClosure, __detail::_ToClosure2): Add missing
+	constexpr specifier on constructors.
+	* testsuite/std/ranges/conv/1.cc (_Cont, _Cont2, _Cont3): Remove
+	unnecessary begin() and end() members.
+	(test_constexpr): New function to check range adaptors are
+	usable in constant expressions.
+
+2023-11-29  Thomas Schwinge  <thomas@codesourcery.com>
+
+	* testsuite/23_containers/span/at.cc: Fix for '-fno-exceptions'
+	configurations.
+
+2023-11-28  Jonathan Wakely  <jwakely@redhat.com>
+
+	* include/bits/atomic_wait.h: Include <stdint.h>.
+
+2023-11-28  Jonathan Wakely  <jwakely@redhat.com>
+
+	* include/bits/stl_uninitialized.h: Fix typo in comment.
+
 2023-11-24  Jan Hubicka  <jh@suse.cz>
 
 	PR middle-end/109849
