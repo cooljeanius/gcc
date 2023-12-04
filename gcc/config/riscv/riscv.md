@@ -515,12 +515,27 @@
 	      (match_test "riscv_get_v_regno_alignment (GET_MODE (operands[0])) != 2"))
 	 (const_string "no")
 
-         (and (eq_attr "group_overlap" "W42,W43")
+         (and (eq_attr "group_overlap" "W42")
 	      (match_test "riscv_get_v_regno_alignment (GET_MODE (operands[0])) != 4"))
 	 (const_string "no")
 
-         (and (eq_attr "group_overlap" "W84,W86,W87")
+         (and (eq_attr "group_overlap" "W84")
 	      (match_test "riscv_get_v_regno_alignment (GET_MODE (operands[0])) != 8"))
+	 (const_string "no")
+
+         ;; According to RVV ISA:
+         ;; The destination EEW is greater than the source EEW, the source EMUL is at least 1,
+	 ;; and the overlap is in the highest-numbered part of the destination register group
+	 ;; (e.g., when LMUL=8, vzext.vf4 v0, v6 is legal, but a source of v0, v2, or v4 is not).
+	 ;; So the source operand should have LMUL >= 1.
+         (and (eq_attr "group_overlap" "W43")
+	      (match_test "riscv_get_v_regno_alignment (GET_MODE (operands[0])) != 4
+			   && riscv_get_v_regno_alignment (GET_MODE (operands[3])) >= 1"))
+	 (const_string "no")
+
+         (and (eq_attr "group_overlap" "W86,W87")
+	      (match_test "riscv_get_v_regno_alignment (GET_MODE (operands[0])) != 8
+			   && riscv_get_v_regno_alignment (GET_MODE (operands[3])) >= 1"))
 	 (const_string "no")
         ]
        (const_string "yes")))
@@ -2738,24 +2753,6 @@
   DONE;
 })
 
-;; Patterns for implementations that optimize short forward branches.
-
-(define_insn "*mov<GPR:mode><X:mode>cc"
-  [(set (match_operand:GPR 0 "register_operand" "=r,r")
-	(if_then_else:GPR
-	 (match_operator 5 "ordered_comparison_operator"
-		[(match_operand:X 1 "register_operand" "r,r")
-		 (match_operand:X 2 "reg_or_0_operand" "rJ,rJ")])
-	 (match_operand:GPR 3 "register_operand" "0,0")
-	 (match_operand:GPR 4 "sfb_alu_operand" "rJ,IL")))]
-  "TARGET_SFB_ALU"
-  "@
-   b%C5\t%1,%z2,1f\t# movcc\;mv\t%0,%z4\n1:
-   b%C5\t%1,%z2,1f\t# movcc\;li\t%0,%4\n1:"
-  [(set_attr "length" "8")
-   (set_attr "type" "sfb_alu")
-   (set_attr "mode" "<GPR:MODE>")])
-
 ;; Used to implement built-in functions.
 (define_expand "condjump"
   [(set (pc)
@@ -3775,5 +3772,6 @@
 (include "generic-ooo.md")
 (include "vector.md")
 (include "zicond.md")
+(include "sfb.md")
 (include "zc.md")
 (include "corev.md")
