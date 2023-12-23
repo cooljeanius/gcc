@@ -4357,7 +4357,8 @@ driver_handle_option (struct gcc_options *opts,
 	  const char *basename = (opts->x_dump_base_name ? opts->x_dump_base_name
 				  : opts->x_main_input_basename);
 	  diagnostic_output_format_init (dc, basename,
-					 (enum diagnostics_output_format)value);
+					 (enum diagnostics_output_format)value,
+					 opts->x_flag_diagnostics_json_formatting);
 	  break;
 	}
 
@@ -4617,6 +4618,7 @@ driver_handle_option (struct gcc_options *opts,
       /* -pie is turned on by default.  */
       validated = true;
 #endif
+      /* FALLTHROUGH */
     case OPT_r:
     case OPT_shared:
     case OPT_no_pie:
@@ -5006,7 +5008,7 @@ process_command (unsigned int decoded_options_count,
     {
       if (!any_link_options_p && !static_p)
 	{
-#ifdef HAVE_LD_PIE
+#if defined HAVE_LD_PIE && defined LD_PIE_SPEC
 	  save_switch (LD_PIE_SPEC, 0, NULL, /*validated=*/true, /*known=*/false);
 #endif
 	  /* These are passed straight down to collect2 so we have to break
@@ -11366,6 +11368,7 @@ driver::finalize ()
   input_from_pipe = 0;
   suffix_subst = NULL;
 
+  XDELETEVEC (mdswitches);
   mdswitches = NULL;
   n_mdswitches = 0;
 

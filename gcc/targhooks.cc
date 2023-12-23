@@ -781,8 +781,18 @@ hook_int_CUMULATIVE_ARGS_arg_info_0 (cumulative_args_t,
 }
 
 void
+hook_void_CUMULATIVE_ARGS (cumulative_args_t)
+{
+}
+
+void
 hook_void_CUMULATIVE_ARGS_tree (cumulative_args_t ca ATTRIBUTE_UNUSED,
 				tree ATTRIBUTE_UNUSED)
+{
+}
+
+void
+hook_void_CUMULATIVE_ARGS_rtx_tree (cumulative_args_t, rtx, tree)
 {
 }
 
@@ -1789,7 +1799,19 @@ default_target_option_valid_attribute_p (tree ARG_UNUSED (fndecl),
 					 int ARG_UNUSED (flags))
 {
   warning (OPT_Wattributes,
-	   "target attribute is not supported on this machine");
+	   "%<target%> attribute is not supported on this machine");
+
+  return false;
+}
+
+bool
+default_target_option_valid_version_attribute_p (tree ARG_UNUSED (fndecl),
+						 tree ARG_UNUSED (name),
+						 tree ARG_UNUSED (args),
+						 int ARG_UNUSED (flags))
+{
+  warning (OPT_Wattributes,
+	   "%<target_version%> attribute is not supported on this machine");
 
   return false;
 }

@@ -2050,6 +2050,30 @@ analyze_scalar_evolution (class loop *loop, tree var)
   return res;
 }
 
+/* If CHREC doesn't overflow, set the nonwrapping flag.  */
+
+void record_nonwrapping_chrec (tree chrec)
+{
+  CHREC_NOWRAP(chrec) = 1;
+
+  if (dump_file && (dump_flags & TDF_SCEV))
+    {
+      fprintf (dump_file, "(record_nonwrapping_chrec: ");
+      print_generic_expr (dump_file, chrec);
+      fprintf (dump_file, ")\n");
+    }
+}
+
+/* Return true if CHREC's nonwrapping flag is set.  */
+
+bool nonwrapping_chrec_p (tree chrec)
+{
+  if (!chrec || TREE_CODE(chrec) != POLYNOMIAL_CHREC)
+    return false;
+
+  return CHREC_NOWRAP(chrec);
+}
+
 /* Analyzes and returns the scalar evolution of VAR address in LOOP.  */
 
 static tree
@@ -3505,7 +3529,12 @@ expression_expensive_p (tree expr, bool *cond_overflow_p)
   uint64_t expanded_size = 0;
   *cond_overflow_p = false;
   return (expression_expensive_p (expr, cond_overflow_p, cache, expanded_size)
-	  || expanded_size > cache.elements ());
+	  /* ???  Both the explicit unsharing and gimplification of expr will
+	     expand shared trees to multiple copies.
+	     Guard against exponential growth by counting the visits and
+	     comparing againt the number of original nodes.  Allow a tiny
+	     bit of duplication to catch some additional optimizations.  */
+	  || expanded_size > (cache.elements () + 1));
 }
 
 /* Match.pd function to match bitwise inductive expression.
@@ -3739,7 +3768,6 @@ final_value_replacement_loop (class loop *loop)
     split_loop_exit_edge (exit);
 
   /* Set stmt insertion pointer.  All stmts are inserted before this point.  */
-  gimple_stmt_iterator gsi = gsi_after_labels (exit->dest);
 
   class loop *ex_loop
     = superloop_at_depth (loop,
@@ -3844,6 +3872,10 @@ final_value_replacement_loop (class loop *loop)
 	  fprintf (dump_file, "\n");
 	}
       any = true;
+      /* ???  Here we'd like to have a unshare_expr that would assign
+	 shared sub-trees to new temporary variables either gimplified
+	 to a GIMPLE sequence or to a statement list (keeping this a
+	 GENERIC interface).  */
       def = unshare_expr (def);
       remove_phi_node (&psi, false);
 
@@ -3880,6 +3912,7 @@ final_value_replacement_loop (class loop *loop)
 	      gsi_next (&gsi2);
 	    }
 	}
+      gimple_stmt_iterator gsi = gsi_after_labels (exit->dest);
       gsi_insert_seq_before (&gsi, stmts, GSI_SAME_STMT);
       if (dump_file)
 	{

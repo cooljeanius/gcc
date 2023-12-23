@@ -39,6 +39,7 @@
 #include "varasm.h"
 #include "toplev.h"
 #include "opts.h"
+#include "ipa-strub.h"
 #include "output.h"
 #include "debug.h"
 #include "convert.h"
@@ -130,6 +131,34 @@ static const struct attribute_spec::exclusions attr_stack_protect_exclusions[] =
   { NULL, false, false, false },
 };
 
+static const struct attribute_spec::exclusions attr_always_inline_exclusions[] =
+{
+  { "noinline", true, true, true },
+  { "target_clones", true, true, true },
+  { NULL, false, false, false },
+};
+
+static const struct attribute_spec::exclusions attr_noinline_exclusions[] =
+{
+  { "always_inline", true, true, true },
+  { NULL, false, false, false },
+};
+
+static const struct attribute_spec::exclusions attr_target_exclusions[] =
+{
+  { "target_clones", TARGET_HAS_FMV_TARGET_ATTRIBUTE,
+    TARGET_HAS_FMV_TARGET_ATTRIBUTE, TARGET_HAS_FMV_TARGET_ATTRIBUTE },
+  { NULL, false, false, false },
+};
+
+static const struct attribute_spec::exclusions attr_target_clones_exclusions[] =
+{
+  { "always_inline", true, true, true },
+  { "target", TARGET_HAS_FMV_TARGET_ATTRIBUTE, TARGET_HAS_FMV_TARGET_ATTRIBUTE,
+    TARGET_HAS_FMV_TARGET_ATTRIBUTE },
+  { NULL, false, false, false },
+};
+
 /* Fake handler for attributes we don't properly support, typically because
    they'd require dragging a lot of the common-c front-end circuitry.  */
 static tree fake_attribute_handler (tree *, tree, tree, int, bool *);
@@ -165,7 +194,7 @@ static const attribute_spec gnat_internal_attributes[] =
   { "strub",	    0, 1, false, true, false, true,
     handle_strub_attribute, NULL },
   { "noinline",     0, 0,  true,  false, false, false,
-    handle_noinline_attribute, NULL },
+    handle_noinline_attribute, attr_noinline_exclusions },
   { "noclone",      0, 0,  true,  false, false, false,
     handle_noclone_attribute, NULL },
   { "no_icf",       0, 0,  true,  false, false, false,
@@ -175,7 +204,7 @@ static const attribute_spec gnat_internal_attributes[] =
   { "leaf",         0, 0,  true,  false, false, false,
     handle_leaf_attribute, NULL },
   { "always_inline",0, 0,  true,  false, false, false,
-    handle_always_inline_attribute, NULL },
+    handle_always_inline_attribute, attr_always_inline_exclusions },
   { "malloc",       0, 0,  true,  false, false, false,
     handle_malloc_attribute, NULL },
   { "type generic", 0, 0,  false, true,  true,  false,
@@ -192,9 +221,9 @@ static const attribute_spec gnat_internal_attributes[] =
   { "simd",         0, 1,  true,  false, false, false,
     handle_simd_attribute, NULL },
   { "target",       1, -1, true,  false, false, false,
-    handle_target_attribute, NULL },
+    handle_target_attribute, attr_target_exclusions },
   { "target_clones",1, -1, true,  false, false, false,
-    handle_target_clones_attribute, NULL },
+    handle_target_clones_attribute, attr_target_clones_exclusions },
 
   { "vector_size",  1, 1,  false, true,  false, false,
     handle_vector_size_attribute, NULL },
@@ -221,7 +250,7 @@ static const attribute_spec gnat_internal_attributes[] =
 
 const scoped_attribute_specs gnat_internal_attribute_table =
 {
-  "gnu", gnat_internal_attributes
+  "gnu", { gnat_internal_attributes }
 };
 
 /* Associates a GNAT tree node to a GCC tree node. It is used in
@@ -6742,9 +6771,77 @@ handle_no_stack_protector_attribute (tree *node, tree name, tree, int,
    struct attribute_spec.handler.  */
 
 static tree
-handle_strub_attribute (tree *, tree, tree, int, bool *no_add_attrs)
+handle_strub_attribute (tree *node, tree name,
+			tree args,
+			int ARG_UNUSED (flags), bool *no_add_attrs)
 {
-  *no_add_attrs = true;
+  bool enable = true;
+
+  if (args && FUNCTION_POINTER_TYPE_P (*node))
+    *node = TREE_TYPE (*node);
+
+  if (args && FUNC_OR_METHOD_TYPE_P (*node))
+    {
+      switch (strub_validate_fn_attr_parm (TREE_VALUE (args)))
+	{
+	case 1:
+	case 2:
+	  enable = true;
+	  break;
+
+	case 0:
+	  warning (OPT_Wattributes,
+		   "%qE attribute ignored because of argument %qE",
+		   name, TREE_VALUE (args));
+	  *no_add_attrs = true;
+	  enable = false;
+	  break;
+
+	case -1:
+	case -2:
+	  enable = false;
+	  break;
+
+	default:
+	  gcc_unreachable ();
+	}
+
+      args = TREE_CHAIN (args);
+    }
+
+  if (args)
+    {
+      warning (OPT_Wattributes,
+	       "ignoring attribute %qE because of excess arguments"
+	       " starting at %qE",
+	       name, TREE_VALUE (args));
+      *no_add_attrs = true;
+      enable = false;
+    }
+
+  /* Warn about unmet expectations that the strub attribute works like a
+     qualifier.  ??? Could/should we extend it to the element/field types
+     here?  */
+  if (TREE_CODE (*node) == ARRAY_TYPE
+      || VECTOR_TYPE_P (*node)
+      || TREE_CODE (*node) == COMPLEX_TYPE)
+    warning (OPT_Wattributes,
+	     "attribute %qE does not apply to elements"
+	     " of non-scalar type %qT",
+	     name, *node);
+  else if (RECORD_OR_UNION_TYPE_P (*node))
+    warning (OPT_Wattributes,
+	     "attribute %qE does not apply to fields"
+	     " of aggregate type %qT",
+	     name, *node);
+
+  /* If we see a strub-enabling attribute, and we're at the default setting,
+     implicitly or explicitly, note that the attribute was seen, so that we can
+     reduce the compile-time overhead to nearly zero when the strub feature is
+     not used.  */
+  if (enable && flag_strub < -2)
+    flag_strub += 2;
+
   return NULL_TREE;
 }
 
@@ -6757,16 +6854,7 @@ handle_noinline_attribute (tree *node, tree name,
 			   int ARG_UNUSED (flags), bool *no_add_attrs)
 {
   if (TREE_CODE (*node) == FUNCTION_DECL)
-    {
-      if (lookup_attribute ("always_inline", DECL_ATTRIBUTES (*node)))
-	{
-	  warning (OPT_Wattributes, "%qE attribute ignored due to conflict "
-		   "with attribute %qs", name, "always_inline");
-	  *no_add_attrs = true;
-	}
-      else
-	DECL_UNINLINABLE (*node) = 1;
-    }
+    DECL_UNINLINABLE (*node) = 1;
   else
     {
       warning (OPT_Wattributes, "%qE attribute ignored", name);
@@ -7065,12 +7153,6 @@ handle_target_attribute (tree *node, tree name, tree args, int flags,
       warning (OPT_Wattributes, "%qE attribute ignored", name);
       *no_add_attrs = true;
     }
-  else if (lookup_attribute ("target_clones", DECL_ATTRIBUTES (*node)))
-    {
-      warning (OPT_Wattributes, "%qE attribute ignored due to conflict "
-		   "with %qs attribute", name, "target_clones");
-      *no_add_attrs = true;
-    }
   else if (!targetm.target_option.valid_attribute_p (*node, name, args, flags))
     *no_add_attrs = true;
 
@@ -7098,23 +7180,8 @@ handle_target_clones_attribute (tree *node, tree name, tree ARG_UNUSED (args),
 {
   /* Ensure we have a function type.  */
   if (TREE_CODE (*node) == FUNCTION_DECL)
-    {
-      if (lookup_attribute ("always_inline", DECL_ATTRIBUTES (*node)))
-	{
-	  warning (OPT_Wattributes, "%qE attribute ignored due to conflict "
-		   "with %qs attribute", name, "always_inline");
-	  *no_add_attrs = true;
-	}
-      else if (lookup_attribute ("target", DECL_ATTRIBUTES (*node)))
-	{
-	  warning (OPT_Wattributes, "%qE attribute ignored due to conflict "
-		   "with %qs attribute", name, "target");
-	  *no_add_attrs = true;
-	}
-      else
-	/* Do not inline functions with multiple clone targets.  */
-	DECL_UNINLINABLE (*node) = 1;
-    }
+    /* Do not inline functions with multiple clone targets.  */
+    DECL_UNINLINABLE (*node) = 1;
   else
     {
       warning (OPT_Wattributes, "%qE attribute ignored", name);

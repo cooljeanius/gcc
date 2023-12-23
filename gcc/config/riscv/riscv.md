@@ -41,6 +41,7 @@
   ;; Symbolic accesses.  The order of this list must match that of
   ;; enum riscv_symbol_type in riscv-protos.h.
   UNSPEC_ADDRESS_FIRST
+  UNSPEC_FORCE_FOR_MEM
   UNSPEC_PCREL
   UNSPEC_LOAD_GOT
   UNSPEC_TLS
@@ -235,7 +236,6 @@
   RVVM1x7DF,RVVM1x6DF,RVVM1x5DF,RVVM2x4DF,
   RVVM1x4DF,RVVM2x3DF,RVVM1x3DF,RVVM4x2DF,
   RVVM2x2DF,RVVM1x2DF,
-  VNx2x1DF,VNx3x1DF,VNx4x1DF,VNx5x1DF,VNx6x1DF,VNx7x1DF,VNx8x1DF,
   V1QI,V2QI,V4QI,V8QI,V16QI,V32QI,V64QI,V128QI,V256QI,V512QI,V1024QI,V2048QI,V4096QI,
   V1HI,V2HI,V4HI,V8HI,V16HI,V32HI,V64HI,V128HI,V256HI,V512HI,V1024HI,V2048HI,
   V1SI,V2SI,V4SI,V8SI,V16SI,V32SI,V64SI,V128SI,V256SI,V512SI,V1024SI,
@@ -504,7 +504,7 @@
 ;; Widening instructions have group-overlap constraints.  Those are only
 ;; valid for certain register-group sizes.  This attribute marks the
 ;; alternatives not matching the required register-group size as disabled.
-(define_attr "group_overlap" "none,W21,W42,W84,W43,W86,W87"
+(define_attr "group_overlap" "none,W21,W42,W84,W43,W86,W87,W0"
   (const_string "none"))
 
 (define_attr "group_overlap_valid" "no,yes"
@@ -525,9 +525,9 @@
 
          ;; According to RVV ISA:
          ;; The destination EEW is greater than the source EEW, the source EMUL is at least 1,
-	 ;; and the overlap is in the highest-numbered part of the destination register group
-	 ;; (e.g., when LMUL=8, vzext.vf4 v0, v6 is legal, but a source of v0, v2, or v4 is not).
-	 ;; So the source operand should have LMUL >= 1.
+         ;; and the overlap is in the highest-numbered part of the destination register group
+         ;; (e.g., when LMUL=8, vzext.vf4 v0, v6 is legal, but a source of v0, v2, or v4 is not).
+         ;; So the source operand should have LMUL >= 1.
          (and (eq_attr "group_overlap" "W43")
 	      (match_test "riscv_get_v_regno_alignment (GET_MODE (operands[0])) != 4
 			   && riscv_get_v_regno_alignment (GET_MODE (operands[3])) >= 1"))
@@ -536,6 +536,12 @@
          (and (eq_attr "group_overlap" "W86,W87")
 	      (match_test "riscv_get_v_regno_alignment (GET_MODE (operands[0])) != 8
 			   && riscv_get_v_regno_alignment (GET_MODE (operands[3])) >= 1"))
+	 (const_string "no")
+
+         ;; W21 supports highest-number overlap for source LMUL = 1.
+         ;; For 'wv' variant, we can also allow wide source operand overlaps dest operand.
+         (and (eq_attr "group_overlap" "W0")
+	      (match_test "riscv_get_v_regno_alignment (GET_MODE (operands[0])) > 1"))
 	 (const_string "no")
         ]
        (const_string "yes")))
@@ -2354,9 +2360,7 @@
 	      (use (match_operand:SI 3 "const_int_operand"))])]
   ""
 {
-  if (riscv_vector::expand_block_move (operands[0], operands[1], operands[2]))
-    DONE;
-  else if (riscv_expand_block_move (operands[0], operands[1], operands[2]))
+  if (riscv_expand_block_move (operands[0], operands[1], operands[2]))
     DONE;
   else
     FAIL;
@@ -3705,7 +3709,8 @@
 			  (match_operand:BLK 2)))
 	      (use (match_operand:SI 3))
 	      (use (match_operand:SI 4))])]
-  "riscv_inline_strncmp && !optimize_size && (TARGET_ZBB || TARGET_XTHEADBB)"
+  "riscv_inline_strncmp && !optimize_size
+    && (TARGET_ZBB || TARGET_XTHEADBB || TARGET_VECTOR)"
 {
   if (riscv_expand_strcmp (operands[0], operands[1], operands[2],
                            operands[3], operands[4]))
@@ -3725,7 +3730,8 @@
 	      (compare:SI (match_operand:BLK 1)
 			  (match_operand:BLK 2)))
 	      (use (match_operand:SI 3))])]
-  "riscv_inline_strcmp && !optimize_size && (TARGET_ZBB || TARGET_XTHEADBB)"
+  "riscv_inline_strcmp && !optimize_size
+    && (TARGET_ZBB || TARGET_XTHEADBB || TARGET_VECTOR)"
 {
   if (riscv_expand_strcmp (operands[0], operands[1], operands[2],
                            NULL_RTX, operands[3]))
@@ -3746,7 +3752,8 @@
 		     (match_operand:SI 2 "const_int_operand")
 		     (match_operand:SI 3 "const_int_operand")]
 		  UNSPEC_STRLEN))]
-  "riscv_inline_strlen && !optimize_size && (TARGET_ZBB || TARGET_XTHEADBB)"
+  "riscv_inline_strlen && !optimize_size
+    && (TARGET_ZBB || TARGET_XTHEADBB || TARGET_VECTOR)"
 {
   rtx search_char = operands[2];
 
@@ -3758,6 +3765,14 @@
   else
     FAIL;
 })
+
+(define_insn "*large_load_address"
+  [(set (match_operand:DI 0 "register_operand" "=r")
+        (mem:DI (match_operand 1 "pcrel_symbol_operand" "")))]
+  "TARGET_64BIT && riscv_cmodel == CM_LARGE"
+  "ld\t%0,%1"
+  [(set_attr "type" "load")
+   (set (attr "length") (const_int 8))])
 
 (include "bitmanip.md")
 (include "crypto.md")

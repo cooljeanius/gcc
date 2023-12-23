@@ -1965,19 +1965,17 @@
 
 ;; All integer modes with AVX512BW/DQ.
 (define_mode_iterator SWI1248_AVX512BWDQ
-  [(QI "TARGET_AVX512DQ") HI (SI "TARGET_AVX512BW")
-   (DI "TARGET_AVX512BW && TARGET_EVEX512")])
+  [(QI "TARGET_AVX512DQ") HI (SI "TARGET_AVX512BW") (DI "TARGET_AVX512BW")])
 
 ;; All integer modes with AVX512BW, where HImode operation
 ;; can be used instead of QImode.
 (define_mode_iterator SWI1248_AVX512BW
-  [QI HI (SI "TARGET_AVX512BW")
-   (DI "TARGET_AVX512BW && TARGET_EVEX512")])
+  [QI HI (SI "TARGET_AVX512BW") (DI "TARGET_AVX512BW")])
 
 ;; All integer modes with AVX512BW/DQ, even HImode requires DQ.
 (define_mode_iterator SWI1248_AVX512BWDQ2
   [(QI "TARGET_AVX512DQ") (HI "TARGET_AVX512DQ")
-   (SI "TARGET_AVX512BW") (DI "TARGET_AVX512BW && TARGET_EVEX512")])
+   (SI "TARGET_AVX512BW") (DI "TARGET_AVX512BW")])
 
 (define_expand "kmov<mskmodesuffix>"
   [(set (match_operand:SWI1248_AVX512BWDQ 0 "nonimmediate_operand")
@@ -2116,7 +2114,7 @@
 	(zero_extend:DI
 	  (not:SI (match_operand:SI 1 "register_operand" "k"))))
    (unspec [(const_int 0)] UNSPEC_MASKOP)]
-  "TARGET_AVX512BW && TARGET_EVEX512"
+  "TARGET_AVX512BW"
   "knotd\t{%1, %0|%0, %1}";
   [(set_attr "type" "msklog")
    (set_attr "prefix" "vex")
@@ -2126,7 +2124,7 @@
   [(set (match_operand:DI 0 "mask_reg_operand")
 	(zero_extend:DI
 	  (not:SI (match_operand:SI 1 "mask_reg_operand"))))]
-  "TARGET_AVX512BW && TARGET_EVEX512 && reload_completed"
+  "TARGET_AVX512BW && reload_completed"
   [(parallel
      [(set (match_dup 0)
 	   (zero_extend:DI
@@ -2256,7 +2254,7 @@
 	    (const_int 32))
 	  (zero_extend:DI (match_operand:SI 2 "register_operand" "k"))))
    (unspec [(const_int 0)] UNSPEC_MASKOP)]
-  "TARGET_AVX512BW && TARGET_EVEX512"
+  "TARGET_AVX512BW"
   "kunpckdq\t{%2, %1, %0|%0, %1, %2}"
   [(set_attr "mode" "DI")])
 
@@ -16614,6 +16612,18 @@
   DONE;
 })
 
+(define_split
+  [(set (match_operand:VI248_AVX2 0 "register_operand")
+        (eq:VI248_AVX2
+	  (eq:VI248_AVX2
+	    (lshiftrt:VI248_AVX2
+	      (match_operand:VI248_AVX2 1 "register_operand")
+	      (match_operand:SI 2 "const_int_operand"))
+	    (match_operand:VI248_AVX2 3 "const0_operand"))
+	  (match_operand:VI248_AVX2 4 "const0_operand")))]
+  "INTVAL (operands[2]) == GET_MODE_PRECISION (<ssescalarmode>mode) - 1"
+  [(set (match_dup 0) (ashiftrt:VI248_AVX2 (match_dup 1) (match_dup 2)))])
+
 (define_expand "rotlv1ti3"
   [(set (match_operand:V1TI 0 "register_operand")
 	(rotate:V1TI
@@ -18284,18 +18294,16 @@
      (unspec [(const_int 0)] UNSPEC_MASKOP)])]
   "TARGET_AVX512F")
 
-(define_mode_iterator SWI24_MASK [HI (SI "TARGET_EVEX512")])
-
 (define_expand "vec_pack_trunc_<mode>"
   [(parallel
     [(set (match_operand:<DOUBLEMASKMODE> 0 "register_operand")
 	  (ior:<DOUBLEMASKMODE>
 	    (ashift:<DOUBLEMASKMODE>
 	      (zero_extend:<DOUBLEMASKMODE>
-	        (match_operand:SWI24_MASK 2 "register_operand"))
+	        (match_operand:SWI24 2 "register_operand"))
 	      (match_dup 3))
 	    (zero_extend:<DOUBLEMASKMODE>
-	      (match_operand:SWI24_MASK 1 "register_operand"))))
+	      (match_operand:SWI24 1 "register_operand"))))
      (unspec [(const_int 0)] UNSPEC_MASKOP)])]
   "TARGET_AVX512BW"
 {
@@ -20932,7 +20940,7 @@
 (define_expand "vec_unpacks_lo_di"
   [(set (match_operand:SI 0 "register_operand")
         (subreg:SI (match_operand:DI 1 "register_operand") 0))]
-  "TARGET_AVX512BW && TARGET_EVEX512")
+  "TARGET_AVX512BW")
 
 (define_expand "vec_unpacku_hi_<mode>"
   [(match_operand:<sseunpackmode> 0 "register_operand")
@@ -20971,14 +20979,12 @@
       (unspec [(const_int 0)] UNSPEC_MASKOP)])]
   "TARGET_AVX512F")
 
-(define_mode_iterator SWI48x_MASK [SI (DI "TARGET_EVEX512")])
-
 (define_expand "vec_unpacks_hi_<mode>"
   [(parallel
-     [(set (subreg:SWI48x_MASK
+     [(set (subreg:SWI48x
 	     (match_operand:<HALFMASKMODE> 0 "register_operand") 0)
-	   (lshiftrt:SWI48x_MASK
-	     (match_operand:SWI48x_MASK 1 "register_operand")
+	   (lshiftrt:SWI48x
+	     (match_operand:SWI48x 1 "register_operand")
 	     (match_dup 2)))
       (unspec [(const_int 0)] UNSPEC_MASKOP)])]
   "TARGET_AVX512BW"
@@ -30838,20 +30844,78 @@
 
 (define_expand "udot_prod<mode>"
   [(match_operand:<ssedvecmode> 0 "register_operand")
-   (match_operand:VI1 1 "register_operand")
-   (match_operand:VI1 2 "register_operand")
+   (match_operand:VI1_AVX2 1 "register_operand")
+   (match_operand:VI1_AVX2 2 "register_operand")
    (match_operand:<ssedvecmode> 3 "register_operand")]
-  "TARGET_AVXVNNIINT8"
+  "TARGET_SSE2"
 {
-  operands[1] = lowpart_subreg (<ssedvecmode>mode,
-                                force_reg (<MODE>mode, operands[1]),
-                                <MODE>mode);
-  operands[2] = lowpart_subreg (<ssedvecmode>mode,
-                                force_reg (<MODE>mode, operands[2]),
-                                <MODE>mode);
-  emit_insn (gen_rtx_SET (operands[0], operands[3]));
-  emit_insn (gen_vpdpbuud_<ssedvecmodelower> (operands[0], operands[3],
-				   operands[1], operands[2]));
+  if (TARGET_AVXVNNIINT8)
+    {
+      operands[1] = lowpart_subreg (<ssedvecmode>mode,
+				    force_reg (<MODE>mode, operands[1]),
+				    <MODE>mode);
+      operands[2] = lowpart_subreg (<ssedvecmode>mode,
+				    force_reg (<MODE>mode, operands[2]),
+				    <MODE>mode);
+      emit_insn (gen_rtx_SET (operands[0], operands[3]));
+      emit_insn (gen_vpdpbuud_<ssedvecmodelower> (operands[0], operands[3],
+						  operands[1], operands[2]));
+   }
+ else
+   {
+     /* Emulate with vpdpwssd.  */
+     rtx op1_lo = gen_reg_rtx (<sseunpackmode>mode);
+     rtx op1_hi = gen_reg_rtx (<sseunpackmode>mode);
+     rtx op2_lo = gen_reg_rtx (<sseunpackmode>mode);
+     rtx op2_hi = gen_reg_rtx (<sseunpackmode>mode);
+
+     emit_insn (gen_vec_unpacku_lo_<mode> (op1_lo, operands[1]));
+     emit_insn (gen_vec_unpacku_lo_<mode> (op2_lo, operands[2]));
+     emit_insn (gen_vec_unpacku_hi_<mode> (op1_hi, operands[1]));
+     emit_insn (gen_vec_unpacku_hi_<mode> (op2_hi, operands[2]));
+
+     rtx res1 = gen_reg_rtx (<ssedvecmode>mode);
+     rtx res2 = gen_reg_rtx (<ssedvecmode>mode);
+     rtx sum = gen_reg_rtx (<ssedvecmode>mode);
+
+     emit_move_insn (sum, CONST0_RTX (<ssedvecmode>mode));
+     emit_insn (gen_sdot_prod<sseunpackmodelower> (res1, op1_lo,
+						    op2_lo, sum));
+     emit_insn (gen_sdot_prod<sseunpackmodelower> (res2, op1_hi,
+						    op2_hi, operands[3]));
+     emit_insn (gen_add<ssedvecmodelower>3 (operands[0], res1, res2));
+   }
+
+  DONE;
+})
+
+(define_expand "udot_prodv64qi"
+  [(match_operand:V16SI 0 "register_operand")
+   (match_operand:V64QI 1 "register_operand")
+   (match_operand:V64QI 2 "register_operand")
+   (match_operand:V16SI 3 "register_operand")]
+  "(TARGET_AVX512VNNI || TARGET_AVX512BW) && TARGET_EVEX512"
+{
+  /* Emulate with vpdpwssd.  */
+  rtx op1_lo = gen_reg_rtx (V32HImode);
+  rtx op1_hi = gen_reg_rtx (V32HImode);
+  rtx op2_lo = gen_reg_rtx (V32HImode);
+  rtx op2_hi = gen_reg_rtx (V32HImode);
+
+  emit_insn (gen_vec_unpacku_lo_v64qi (op1_lo, operands[1]));
+  emit_insn (gen_vec_unpacku_lo_v64qi (op2_lo, operands[2]));
+  emit_insn (gen_vec_unpacku_hi_v64qi (op1_hi, operands[1]));
+  emit_insn (gen_vec_unpacku_hi_v64qi (op2_hi, operands[2]));
+
+  rtx res1 = gen_reg_rtx (V16SImode);
+  rtx res2 = gen_reg_rtx (V16SImode);
+  rtx sum = gen_reg_rtx (V16SImode);
+
+  emit_move_insn (sum, CONST0_RTX (V16SImode));
+  emit_insn (gen_sdot_prodv32hi (res1, op1_lo, op2_lo, sum));
+  emit_insn (gen_sdot_prodv32hi (res2, op1_hi, op2_hi, operands[3]));
+
+  emit_insn (gen_addv16si3 (operands[0], res1, res2));
   DONE;
 })
 

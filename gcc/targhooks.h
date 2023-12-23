@@ -142,8 +142,9 @@ extern bool hook_bool_CUMULATIVE_ARGS_arg_info_true
   (cumulative_args_t, const function_arg_info &);
 extern int hook_int_CUMULATIVE_ARGS_arg_info_0
   (cumulative_args_t, const function_arg_info &);
-extern void hook_void_CUMULATIVE_ARGS_tree
-  (cumulative_args_t, tree);
+extern void hook_void_CUMULATIVE_ARGS (cumulative_args_t);
+extern void hook_void_CUMULATIVE_ARGS_tree (cumulative_args_t, tree);
+extern void hook_void_CUMULATIVE_ARGS_rtx_tree (cumulative_args_t, rtx, tree);
 extern const char *hook_invalid_arg_for_unprototyped_fn
   (const_tree, const_tree, const_tree);
 extern void default_function_arg_advance
@@ -192,6 +193,7 @@ extern bool default_hard_regno_scratch_ok (unsigned int);
 extern bool default_mode_dependent_address_p (const_rtx, addr_space_t);
 extern bool default_new_address_profitable_p (rtx, rtx_insn *, rtx);
 extern bool default_target_option_valid_attribute_p (tree, tree, tree, int);
+extern bool default_target_option_valid_version_attribute_p (tree, tree, tree, int);
 extern bool default_target_option_pragma_parse (tree, tree);
 extern bool default_target_can_inline_p (tree, tree);
 extern bool default_update_ipa_fn_target_info (unsigned int &, const gimple *);

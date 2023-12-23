@@ -2098,6 +2098,18 @@ ix86_option_override_internal (bool main_args_p,
 		 : G_("%<target(\"tune=x86-64\")%> is deprecated; use "
 		      "%<target(\"tune=k8\")%> or %<target(\"tune=generic\")%>"
 		      " instead as appropriate"));
+      else if (!strcmp (opts->x_ix86_tune_string, "knl"))
+	warning (OPT_Wdeprecated,
+		 main_args_p
+		 ? G_("%<-mtune=knl%> support will be removed in GCC 15")
+		 : G_("%<target(\"tune=knl\")%> support will be removed in "
+		      "GCC 15"));
+      else if (!strcmp (opts->x_ix86_tune_string, "knm"))
+	warning (OPT_Wdeprecated,
+		 main_args_p
+		 ? G_("%<-mtune=knm%> support will be removed in GCC 15")
+		 : G_("%<target(\"tune=knm\")%> support will be removed in "
+		      "GCC 15"));
     }
   else
     {
@@ -2129,6 +2141,8 @@ ix86_option_override_internal (bool main_args_p,
 
   if (TARGET_APX_F && !TARGET_64BIT)
     error ("%<-mapxf%> is not supported for 32-bit code");
+  else if (opts->x_ix86_apx_features != apx_none && !TARGET_64BIT)
+    error ("%<-mapx-features=%> option is not supported for 32-bit code");
 
   if (TARGET_UINTR && !TARGET_64BIT)
     error ("%<-muintr%> not supported for 32-bit code");
@@ -2297,6 +2311,19 @@ ix86_option_override_internal (bool main_args_p,
 		   "instruction set");
 	    return false;
 	  }
+
+	if (!strcmp (opts->x_ix86_arch_string, "knl"))
+	  warning (OPT_Wdeprecated,
+		   main_args_p
+		   ? G_("%<-march=knl%> support will be removed in GCC 15")
+		   : G_("%<target(\"arch=knl\")%> support will be removed in "
+			"GCC 15"));
+	else if (!strcmp (opts->x_ix86_arch_string, "knm"))
+	  warning (OPT_Wdeprecated,
+		   main_args_p
+		   ? G_("%<-march=knm%> support will be removed in GCC 15")
+		   : G_("%<target(\"arch=knm\")%> support will be removed in "
+			"GCC 15"));
 
 	ix86_schedule = processor_alias_table[i].schedule;
 	ix86_arch = processor_alias_table[i].processor;
@@ -2985,7 +3012,9 @@ ix86_option_override_internal (bool main_args_p,
     {
       /* Set the maximum number of bits can be moved from memory to
 	 memory efficiently.  */
-      if (ix86_tune_features[X86_TUNE_AVX512_MOVE_BY_PIECES])
+      if (opts_set->x_prefer_vector_width_type != PVW_NONE)
+	opts->x_ix86_move_max = opts->x_prefer_vector_width_type;
+      else if (ix86_tune_features[X86_TUNE_AVX512_MOVE_BY_PIECES])
 	opts->x_ix86_move_max = PVW_AVX512;
       else if (ix86_tune_features[X86_TUNE_AVX256_MOVE_BY_PIECES])
 	opts->x_ix86_move_max = PVW_AVX256;
@@ -3007,7 +3036,9 @@ ix86_option_override_internal (bool main_args_p,
     {
       /* Set the maximum number of bits can be stored to memory
 	 efficiently.  */
-      if (ix86_tune_features[X86_TUNE_AVX512_STORE_BY_PIECES])
+      if (opts_set->x_prefer_vector_width_type != PVW_NONE)
+	opts->x_ix86_store_max = opts->x_prefer_vector_width_type;
+      else if (ix86_tune_features[X86_TUNE_AVX512_STORE_BY_PIECES])
 	opts->x_ix86_store_max = PVW_AVX512;
       else if (ix86_tune_features[X86_TUNE_AVX256_STORE_BY_PIECES])
 	opts->x_ix86_store_max = PVW_AVX256;
@@ -4171,7 +4202,7 @@ static const attribute_spec ix86_gnu_attributes[] =
 
 const scoped_attribute_specs ix86_gnu_attribute_table =
 {
-  "gnu", ix86_gnu_attributes
+  "gnu", { ix86_gnu_attributes }
 };
 
 #include "gt-i386-options.h"

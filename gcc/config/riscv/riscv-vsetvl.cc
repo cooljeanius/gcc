@@ -579,6 +579,8 @@ extract_single_source (set_info *set)
   if (!set->insn ()->is_phi ())
     return nullptr;
   hash_set<set_info *> sets = get_all_sets (set, true, false, true);
+  if (sets.is_empty ())
+    return nullptr;
 
   insn_info *first_insn = (*sets.begin ())->insn ();
   if (first_insn->is_artificial ())
@@ -594,6 +596,14 @@ extract_single_source (set_info *set)
     }
 
   return first_insn;
+}
+
+static insn_info *
+extract_single_source (def_info *def)
+{
+  if (!def)
+    return nullptr;
+  return extract_single_source (dyn_cast<set_info *> (def));
 }
 
 static bool
@@ -1116,6 +1126,27 @@ public:
       return gen_vsetvl (Pmode, get_vl (), avl, sew, vlmul, ta, ma);
     else
       return gen_vsetvl_discard_result (Pmode, avl, sew, vlmul, ta, ma);
+  }
+
+  /* Return true that the non-AVL operands of THIS will be modified
+     if we fuse the VL modification from OTHER into THIS.  */
+  bool vl_modify_non_avl_op_p (const vsetvl_info &other) const
+  {
+    /* We don't need to worry about any operands from THIS be
+       modified by OTHER vsetvl since we OTHER vsetvl doesn't
+       modify any operand.  */
+    if (!other.has_vl ())
+      return false;
+
+    /* THIS VL operand always preempt OTHER VL operand.  */
+    if (this->has_vl ())
+      return false;
+
+    /* If THIS has non IMM AVL and THIS is AVL compatible with
+       OTHER, the AVL value of THIS is same as VL value of OTHER.  */
+    if (!this->has_imm_avl ())
+      return false;
+    return find_access (this->get_insn ()->uses (), REGNO (other.get_vl ()));
   }
 
   bool operator== (const vsetvl_info &other) const
@@ -1886,6 +1917,20 @@ public:
     gcc_unreachable ();
   }
 
+  bool vl_not_in_conflict_p (const vsetvl_info &prev, const vsetvl_info &next)
+  {
+    /* We don't fuse this following case:
+
+	li a5, -1
+	vmv.s.x v0, a5         -- PREV
+	vsetvli a5, ...        -- NEXT
+
+       Don't fuse NEXT into PREV.
+    */
+    return !prev.vl_modify_non_avl_op_p (next)
+	   && !next.vl_modify_non_avl_op_p (prev);
+  }
+
   bool avl_compatible_p (const vsetvl_info &prev, const vsetvl_info &next)
   {
     gcc_assert (prev.valid_p () && next.valid_p ());
@@ -1943,7 +1988,8 @@ public:
   {
     bool compatible_p = sew_lmul_compatible_p (prev, next)
 			&& policy_compatible_p (prev, next)
-			&& avl_compatible_p (prev, next);
+			&& avl_compatible_p (prev, next)
+			&& vl_not_in_conflict_p (prev, next);
     return compatible_p;
   }
 
@@ -1951,7 +1997,8 @@ public:
   {
     bool available_p = sew_lmul_available_p (prev, next)
 		       && policy_available_p (prev, next)
-		       && avl_available_p (prev, next);
+		       && avl_available_p (prev, next)
+		       && vl_not_in_conflict_p (prev, next);
     gcc_assert (!available_p || compatible_p (prev, next));
     return available_p;
   }
@@ -2034,7 +2081,7 @@ private:
     gcc_unreachable ();
   }
 
-  bool anticpatable_exp_p (const vsetvl_info &header_info)
+  bool anticipated_exp_p (const vsetvl_info &header_info)
   {
     if (!header_info.has_nonvlmax_reg_avl () && !header_info.has_vl ())
       return true;
@@ -2645,11 +2692,62 @@ pre_vsetvl::compute_lcm_local_properties ()
 		    }
 		}
 
-	      for (const insn_info *insn : bb->real_nondebug_insns ())
+	      for (insn_info *insn : bb->real_nondebug_insns ())
 		{
 		  if (info.has_nonvlmax_reg_avl ()
 		      && find_access (insn->defs (), REGNO (info.get_avl ())))
 		    {
+		      bitmap_clear_bit (m_transp[bb_index], i);
+		      break;
+		    }
+
+		  if (info.has_vl ()
+		      && reg_mentioned_p (info.get_vl (), insn->rtl ()))
+		    {
+		      if (find_access (insn->defs (), REGNO (info.get_vl ())))
+			/* We can't fuse vsetvl into the blocks that modify the
+			   VL operand since successors of such blocks will need
+			   the value of those blocks are defining.
+
+					  bb 4: def a5
+					  /   \
+				  bb 5:use a5  bb 6:vsetvl a5, 5
+
+			   The example above shows that we can't fuse vsetvl
+			   from bb 6 into bb 4 since the successor bb 5 is using
+			   the value defined in bb 4.  */
+			;
+		      else
+			{
+			  /* We can't fuse vsetvl into the blocks that use the
+			     VL operand which has different value from the
+			     vsetvl info.
+
+					    bb 4: def a5
+					      |
+					    bb 5: use a5
+					      |
+					    bb 6: def a5
+					      |
+					    bb 7: use a5
+
+			     The example above shows that we can't fuse vsetvl
+			     from bb 6 into bb 5 since their value is different.
+			   */
+			  resource_info resource
+			    = full_register (REGNO (info.get_vl ()));
+			  def_lookup dl = crtl->ssa->find_def (resource, insn);
+			  def_info *def
+			    = dl.matching_set_or_last_def_of_prev_group ();
+			  insn_info *def_insn = extract_single_source (def);
+			  if (def_insn && vsetvl_insn_p (def_insn->rtl ()))
+			    {
+			      vsetvl_info def_info = vsetvl_info (def_insn);
+			      if (m_dem.compatible_p (def_info, info))
+				continue;
+			    }
+			}
+
 		      bitmap_clear_bit (m_transp[bb_index], i);
 		      break;
 		    }
@@ -2662,8 +2760,7 @@ pre_vsetvl::compute_lcm_local_properties ()
       vsetvl_info &header_info = block_info.get_entry_info ();
       vsetvl_info &footer_info = block_info.get_exit_info ();
 
-      if (header_info.valid_p ()
-	  && (anticpatable_exp_p (header_info) || block_info.full_available))
+      if (header_info.valid_p () && anticipated_exp_p (header_info))
 	bitmap_set_bit (m_antloc[bb_index],
 			get_expr_index (m_exprs, header_info));
 
@@ -2920,6 +3017,13 @@ pre_vsetvl::earliest_fuse_vsetvl_info ()
 	      || eg->dest == EXIT_BLOCK_PTR_FOR_FN (cfun))
 	    continue;
 
+	  /* When multiple set bits in earliest edge, such edge may
+	     have infinite loop in preds or succs or multiple conflict
+	     vsetvl expression which make such edge is unrelated.  We
+	     don't perform fusion for such situation.  */
+	  if (bitmap_count_bits (e) != 1)
+	    continue;
+
 	  vsetvl_block_info &src_block_info = get_block_info (eg->src);
 	  vsetvl_block_info &dest_block_info = get_block_info (eg->dest);
 
@@ -3153,6 +3257,17 @@ pre_vsetvl::pre_global_vsetvl_info ()
       gcc_assert (info.get_bb () == bb);
       const vsetvl_block_info &block_info = get_block_info (info.get_bb ());
       gcc_assert (block_info.get_entry_info () == info);
+      info.set_delete ();
+    }
+
+  /* Remove vsetvl infos if all precessors are available to the block.  */
+  for (const bb_info *bb : crtl->ssa->bbs ())
+    {
+      vsetvl_block_info &block_info = get_block_info (bb);
+      if (block_info.empty_p () || !block_info.full_available)
+	continue;
+
+      vsetvl_info &info = block_info.get_entry_info ();
       info.set_delete ();
     }
 

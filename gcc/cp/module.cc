@@ -5683,6 +5683,8 @@ trees_out::lang_decl_bools (tree t)
       WB (lang->u.fn.has_dependent_explicit_spec_p);
       WB (lang->u.fn.immediate_fn_p);
       WB (lang->u.fn.maybe_deleted);
+      WB (lang->u.fn.escalated_p);
+      /* We do not stream lang->u.fn.implicit_constexpr.  */
       goto lds_min;
 
     case lds_decomp:  /* lang_decl_decomp.  */
@@ -5751,6 +5753,8 @@ trees_in::lang_decl_bools (tree t)
       RB (lang->u.fn.has_dependent_explicit_spec_p);
       RB (lang->u.fn.immediate_fn_p);
       RB (lang->u.fn.maybe_deleted);
+      RB (lang->u.fn.escalated_p);
+      /* We do not stream lang->u.fn.implicit_constexpr.  */
       goto lds_min;
 
     case lds_decomp:  /* lang_decl_decomp.  */
@@ -14757,9 +14761,7 @@ module_state::write_cluster (elf_out *to, depset *scc[], unsigned size,
   for (unsigned ix = 0; ix != size; ix++)
     {
       depset *b = scc[ix];
-      for (unsigned jx = (b->get_entity_kind () == depset::EK_BINDING
-			  || b->is_special ()) ? 1 : 0;
-	   jx != b->deps.length (); jx++)
+      for (unsigned jx = b->is_special (); jx != b->deps.length (); jx++)
 	{
 	  depset *dep = b->deps[jx];
 

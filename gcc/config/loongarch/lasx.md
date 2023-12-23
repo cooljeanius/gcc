@@ -32,27 +32,16 @@
   UNSPEC_LASX_XVBITREVI
   UNSPEC_LASX_XVBITSET
   UNSPEC_LASX_XVBITSETI
-  UNSPEC_LASX_XVFCMP_CAF
   UNSPEC_LASX_XVFCLASS
-  UNSPEC_LASX_XVFCMP_CUNE
   UNSPEC_LASX_XVFCVT
   UNSPEC_LASX_XVFCVTH
   UNSPEC_LASX_XVFCVTL
   UNSPEC_LASX_XVFLOGB
   UNSPEC_LASX_XVFRECIP
+  UNSPEC_LASX_XVFRECIPE
   UNSPEC_LASX_XVFRINT
   UNSPEC_LASX_XVFRSQRT
-  UNSPEC_LASX_XVFCMP_SAF
-  UNSPEC_LASX_XVFCMP_SEQ
-  UNSPEC_LASX_XVFCMP_SLE
-  UNSPEC_LASX_XVFCMP_SLT
-  UNSPEC_LASX_XVFCMP_SNE
-  UNSPEC_LASX_XVFCMP_SOR
-  UNSPEC_LASX_XVFCMP_SUEQ
-  UNSPEC_LASX_XVFCMP_SULE
-  UNSPEC_LASX_XVFCMP_SULT
-  UNSPEC_LASX_XVFCMP_SUN
-  UNSPEC_LASX_XVFCMP_SUNE
+  UNSPEC_LASX_XVFRSQRTE
   UNSPEC_LASX_XVFTINT_U
   UNSPEC_LASX_XVCLO
   UNSPEC_LASX_XVSAT_S
@@ -1065,10 +1054,10 @@
    (set_attr "mode" "<MODE>")])
 
 (define_insn "xor<mode>3"
-  [(set (match_operand:ILASX 0 "register_operand" "=f,f,f")
-	(xor:ILASX
-	  (match_operand:ILASX 1 "register_operand" "f,f,f")
-	  (match_operand:ILASX 2 "reg_or_vector_same_val_operand" "f,YC,Urv8")))]
+  [(set (match_operand:LASX 0 "register_operand" "=f,f,f")
+	(xor:LASX
+	  (match_operand:LASX 1 "register_operand" "f,f,f")
+	  (match_operand:LASX 2 "reg_or_vector_same_val_operand" "f,YC,Urv8")))]
   "ISA_HAS_LASX"
   "@
    xvxor.v\t%u0,%u1,%u2
@@ -1192,7 +1181,25 @@
   [(set_attr "type" "simd_fmul")
    (set_attr "mode" "<MODE>")])
 
-(define_insn "div<mode>3"
+(define_expand "div<mode>3"
+  [(set (match_operand:FLASX 0 "register_operand")
+    (div:FLASX (match_operand:FLASX 1 "reg_or_vecotr_1_operand")
+	       (match_operand:FLASX 2 "register_operand")))]
+  "ISA_HAS_LASX"
+{
+  if (<MODE>mode == V8SFmode
+    && TARGET_RECIP_VEC_DIV
+    && optimize_insn_for_speed_p ()
+    && flag_finite_math_only && !flag_trapping_math
+    && flag_unsafe_math_optimizations)
+  {
+    loongarch_emit_swdivsf (operands[0], operands[1],
+	operands[2], V8SFmode);
+    DONE;
+  }
+})
+
+(define_insn "*div<mode>3"
   [(set (match_operand:FLASX 0 "register_operand" "=f")
 	(div:FLASX (match_operand:FLASX 1 "register_operand" "f")
 		   (match_operand:FLASX 2 "register_operand" "f")))]
@@ -1221,7 +1228,23 @@
   [(set_attr "type" "simd_fmadd")
    (set_attr "mode" "<MODE>")])
 
-(define_insn "sqrt<mode>2"
+(define_expand "sqrt<mode>2"
+  [(set (match_operand:FLASX 0 "register_operand")
+    (sqrt:FLASX (match_operand:FLASX 1 "register_operand")))]
+  "ISA_HAS_LASX"
+{
+  if (<MODE>mode == V8SFmode
+      && TARGET_RECIP_VEC_SQRT
+      && flag_unsafe_math_optimizations
+      && optimize_insn_for_speed_p ()
+      && flag_finite_math_only && !flag_trapping_math)
+    {
+      loongarch_emit_swrsqrtsf (operands[0], operands[1], V8SFmode, 0);
+      DONE;
+    }
+})
+
+(define_insn "*sqrt<mode>2"
   [(set (match_operand:FLASX 0 "register_operand" "=f")
 	(sqrt:FLASX (match_operand:FLASX 1 "register_operand" "f")))]
   "ISA_HAS_LASX"
@@ -1445,69 +1468,6 @@
   [(set_attr "type" "simd_fclass")
    (set_attr "mode" "<MODE>")])
 
-(define_insn "lasx_xvfcmp_caf_<flasxfmt>"
-  [(set (match_operand:<VIMODE256> 0 "register_operand" "=f")
-	(unspec:<VIMODE256> [(match_operand:FLASX 1 "register_operand" "f")
-			     (match_operand:FLASX 2 "register_operand" "f")]
-			    UNSPEC_LASX_XVFCMP_CAF))]
-  "ISA_HAS_LASX"
-  "xvfcmp.caf.<flasxfmt>\t%u0,%u1,%u2"
-  [(set_attr "type" "simd_fcmp")
-   (set_attr "mode" "<MODE>")])
-
-(define_insn "lasx_xvfcmp_cune_<FLASX:flasxfmt>"
-  [(set (match_operand:<VIMODE256> 0 "register_operand" "=f")
-	(unspec:<VIMODE256> [(match_operand:FLASX 1 "register_operand" "f")
-			     (match_operand:FLASX 2 "register_operand" "f")]
-			    UNSPEC_LASX_XVFCMP_CUNE))]
-  "ISA_HAS_LASX"
-  "xvfcmp.cune.<FLASX:flasxfmt>\t%u0,%u1,%u2"
-  [(set_attr "type" "simd_fcmp")
-   (set_attr "mode" "<MODE>")])
-
-
-
-(define_int_iterator FSC256_UNS [UNSPEC_LASX_XVFCMP_SAF UNSPEC_LASX_XVFCMP_SUN
-				 UNSPEC_LASX_XVFCMP_SOR UNSPEC_LASX_XVFCMP_SEQ
-				 UNSPEC_LASX_XVFCMP_SNE UNSPEC_LASX_XVFCMP_SUEQ
-				 UNSPEC_LASX_XVFCMP_SUNE UNSPEC_LASX_XVFCMP_SULE
-				 UNSPEC_LASX_XVFCMP_SULT UNSPEC_LASX_XVFCMP_SLE
-				 UNSPEC_LASX_XVFCMP_SLT])
-
-(define_int_attr fsc256
-  [(UNSPEC_LASX_XVFCMP_SAF  "saf")
-   (UNSPEC_LASX_XVFCMP_SUN  "sun")
-   (UNSPEC_LASX_XVFCMP_SOR  "sor")
-   (UNSPEC_LASX_XVFCMP_SEQ  "seq")
-   (UNSPEC_LASX_XVFCMP_SNE  "sne")
-   (UNSPEC_LASX_XVFCMP_SUEQ "sueq")
-   (UNSPEC_LASX_XVFCMP_SUNE "sune")
-   (UNSPEC_LASX_XVFCMP_SULE "sule")
-   (UNSPEC_LASX_XVFCMP_SULT "sult")
-   (UNSPEC_LASX_XVFCMP_SLE  "sle")
-   (UNSPEC_LASX_XVFCMP_SLT  "slt")])
-
-(define_insn "lasx_xvfcmp_<vfcond:fcc>_<FLASX:flasxfmt>"
-  [(set (match_operand:<VIMODE256> 0 "register_operand" "=f")
-	(vfcond:<VIMODE256> (match_operand:FLASX 1 "register_operand" "f")
-			    (match_operand:FLASX 2 "register_operand" "f")))]
-  "ISA_HAS_LASX"
-  "xvfcmp.<vfcond:fcc>.<FLASX:flasxfmt>\t%u0,%u1,%u2"
-  [(set_attr "type" "simd_fcmp")
-   (set_attr "mode" "<MODE>")])
-
-
-(define_insn "lasx_xvfcmp_<fsc256>_<FLASX:flasxfmt>"
-  [(set (match_operand:<VIMODE256> 0 "register_operand" "=f")
-	(unspec:<VIMODE256> [(match_operand:FLASX 1 "register_operand" "f")
-			     (match_operand:FLASX 2 "register_operand" "f")]
-			    FSC256_UNS))]
-  "ISA_HAS_LASX"
-  "xvfcmp.<fsc256>.<FLASX:flasxfmt>\t%u0,%u1,%u2"
-  [(set_attr "type" "simd_fcmp")
-   (set_attr "mode" "<MODE>")])
-
-
 (define_mode_attr fint256
   [(V8SF "v8si")
    (V4DF "v4di")])
@@ -1624,21 +1584,56 @@
   [(set_attr "type" "simd_fminmax")
    (set_attr "mode" "<MODE>")])
 
-(define_insn "lasx_xvfrecip_<flasxfmt>"
+(define_insn "recip<mode>3"
   [(set (match_operand:FLASX 0 "register_operand" "=f")
-	(unspec:FLASX [(match_operand:FLASX 1 "register_operand" "f")]
-		      UNSPEC_LASX_XVFRECIP))]
+       (div:FLASX (match_operand:FLASX 1 "const_vector_1_operand" "")
+		  (match_operand:FLASX 2 "register_operand" "f")))]
   "ISA_HAS_LASX"
-  "xvfrecip.<flasxfmt>\t%u0,%u1"
+  "xvfrecip.<flasxfmt>\t%u0,%u2"
   [(set_attr "type" "simd_fdiv")
    (set_attr "mode" "<MODE>")])
 
-(define_insn "lasx_xvfrsqrt_<flasxfmt>"
+;; Approximate Reciprocal Instructions.
+
+(define_insn "lasx_xvfrecipe_<flasxfmt>"
   [(set (match_operand:FLASX 0 "register_operand" "=f")
-	(unspec:FLASX [(match_operand:FLASX 1 "register_operand" "f")]
-		      UNSPEC_LASX_XVFRSQRT))]
+    (unspec:FLASX [(match_operand:FLASX 1 "register_operand" "f")]
+		  UNSPEC_LASX_XVFRECIPE))]
+  "ISA_HAS_LASX && TARGET_FRECIPE"
+  "xvfrecipe.<flasxfmt>\t%u0,%u1"
+  [(set_attr "type" "simd_fdiv")
+   (set_attr "mode" "<MODE>")])
+
+(define_expand "rsqrt<mode>2"
+  [(set (match_operand:FLASX 0 "register_operand" "=f")
+    (unspec:FLASX [(match_operand:FLASX 1 "register_operand" "f")]
+	     UNSPEC_LASX_XVFRSQRT))]
+  "ISA_HAS_LASX"
+ {
+   if (<MODE>mode == V8SFmode && TARGET_RECIP_VEC_RSQRT)
+     {
+       loongarch_emit_swrsqrtsf (operands[0], operands[1], V8SFmode, 1);
+       DONE;
+     }
+})
+
+(define_insn "*rsqrt<mode>2"
+  [(set (match_operand:FLASX 0 "register_operand" "=f")
+    (unspec:FLASX [(match_operand:FLASX 1 "register_operand" "f")]
+		  UNSPEC_LASX_XVFRSQRT))]
   "ISA_HAS_LASX"
   "xvfrsqrt.<flasxfmt>\t%u0,%u1"
+  [(set_attr "type" "simd_fdiv")
+   (set_attr "mode" "<MODE>")])
+
+;; Approximate Reciprocal Square Root Instructions.
+
+(define_insn "lasx_xvfrsqrte_<flasxfmt>"
+  [(set (match_operand:FLASX 0 "register_operand" "=f")
+    (unspec:FLASX [(match_operand:FLASX 1 "register_operand" "f")]
+		  UNSPEC_LASX_XVFRSQRTE))]
+  "ISA_HAS_LASX && TARGET_FRECIPE"
+  "xvfrsqrte.<flasxfmt>\t%u0,%u1"
   [(set_attr "type" "simd_fdiv")
    (set_attr "mode" "<MODE>")])
 
@@ -3059,6 +3054,20 @@
 
   operands[4] = gen_reg_rtx (<MODE>mode);
   operands[5] = gen_reg_rtx (<MODE>mode);
+})
+
+(define_expand "xorsign<mode>3"
+  [(set (match_dup 4)
+    (and:FLASX (match_dup 3)
+        (match_operand:FLASX 2 "register_operand")))
+   (set (match_operand:FLASX 0 "register_operand")
+    (xor:FLASX (match_dup 4)
+         (match_operand:FLASX 1 "register_operand")))]
+  "ISA_HAS_LASX"
+{
+  operands[3] = loongarch_build_signbit_mask (<MODE>mode, 1, 0);
+
+  operands[4] = gen_reg_rtx (<MODE>mode);
 })
 
 
@@ -5012,8 +5021,8 @@
   rtx t2 = gen_reg_rtx (V16HImode);
   rtx t3 = gen_reg_rtx (V8SImode);
   emit_insn (gen_lasx_xvabsd_u_bu (t1, operands[1], operands[2]));
-  emit_insn (gen_lasx_xvhaddw_h_b (t2, t1, t1));
-  emit_insn (gen_lasx_xvhaddw_w_h (t3, t2, t2));
+  emit_insn (gen_lasx_xvhaddw_hu_bu (t2, t1, t1));
+  emit_insn (gen_lasx_xvhaddw_wu_hu (t3, t2, t2));
   emit_insn (gen_addv8si3 (operands[0], t3, operands[3]));
   DONE;
 })
@@ -5029,8 +5038,8 @@
   rtx t2 = gen_reg_rtx (V16HImode);
   rtx t3 = gen_reg_rtx (V8SImode);
   emit_insn (gen_lasx_xvabsd_s_b (t1, operands[1], operands[2]));
-  emit_insn (gen_lasx_xvhaddw_h_b (t2, t1, t1));
-  emit_insn (gen_lasx_xvhaddw_w_h (t3, t2, t2));
+  emit_insn (gen_lasx_xvhaddw_hu_bu (t2, t1, t1));
+  emit_insn (gen_lasx_xvhaddw_wu_hu (t3, t2, t2));
   emit_insn (gen_addv8si3 (operands[0], t3, operands[3]));
   DONE;
 })

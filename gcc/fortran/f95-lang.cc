@@ -102,7 +102,7 @@ static const attribute_spec gfc_gnu_attributes[] =
 
 static const scoped_attribute_specs gfc_gnu_attribute_table =
 {
-  "gnu", gfc_gnu_attributes
+  "gnu", { gfc_gnu_attributes }
 };
 
 static const scoped_attribute_specs *const gfc_attribute_table[] =
@@ -566,7 +566,9 @@ gfc_builtin_function (tree decl)
 #define ATTR_NOTHROW_LIST		(ECF_NOTHROW)
 #define ATTR_CONST_NOTHROW_LIST		(ECF_NOTHROW | ECF_CONST)
 #define ATTR_ALLOC_WARN_UNUSED_RESULT_SIZE_2_NOTHROW_LIST \
-					(ECF_NOTHROW)
+					(ECF_NOTHROW | ECF_LEAF | ECF_MALLOC)
+#define ATTR_ALLOC_WARN_UNUSED_RESULT_SIZE_2_NOTHROW_LEAF_LIST \
+					(ECF_NOTHROW | ECF_LEAF)
 #define ATTR_COLD_NORETURN_NOTHROW_LEAF_LIST \
 					(ECF_COLD | ECF_NORETURN | \
 					 ECF_NOTHROW | ECF_LEAF)

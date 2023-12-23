@@ -560,13 +560,6 @@ const struct c_common_resword c_common_reswords[] =
   { "wchar_t",		RID_WCHAR,	D_CXXONLY },
   { "while",		RID_WHILE,	0 },
 
-#define DEFTRAIT(TCC, CODE, NAME, ARITY) \
-  { NAME,		RID_##CODE,	D_CXXONLY },
-#include "cp/cp-trait.def"
-#undef DEFTRAIT
-  /* An alias for __is_same.  */
-  { "__is_same_as",	RID_IS_SAME,	D_CXXONLY },
-
   /* C++ transactional memory.  */
   { "synchronized",	RID_SYNCHRONIZED, D_CXX_OBJC | D_TRANSMEM },
   { "atomic_noexcept",	RID_ATOMIC_NOEXCEPT, D_CXXONLY | D_TRANSMEM },
@@ -2361,6 +2354,15 @@ c_common_type_for_size (unsigned int bits, int unsignedp)
   if (bits == TYPE_PRECISION (widest_integer_literal_type_node))
     return (unsignedp ? widest_unsigned_literal_type_node
 	    : widest_integer_literal_type_node);
+
+  for (tree t = registered_builtin_types; t; t = TREE_CHAIN (t))
+    {
+      tree type = TREE_VALUE (t);
+      if (TREE_CODE (type) == INTEGER_TYPE
+	  && bits == TYPE_PRECISION (type)
+	  && !!unsignedp == !!TYPE_UNSIGNED (type))
+	return type;
+    }
 
   if (bits <= TYPE_PRECISION (intQI_type_node))
     return unsignedp ? unsigned_intQI_type_node : intQI_type_node;
@@ -7635,7 +7637,7 @@ get_atomic_generic_size (location_t loc, tree function,
 		return 0;
 	      }
 	    else
-	      pedwarn (loc, OPT_Wincompatible_pointer_types, "argument %d "
+	      pedwarn (loc, OPT_Wdiscarded_qualifiers, "argument %d "
 		       "of %qE discards %<const%> qualifier", x + 1,
 		       function);
 	  }
@@ -7649,7 +7651,7 @@ get_atomic_generic_size (location_t loc, tree function,
 		return 0;
 	      }
 	    else
-	      pedwarn (loc, OPT_Wincompatible_pointer_types, "argument %d "
+	      pedwarn (loc, OPT_Wdiscarded_qualifiers, "argument %d "
 		       "of %qE discards %<volatile%> qualifier", x + 1,
 		       function);
 	  }

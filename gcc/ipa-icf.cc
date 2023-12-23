@@ -1666,6 +1666,10 @@ sem_variable::equals_wpa (sem_item *item,
   if (DECL_IN_TEXT_SECTION (decl) != DECL_IN_TEXT_SECTION (item->decl))
     return return_false_with_msg ("text section");
 
+  if (TYPE_ADDR_SPACE (TREE_TYPE (decl))
+      != TYPE_ADDR_SPACE (TREE_TYPE (item->decl)))
+    return return_false_with_msg ("address-space");
+
   ipa_ref *ref = NULL, *ref2 = NULL;
   for (unsigned i = 0; node->iterate_reference (i, ref); i++)
     {
@@ -3418,7 +3422,8 @@ sem_item_optimizer::merge_classes (unsigned int prev_class_count,
 				 alias->node->dump_asm_name ());
 	      }
 
-	    if (lookup_attribute ("no_icf", DECL_ATTRIBUTES (alias->decl)))
+	    if (lookup_attribute ("no_icf", DECL_ATTRIBUTES (alias->decl))
+		|| lookup_attribute ("no_icf", DECL_ATTRIBUTES (source->decl)))
 	      {
 		if (dump_enabled_p ())
 		  dump_printf_loc (MSG_OPTIMIZED_LOCATIONS, loc,

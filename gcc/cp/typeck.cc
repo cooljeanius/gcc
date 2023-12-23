@@ -3932,13 +3932,14 @@ cp_build_indirect_ref (location_t loc, tree ptr, ref_operator errorstring,
    If INDEX is of some user-defined type, it must be converted to
    integer type.  Otherwise, to make a compatible PLUS_EXPR, it
    will inherit the type of the array, which will be some pointer type.
-   
+
    LOC is the location to use in building the array reference.  */
 
 tree
 cp_build_array_ref (location_t loc, tree array, tree idx,
 		    tsubst_flags_t complain)
 {
+  tree first = NULL_TREE;
   tree ret;
 
   if (idx == 0)
@@ -3982,6 +3983,14 @@ cp_build_array_ref (location_t loc, tree array, tree idx,
     }
 
   bool non_lvalue = convert_vector_to_array_for_subscript (loc, &array, idx);
+
+  /* 0[array] */
+  if (TREE_CODE (TREE_TYPE (idx)) == ARRAY_TYPE)
+    {
+      std::swap (array, idx);
+      if (flag_strong_eval_order == 2 && TREE_SIDE_EFFECTS (array))
+	idx = first = save_expr (idx);
+    }
 
   if (TREE_CODE (TREE_TYPE (array)) == ARRAY_TYPE)
     {
@@ -4058,15 +4067,16 @@ cp_build_array_ref (location_t loc, tree array, tree idx,
       protected_set_expr_location (ret, loc);
       if (non_lvalue)
 	ret = non_lvalue_loc (loc, ret);
+      if (first)
+	ret = build2_loc (loc, COMPOUND_EXPR, TREE_TYPE (ret), first, ret);
       return ret;
     }
 
   {
     tree ar = cp_default_conversion (array, complain);
     tree ind = cp_default_conversion (idx, complain);
-    tree first = NULL_TREE;
 
-    if (flag_strong_eval_order == 2 && TREE_SIDE_EFFECTS (ind))
+    if (!first && flag_strong_eval_order == 2 && TREE_SIDE_EFFECTS (ind))
       ar = first = save_expr (ar);
 
     /* Put the integer in IND to simplify error checking.  */
@@ -7269,11 +7279,9 @@ cp_build_addr_expr_1 (tree arg, bool strict_lvalue, tsubst_flags_t complain)
 			      complain);
     }
 
-  /* For addresses of immediate functions ensure we have EXPR_LOCATION
-     set for possible later diagnostics.  */
+  /* Ensure we have EXPR_LOCATION set for possible later diagnostics.  */
   if (TREE_CODE (val) == ADDR_EXPR
-      && TREE_CODE (TREE_OPERAND (val, 0)) == FUNCTION_DECL
-      && DECL_IMMEDIATE_FUNCTION_P (TREE_OPERAND (val, 0)))
+      && TREE_CODE (TREE_OPERAND (val, 0)) == FUNCTION_DECL)
     SET_EXPR_LOCATION (val, input_location);
 
   return val;
@@ -9215,6 +9223,8 @@ cp_build_c_cast (location_t loc, tree type, tree expr,
 	  maybe_warn_about_useless_cast (loc, type, value, complain);
 	  maybe_warn_about_cast_ignoring_quals (loc, type, complain);
 	}
+      else if (complain & tf_error)
+	build_const_cast_1 (loc, type, value, tf_error, &valid_p);
       return result;
     }
 
@@ -9250,7 +9260,7 @@ cp_build_c_cast (location_t loc, tree type, tree expr,
 	 to succeed.  */
       if (!same_type_p (non_reference (type), non_reference (result_type)))
 	{
-	  result = build_const_cast_1 (loc, type, result, false, &valid_p);
+	  result = build_const_cast_1 (loc, type, result, tf_none, &valid_p);
 	  gcc_assert (valid_p);
 	}
       return result;
@@ -10377,14 +10387,11 @@ convert_for_assignment (tree type, tree rhs,
 	  }
     }
 
-  /* If -Wparentheses, warn about a = b = c when a has type bool and b
-     does not.  */
-  if (TREE_CODE (type) == BOOLEAN_TYPE
-      && TREE_CODE (TREE_TYPE (rhs)) != BOOLEAN_TYPE)
-    maybe_warn_unparenthesized_assignment (rhs, complain);
+  if (TREE_CODE (type) == BOOLEAN_TYPE)
+    maybe_warn_unparenthesized_assignment (rhs, /*nested_p=*/true, complain);
 
   if (complain & tf_warning)
-    warn_for_address_or_pointer_of_packed_member (type, rhs);
+    warn_for_address_of_packed_member (type, rhs);
 
   return perform_implicit_conversion_flags (strip_top_quals (type), rhs,
 					    complain, flags);

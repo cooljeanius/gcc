@@ -15038,8 +15038,12 @@ ix86_avx_u128_mode_needed (rtx_insn *insn)
 	 vzeroupper if all SSE registers are clobbered.  */
       const function_abi &abi = insn_callee_abi (insn);
       if (vzeroupper_pattern (PATTERN (insn), VOIDmode)
-	  || !hard_reg_set_subset_p (reg_class_contents[SSE_REGS],
-				     abi.mode_clobbers (V4DImode)))
+	  /* Should be safe to issue an vzeroupper before sibling_call_p.
+	     Also there not mode_exit for sibling_call, so there could be
+	     missing vzeroupper for that.  */
+	  || !(SIBLING_CALL_P (insn)
+	       || hard_reg_set_subset_p (reg_class_contents[SSE_REGS],
+					 abi.mode_clobbers (V4DImode))))
 	return AVX_U128_ANY;
 
       return AVX_U128_CLEAN;
@@ -15177,7 +15181,19 @@ ix86_avx_u128_mode_after (int mode, rtx_insn *insn)
       bool avx_upper_reg_found = false;
       note_stores (insn, ix86_check_avx_upper_stores, &avx_upper_reg_found);
 
-      return avx_upper_reg_found ? AVX_U128_DIRTY : AVX_U128_CLEAN;
+      if (avx_upper_reg_found)
+	return AVX_U128_DIRTY;
+
+      /* If the function desn't clobber any sse registers or only clobber
+	 128-bit part, Then vzeroupper isn't issued before the function exit.
+	 the status not CLEAN but ANY after the function.  */
+      const function_abi &abi = insn_callee_abi (insn);
+      if (!(SIBLING_CALL_P (insn)
+	    || hard_reg_set_subset_p (reg_class_contents[SSE_REGS],
+				      abi.mode_clobbers (V4DImode))))
+	return AVX_U128_ANY;
+
+      return  AVX_U128_CLEAN;
     }
 
   /* Otherwise, return current mode.  Remember that if insn
@@ -16209,11 +16225,12 @@ ix86_dep_by_shift_count (const_rtx set_insn, const_rtx use_insn)
 bool
 ix86_unary_operator_ok (enum rtx_code,
 			machine_mode,
-			rtx operands[2])
+			rtx operands[2],
+			bool use_ndd)
 {
   /* If one of operands is memory, source and destination must match.  */
   if ((MEM_P (operands[0])
-       || MEM_P (operands[1]))
+       || (!use_ndd && MEM_P (operands[1])))
       && ! rtx_equal_p (operands[0], operands[1]))
     return false;
   return true;
@@ -19360,7 +19377,10 @@ ix86_gimple_fold_builtin (gimple_stmt_iterator *gsi)
     do_shift:
       gcc_assert (n_args >= 2);
       if (!gimple_call_lhs (stmt))
-	break;
+	{
+	  gsi_replace (gsi, gimple_build_nop (), false);
+	  return true;
+	}
       arg0 = gimple_call_arg (stmt, 0);
       arg1 = gimple_call_arg (stmt, 1);
       elems = TYPE_VECTOR_SUBPARTS (TREE_TYPE (arg0));
@@ -19506,7 +19526,10 @@ ix86_gimple_fold_builtin (gimple_stmt_iterator *gsi)
     case IX86_BUILTIN_PABSD256_MASK:
       gcc_assert (n_args >= 1);
       if (!gimple_call_lhs (stmt))
-	break;
+	{
+	  gsi_replace (gsi, gimple_build_nop (), false);
+	  return true;
+	}
       arg0 = gimple_call_arg (stmt, 0);
       elems = TYPE_VECTOR_SUBPARTS (TREE_TYPE (arg0));
       /* For masked ABS, only optimize if the mask is all ones.  */
@@ -20797,8 +20820,7 @@ ix86_hard_regno_mode_ok (unsigned int regno, machine_mode mode)
 	return MASK_PAIR_REGNO_P(regno);
 
       return ((TARGET_AVX512F && VALID_MASK_REG_MODE (mode))
-	      || (TARGET_AVX512BW && mode == SImode)
-	      || (TARGET_AVX512BW && TARGET_EVEX512 && mode == DImode));
+	      || (TARGET_AVX512BW && VALID_MASK_AVX512BW_MODE (mode)));
     }
 
   if (GET_MODE_CLASS (mode) == MODE_PARTIAL_INT)
@@ -23331,6 +23353,31 @@ x86_evex_reg_mentioned_p (rtx operands[], int nops)
   return false;
 }
 
+/* Return true when rtx operand does not contain any UNSPEC_*POFF related
+   constant to avoid APX_NDD instructions excceed encoding length limit.  */
+bool
+x86_poff_operand_p (rtx operand)
+{
+  if (GET_CODE (operand) == CONST)
+    {
+      rtx op = XEXP (operand, 0);
+      if (GET_CODE (op) == PLUS)
+	op = XEXP (op, 0);
+	
+      if (GET_CODE (op) == UNSPEC)
+	{
+	  int unspec = XINT (op, 1);
+	  return (unspec == UNSPEC_NTPOFF
+		  || unspec == UNSPEC_TPOFF
+		  || unspec == UNSPEC_DTPOFF
+		  || unspec == UNSPEC_GOTTPOFF
+		  || unspec == UNSPEC_GOTNTPOFF
+		  || unspec == UNSPEC_INDNTPOFF);
+	}
+    }
+  return false;
+}
+
 /* If profitable, negate (without causing overflow) integer constant
    of mode MODE at location LOC.  Return true in this case.  */
 bool
@@ -23681,8 +23728,9 @@ static void map_egpr_constraints (vec<const char *> &constraints)
 static rtx_insn *
 ix86_md_asm_adjust (vec<rtx> &outputs, vec<rtx> & /*inputs*/,
 		    vec<machine_mode> & /*input_modes*/,
-		    vec<const char *> &constraints, vec<rtx> &clobbers,
-		    HARD_REG_SET &clobbered_regs, location_t loc)
+		    vec<const char *> &constraints, vec<rtx> &/*uses*/,
+		    vec<rtx> &clobbers, HARD_REG_SET &clobbered_regs,
+		    location_t loc)
 {
   bool saw_asm_flag = false;
 
@@ -24563,14 +24611,33 @@ ix86_noce_conversion_profitable_p (rtx_insn *seq, struct noce_if_info *if_info)
 /* x86-specific vector costs.  */
 class ix86_vector_costs : public vector_costs
 {
-  using vector_costs::vector_costs;
+public:
+  ix86_vector_costs (vec_info *, bool);
 
   unsigned int add_stmt_cost (int count, vect_cost_for_stmt kind,
 			      stmt_vec_info stmt_info, slp_tree node,
 			      tree vectype, int misalign,
 			      vect_cost_model_location where) override;
   void finish_cost (const vector_costs *) override;
+
+private:
+
+  /* Estimate register pressure of the vectorized code.  */
+  void ix86_vect_estimate_reg_pressure ();
+  /* Number of GENERAL_REGS/SSE_REGS used in the vectorizer, it's used for
+     estimation of register pressure.
+     ??? Currently it's only used by vec_construct/scalar_to_vec
+     where we know it's not loaded from memory.  */
+  unsigned m_num_gpr_needed[3];
+  unsigned m_num_sse_needed[3];
 };
+
+ix86_vector_costs::ix86_vector_costs (vec_info* vinfo, bool costing_for_scalar)
+  : vector_costs (vinfo, costing_for_scalar),
+    m_num_gpr_needed (),
+    m_num_sse_needed ()
+{
+}
 
 /* Implement targetm.vectorize.create_costs.  */
 
@@ -24749,8 +24816,7 @@ ix86_vector_costs::add_stmt_cost (int count, vect_cost_for_stmt kind,
     }
   else if ((kind == vec_construct || kind == scalar_to_vec)
 	   && node
-	   && SLP_TREE_DEF_TYPE (node) == vect_external_def
-	   && INTEGRAL_TYPE_P (TREE_TYPE (vectype)))
+	   && SLP_TREE_DEF_TYPE (node) == vect_external_def)
     {
       stmt_cost = ix86_builtin_vectorization_cost (kind, vectype, misalign);
       unsigned i;
@@ -24786,7 +24852,15 @@ ix86_vector_costs::add_stmt_cost (int count, vect_cost_for_stmt kind,
 		  && (gimple_assign_rhs_code (def) != BIT_FIELD_REF
 		      || !VECTOR_TYPE_P (TREE_TYPE
 				(TREE_OPERAND (gimple_assign_rhs1 (def), 0))))))
-	    stmt_cost += ix86_cost->sse_to_integer;
+	    {
+	      if (fp)
+		m_num_sse_needed[where]++;
+	      else
+		{
+		  m_num_gpr_needed[where]++;
+		  stmt_cost += ix86_cost->sse_to_integer;
+		}
+	    }
 	}
       FOR_EACH_VEC_ELT (SLP_TREE_SCALAR_OPS (node), i, op)
 	if (TREE_CODE (op) == SSA_NAME)
@@ -24823,6 +24897,24 @@ ix86_vector_costs::add_stmt_cost (int count, vect_cost_for_stmt kind,
 }
 
 void
+ix86_vector_costs::ix86_vect_estimate_reg_pressure ()
+{
+  unsigned gpr_spill_cost = COSTS_N_INSNS (ix86_cost->int_store [2]) / 2;
+  unsigned sse_spill_cost = COSTS_N_INSNS (ix86_cost->sse_store[0]) / 2;
+
+  /* Any better way to have target available fp registers, currently use SSE_REGS.  */
+  unsigned target_avail_sse = TARGET_64BIT ? (TARGET_AVX512F ? 32 : 16) : 8;
+  for (unsigned i = 0; i != 3; i++)
+    {
+      if (m_num_gpr_needed[i] > target_avail_regs)
+	m_costs[i] += gpr_spill_cost * (m_num_gpr_needed[i] - target_avail_regs);
+      /* Only measure sse registers pressure.  */
+      if (TARGET_SSE && (m_num_sse_needed[i] > target_avail_sse))
+	m_costs[i] += sse_spill_cost * (m_num_sse_needed[i] - target_avail_sse);
+    }
+}
+
+void
 ix86_vector_costs::finish_cost (const vector_costs *scalar_costs)
 {
   loop_vec_info loop_vinfo = dyn_cast<loop_vec_info> (m_vinfo);
@@ -24843,6 +24935,8 @@ ix86_vector_costs::finish_cost (const vector_costs *scalar_costs)
 	      > ceil_log2 (LOOP_VINFO_INT_NITERS (loop_vinfo))))
 	m_costs[vect_body] = INT_MAX;
     }
+
+  ix86_vect_estimate_reg_pressure ();
 
   vector_costs::finish_cost (scalar_costs);
 }
@@ -25584,6 +25678,7 @@ ix86_bitint_type_info (int n, struct bitint_info *info)
     info->limb_mode = SImode;
   else
     info->limb_mode = DImode;
+  info->abi_limb_mode = info->limb_mode;
   info->big_endian = false;
   info->extended = false;
   return true;

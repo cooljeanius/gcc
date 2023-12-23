@@ -13802,10 +13802,8 @@ s390_encode_section_info (tree decl, rtx rtl, int first)
 	 byte aligned as mandated by our ABI.  This behavior can be
 	 overridden for external symbols with the -munaligned-symbols
 	 switch.  */
-      if (DECL_ALIGN (decl) % 16
-	  && (DECL_USER_ALIGN (decl)
-	      || (!SYMBOL_REF_LOCAL_P (XEXP (rtl, 0))
-		  && s390_unaligned_symbols_p)))
+      if ((DECL_USER_ALIGN (decl) && DECL_ALIGN (decl) % 16)
+	  || (s390_unaligned_symbols_p && !decl_binds_to_current_def_p (decl)))
 	SYMBOL_FLAG_SET_NOTALIGN2 (XEXP (rtl, 0));
       else if (DECL_ALIGN (decl) % 32)
 	SYMBOL_FLAG_SET_NOTALIGN4 (XEXP (rtl, 0));
@@ -17513,7 +17511,8 @@ s390_hard_fp_reg_p (rtx x)
 static rtx_insn *
 s390_md_asm_adjust (vec<rtx> &outputs, vec<rtx> &inputs,
 		    vec<machine_mode> &input_modes,
-		    vec<const char *> &constraints, vec<rtx> & /*clobbers*/,
+		    vec<const char *> &constraints,
+		    vec<rtx> &/*uses*/, vec<rtx> &/*clobbers*/,
 		    HARD_REG_SET &clobbered_regs, location_t loc)
 {
 

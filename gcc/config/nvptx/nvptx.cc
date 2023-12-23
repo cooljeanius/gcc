@@ -1791,7 +1791,7 @@ nvptx_get_drap_rtx (void)
    argument to the next call.  */
 
 static void
-nvptx_call_args (rtx arg, tree fntype)
+nvptx_call_args (cumulative_args_t, rtx arg, tree fntype)
 {
   if (!cfun->machine->doing_call)
     {
@@ -1819,7 +1819,7 @@ nvptx_call_args (rtx arg, tree fntype)
    information we recorded.  */
 
 static void
-nvptx_end_call_args (void)
+nvptx_end_call_args (cumulative_args_t)
 {
   cfun->machine->doing_call = false;
   free_EXPR_LIST_list (&cfun->machine->call_args);
@@ -7788,6 +7788,9 @@ nvptx_asm_output_def_from_decls (FILE *stream, tree name, tree value)
 
 #undef TARGET_LIBC_HAS_FUNCTION
 #define TARGET_LIBC_HAS_FUNCTION nvptx_libc_has_function
+
+#undef TARGET_HAVE_STRUB_SUPPORT_FOR
+#define TARGET_HAVE_STRUB_SUPPORT_FOR hook_bool_tree_false
 
 struct gcc_target targetm = TARGET_INITIALIZER;
 

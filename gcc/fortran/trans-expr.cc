@@ -7124,7 +7124,9 @@ gfc_conv_procedure_call (gfc_se * se, gfc_symbol * sym,
 					     INTENT_IN, fsym->attr.pointer);
 		}
 	      else if (fsym && fsym->attr.contiguous
-		       && !gfc_is_simply_contiguous (e, false, true)
+		       && (fsym->attr.target
+			   ? gfc_is_not_contiguous (e)
+			   : !gfc_is_simply_contiguous (e, false, true))
 		       && gfc_expr_is_variable (e))
 		{
 		  gfc_conv_subref_array_arg (&parmse, e, nodesc_arg,
@@ -7173,8 +7175,6 @@ gfc_conv_procedure_call (gfc_se * se, gfc_symbol * sym,
 		  if  (TREE_TYPE(tmp) != pvoid_type_node)
 		    tmp = build_fold_indirect_ref_loc (input_location,
 						       parmse.expr);
-		  if (GFC_DESCRIPTOR_TYPE_P (TREE_TYPE (tmp)))
-		    tmp = gfc_conv_descriptor_data_get (tmp);
 		  tmp = gfc_deallocate_with_status (tmp, NULL_TREE, NULL_TREE,
 						    NULL_TREE, NULL_TREE, true,
 						    e,
@@ -9765,7 +9765,9 @@ gfc_conv_expr (gfc_se * se, gfc_expr * expr)
 	 executable construct containing the reference. This, in fact,
 	 was later deleted by the Combined Techical Corrigenda 1 TO 4 for
 	 fortran 2008 (f08/0011).  */
-      if (!gfc_notification_std (GFC_STD_F2018_DEL) && expr->must_finalize
+      if ((gfc_option.allow_std & (GFC_STD_F2008 | GFC_STD_F2003))
+	  && !(gfc_option.allow_std & GFC_STD_GNU)
+	  && expr->must_finalize
 	  && gfc_may_be_finalized (expr->ts))
 	{
 	  gfc_warning (0, "The structure constructor at %C has been"
@@ -11731,8 +11733,30 @@ alloc_scalar_allocatable_for_assignment (stmtblock_t *block,
 				 builtin_decl_explicit (BUILT_IN_REALLOC),
 				 2, fold_convert (pvoid_type_node, lse.expr),
 				 size_in_bytes);
+      tree omp_cond = NULL_TREE;
+      if (flag_openmp_allocators)
+	{
+	  tree omp_tmp;
+	  omp_cond = gfc_omp_call_is_alloc (lse.expr);
+	  omp_cond = gfc_evaluate_now (omp_cond, block);
+
+	  omp_tmp = builtin_decl_explicit (BUILT_IN_GOMP_REALLOC);
+	  omp_tmp = build_call_expr_loc (input_location, omp_tmp, 4,
+					 fold_convert (pvoid_type_node,
+						       lse.expr), size_in_bytes,
+					 build_zero_cst (ptr_type_node),
+					 build_zero_cst (ptr_type_node));
+	  tmp = build3_loc (input_location, COND_EXPR, TREE_TYPE (tmp),
+			    omp_cond, omp_tmp, tmp);
+	}
       tmp = fold_convert (TREE_TYPE (lse.expr), tmp);
       gfc_add_modify (block, lse.expr, tmp);
+      if (omp_cond)
+	gfc_add_expr_to_block (block,
+			       build3_loc (input_location, COND_EXPR,
+			       void_type_node, omp_cond,
+			       gfc_omp_call_add_alloc (lse.expr),
+			       build_empty_stmt (input_location)));
       tmp = build1_v (LABEL_EXPR, jump_label2);
       gfc_add_expr_to_block (block, tmp);
 

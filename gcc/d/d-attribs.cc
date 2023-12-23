@@ -128,14 +128,16 @@ static const struct attribute_spec::exclusions attr_noinline_exclusions[] =
 
 static const struct attribute_spec::exclusions attr_target_exclusions[] =
 {
-  ATTR_EXCL ("target_clones", true, true, true),
+  ATTR_EXCL ("target_clones", TARGET_HAS_FMV_TARGET_ATTRIBUTE,
+	     TARGET_HAS_FMV_TARGET_ATTRIBUTE, TARGET_HAS_FMV_TARGET_ATTRIBUTE),
   ATTR_EXCL (NULL, false, false, false),
 };
 
 static const struct attribute_spec::exclusions attr_target_clones_exclusions[] =
 {
   ATTR_EXCL ("always_inline", true, true, true),
-  ATTR_EXCL ("target", true, true, true),
+  ATTR_EXCL ("target", TARGET_HAS_FMV_TARGET_ATTRIBUTE,
+	     TARGET_HAS_FMV_TARGET_ATTRIBUTE, TARGET_HAS_FMV_TARGET_ATTRIBUTE),
   ATTR_EXCL (NULL, false, false, false),
 };
 
@@ -194,7 +196,7 @@ static const attribute_spec d_langhook_common_attributes[] =
 
 const scoped_attribute_specs d_langhook_common_attribute_table =
 {
-  "gnu", d_langhook_common_attributes
+  "gnu", { d_langhook_common_attributes }
 };
 
 /* Table of D language attributes exposed by `gcc.attribute' UDAs.  */
@@ -246,7 +248,7 @@ static const attribute_spec d_langhook_gnu_attributes[] =
 
 const scoped_attribute_specs d_langhook_gnu_attribute_table =
 {
-  "gnu", d_langhook_gnu_attributes
+  "gnu", { d_langhook_gnu_attributes }
 };
 
 /* Insert the type attribute ATTRNAME with value VALUE into TYPE.

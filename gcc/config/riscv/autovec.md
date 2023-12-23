@@ -59,7 +59,7 @@
    (match_operand:<RATIO64:VM> 5 "vector_mask_operand")
    (match_operand 6 "autovec_length_operand")
    (match_operand 7 "const_0_operand")]
-  "TARGET_VECTOR"
+  "TARGET_VECTOR && riscv_vector::gather_scatter_valid_offset_p (<RATIO64I:MODE>mode)"
 {
   riscv_vector::expand_gather_scatter (operands, true);
   DONE;
@@ -74,7 +74,7 @@
    (match_operand:<RATIO32:VM> 5 "vector_mask_operand")
    (match_operand 6 "autovec_length_operand")
    (match_operand 7 "const_0_operand")]
-  "TARGET_VECTOR"
+  "TARGET_VECTOR && riscv_vector::gather_scatter_valid_offset_p (<RATIO32I:MODE>mode)"
 {
   riscv_vector::expand_gather_scatter (operands, true);
   DONE;
@@ -89,7 +89,7 @@
    (match_operand:<RATIO16:VM> 5 "vector_mask_operand")
    (match_operand 6 "autovec_length_operand")
    (match_operand 7 "const_0_operand")]
-  "TARGET_VECTOR"
+  "TARGET_VECTOR && riscv_vector::gather_scatter_valid_offset_p (<RATIO16I:MODE>mode)"
 {
   riscv_vector::expand_gather_scatter (operands, true);
   DONE;
@@ -104,7 +104,7 @@
    (match_operand:<RATIO8:VM> 5 "vector_mask_operand")
    (match_operand 6 "autovec_length_operand")
    (match_operand 7 "const_0_operand")]
-  "TARGET_VECTOR"
+  "TARGET_VECTOR && riscv_vector::gather_scatter_valid_offset_p (<RATIO8I:MODE>mode)"
 {
   riscv_vector::expand_gather_scatter (operands, true);
   DONE;
@@ -119,7 +119,7 @@
    (match_operand:<RATIO4:VM> 5 "vector_mask_operand")
    (match_operand 6 "autovec_length_operand")
    (match_operand 7 "const_0_operand")]
-  "TARGET_VECTOR"
+  "TARGET_VECTOR && riscv_vector::gather_scatter_valid_offset_p (<RATIO4I:MODE>mode)"
 {
   riscv_vector::expand_gather_scatter (operands, true);
   DONE;
@@ -134,7 +134,7 @@
    (match_operand:<RATIO2:VM> 5 "vector_mask_operand")
    (match_operand 6 "autovec_length_operand")
    (match_operand 7 "const_0_operand")]
-  "TARGET_VECTOR"
+  "TARGET_VECTOR && riscv_vector::gather_scatter_valid_offset_p (<RATIO2I:MODE>mode)"
 {
   riscv_vector::expand_gather_scatter (operands, true);
   DONE;
@@ -172,7 +172,7 @@
    (match_operand:<RATIO64:VM> 5 "vector_mask_operand")
    (match_operand 6 "autovec_length_operand")
    (match_operand 7 "const_0_operand")]
-  "TARGET_VECTOR"
+  "TARGET_VECTOR && riscv_vector::gather_scatter_valid_offset_p (<RATIO64I:MODE>mode)"
 {
   riscv_vector::expand_gather_scatter (operands, false);
   DONE;
@@ -187,7 +187,7 @@
    (match_operand:<RATIO32:VM> 5 "vector_mask_operand")
    (match_operand 6 "autovec_length_operand")
    (match_operand 7 "const_0_operand")]
-  "TARGET_VECTOR"
+  "TARGET_VECTOR && riscv_vector::gather_scatter_valid_offset_p (<RATIO32I:MODE>mode)"
 {
   riscv_vector::expand_gather_scatter (operands, false);
   DONE;
@@ -202,7 +202,7 @@
    (match_operand:<RATIO16:VM> 5 "vector_mask_operand")
    (match_operand 6 "autovec_length_operand")
    (match_operand 7 "const_0_operand")]
-  "TARGET_VECTOR"
+  "TARGET_VECTOR && riscv_vector::gather_scatter_valid_offset_p (<RATIO16I:MODE>mode)"
 {
   riscv_vector::expand_gather_scatter (operands, false);
   DONE;
@@ -217,7 +217,7 @@
    (match_operand:<RATIO8:VM> 5 "vector_mask_operand")
    (match_operand 6 "autovec_length_operand")
    (match_operand 7 "const_0_operand")]
-  "TARGET_VECTOR"
+  "TARGET_VECTOR && riscv_vector::gather_scatter_valid_offset_p (<RATIO8I:MODE>mode)"
 {
   riscv_vector::expand_gather_scatter (operands, false);
   DONE;
@@ -232,7 +232,7 @@
    (match_operand:<RATIO4:VM> 5 "vector_mask_operand")
    (match_operand 6 "autovec_length_operand")
    (match_operand 7 "const_0_operand")]
-  "TARGET_VECTOR"
+  "TARGET_VECTOR && riscv_vector::gather_scatter_valid_offset_p (<RATIO4I:MODE>mode)"
 {
   riscv_vector::expand_gather_scatter (operands, false);
   DONE;
@@ -247,7 +247,7 @@
    (match_operand:<RATIO2:VM> 5 "vector_mask_operand")
    (match_operand 6 "autovec_length_operand")
    (match_operand 7 "const_0_operand")]
-  "TARGET_VECTOR"
+  "TARGET_VECTOR && riscv_vector::gather_scatter_valid_offset_p (<RATIO2I:MODE>mode)"
 {
   riscv_vector::expand_gather_scatter (operands, false);
   DONE;
@@ -390,6 +390,22 @@
   "TARGET_VECTOR"
   {
     riscv_vector::expand_vec_init (operands[0], operands[1]);
+    DONE;
+  }
+)
+
+;; Provide a vec_init for mask registers by initializing
+;; a QImode vector and comparing it against 0.
+(define_expand "vec_init<mode>qi"
+  [(match_operand:VB 0 "register_operand")
+   (match_operand 1 "")]
+  "TARGET_VECTOR"
+  {
+    machine_mode qimode = riscv_vector::get_vector_mode
+	(QImode, GET_MODE_NUNITS (<MODE>mode)).require ();
+    rtx tmp = gen_reg_rtx (qimode);
+    riscv_vector::expand_vec_init (tmp, operands[1]);
+    riscv_vector::expand_vec_cmp (operands[0], NE, tmp, CONST0_RTX (qimode));
     DONE;
   }
 )
@@ -1380,12 +1396,23 @@
   rtx tmp = NULL_RTX;
   if (operands[2] != const0_rtx)
     {
-      /* Emit the slide down to index 0 in a new vector.  */
-      tmp = gen_reg_rtx (<MODE>mode);
-      operands[2] = gen_lowpart (Pmode, operands[2]);
-      rtx ops[] = {tmp, operands[1], operands[2]};
-      riscv_vector::emit_vlmax_insn
-	(code_for_pred_slide (UNSPEC_VSLIDEDOWN, <MODE>mode), riscv_vector::BINARY_OP, ops);
+      /* Properly convert a poly_int value and put the result into a
+	 register.  */
+      if (CONST_POLY_INT_P (operands[2]))
+	{
+	  rtx pos = gen_reg_rtx (Pmode);
+	  riscv_legitimize_poly_move (Pmode, pos, gen_reg_rtx (Pmode),
+				      operands[2]);
+	  operands[2] = pos;
+	}
+
+    /* Emit the slide down to index 0 in a new vector.  */
+    tmp = gen_reg_rtx (<MODE>mode);
+    operands[2] = gen_lowpart (Pmode, operands[2]);
+    rtx ops[] = {tmp, operands[1], operands[2]};
+    riscv_vector::emit_vlmax_insn
+      (code_for_pred_slide (UNSPEC_VSLIDEDOWN, <MODE>mode),
+       riscv_vector::BINARY_OP, ops);
     }
 
   /* Emit v(f)mv.[xf].s.  */
@@ -1417,16 +1444,21 @@
   riscv_vector::emit_vlmax_insn (code_for_pred_merge (qimode),
 				 riscv_vector::MERGE_OP, ops1);
 
-  /* Slide down the requested byte element.  */
-  rtx tmp2 = gen_reg_rtx (qimode);
+  /* Extract from it.  */
+  riscv_vector::emit_vec_extract (operands[0], tmp1, operands[2]);
+  DONE;
+})
 
-  rtx ops2[] = {tmp2, tmp1, operands[2]};
-  riscv_vector::emit_vlmax_insn
-    (code_for_pred_slide (UNSPEC_VSLIDEDOWN, qimode),
-     riscv_vector::BINARY_OP, ops2);
-
-  /* Extract it.  */
-  emit_insn (gen_pred_extract_first (qimode, operands[0], tmp2));
+;; Same for a BImode but still return a QImode.
+(define_expand "vec_extract<mode>bi"
+  [(set (match_operand:QI	  0 "register_operand")
+     (vec_select:QI
+       (match_operand:VB	  1 "register_operand")
+       (parallel
+	 [(match_operand	  2 "nonmemory_operand")])))]
+  "TARGET_VECTOR"
+{
+  emit_insn (gen_vec_extract<mode>qi (operands[0], operands[1], operands[2]));
   DONE;
 })
 
