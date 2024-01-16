@@ -1,5 +1,5 @@
 /* Utility functions for the analyzer.
-   Copyright (C) 2019-2023 Free Software Foundation, Inc.
+   Copyright (C) 2019-2024 Free Software Foundation, Inc.
    Contributed by David Malcolm <dmalcolm@redhat.com>.
 
 This file is part of GCC.
@@ -426,6 +426,9 @@ bit_offset_to_json (const bit_offset_t &offset);
 
 extern json::value *
 byte_offset_to_json (const byte_offset_t &offset);
+
+extern tristate
+compare_constants (tree lhs_const, enum tree_code op, tree rhs_const);
 
 } // namespace ana
 
