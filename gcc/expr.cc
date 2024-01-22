@@ -5532,11 +5532,12 @@ emit_push_insn (rtx x, machine_mode mode, tree type, rtx size,
       /* Loop over all the words allocated on the stack for this arg.  */
       /* We can do it by words, because any scalar bigger than a word
 	 has a size a multiple of a word.  */
+      tree word_mode_type = lang_hooks.types.type_for_mode (word_mode, 1);
       for (i = num_words - 1; i >= not_stack; i--)
 	if (i >= not_stack + offset)
 	  if (!emit_push_insn (operand_subword_force (x, i, mode),
-			  word_mode, NULL_TREE, NULL_RTX, align, 0, NULL_RTX,
-			  0, args_addr,
+			  word_mode, word_mode_type, NULL_RTX, align, 0,
+			  NULL_RTX, 0, args_addr,
 			  GEN_INT (args_offset + ((i - not_stack + skip)
 						  * UNITS_PER_WORD)),
 			  reg_parm_stack_space, alignment_pad, sibcall_p))
@@ -12388,6 +12389,10 @@ expand_expr_real_1 (tree exp, rtx target, machine_mode tmode,
 
       /* If the input and output modes are both the same, we are done.  */
       if (mode == GET_MODE (op0))
+	;
+      /* Similarly if the output mode is BLKmode and input is a MEM,
+	 adjust_address done below is all we need.  */
+      else if (mode == BLKmode && MEM_P (op0))
 	;
       /* If neither mode is BLKmode, and both modes are the same size
 	 then we can use gen_lowpart.  */

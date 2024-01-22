@@ -1426,6 +1426,9 @@ riscv_v_adjust_bytesize (machine_mode mode, int scale)
 {
   if (riscv_v_ext_vector_mode_p (mode))
     {
+      if (TARGET_XTHEADVECTOR)
+	return BYTES_PER_RISCV_VECTOR;
+
       poly_int64 nunits = GET_MODE_NUNITS (mode);
       poly_int64 mode_size = GET_MODE_SIZE (mode);
 
@@ -4870,11 +4873,7 @@ riscv_pass_fpr_pair (machine_mode mode, unsigned regno1,
    For a library call, FNTYPE is 0.  */
 
 void
-riscv_init_cumulative_args (CUMULATIVE_ARGS *cum,
-			    tree fntype ATTRIBUTE_UNUSED,
-			    rtx libname ATTRIBUTE_UNUSED,
-			    tree fndecl,
-			    int caller ATTRIBUTE_UNUSED)
+riscv_init_cumulative_args (CUMULATIVE_ARGS *cum, tree fntype, rtx, tree, int)
 {
   memset (cum, 0, sizeof (*cum));
 
@@ -5608,6 +5607,17 @@ riscv_get_v_regno_alignment (machine_mode mode)
   if (known_gt (size, UNITS_PER_V_REG))
     lmul = exact_div (size, UNITS_PER_V_REG).to_constant ();
   return lmul;
+}
+
+/* Define ASM_OUTPUT_OPCODE to do anything special before
+   emitting an opcode.  */
+const char *
+riscv_asm_output_opcode (FILE *asm_out_file, const char *p)
+{
+  if (TARGET_XTHEADVECTOR)
+     return th_asm_output_opcode (asm_out_file, p);
+
+  return p;
 }
 
 /* Implement TARGET_PRINT_OPERAND.  The RISCV-specific operand codes are:
@@ -8784,13 +8794,13 @@ riscv_override_options_internal (struct gcc_options *opts)
 
      We can only allow TARGET_MIN_VLEN * 8 (LMUL) < 65535.  */
   if (TARGET_MIN_VLEN_OPTS (opts) > 4096)
-    sorry ("Current RISC-V GCC cannot support VLEN greater than 4096bit for "
+    sorry ("Current RISC-V GCC does not support VLEN greater than 4096bit for "
 	   "'V' Extension");
 
   /* FIXME: We don't support RVV in big-endian for now, we may enable RVV with
      big-endian after finishing full coverage testing.  */
   if (TARGET_VECTOR && TARGET_BIG_ENDIAN)
-    sorry ("Current RISC-V GCC cannot support RVV in big-endian mode");
+    sorry ("Current RISC-V GCC does not support RVV in big-endian mode");
 
   /* Convert -march to a chunks count.  */
   riscv_vector_chunks = riscv_convert_vector_bits (opts);
@@ -9978,7 +9988,7 @@ riscv_use_divmod_expander (void)
 static machine_mode
 riscv_preferred_simd_mode (scalar_mode mode)
 {
-  if (TARGET_VECTOR)
+  if (TARGET_VECTOR && !TARGET_XTHEADVECTOR)
     return riscv_vector::preferred_simd_mode (mode);
 
   return word_mode;
@@ -10329,7 +10339,7 @@ riscv_mode_priority (int, int n)
 unsigned int
 riscv_autovectorize_vector_modes (vector_modes *modes, bool all)
 {
-  if (TARGET_VECTOR)
+  if (TARGET_VECTOR && !TARGET_XTHEADVECTOR)
     return riscv_vector::autovectorize_vector_modes (modes, all);
 
   return default_autovectorize_vector_modes (modes, all);
@@ -10515,6 +10525,16 @@ extract_base_offset_in_addr (rtx mem, rtx *base, rtx *offset)
   *offset = NULL_RTX;
 
   return false;
+}
+
+/* Implements target hook vector_mode_supported_any_target_p.  */
+
+static bool
+riscv_vector_mode_supported_any_target_p (machine_mode)
+{
+  if (TARGET_XTHEADVECTOR)
+    return false;
+  return true;
 }
 
 /* Initialize the GCC target structure.  */
@@ -10859,6 +10879,9 @@ extract_base_offset_in_addr (rtx mem, rtx *base, rtx *offset)
 
 #undef TARGET_PREFERRED_ELSE_VALUE
 #define TARGET_PREFERRED_ELSE_VALUE riscv_preferred_else_value
+
+#undef TARGET_VECTOR_MODE_SUPPORTED_ANY_TARGET_P
+#define TARGET_VECTOR_MODE_SUPPORTED_ANY_TARGET_P riscv_vector_mode_supported_any_target_p
 
 struct gcc_target targetm = TARGET_INITIALIZER;
 
