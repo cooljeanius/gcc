@@ -76,7 +76,7 @@ FROM SymbolTable IMPORT PushSize, PopSize, PushValue, PopValue,
                         GetPriority, GetNeedSavePriority,
                         PutConstString,
                         PutConst, PutConstSet, PutConstructor,
-			GetSType,
+			GetSType, GetTypeMode,
                         HasVarParameters,
                         NulSym ;
 
@@ -520,7 +520,7 @@ BEGIN
    IndrXOp            : CodeIndrX (q, op1, op2, op3) |
    XIndrOp            : CodeXIndr (q) |
    CallOp             : CodeCall (CurrentQuadToken, op3) |
-   ParamOp            : CodeParam (q, op1, op2, op3) |
+   ParamOp            : CodeParam (q) |
    FunctValueOp       : CodeFunctValue (location, op1) |
    AddrOp             : CodeAddr (q, op1, op3) |
    SizeOp             : CodeSize (op1, op3) |
@@ -2376,14 +2376,14 @@ END FoldMakeAdr ;
              procedure, op2.  The number of the parameter is op1.
 *)
 
-PROCEDURE doParam (quad: CARDINAL; op1, op2, op3: CARDINAL) ;
+PROCEDURE doParam (quad: CARDINAL; paramtok: CARDINAL; op1, op2, op3: CARDINAL) ;
 VAR
    location: location_t ;
 BEGIN
-   location := TokenToLocation (CurrentQuadToken) ;
-   DeclareConstant (CurrentQuadToken, op3) ;
-   DeclareConstructor (CurrentQuadToken, quad, op3) ;
-   BuildParam (location, CheckConvertCoerceParameter (CurrentQuadToken, op1, op2, op3))
+   location := TokenToLocation (paramtok) ;
+   DeclareConstant (paramtok, op3) ;
+   DeclareConstructor (paramtok, quad, op3) ;
+   BuildParam (location, CheckConvertCoerceParameter (paramtok, op1, op2, op3))
 END doParam ;
 
 
@@ -2433,7 +2433,7 @@ BEGIN
       REPEAT
          IF (op=ParamOp) AND (op1>0)
          THEN
-            doParam(n, op1, op2, op3)
+            doParam (tokenno, n, op1, op2, op3)
          ELSIF op=CallOp
          THEN
             procedure := op3
@@ -2499,8 +2499,21 @@ END FoldBuiltinFunction ;
                NOTE that we CAN ignore ModeOfAddr though
 *)
 
-PROCEDURE CodeParam (quad: CARDINAL; nth, procedure, parameter: CARDINAL) ;
+PROCEDURE CodeParam (quad: CARDINAL) ;
+VAR
+   nopos,
+   procedure,
+   parameter,
+   parampos  : CARDINAL ;
+   nth       : CARDINAL ;
+   compatible,
+   overflow  : BOOLEAN ;
+   op        : QuadOperator ;
 BEGIN
+   GetQuadOtok (quad, parampos, op,
+                nth, procedure, parameter, overflow,
+                nopos, nopos, nopos) ;
+   compatible := TRUE ;
    IF nth=0
    THEN
       CodeBuiltinFunction (quad, nth, procedure, parameter)
@@ -2509,41 +2522,27 @@ BEGIN
       THEN
          IF (nth <= NoOfParam (procedure))
          THEN
-            IF IsVarParam (procedure, nth) AND
-               (NOT ParameterTypeCompatible (CurrentQuadToken,
-                                             'parameter incompatibility when attempting to pass actual parameter {%2ad} to a {%kVAR} formal parameter {%3Ead} during call to procedure {%1ad}',
-                                             procedure, GetNthParam (procedure, nth), parameter, nth, TRUE))
-            THEN
-
-            ELSIF (NOT IsVarParam (procedure, nth)) AND
-               (NOT ParameterTypeCompatible (CurrentQuadToken,
-                                             'parameter incompatibility when attempting to pass actual parameter {%3Ead} to the {%4EN} formal parameter {%2ad} during call to procedure {%1ad}',
-                                             procedure, GetNthParam (procedure, nth), parameter, nth, FALSE))
-            THEN
-               (* use the AssignmentTypeCompatible as the rules are for assignment for non var parameters.  *)
-            ELSE
-               (* doParam (quad, nth, procedure, parameter) *)    (* --fixme--  enable when M2Check works.  *)
-            END
+            compatible := ParameterTypeCompatible (parampos,
+                                                   'parameter incompatibility when attempting to pass actual parameter {%2ad} to a {%kVAR} formal parameter {%3Ead} during call to procedure {%1ad}',
+                                                   procedure, GetNthParam (procedure, nth),
+                                                   parameter, nth, IsVarParam (procedure, nth))
          END
-      ELSE
-         (* doParam (quad, nth, procedure, parameter)     *)    (* --fixme--  enable when M2Check works.  *)
       END ;
 
-      (* --fixme  remove B EGIN  *)
       IF (nth <= NoOfParam (procedure)) AND
          IsVarParam (procedure, nth) AND IsConst (parameter)
       THEN
-         MetaErrorT1 (CurrentQuadToken,
+         MetaErrorT1 (parampos,
                       'cannot pass a constant {%1Ead} as a VAR parameter', parameter)
       ELSIF IsAModula2Type (parameter)
       THEN
-         MetaErrorT2 (CurrentQuadToken,
+         MetaErrorT2 (parampos,
                       'cannot pass a type {%1Ead} as a parameter to procedure {%2ad}',
                       parameter, procedure)
-      ELSE
-         doParam (quad, nth, procedure, parameter)
+      ELSIF compatible
+      THEN
+         doParam (quad, parampos, nth, procedure, parameter)
       END
-      (* --fixme  remove E ND  once M2Check works.  *)
    END
 END CodeParam ;
 
@@ -2942,21 +2941,6 @@ BEGIN
       RETURN( Mod2Gcc(sym) )
    END
 END DefaultConvertGM2 ;
-
-
-(*
-   GetTypeMode -
-*)
-
-PROCEDURE GetTypeMode (sym: CARDINAL) : CARDINAL ;
-BEGIN
-   IF GetMode(sym)=LeftValue
-   THEN
-      RETURN( Address )
-   ELSE
-      RETURN( GetType(sym) )
-   END
-END GetTypeMode ;
 
 
 (*
@@ -3524,7 +3508,7 @@ BEGIN
    DeclareConstant (op2pos, op2) ;
    location := TokenToLocation (op1pos) ;
 
-   type := MixTypes (FindType (op2), FindType (op3), op3pos) ;
+   type := MixTypesBinary (op2, op3, op1pos, MustCheckOverflow (quad)) ;
    ConvertBinaryOperands (location, tl, tr, type, op2, op3) ;
 
    lowestType := GetLType (op1) ;
@@ -3555,6 +3539,23 @@ END CodeBinaryCheck ;
 
 
 (*
+   MixTypesBinary - depending upon check do not check pointer arithmetic.
+*)
+
+PROCEDURE MixTypesBinary (left, right: CARDINAL;
+                          tokpos: CARDINAL; check: BOOLEAN) : CARDINAL ;
+BEGIN
+   IF (NOT check) AND
+      (IsPointer (GetTypeMode (left)) OR IsPointer (GetTypeMode (right)))
+   THEN
+      RETURN Address
+   ELSE
+      RETURN MixTypes (FindType (left), FindType (right), tokpos)
+   END
+END MixTypesBinary ;
+
+
+(*
    CodeBinary - encode a binary arithmetic operation.
 *)
 
@@ -3577,7 +3578,7 @@ BEGIN
    DeclareConstant (op2pos, op2) ;
    location := TokenToLocation (op1pos) ;
 
-   type := MixTypes (FindType (op2), FindType (op3), op1pos) ;
+   type := MixTypesBinary (op2, op3, op1pos, MustCheckOverflow (quad)) ;
    ConvertBinaryOperands (location, tl, tr, type, op2, op3) ;
 
    tv := binop (location, tl, tr, FALSE) ;
@@ -6743,9 +6744,9 @@ BEGIN
       ELSE
          ConvertBinaryOperands(location,
                                tl, tr,
-                               MixTypes(SkipType(GetType(op1)),
-                                        SkipType(GetType(op2)),
-                                        CurrentQuadToken),
+                               ComparisonMixTypes (SkipType (GetType (op1)),
+                                                   SkipType (GetType (op2)),
+                                                   CurrentQuadToken),
                                op1, op2) ;
          DoJump(location,
                 BuildLessThan(location, tl, tr), NIL, string(CreateLabelName(op3)))
@@ -6840,9 +6841,9 @@ BEGIN
       ELSE
          ConvertBinaryOperands(location,
                                tl, tr,
-                               MixTypes(SkipType(GetType(op1)),
-                                        SkipType(GetType(op2)),
-                                        CurrentQuadToken),
+                               ComparisonMixTypes (SkipType (GetType (op1)),
+                                                   SkipType (GetType (op2)),
+                                                   CurrentQuadToken),
                                op1, op2) ;
          DoJump(location, BuildGreaterThan(location, tl, tr), NIL, string(CreateLabelName(op3)))
       END
@@ -6936,9 +6937,9 @@ BEGIN
       ELSE
          ConvertBinaryOperands(location,
                                tl, tr,
-                               MixTypes(SkipType(GetType(op1)),
-                                        SkipType(GetType(op2)),
-                                        CurrentQuadToken),
+                               ComparisonMixTypes (SkipType (GetType (op1)),
+                                                   SkipType (GetType (op2)),
+                                                   CurrentQuadToken),
                                op1, op2) ;
          DoJump(location, BuildLessThanOrEqual(location, tl, tr), NIL, string(CreateLabelName(op3)))
       END
@@ -7032,9 +7033,9 @@ BEGIN
       ELSE
          ConvertBinaryOperands(location,
                                tl, tr,
-                               MixTypes(SkipType(GetType(op1)),
-                                        SkipType(GetType(op2)),
-                                        CurrentQuadToken),
+                               ComparisonMixTypes (SkipType (GetType (op1)),
+                                                   SkipType (GetType (op2)),
+                                                   CurrentQuadToken),
                                op1, op2) ;
          DoJump(location, BuildGreaterThanOrEqual(location, tl, tr), NIL, string(CreateLabelName(op3)))
       END
@@ -7148,6 +7149,24 @@ END CodeIfSetNotEqu ;
 
 
 (*
+   ComparisonMixTypes -
+*)
+
+PROCEDURE ComparisonMixTypes (left, right: CARDINAL; tokpos: CARDINAL) : CARDINAL ;
+BEGIN
+   IF IsGenericSystemType (left)
+   THEN
+      RETURN left
+   ELSIF IsGenericSystemType (right)
+   THEN
+      RETURN right
+   ELSE
+      RETURN MixTypes (left, right, tokpos)
+   END
+END ComparisonMixTypes ;
+
+
+(*
    CodeIfEqu - codes the quadruple if op1 = op2 then goto op3
 *)
 
@@ -7186,9 +7205,9 @@ BEGIN
       ELSE
          ConvertBinaryOperands(location,
                                tl, tr,
-                               MixTypes(SkipType(GetType(op1)),
-                                        SkipType(GetType(op2)),
-                                        CurrentQuadToken),
+                               ComparisonMixTypes (SkipType (GetType (op1)),
+                                                   SkipType (GetType (op2)),
+                                                   CurrentQuadToken),
                                op1, op2) ;
          DoJump(location, BuildEqualTo(location, tl, tr), NIL, string(CreateLabelName(op3)))
       END
@@ -7235,9 +7254,9 @@ BEGIN
       ELSE
          ConvertBinaryOperands(location,
                                tl, tr,
-                               MixTypes(SkipType(GetType(op1)),
-                                        SkipType(GetType(op2)),
-                                        CurrentQuadToken),
+                               ComparisonMixTypes (SkipType (GetType (op1)),
+                                                   SkipType (GetType (op2)),
+                                                   CurrentQuadToken),
                                op1, op2) ;
          DoJump(location,
                 BuildNotEqualTo(location, tl, tr), NIL, string(CreateLabelName(op3)))

@@ -547,6 +547,7 @@ Objective-C and Objective-C++ Dialects}.
 -falign-jumps[=@var{n}[:@var{m}:[@var{n2}[:@var{m2}]]]]
 -falign-labels[=@var{n}[:@var{m}:[@var{n2}[:@var{m2}]]]]
 -falign-loops[=@var{n}[:@var{m}:[@var{n2}[:@var{m2}]]]]
+-fmin-function-alignment=[@var{n}]
 -fno-allocation-dce -fallow-store-data-races
 -fassociative-math  -fauto-profile  -fauto-profile[=@var{path}]
 -fauto-inc-dec  -fbranch-probabilities
@@ -1138,6 +1139,7 @@ Objective-C and Objective-C++ Dialects}.
 -mcode-readable=@var{setting}
 -msplit-addresses  -mno-split-addresses
 -mexplicit-relocs  -mno-explicit-relocs
+-mexplicit-relocs=@var{release}
 -mcheck-zero-division  -mno-check-zero-division
 -mdivide-traps  -mdivide-breaks
 -mload-store-pairs  -mno-load-store-pairs
@@ -3202,7 +3204,9 @@ the language standard, so @option{-fconcepts} defaults to on.
 Some constructs that were allowed by the earlier C++ Extensions for
 Concepts Technical Specification, ISO 19217 (2015), but didn't make it
 into the standard, can additionally be enabled by
-@option{-fconcepts-ts}.
+@option{-fconcepts-ts}.  The option @option{-fconcepts-ts} was deprecated
+in GCC 14 and may be removed in GCC 15; users are expected to convert
+their code to C++20 concepts.
 
 @opindex fconstexpr-depth
 @item -fconstexpr-depth=@var{n}
@@ -3913,6 +3917,20 @@ auto p = std::minmax(1, 2);
 where @code{std::minmax} returns @code{std::pair<const int&, const int&>}, and
 both references dangle after the end of the full expression that contains
 the call to @code{std::minmax}.
+
+The warning does not warn for @code{std::span}-like classes.  We consider
+classes of the form:
+
+@smallexample
+template<typename T>
+struct Span @{
+  T* data_;
+  std::size len_;
+@};
+@end smallexample
+
+as @code{std::span}-like; that is, the class is a non-union class
+that has a pointer data member and a trivial destructor.
 
 This warning is enabled by @option{-Wall}.
 
@@ -6202,27 +6220,37 @@ Options} and @ref{Objective-C and Objective-C++ Dialect Options}.
 @option{-Wall} turns on the following warning flags:
 
 @gccoptlist{-Waddress
+-Waligned-new @r{(C++ and Objective-C++ only)}
 -Warray-bounds=1 @r{(only with} @option{-O2}@r{)}
 -Warray-compare
--Warray-parameter=2 @r{(C and Objective-C only)}
+-Warray-parameter=2
 -Wbool-compare
 -Wbool-operation
--Wc++11-compat  -Wc++14-compat
+-Wc++11-compat  -Wc++14-compat  -Wc++17compat  -Wc++20compat
 -Wcatch-value @r{(C++ and Objective-C++ only)}
 -Wchar-subscripts
+-Wclass-memaccess @r{(C++ and Objective-C++ only)}
 -Wcomment
+-Wdangling-else
 -Wdangling-pointer=2
+-Wdelete-non-virtual-dtor @r{(C++ and Objective-C++ only)}
 -Wduplicate-decl-specifier @r{(C and Objective-C only)}
 -Wenum-compare @r{(in C/ObjC; this is on by default in C++)}
 -Wenum-int-mismatch @r{(C and Objective-C only)}
--Wformat
--Wformat-overflow
--Wformat-truncation
--Wint-in-bool-context
+-Wformat=1
+-Wformat-contains-nul
+-Wformat-diag
+-Wformat-extra-args
+-Wformat-overflow=1
+-Wformat-truncation=1
+-Wformat-zero-length
+-Wframe-address
 -Wimplicit @r{(C and Objective-C only)}
--Wimplicit-int @r{(C and Objective-C only)}
 -Wimplicit-function-declaration @r{(C and Objective-C only)}
--Winit-self @r{(only for C++)}
+-Wimplicit-int @r{(C and Objective-C only)}
+-Winfinite-recursion
+-Winit-self @r{(C++ and Objective-C++ only)}
+-Wint-in-bool-context
 -Wlogical-not-parentheses
 -Wmain @r{(only for C/ObjC and unless} @option{-ffreestanding}@r{)}
 -Wmaybe-uninitialized
@@ -6230,24 +6258,26 @@ Options} and @ref{Objective-C and Objective-C++ Dialect Options}.
 -Wmemset-transposed-args
 -Wmisleading-indentation @r{(only for C/C++)}
 -Wmismatched-dealloc
--Wmismatched-new-delete @r{(only for C/C++)}
+-Wmismatched-new-delete @r{(C++ and Objective-C++ only)}
 -Wmissing-attributes
 -Wmissing-braces @r{(only for C/ObjC)}
 -Wmultistatement-macros
--Wnarrowing @r{(only for C++)}
+-Wnarrowing  @r{(C++ and Objective-C++ only)}
 -Wnonnull
 -Wnonnull-compare
--Wopenmp-simd
+-Wopenmp-simd @r{(C and C++ only)}
+-Woverloaded-virtual=1 @r{(C++ and Objective-C++ only)}
+-Wpacked-not-aligned
 -Wparentheses
--Wpessimizing-move @r{(only for C++)}
--Wpointer-sign
--Wrange-loop-construct @r{(only for C++)}
--Wreorder
+-Wpessimizing-move @r{(C++ and Objective-C++ only)}
+-Wpointer-sign @r{(only for C/ObjC)}
+-Wrange-loop-construct @r{(C++ and Objective-C++ only)}
+-Wreorder @r{(C++ and Objective-C++ only)}
 -Wrestrict
 -Wreturn-type
--Wself-move @r{(only for C++)}
+-Wself-move @r{(C++ and Objective-C++ only)}
 -Wsequence-point
--Wsign-compare @r{(only in C++)}
+-Wsign-compare @r{(C++ and Objective-C++ only)}
 -Wsizeof-array-div
 -Wsizeof-pointer-div
 -Wsizeof-pointer-memaccess
@@ -6258,12 +6288,16 @@ Options} and @ref{Objective-C and Objective-C++ Dialect Options}.
 -Wtrigraphs
 -Wuninitialized
 -Wunknown-pragmas
+-Wunused
+-Wunused-but-set-variable
+-Wunused-const-variable=1 @r{(only for C/ObjC)}
 -Wunused-function
 -Wunused-label
+-Wunused-local-typedefs
 -Wunused-value
 -Wunused-variable
 -Wuse-after-free=2
--Wvla-parameter @r{(C and Objective-C only)}
+-Wvla-parameter
 -Wvolatile-register-var
 -Wzero-length-bounds}
 
@@ -6283,26 +6317,31 @@ This enables some extra warning flags that are not enabled by
 @option{-Wall}. (This option used to be called @option{-W}.  The older
 name is still supported, but the newer name is more descriptive.)
 
-@gccoptlist{-Wclobbered
+@gccoptlist{-Wabsolute-value @r{(only for C/ObjC)}
+-Walloc-size
+-Wcalloc-transposed-args
 -Wcast-function-type
--Wdeprecated-copy @r{(C++ only)}
+-Wclobbered
+-Wdeprecated-copy @r{(C++ and Objective-C++ only)}
 -Wempty-body
--Wenum-conversion @r{(C only)}
--Wignored-qualifiers
+-Wenum-conversion @r{(only for C/ObjC)}
+-Wexpansion-to-defined
+-Wignored-qualifiers  @r{(only for C/C++)}
 -Wimplicit-fallthrough=3
+-Wmaybe-uninitialized
 -Wmissing-field-initializers
--Wmissing-parameter-type @r{(C only)}
--Wold-style-declaration @r{(C only)}
--Woverride-init
--Wsign-compare @r{(C only)}
+-Wmissing-parameter-type @r{(C/ObjC only)}
+-Wold-style-declaration @r{(C/ObjC only)}
+-Woverride-init @r{(C/ObjC only)}
+-Wredundant-move @r{(C++ and Objective-C++ only)}
+-Wshift-negative-value @r{(in C++11 to C++17 and in C99 and newer)}
+-Wsign-compare @r{(C++ and Objective-C++ only)}
+-Wsized-deallocation @r{(C++ and Objective-C++ only)}
 -Wstring-compare
--Wredundant-move @r{(only for C++)}
 -Wtype-limits
 -Wuninitialized
--Wshift-negative-value @r{(in C++11 to C++17 and in C99 and newer)}
 -Wunused-parameter @r{(only with} @option{-Wunused} @r{or} @option{-Wall}@r{)}
 -Wunused-but-set-parameter @r{(only with} @option{-Wunused} @r{or} @option{-Wall}@r{)}}
-
 
 The option @option{-Wextra} also prints warning messages for the
 following cases:
@@ -14212,6 +14251,9 @@ Align the start of functions to the next power-of-two greater than or
 equal to @var{n}, skipping up to @var{m}-1 bytes.  This ensures that at
 least the first @var{m} bytes of the function can be fetched by the CPU
 without crossing an @var{n}-byte alignment boundary.
+This is an optimization of code performance and alignment is ignored for
+functions considered cold.  If alignment is required for all functions,
+use @option{-fmin-function-alignment}.
 
 If @var{m} is not specified, it defaults to @var{n}.
 
@@ -14275,6 +14317,8 @@ Enabled at levels @option{-O2}, @option{-O3}.
 Align loops to a power-of-two boundary.  If the loops are executed
 many times, this makes up for any execution of the dummy padding
 instructions.
+This is an optimization of code performance and alignment is ignored for
+loops considered cold.
 
 If @option{-falign-labels} is greater than this value, then its value
 is used instead.
@@ -14297,6 +14341,8 @@ Enabled at levels @option{-O2}, @option{-O3}.
 Align branch targets to a power-of-two boundary, for branch targets
 where the targets can only be reached by jumping.  In this case,
 no dummy operations need be executed.
+This is an optimization of code performance and alignment is ignored for
+jumps considered cold.
 
 If @option{-falign-labels} is greater than this value, then its value
 is used instead.
@@ -14309,6 +14355,14 @@ If @var{n} is not specified or is zero, use a machine-dependent default.
 The maximum allowed @var{n} option value is 65536.
 
 Enabled at levels @option{-O2}, @option{-O3}.
+
+@opindex fmin-function-alignment=@var{n}
+@item -fmin-function-alignment
+Specify minimal alignment of functions to the next power-of-two greater than or
+equal to @var{n}. Unlike @option{-falign-functions} this alignment is applied
+also to all functions (even those considered cold).  The alignment is also not
+affected by @option{-flimit-function-alignment}
+
 
 @opindex fno-allocation-dce
 @item -fno-allocation-dce
@@ -14406,7 +14460,7 @@ To use the link-time optimizer, @option{-flto} and optimization
 options should be specified at compile time and during the final link.
 It is recommended that you compile all the files participating in the
 same link with the same options and also specify those options at
-link time.  
+link time.
 For example:
 
 @smallexample
@@ -19485,8 +19539,8 @@ for nested functions.
 By default, trampolines are generated on stack.  However, certain platforms
 (such as the Apple M1) do not permit an executable stack.  Compiling with
 @option{-ftrampoline-impl=heap} generate calls to
-@code{__builtin_nested_func_ptr_created} and
-@code{__builtin_nested_func_ptr_deleted} in order to allocate and
+@code{__gcc_nested_func_ptr_created} and
+@code{__gcc_nested_func_ptr_deleted} in order to allocate and
 deallocate trampoline space on the executable heap.  These functions are
 implemented in libgcc, and will only be provided on specific targets:
 x86_64 Darwin, x86_64 and aarch64 Linux.  @emph{PLEASE NOTE}: Heap
@@ -21700,6 +21754,12 @@ Compile for CDNA1 Instinct MI100 series devices (gfx908).
 
 @item gfx90a
 Compile for CDNA2 Instinct MI200 series devices (gfx90a).
+
+@item gfx1030
+Compile for RDNA2 gfx1030 devices (GFX10 series).
+
+@item gfx1100
+Compile for RDNA3 gfx1100 devices (GFX11 series).
 
 @end table
 
@@ -28396,16 +28456,20 @@ Enable (disable) use of the @code{%hi()} and @code{%lo()} assembler
 relocation operators.  This option has been superseded by
 @option{-mexplicit-relocs} but is retained for backwards compatibility.
 
-@opindex mexplicit-relocs
-@opindex mno-explicit-relocs
-@item -mexplicit-relocs
+@opindex mexplicit-relocs=none
+@opindex mexplicit-relocs=base
+@opindex mexplicit-relocs=pcrel
+@item -mexplicit-relocs=none
+@itemx -mexplicit-relocs=base
+@itemx -mexplicit-relocs=pcrel
+@itemx -mexplicit-relocs
 @itemx -mno-explicit-relocs
-Use (do not use) assembler relocation operators when dealing with symbolic
-addresses.  The alternative, selected by @option{-mno-explicit-relocs},
-is to use assembler macros instead.
+These options control whether explicit relocs (such as %gp_rel) are used.
+The default value depends on the version of GAS when GCC itself was built.
 
-@option{-mexplicit-relocs} is the default if GCC was configured
-to use an assembler that supports relocation operators.
+The @code{base} explicit-relocs support introdunced into GAS in 2001.
+The @code{pcrel} explicit-relocs support introdunced into GAS in 2014,
+which supports @code{%pcrel_hi} and @code{%pcrel_lo}.
 
 @opindex mcheck-zero-division
 @opindex mno-check-zero-division
@@ -30198,6 +30262,14 @@ Supported extension are listed below:
 @tab 1.0
 @tab Integer conditional operations extension.
 
+@item za64rs
+@tab 1.0
+@tab Reservation set size of 64 bytes.
+
+@item za128rs
+@tab 1.0
+@tab Reservation set size of 128 bytes.
+
 @item zawrs
 @tab 1.0
 @tab Wait-on-reservation-set extension.
@@ -30305,6 +30377,26 @@ Supported extension are listed below:
 @item zicbop
 @tab 1.0
 @tab Cache-block prefetch extension.
+
+@item zic64b
+@tab 1.0
+@tab Cache block size isf 64 bytes.
+
+@item ziccamoa
+@tab 1.0
+@tab Main memory supports all atomics in A.
+
+@item ziccif
+@tab 1.0
+@tab Main memory supports instruction fetch with atomicity requirement.
+
+@item zicclsm
+@tab 1.0
+@tab Main memory supports misaligned loads/stores.
+
+@item ziccrse
+@tab 1.0
+@tab Main memory supports forward progress on LR/SC sequences.
 
 @item zicntr
 @tab 2.0
@@ -30615,14 +30707,16 @@ by particular CPU name.
 Permissible values for this option are: @samp{sifive-e20}, @samp{sifive-e21},
 @samp{sifive-e24}, @samp{sifive-e31}, @samp{sifive-e34}, @samp{sifive-e76},
 @samp{sifive-s21}, @samp{sifive-s51}, @samp{sifive-s54}, @samp{sifive-s76},
-@samp{sifive-u54}, @samp{sifive-u74}, and @samp{sifive-x280}.
+@samp{sifive-u54}, @samp{sifive-u74}, @samp{sifive-x280}, @samp{sifive-xp450},
+@samp{sifive-x670}.
 
 @opindex mtune
 @item -mtune=@var{processor-string}
 Optimize the output for the given processor, specified by microarchitecture or
 particular CPU name.  Permissible values for this option are: @samp{rocket},
 @samp{sifive-3-series}, @samp{sifive-5-series}, @samp{sifive-7-series},
-@samp{thead-c906}, @samp{size}, and all valid options for @option{-mcpu=}.
+@samp{thead-c906}, @samp{size}, @samp{sifive-p400-series},
+@samp{sifive-p600-series}, and all valid options for @option{-mcpu=}.
 
 When @option{-mtune=} is not specified, use the setting from @option{-mcpu},
 the default is @samp{rocket} if both are not specified.

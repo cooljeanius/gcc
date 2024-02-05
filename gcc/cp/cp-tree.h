@@ -3251,7 +3251,7 @@ struct GTY(()) lang_decl {
 #define DECL_CONV_FN_TYPE(FN) \
   TREE_TYPE ((gcc_checking_assert (DECL_CONV_FN_P (FN)), DECL_NAME (FN)))
 
-/* Nonzero if NODE, a static data member, was declared in its class as an
+/* Nonzero if NODE, a templated variable, was declared as an
    array of unknown bound.  */
 #define VAR_HAD_UNKNOWN_BOUND(NODE)			\
   (DECL_LANG_SPECIFIC (VAR_DECL_CHECK (NODE))		\
@@ -7151,7 +7151,7 @@ extern tree maybe_get_tls_wrapper_call		(tree);
 extern void mark_needed				(tree);
 extern bool decl_needed_p			(tree);
 extern void note_vague_linkage_fn		(tree);
-extern void note_variable_template_instantiation (tree);
+extern void note_vague_linkage_variable		(tree);
 extern tree build_artificial_parm		(tree, tree, tree);
 extern bool possibly_inlined_p			(tree);
 extern int parm_index                           (tree);

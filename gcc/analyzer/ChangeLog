@@ -1,3 +1,64 @@
+2024-01-31  David Malcolm  <dmalcolm@redhat.com>
+
+	PR analyzer/113253
+	* region-model.cc (region_model::on_stmt_pre): Add gcc_unreachable
+	for debug statements.
+	* state-purge.cc
+	(state_purge_per_ssa_name::state_purge_per_ssa_name): Skip any
+	debug stmts in the FOR_EACH_IMM_USE_FAST list.
+	* supergraph.cc (supergraph::supergraph): Don't add debug stmts
+	to the supernodes.
+
+2024-01-31  David Malcolm  <dmalcolm@redhat.com>
+
+	PR analyzer/113509
+	* checker-event.cc (state_change_event::get_desc): Don't assume
+	"var" is non-NULL.
+
+2024-01-30  David Malcolm  <dmalcolm@redhat.com>
+
+	PR analyzer/113654
+	* region-model.cc (is_round_up): New.
+	(is_multiple_p): New.
+	(is_dubious_capacity): New.
+	(region_model::check_region_size): Move usage of size_visitor into
+	is_dubious_capacity.
+
+2024-01-30  David Malcolm  <dmalcolm@redhat.com>
+
+	* region-model.cc
+	(dubious_allocation_size::dubious_allocation_size): Add
+	"capacity_sval" param.  Drop unused ctor.
+	(dubious_allocation_size::maybe_add_sarif_properties): New.
+	(dubious_allocation_size::m_capacity_sval): New field.
+	(region_model::check_region_size): Pass capacity svalue to
+	dubious_allocation_size ctor.
+
+2024-01-25  David Malcolm  <dmalcolm@redhat.com>
+
+	PR analyzer/112969
+	* store.cc (binding_cluster::maybe_get_compound_binding): When
+	populating default_map, express the bit-range of the default key
+	for REG relative to REG, rather than to the base region.
+
+2024-01-24  David Malcolm  <dmalcolm@redhat.com>
+
+	PR analyzer/112977
+	* engine.cc (impl_region_model_context::on_liveness_change): Pass
+	m_ext_state to sm_state_map::on_liveness_change.
+	* program-state.cc (sm_state_map::on_svalue_leak): Guard removal
+	of map entry based on can_purge_p.
+	(sm_state_map::on_liveness_change): Add ext_state param.  Add
+	workaround for bad interaction between state purging and
+	alt-inherited sm-state.
+	* program-state.h (sm_state_map::on_liveness_change): Add
+	ext_state param.
+	* sm-taint.cc
+	(taint_state_machine::has_alt_get_inherited_state_p): New.
+	(taint_state_machine::can_purge_p): Return false for "has_lb" and
+	"has_ub".
+	* sm.h (state_machine::has_alt_get_inherited_state_p): New vfunc.
+
 2024-01-18  David Malcolm  <dmalcolm@redhat.com>
 
 	PR analyzer/111361

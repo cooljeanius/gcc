@@ -96,8 +96,6 @@ static const riscv_implied_info_t riscv_implied_info[] =
   {"zks", "zksed"},
   {"zks", "zksh"},
 
-  {"ztso", "a"},
-
   {"v", "zvl128b"},
   {"v", "zve64d"},
 
@@ -249,6 +247,8 @@ static const struct riscv_ext_version riscv_ext_version_table[] =
 
   {"zicond", ISA_SPEC_CLASS_NONE, 1, 0},
 
+  {"za64rs",  ISA_SPEC_CLASS_NONE, 1, 0},
+  {"za128rs", ISA_SPEC_CLASS_NONE, 1, 0},
   {"zawrs", ISA_SPEC_CLASS_NONE, 1, 0},
 
   {"zba", ISA_SPEC_CLASS_NONE, 1, 0},
@@ -278,6 +278,11 @@ static const struct riscv_ext_version riscv_ext_version_table[] =
   {"zicboz",ISA_SPEC_CLASS_NONE, 1, 0},
   {"zicbom",ISA_SPEC_CLASS_NONE, 1, 0},
   {"zicbop",ISA_SPEC_CLASS_NONE, 1, 0},
+  {"zic64b",   ISA_SPEC_CLASS_NONE, 1, 0},
+  {"ziccamoa", ISA_SPEC_CLASS_NONE, 1, 0},
+  {"ziccif",   ISA_SPEC_CLASS_NONE, 1, 0},
+  {"zicclsm",  ISA_SPEC_CLASS_NONE, 1, 0},
+  {"ziccrse",  ISA_SPEC_CLASS_NONE, 1, 0},
 
   {"zicntr", ISA_SPEC_CLASS_NONE, 2, 0},
   {"zihpm",  ISA_SPEC_CLASS_NONE, 2, 0},
@@ -358,6 +363,7 @@ static const struct riscv_ext_version riscv_ext_version_table[] =
   {"xcvmac", ISA_SPEC_CLASS_NONE, 1, 0},
   {"xcvalu", ISA_SPEC_CLASS_NONE, 1, 0},
   {"xcvelw", ISA_SPEC_CLASS_NONE, 1, 0},
+  {"xcvsimd", ISA_SPEC_CLASS_NONE, 1, 0},
 
   {"xtheadba", ISA_SPEC_CLASS_NONE, 1, 0},
   {"xtheadbb", ISA_SPEC_CLASS_NONE, 1, 0},
@@ -1495,6 +1501,8 @@ static const riscv_ext_flag_table_t riscv_ext_flag_table[] =
   {"zifencei", &gcc_options::x_riscv_zi_subext, MASK_ZIFENCEI},
   {"zicond",   &gcc_options::x_riscv_zi_subext, MASK_ZICOND},
 
+  {"za64rs", &gcc_options::x_riscv_za_subext, MASK_ZA64RS},
+  {"za128rs", &gcc_options::x_riscv_za_subext, MASK_ZA128RS},
   {"zawrs", &gcc_options::x_riscv_za_subext, MASK_ZAWRS},
 
   {"zba",    &gcc_options::x_riscv_zb_subext, MASK_ZBA},
@@ -1524,6 +1532,11 @@ static const riscv_ext_flag_table_t riscv_ext_flag_table[] =
   {"zicboz", &gcc_options::x_riscv_zicmo_subext, MASK_ZICBOZ},
   {"zicbom", &gcc_options::x_riscv_zicmo_subext, MASK_ZICBOM},
   {"zicbop", &gcc_options::x_riscv_zicmo_subext, MASK_ZICBOP},
+  {"zic64b", &gcc_options::x_riscv_zicmo_subext, MASK_ZIC64B},
+  {"ziccamoa", &gcc_options::x_riscv_zicmo_subext, MASK_ZICCAMOA},
+  {"ziccif", &gcc_options::x_riscv_zicmo_subext, MASK_ZICCIF},
+  {"zicclsm", &gcc_options::x_riscv_zicmo_subext, MASK_ZICCLSM},
+  {"ziccrse", &gcc_options::x_riscv_zicmo_subext, MASK_ZICCRSE},
 
   {"zve32x",   &gcc_options::x_target_flags, MASK_VECTOR},
   {"zve32f",   &gcc_options::x_target_flags, MASK_VECTOR},
@@ -1602,6 +1615,7 @@ static const riscv_ext_flag_table_t riscv_ext_flag_table[] =
   {"xcvmac",        &gcc_options::x_riscv_xcv_subext, MASK_XCVMAC},
   {"xcvalu",        &gcc_options::x_riscv_xcv_subext, MASK_XCVALU},
   {"xcvelw",        &gcc_options::x_riscv_xcv_subext, MASK_XCVELW},
+  {"xcvsimd",       &gcc_options::x_riscv_xcv_subext, MASK_XCVSIMD},
 
   {"xtheadba",      &gcc_options::x_riscv_xthead_subext, MASK_XTHEADBA},
   {"xtheadbb",      &gcc_options::x_riscv_xthead_subext, MASK_XTHEADBB},
