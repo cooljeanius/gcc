@@ -1,5 +1,5 @@
 /* Modeling API uses and misuses via state machines.
-   Copyright (C) 2019-2023 Free Software Foundation, Inc.
+   Copyright (C) 2019-2024 Free Software Foundation, Inc.
    Contributed by David Malcolm <dmalcolm@redhat.com>.
 
 This file is part of GCC.
@@ -76,6 +76,12 @@ public:
 			   const extrinsic_state &) const
   {
     return NULL;
+  }
+
+  virtual bool
+  has_alt_get_inherited_state_p () const
+  {
+    return false;
   }
 
   virtual state_machine::state_t get_default_state (const svalue *) const

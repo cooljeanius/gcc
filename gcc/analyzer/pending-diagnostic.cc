@@ -1,5 +1,5 @@
 /* Classes for analyzer diagnostics.
-   Copyright (C) 2019-2023 Free Software Foundation, Inc.
+   Copyright (C) 2019-2024 Free Software Foundation, Inc.
    Contributed by David Malcolm <dmalcolm@redhat.com>.
 
 This file is part of GCC.
@@ -129,10 +129,10 @@ diagnostic_emission_context::warn (const char *gmsgid, ...)
   auto_diagnostic_group d;
   va_list ap;
   va_start (ap, gmsgid);
-  const bool result = emit_diagnostic_valist (DK_WARNING,
-					      &m_rich_loc, &m_metadata,
-					      pd.get_controlling_option (),
-					      gmsgid, &ap);
+  const bool result = emit_diagnostic_valist_meta (DK_WARNING,
+						   &m_rich_loc, &m_metadata,
+						   pd.get_controlling_option (),
+						   gmsgid, &ap);
   va_end (ap);
   return result;
 }
@@ -147,10 +147,10 @@ diagnostic_emission_context::inform (const char *gmsgid, ...)
   auto_diagnostic_group d;
   va_list ap;
   va_start (ap, gmsgid);
-  emit_diagnostic_valist (DK_NOTE,
-			  &m_rich_loc, &m_metadata,
-			  pd.get_controlling_option (),
-			  gmsgid, &ap);
+  emit_diagnostic_valist_meta (DK_NOTE,
+			       &m_rich_loc, &m_metadata,
+			       pd.get_controlling_option (),
+			       gmsgid, &ap);
   va_end (ap);
 }
 

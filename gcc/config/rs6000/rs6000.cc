@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 /* Subroutines used for code generation on IBM RS/6000.
-   Copyright (C) 1991-2023 Free Software Foundation, Inc.
+   Copyright (C) 1991-2024 Free Software Foundation, Inc.
    Contributed by Richard Kenner (kenner@vlsi1.ultra.nyu.edu)
 
    This file is part of GCC.
@@ -72,6 +72,8 @@
 #include "context.h"
 #include "tree-pass.h"
 #include "symbol-summary.h"
+#include "sreal.h"
+#include "ipa-cp.h"
 #include "ipa-prop.h"
 #include "ipa-fnsummary.h"
 #include "except.h"
@@ -3864,8 +3866,8 @@ rs6000_option_override_internal (bool global_init_p)
     dwarf_offset_size = POINTER_SIZE_UNITS;
 #endif
 
-  /* Handle explicit -mno-{altivec,vsx,power8-vector,power9-vector} and turn
-     off all of the options that depend on those flags.  */
+  /* Handle explicit -mno-{altivec,vsx} and turn off all of
+     the options that depend on those flags.  */
   ignore_masks = rs6000_disable_incompatible_switches ();
 
   /* For the newer switches (vsx, dfp, etc.) set some of the older options,
@@ -3945,31 +3947,10 @@ rs6000_option_override_internal (bool global_init_p)
     }
 
   if (TARGET_P8_VECTOR && !TARGET_ALTIVEC)
-    {
-      if (rs6000_isa_flags_explicit & OPTION_MASK_P8_VECTOR)
-	error ("%qs requires %qs", "-mpower8-vector", "-maltivec");
-      rs6000_isa_flags &= ~OPTION_MASK_P8_VECTOR;
-    }
+    rs6000_isa_flags &= ~OPTION_MASK_P8_VECTOR;
 
   if (TARGET_P8_VECTOR && !TARGET_VSX)
-    {
-      if ((rs6000_isa_flags_explicit & OPTION_MASK_P8_VECTOR)
-	  && (rs6000_isa_flags_explicit & OPTION_MASK_VSX))
-	error ("%qs requires %qs", "-mpower8-vector", "-mvsx");
-      else if ((rs6000_isa_flags_explicit & OPTION_MASK_P8_VECTOR) == 0)
-	{
-	  rs6000_isa_flags &= ~OPTION_MASK_P8_VECTOR;
-	  if (rs6000_isa_flags_explicit & OPTION_MASK_VSX)
-	    rs6000_isa_flags_explicit |= OPTION_MASK_P8_VECTOR;
-	}
-      else
-	{
-	  /* OPTION_MASK_P8_VECTOR is explicit, and OPTION_MASK_VSX is
-	     not explicit.  */
-	  rs6000_isa_flags |= OPTION_MASK_VSX;
-	  rs6000_isa_flags_explicit |= OPTION_MASK_VSX;
-	}
-    }
+    rs6000_isa_flags &= ~OPTION_MASK_P8_VECTOR;
 
   if (TARGET_DFP && !TARGET_HARD_FLOAT)
     {
@@ -4056,28 +4037,7 @@ rs6000_option_override_internal (bool global_init_p)
 
   /* ISA 3.0 vector instructions include ISA 2.07.  */
   if (TARGET_P9_VECTOR && !TARGET_P8_VECTOR)
-    {
-      /* We prefer to not mention undocumented options in
-	 error messages.  However, if users have managed to select
-	 power9-vector without selecting power8-vector, they
-	 already know about undocumented flags.  */
-      if ((rs6000_isa_flags_explicit & OPTION_MASK_P9_VECTOR) &&
-	  (rs6000_isa_flags_explicit & OPTION_MASK_P8_VECTOR))
-	error ("%qs requires %qs", "-mpower9-vector", "-mpower8-vector");
-      else if ((rs6000_isa_flags_explicit & OPTION_MASK_P9_VECTOR) == 0)
-	{
-	  rs6000_isa_flags &= ~OPTION_MASK_P9_VECTOR;
-	  if (rs6000_isa_flags_explicit & OPTION_MASK_P8_VECTOR)
-	    rs6000_isa_flags_explicit |= OPTION_MASK_P9_VECTOR;
-	}
-      else
-	{
-	  /* OPTION_MASK_P9_VECTOR is explicit and
-	     OPTION_MASK_P8_VECTOR is not explicit.  */
-	  rs6000_isa_flags |= OPTION_MASK_P8_VECTOR;
-	  rs6000_isa_flags_explicit |= OPTION_MASK_P8_VECTOR;
-	}
-    }
+    rs6000_isa_flags &= ~OPTION_MASK_P9_VECTOR;
 
   /* Set -mallow-movmisalign to explicitly on if we have full ISA 2.07
      support. If we only have ISA 2.06 support, and the user did not specify
@@ -10199,9 +10159,13 @@ rs6000_conditional_register_usage (void)
     for (i = 32; i < 64; i++)
       fixed_regs[i] = call_used_regs[i] = 1;
 
+  /* For non PC-relative code, GPR2 is unavailable for register allocation.  */
+  if (FIXED_R2 && !rs6000_pcrel_p ())
+    fixed_regs[2] = 1;
+
   /* The TOC register is not killed across calls in a way that is
      visible to the compiler.  */
-  if (DEFAULT_ABI == ABI_AIX || DEFAULT_ABI == ABI_ELFv2)
+  if (fixed_regs[2] && (DEFAULT_ABI == ABI_AIX || DEFAULT_ABI == ABI_ELFv2))
     call_used_regs[2] = 0;
 
   if (DEFAULT_ABI == ABI_V4 && flag_pic == 2)
@@ -21353,6 +21317,7 @@ rs6000_elf_declare_function_name (FILE *file, const char *name, tree decl)
       ASM_DECLARE_RESULT (file, DECL_RESULT (decl));
       rs6000_output_function_entry (file, name);
       fputs (":\n", file);
+      assemble_function_label_final ();
       return;
     }
 
@@ -21415,7 +21380,7 @@ rs6000_elf_declare_function_name (FILE *file, const char *name, tree decl)
       fputs ("\t.long 0\n", file);
       fprintf (file, "\t.previous\n");
     }
-  ASM_OUTPUT_LABEL (file, name);
+  ASM_OUTPUT_FUNCTION_LABEL (file, name, decl);
 }
 
 static void rs6000_elf_file_end (void) ATTRIBUTE_UNUSED;
@@ -21988,7 +21953,7 @@ rs6000_xcoff_declare_function_name (FILE *file, const char *name, tree decl)
   assemble_name (file, buffer);
   fputs (TARGET_32BIT ? "\n" : ",3\n", file);
 
-  ASM_OUTPUT_LABEL (file, buffer);
+  ASM_OUTPUT_FUNCTION_LABEL (file, buffer, decl);
 
   symtab_node::get (decl)->call_for_symbol_and_aliases (rs6000_declare_alias,
 							&data, true);
@@ -25183,12 +25148,6 @@ rs6000_print_isa_options (FILE *file, int indent, const char *string,
    2.07, and 3.0 options that relate to the vector unit (-mdirect-move,
    -mupper-regs-df, etc.).
 
-   If the user used -mno-power8-vector, we need to turn off all of the implicit
-   ISA 2.07 and 3.0 options that relate to the vector unit.
-
-   If the user used -mno-power9-vector, we need to turn off all of the implicit
-   ISA 3.0 options that relate to the vector unit.
-
    This function does not handle explicit options such as the user specifying
    -mdirect-move.  These are handled in rs6000_option_override_internal, and
    the appropriate error is given if needed.
@@ -25207,8 +25166,6 @@ rs6000_disable_incompatible_switches (void)
     const HOST_WIDE_INT dep_flags;	/* flags that depend on this option.  */
     const char *const name;		/* name of the switch.  */
   } flags[] = {
-    { OPTION_MASK_P9_VECTOR,	OTHER_P9_VECTOR_MASKS,	"power9-vector"	},
-    { OPTION_MASK_P8_VECTOR,	OTHER_P8_VECTOR_MASKS,	"power8-vector"	},
     { OPTION_MASK_VSX,		OTHER_VSX_VECTOR_MASKS,	"vsx"		},
     { OPTION_MASK_ALTIVEC,	OTHER_ALTIVEC_MASKS,	"altivec"	},
   };

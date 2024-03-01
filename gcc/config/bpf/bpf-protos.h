@@ -1,5 +1,5 @@
 /* Definition of eBPF target for GNU compiler.
-   Copyright (C) 2019-2023 Free Software Foundation, Inc.
+   Copyright (C) 2019-2024 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -34,5 +34,7 @@ const char *bpf_add_core_reloc (rtx *operands, const char *templ);
 
 class gimple_opt_pass;
 gimple_opt_pass *make_pass_lower_bpf_core (gcc::context *ctxt);
+
+bool bpf_expand_cpymem (rtx *, bool);
 
 #endif /* ! GCC_BPF_PROTOS_H */

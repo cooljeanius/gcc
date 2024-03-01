@@ -1,5 +1,5 @@
 /* ACLE support for AArch64 SVE (function shapes)
-   Copyright (C) 2018-2023 Free Software Foundation, Inc.
+   Copyright (C) 2018-2024 Free Software Foundation, Inc.
 
    This file is part of GCC.
 
@@ -338,6 +338,14 @@ build_one (function_builder &b, const char *signature,
 	   unsigned int ti, unsigned int gi, unsigned int pi,
 	   bool force_direct_overloads)
 {
+  /* For simplicity, function definitions are allowed to use the group
+     suffix lists vg2 and vg4 for shapes that have _single forms,
+     even though the _single form applies only to vgNx2 and vgNx4,
+     not to vgNx1.  */
+  if (mode_suffix_id == MODE_single
+      && group_suffixes[group.groups[gi]].vectors_per_tuple == 1)
+    return;
+
   /* Byte forms of svdupq take 16 arguments.  */
   auto_vec<tree, 16> argument_types;
   function_instance instance (group.base_name, *group.base, *group.shape,

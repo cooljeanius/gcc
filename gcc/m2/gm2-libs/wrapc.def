@@ -1,6 +1,6 @@
 (* wrapc.def provides access to more of the C library.
 
-Copyright (C) 2001-2023 Free Software Foundation, Inc.
+Copyright (C) 2001-2024 Free Software Foundation, Inc.
 Contributed by Gaius Mulley <gaius.mulley@southwales.ac.uk>.
 
 This file is part of GNU Modula-2.
@@ -138,6 +138,34 @@ PROCEDURE isnanf (x: SHORTREAL) : INTEGER ;
 *)
 
 PROCEDURE isnanl (x: LONGREAL) : INTEGER ;
+
+
+(*
+   SeekSet - return the system libc SEEK_SET value.
+*)
+
+PROCEDURE SeekSet () : INTEGER ;
+
+
+(*
+    SeekEnd - return the system libc SEEK_END value.
+*)
+
+PROCEDURE SeekEnd () : INTEGER ;
+
+
+(*
+   ReadOnly - return the system value of O_RDONLY.
+*)
+
+PROCEDURE ReadOnly () : BITSET ;
+
+
+(*
+   WriteOnly - return the system value of O_WRONLY.
+*)
+
+PROCEDURE WriteOnly () : BITSET ;
 
 
 END wrapc.

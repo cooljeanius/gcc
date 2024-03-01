@@ -1,5 +1,5 @@
 /* Output routines for GCC for ARM.
-   Copyright (C) 1991-2023 Free Software Foundation, Inc.
+   Copyright (C) 1991-2024 Free Software Foundation, Inc.
    Contributed by Pieter `Tiggr' Schoenmakers (rcpieter@win.tue.nl)
    and Martin Simmons (@harleqn.co.uk).
    More major hacks by Richard Earnshaw (rearnsha@arm.com).
@@ -7980,10 +7980,13 @@ arm_function_ok_for_sibcall (tree decl, tree exp)
       && DECL_WEAK (decl))
     return false;
 
-  /* We cannot do a tailcall for an indirect call by descriptor if all the
-     argument registers are used because the only register left to load the
-     address is IP and it will already contain the static chain.  */
-  if (!decl && CALL_EXPR_BY_DESCRIPTOR (exp) && !flag_trampolines)
+  /* We cannot tailcall an indirect call by descriptor if all the call-clobbered
+     general registers are live (r0-r3 and ip).  This can happen when:
+      - IP contains the static chain, or
+      - IP is needed for validating the PAC signature.  */
+  if (!decl
+      && ((CALL_EXPR_BY_DESCRIPTOR (exp) && !flag_trampolines)
+	  || arm_current_function_pac_enabled_p()))
     {
       tree fntype = TREE_TYPE (TREE_TYPE (CALL_EXPR_FN (exp)));
       CUMULATIVE_ARGS cum;
@@ -21800,7 +21803,7 @@ arm_asm_declare_function_name (FILE *file, const char *name, tree decl)
   ARM_DECLARE_FUNCTION_NAME (file, name, decl);
   ASM_OUTPUT_TYPE_DIRECTIVE (file, name, "function");
   ASM_DECLARE_RESULT (file, DECL_RESULT (decl));
-  ASM_OUTPUT_LABEL (file, name);
+  ASM_OUTPUT_FUNCTION_LABEL (file, name, decl);
 
   if (cmse_name)
     ASM_OUTPUT_LABEL (file, cmse_name);
@@ -29257,6 +29260,8 @@ arm_output_mi_thunk (FILE *file, tree thunk, HOST_WIDE_INT delta,
   const char *fnname = IDENTIFIER_POINTER (DECL_ASSEMBLER_NAME (thunk));
 
   assemble_start_function (thunk, fnname);
+  if (aarch_bti_enabled ())
+    emit_insn (aarch_gen_bti_c ());
   if (TARGET_32BIT)
     arm32_output_mi_thunk (file, thunk, delta, vcall_offset, function);
   else

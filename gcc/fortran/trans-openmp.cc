@@ -1,5 +1,5 @@
 /* OpenMP directive translation -- generate GCC trees from gfc_code.
-   Copyright (C) 2005-2023 Free Software Foundation, Inc.
+   Copyright (C) 2005-2024 Free Software Foundation, Inc.
    Contributed by Jakub Jelinek <jakub@redhat.com>
 
 This file is part of GCC.
@@ -8426,7 +8426,8 @@ gfc_trans_omp_declare_variant (gfc_namespace *ns)
 		{
 		  switch (otp->property_kind)
 		    {
-		    case OMP_TRAIT_PROPERTY_EXPR:
+		    case OMP_TRAIT_PROPERTY_DEV_NUM_EXPR:
+		    case OMP_TRAIT_PROPERTY_BOOL_EXPR:
 		      {
 			gfc_se se;
 			gfc_init_se (&se, NULL);

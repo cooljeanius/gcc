@@ -1,5 +1,5 @@
 /* Loop splitting.
-   Copyright (C) 2015-2023 Free Software Foundation, Inc.
+   Copyright (C) 2015-2024 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -712,7 +712,8 @@ split_loop (class loop *loop1)
 			  ? true_edge->probability.to_sreal () : (sreal)1;
 	    sreal scale2 = false_edge->probability.reliable_p ()
 			  ? false_edge->probability.to_sreal () : (sreal)1;
-	    sreal div1 = loop1_prob.to_sreal ();
+	    sreal div1 = loop1_prob.initialized_p ()
+			 ? loop1_prob.to_sreal () : (sreal)1/(sreal)2;
 	    /* +1 to get header interations rather than latch iterations and then
 	       -1 to convert back.  */
 	    if (div1 != 0)

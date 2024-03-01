@@ -1,6 +1,6 @@
 // Output streams -*- C++ -*-
 
-// Copyright (C) 1997-2023 Free Software Foundation, Inc.
+// Copyright (C) 1997-2024 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -906,7 +906,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   inline void
   vprint_unicode(ostream& __os, string_view __fmt, format_args __args)
   {
-#ifndef _WIN32
+#if !defined(_WIN32) || defined(__CYGWIN__)
     // For most targets we don't need to do anything special to write
     // Unicode to a terminal.
     std::vprint_nonunicode(__os, __fmt, __args);
@@ -923,7 +923,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	// If stream refers to a terminal, write a Unicode string to it.
 	if (auto __term = __open_terminal(__os.rdbuf()))
 	  {
-#ifndef _WIN32
+#if !defined(_WIN32) || defined(__CYGWIN__)
 	    // For POSIX, __open_terminal(streambuf*) uses fdopen to open a
 	    // new file, so we would need to close it here. This code is not
 	    // actually compiled because it's inside an #ifdef _WIN32 group,
@@ -981,8 +981,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     inline void
     print(ostream& __os, format_string<_Args...> __fmt, _Args&&... __args)
     {
-      auto __fmtargs = std::make_format_args(std::forward<_Args>(__args)...);
-      if constexpr (__format::__literal_encoding_is_utf8())
+      auto __fmtargs = std::make_format_args(__args...);
+      if constexpr (__unicode::__literal_encoding_is_utf8())
 	std::vprint_unicode(__os, __fmt.get(), __fmtargs);
       else
 	std::vprint_nonunicode(__os, __fmt.get(), __fmtargs);

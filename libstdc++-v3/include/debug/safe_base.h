@@ -1,6 +1,6 @@
 // Safe sequence/iterator base implementation  -*- C++ -*-
 
-// Copyright (C) 2003-2023 Free Software Foundation, Inc.
+// Copyright (C) 2003-2024 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -268,7 +268,6 @@ namespace __gnu_debug
      *  operation is complete all iterators that originally referenced
      *  one container now reference the other container.
      */
-    _GLIBCXX20_CONSTEXPR
     void
     _M_swap(_Safe_sequence_base& __x) _GLIBCXX_USE_NOEXCEPT;
 

@@ -1,5 +1,5 @@
 /* Implement classes and message passing for Objective C.
-   Copyright (C) 1992-2023 Free Software Foundation, Inc.
+   Copyright (C) 1992-2024 Free Software Foundation, Inc.
    Contributed by Steve Naroff.
 
 This file is part of GCC.
@@ -345,6 +345,11 @@ bool
 objc_init (void)
 {
   bool ok;
+
+  /* Set up stuff used by the preprocessor as well as FE parser.  */
+  interface_hash_init ();
+  hash_init ();
+
 #ifdef OBJCPLUS
   if (cxx_init () == false)
 #else
@@ -374,8 +379,6 @@ objc_init (void)
 
   /* Set up stuff used by FE parser and all runtimes.  */
   errbuf = XNEWVEC (char, 1024 * 10);
-  interface_hash_init ();
-  hash_init ();
   objc_encoding_init ();
   /* ... and then check flags and set-up for the selected runtime ... */
   if (flag_next_runtime && flag_objc_abi >= 2)

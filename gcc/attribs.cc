@@ -1,5 +1,5 @@
 /* Functions dealing with attribute handling, used by most front ends.
-   Copyright (C) 1992-2023 Free Software Foundation, Inc.
+   Copyright (C) 1992-2024 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -114,15 +114,6 @@ get_gnu_namespace ()
   if (!gnu_namespace_cache)
     gnu_namespace_cache = get_identifier ("gnu");
   return gnu_namespace_cache;
-}
-
-/* Return base name of the attribute.  Ie '__attr__' is turned into 'attr'.
-   To avoid need for copying, we simply return length of the string.  */
-
-static void
-extract_attribute_substring (struct substring *str)
-{
-  canonicalize_attr_name (str->str, str->length);
 }
 
 /* Insert SPECS into its namespace.  IGNORED_P is true iff all unknown
@@ -398,7 +389,6 @@ lookup_scoped_attribute_spec (const_tree ns, const_tree name)
 
   attr.str = IDENTIFIER_POINTER (name);
   attr.length = IDENTIFIER_LENGTH (name);
-  extract_attribute_substring (&attr);
   return attrs->attribute_hash->find_with_hash (&attr,
 						substring_hash (attr.str,
 							       	attr.length));

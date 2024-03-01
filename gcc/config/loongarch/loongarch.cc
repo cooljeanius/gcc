@@ -1,5 +1,5 @@
 /* Subroutines used for LoongArch code generation.
-   Copyright (C) 2021-2023 Free Software Foundation, Inc.
+   Copyright (C) 2021-2024 Free Software Foundation, Inc.
    Contributed by Loongson Ltd.
    Based on MIPS and RISC-V target for GNU compiler.
 
@@ -1924,11 +1924,7 @@ loongarch_symbolic_constant_p (rtx x, enum loongarch_symbol_type *symbol_type)
       x = UNSPEC_ADDRESS (x);
     }
   else if (SYMBOL_REF_P (x) || LABEL_REF_P (x))
-    {
-      *symbol_type = loongarch_classify_symbol (x);
-      if (*symbol_type == SYMBOL_TLS)
-	return true;
-    }
+    *symbol_type = loongarch_classify_symbol (x);
   else
     return false;
 
@@ -1939,17 +1935,26 @@ loongarch_symbolic_constant_p (rtx x, enum loongarch_symbol_type *symbol_type)
      relocations.  */
   switch (*symbol_type)
     {
-    case SYMBOL_TLS_IE:
-    case SYMBOL_TLS_LE:
-    case SYMBOL_TLSGD:
-    case SYMBOL_TLSLDM:
-    case SYMBOL_PCREL:
     case SYMBOL_PCREL64:
+      /* When the code model is extreme, the non-zero offset situation
+	 has not been handled well, so it is disabled here now.  */
+      if (!loongarch_explicit_relocs_p (SYMBOL_PCREL64))
+	return false;
+    /* fall through */
+    case SYMBOL_PCREL:
       /* GAS rejects offsets outside the range [-2^31, 2^31-1].  */
       return sext_hwi (INTVAL (offset), 32) == INTVAL (offset);
 
+    /* The following symbol types do not allow non-zero offsets.  */
     case SYMBOL_GOT_DISP:
+    case SYMBOL_TLS_IE:
+    case SYMBOL_TLSGD:
+    case SYMBOL_TLSLDM:
     case SYMBOL_TLS:
+    /* From an implementation perspective, tls_le symbols are allowed to
+       have non-zero offsets, but currently binutils has not added support,
+       so the generation of non-zero offsets is prohibited here.  */
+    case SYMBOL_TLS_LE:
       return false;
     }
   gcc_unreachable ();
@@ -1966,22 +1971,21 @@ loongarch_explicit_relocs_p (enum loongarch_symbol_type type)
   if (la_opt_explicit_relocs != EXPLICIT_RELOCS_AUTO)
     return la_opt_explicit_relocs == EXPLICIT_RELOCS_ALWAYS;
 
+  /* The linker don't know how to relax accesses in extreme code model.  */
+  if (loongarch_symbol_extreme_p (type))
+    return true;
+
   switch (type)
     {
       case SYMBOL_TLS_IE:
       case SYMBOL_TLS_LE:
-      case SYMBOL_TLSGD:
-      case SYMBOL_TLSLDM:
       case SYMBOL_PCREL64:
-	/* The linker don't know how to relax TLS accesses or 64-bit
-	   pc-relative accesses.  */
+	/* TLS IE cannot be relaxed.  TLS LE relaxation is different from
+	   the normal R_LARCH_RELAX-based relaxation and it **requires**
+	   using the explicit %le_{lo12,hi20,add}_r relocs.  The linker
+	   does not relax 64-bit pc-relative accesses as at now.  */
 	return true;
       case SYMBOL_GOT_DISP:
-	/* The linker don't know how to relax GOT accesses in extreme
-	   code model.  */
-	if (TARGET_CMODEL_EXTREME)
-	  return true;
-
 	/* If we are performing LTO for a final link, and we have the
 	   linker plugin so we know the resolution of the symbols, then
 	   all GOT references are binding to external symbols or
@@ -2003,7 +2007,8 @@ loongarch_symbol_insns (enum loongarch_symbol_type type, machine_mode mode)
 {
   /* LSX LD.* and ST.* cannot support loading symbols via an immediate
      operand.  */
-  if (LSX_SUPPORTED_MODE_P (mode) || LASX_SUPPORTED_MODE_P (mode))
+  if (mode != MAX_MACHINE_MODE
+      && (LSX_SUPPORTED_MODE_P (mode) || LASX_SUPPORTED_MODE_P (mode)))
     return 0;
 
   switch (type)
@@ -2126,19 +2131,9 @@ loongarch_valid_offset_p (rtx x, machine_mode mode)
 
   /* We may need to split multiword moves, so make sure that every word
      is accessible.  */
-  if (GET_MODE_SIZE (mode) > UNITS_PER_WORD
+  if (!(LSX_SUPPORTED_MODE_P (mode) || LASX_SUPPORTED_MODE_P (mode))
+      && GET_MODE_SIZE (mode) > UNITS_PER_WORD
       && !IMM12_OPERAND (INTVAL (x) + GET_MODE_SIZE (mode) - UNITS_PER_WORD))
-    return false;
-
-  /* LSX LD.* and ST.* supports 10-bit signed offsets.  */
-  if (LSX_SUPPORTED_MODE_P (mode)
-      && !loongarch_signed_immediate_p (INTVAL (x), 10,
-					loongarch_ldst_scaled_shift (mode)))
-    return false;
-
-  /* LASX XVLD.B and XVST.B supports 10-bit signed offsets without shift.  */
-  if (LASX_SUPPORTED_MODE_P (mode)
-      && !loongarch_signed_immediate_p (INTVAL (x), 10, 0))
     return false;
 
   return true;
@@ -2376,9 +2371,8 @@ loongarch_address_insns (rtx x, machine_mode mode, bool might_split_p)
       case ADDRESS_REG:
 	if (lsx_p)
 	  {
-	    /* LSX LD.* and ST.* supports 10-bit signed offsets.  */
-	    if (loongarch_signed_immediate_p (INTVAL (addr.offset), 10,
-					      loongarch_ldst_scaled_shift (mode)))
+	    /* LSX LD.* and ST.* supports 12-bit signed offsets.  */
+	    if (IMM12_OPERAND (INTVAL (addr.offset)))
 	      return 1;
 	    else
 	      return 0;
@@ -2562,7 +2556,6 @@ loongarch_split_const_insns (rtx x)
   return low + high;
 }
 
-bool loongarch_split_move_insn_p (rtx dest, rtx src);
 /* Return one word of 128-bit value OP, taking into account the fixed
    endianness of certain registers.  BYTE selects from the byte address.  */
 
@@ -2602,7 +2595,7 @@ loongarch_load_store_insns (rtx mem, rtx_insn *insn)
     {
       set = single_set (insn);
       if (set
-	  && !loongarch_split_move_insn_p (SET_DEST (set), SET_SRC (set)))
+	  && !loongarch_split_move_p (SET_DEST (set), SET_SRC (set)))
 	might_split_p = false;
     }
 
@@ -2745,39 +2738,21 @@ loongarch_add_offset (rtx temp, rtx reg, HOST_WIDE_INT offset)
   return plus_constant (Pmode, reg, offset);
 }
 
-/* The __tls_get_attr symbol.  */
+/* The __tls_get_addr symbol.  */
 static GTY (()) rtx loongarch_tls_symbol;
 
-/* Load an entry from the GOT for a TLS GD access.  */
+/* Load an entry for a TLS access.  */
 
 static rtx
-loongarch_got_load_tls_gd (rtx dest, rtx sym)
+loongarch_load_tls (rtx dest, rtx sym, enum loongarch_symbol_type type)
 {
-  return gen_got_load_tls_gd (Pmode, dest, sym);
-}
+  /* TLS LE gets a 32 or 64 bit offset here, so one register can do it.  */
+  if (type == SYMBOL_TLS_LE)
+    return gen_load_tls (Pmode, dest, sym);
 
-/* Load an entry from the GOT for a TLS LD access.  */
-
-static rtx
-loongarch_got_load_tls_ld (rtx dest, rtx sym)
-{
-  return gen_got_load_tls_ld (Pmode, dest, sym);
-}
-
-/* Load an entry from the GOT for a TLS IE access.  */
-
-static rtx
-loongarch_got_load_tls_ie (rtx dest, rtx sym)
-{
-  return gen_got_load_tls_ie (Pmode, dest, sym);
-}
-
-/* Add in the thread pointer for a TLS LE access.  */
-
-static rtx
-loongarch_got_load_tls_le (rtx dest, rtx sym)
-{
-  return gen_got_load_tls_le (Pmode, dest, sym);
+  return loongarch_symbol_extreme_p (type)
+    ? gen_movdi_symbolic_off64 (dest, sym, gen_reg_rtx (DImode))
+    : gen_load_tls (Pmode, dest, sym);
 }
 
 /* Return an instruction sequence that calls __tls_get_addr.  SYM is
@@ -2801,34 +2776,27 @@ loongarch_call_tls_get_addr (rtx sym, enum loongarch_symbol_type type, rtx v0)
 
   start_sequence ();
 
-  if (la_opt_explicit_relocs != EXPLICIT_RELOCS_NONE)
+  if (loongarch_explicit_relocs_p (type))
     {
-      /* Split tls symbol to high and low.  */
-      rtx high = gen_rtx_HIGH (Pmode, copy_rtx (loc));
-      high = loongarch_force_temporary (tmp, high);
-
       if (TARGET_CMODEL_EXTREME)
 	{
-	  gcc_assert (TARGET_EXPLICIT_RELOCS);
+	  rtx part1 = gen_reg_rtx (Pmode);
+	  rtx part2 = gen_reg_rtx (Pmode);
 
-	  rtx tmp1 = gen_reg_rtx (Pmode);
-	  emit_insn (gen_tls_low (Pmode, tmp1, gen_rtx_REG (Pmode, 0), loc));
-	  emit_insn (gen_lui_h_lo20 (tmp1, tmp1, loc));
-	  emit_insn (gen_lui_h_hi12 (tmp1, tmp1, loc));
-	  emit_move_insn (a0, gen_rtx_PLUS (Pmode, high, tmp1));
+	  emit_insn (gen_la_pcrel64_two_parts (part1, part2, loc));
+	  emit_move_insn (a0, gen_rtx_PLUS (Pmode, part1, part2));
 	}
       else
-	emit_insn (gen_tls_low (Pmode, a0, high, loc));
+	{
+	  /* Split tls symbol to high and low.  */
+	  rtx high = gen_rtx_HIGH (Pmode, copy_rtx (loc));
+
+	  high = loongarch_force_temporary (tmp, high);
+	  emit_insn (gen_tls_low (Pmode, a0, high, loc));
+	}
     }
   else
-    {
-      if (type == SYMBOL_TLSLDM)
-	emit_insn (loongarch_got_load_tls_ld (a0, loc));
-      else if (type == SYMBOL_TLSGD)
-	emit_insn (loongarch_got_load_tls_gd (a0, loc));
-      else
-	gcc_unreachable ();
-    }
+    emit_insn (loongarch_load_tls (a0, loc, type));
 
   if (flag_plt)
     {
@@ -2842,17 +2810,27 @@ loongarch_call_tls_get_addr (rtx sym, enum loongarch_symbol_type type, rtx v0)
 
 	case CMODEL_MEDIUM:
 	    {
-	      rtx reg = gen_reg_rtx (Pmode);
-	      if (TARGET_EXPLICIT_RELOCS)
+	      if (la_opt_explicit_relocs != EXPLICIT_RELOCS_NONE)
 		{
-		  emit_insn (gen_pcalau12i (Pmode, reg, loongarch_tls_symbol));
-		  rtx call = gen_call_value_internal_1 (Pmode, v0, reg,
-							loongarch_tls_symbol,
-							const0_rtx);
-		  insn = emit_call_insn (call);
+		  rtx call;
+
+		 if (HAVE_AS_SUPPORT_CALL36)
+		   call = gen_call_value_internal (v0, loongarch_tls_symbol,
+						   const0_rtx);
+		 else
+		   {
+		     rtx reg = gen_reg_rtx (Pmode);
+		     emit_insn (gen_pcalau12i (Pmode, reg,
+					       loongarch_tls_symbol));
+		     call = gen_call_value_internal_1 (Pmode, v0, reg,
+						       loongarch_tls_symbol,
+						       const0_rtx);
+		   }
+		 insn = emit_call_insn (call);
 		}
 	      else
 		{
+		  rtx reg = gen_reg_rtx (Pmode);
 		  emit_move_insn (reg, loongarch_tls_symbol);
 		  insn = emit_call_insn (gen_call_value_internal (v0,
 								  reg,
@@ -2879,7 +2857,7 @@ loongarch_call_tls_get_addr (rtx sym, enum loongarch_symbol_type type, rtx v0)
 	case CMODEL_NORMAL:
 	case CMODEL_MEDIUM:
 	    {
-	      if (TARGET_EXPLICIT_RELOCS)
+	      if (loongarch_explicit_relocs_p (SYMBOL_GOT_DISP))
 		{
 		  rtx high = gen_reg_rtx (Pmode);
 		  loongarch_emit_move (high,
@@ -2895,22 +2873,34 @@ loongarch_call_tls_get_addr (rtx sym, enum loongarch_symbol_type type, rtx v0)
 
 	case CMODEL_EXTREME:
 	    {
-	      gcc_assert (TARGET_EXPLICIT_RELOCS);
+	      if (loongarch_explicit_relocs_p (SYMBOL_GOT_DISP))
+		{
+		  gcc_assert (la_opt_explicit_relocs != EXPLICIT_RELOCS_NONE);
 
-	      rtx tmp1 = gen_reg_rtx (Pmode);
-	      rtx high = gen_reg_rtx (Pmode);
+		  rtx part1 = gen_reg_rtx (Pmode);
+		  rtx part2 = gen_reg_rtx (Pmode);
 
-	      loongarch_emit_move (high,
-				   gen_rtx_HIGH (Pmode, loongarch_tls_symbol));
-	      loongarch_emit_move (tmp1, gen_rtx_LO_SUM (Pmode,
-							 gen_rtx_REG (Pmode, 0),
-							 loongarch_tls_symbol));
-	      emit_insn (gen_lui_h_lo20 (tmp1, tmp1, loongarch_tls_symbol));
-	      emit_insn (gen_lui_h_hi12 (tmp1, tmp1, loongarch_tls_symbol));
-	      loongarch_emit_move (dest,
-				   gen_rtx_MEM (Pmode,
-						gen_rtx_PLUS (Pmode,
-							      high, tmp1)));
+		  emit_insn (gen_la_pcrel64_two_parts (part1, part2,
+						       loongarch_tls_symbol));
+		  loongarch_emit_move (
+		    dest,
+		    gen_rtx_MEM (Pmode, gen_rtx_PLUS (Pmode,
+						      part1,
+						      part2)));
+
+		  /* Put an REG_EQUAL note here to allow CSE (storing
+		     part1 + part2, i.e. the address of tls_get_addr into
+		     a saved register and use it for multiple TLS
+		     accesses).  */
+		  rtx sum = gen_rtx_UNSPEC (
+		    Pmode, gen_rtvec (1, loongarch_tls_symbol),
+		    UNSPEC_ADDRESS_FIRST
+		    + loongarch_classify_symbol (loongarch_tls_symbol));
+		  set_unique_reg_note (get_last_insn (), REG_EQUAL, sum);
+		}
+	      else
+	       emit_insn (gen_movdi_symbolic_off64 (dest, loongarch_tls_symbol,
+						    gen_reg_rtx (DImode)));
 	    }
 	  break;
 
@@ -2965,62 +2955,99 @@ loongarch_legitimize_tls_address (rtx loc)
 	  /* la.tls.ie; tp-relative add.  */
 	  tp = gen_rtx_REG (Pmode, THREAD_POINTER_REGNUM);
 	  tmp1 = gen_reg_rtx (Pmode);
+	  tmp2 = loongarch_unspec_address (loc, SYMBOL_TLS_IE);
 	  dest = gen_reg_rtx (Pmode);
-	  if (la_opt_explicit_relocs != EXPLICIT_RELOCS_NONE)
+	  if (loongarch_explicit_relocs_p (SYMBOL_TLS_IE))
 	    {
-	      tmp2 = loongarch_unspec_address (loc, SYMBOL_TLS_IE);
-	      tmp3 = gen_reg_rtx (Pmode);
-	      rtx high = gen_rtx_HIGH (Pmode, copy_rtx (tmp2));
-	      high = loongarch_force_temporary (tmp3, high);
-
 	      if (TARGET_CMODEL_EXTREME)
 		{
-		  gcc_assert (TARGET_EXPLICIT_RELOCS);
+		  gcc_assert (la_opt_explicit_relocs
+			      != EXPLICIT_RELOCS_NONE);
 
-		  rtx tmp3 = gen_reg_rtx (Pmode);
-		  emit_insn (gen_tls_low (Pmode, tmp3,
-					  gen_rtx_REG (Pmode, 0), tmp2));
-		  emit_insn (gen_lui_h_lo20 (tmp3, tmp3, tmp2));
-		  emit_insn (gen_lui_h_hi12 (tmp3, tmp3, tmp2));
+		  rtx part1 = gen_reg_rtx (Pmode);
+		  rtx part2 = gen_reg_rtx (Pmode);
+
+		  emit_insn (gen_la_pcrel64_two_parts (part1, part2,
+						       tmp2));
 		  emit_move_insn (tmp1,
 				  gen_rtx_MEM (Pmode,
 					       gen_rtx_PLUS (Pmode,
-							     high, tmp3)));
+							     part1,
+							     part2)));
 		}
 	      else
-		emit_insn (gen_ld_from_got (Pmode, tmp1, high, tmp2));
+		{
+		  tmp3 = gen_reg_rtx (Pmode);
+		  rtx high = gen_rtx_HIGH (Pmode, copy_rtx (tmp2));
+
+		  high = loongarch_force_temporary (tmp3, high);
+		  emit_insn (gen_ld_from_got (Pmode, tmp1, high, tmp2));
+		}
 	    }
 	  else
-	    emit_insn (loongarch_got_load_tls_ie (tmp1, loc));
+	    emit_insn (loongarch_load_tls (tmp1, tmp2, SYMBOL_TLS_IE));
 	  emit_insn (gen_add3_insn (dest, tmp1, tp));
 	}
       break;
 
     case TLS_MODEL_LOCAL_EXEC:
 	{
-	  /* la.tls.le; tp-relative add.  */
+	  /* la.tls.le; tp-relative add.
+
+	     normal:
+	      lu12i.w $rd, %le_hi20(sym)
+	      ori $rd, $rd, %le_lo12(sym)
+	      add.{w/d} $rd, $rd, $tp
+	      (st.{w/d}/ld.{w/d} $rs, $rd, 0)
+
+	     tls le relax:
+	      lu12i.w $rd, %le_hi20_r(sym)
+	      add.{w/d} $rd,$rd,$tp
+	      addi.{w/d} $rd,$rd,%le_lo12_r(sym)
+	      (st.{w/d}/ld.{w/d} $rs, $rd, 0)
+
+	     extreme (When the code model is set to extreme, the TLS le Relax
+	     instruction sequence is not generated):
+	      lu12i.w $rd, %le_hi20(sym)
+	      ori $rd, $rd, %le_lo12(sym)
+	      lu32i.d $rd, %le64_lo20(sym)
+	      lu52i.d $rd, $rd, %le64_hi12(sym)
+	      add.d $rd, $rd, $tp
+	      (st.{w/d}/ld.{w/d} $rs, $rd, 0)  */
+
 	  tp = gen_rtx_REG (Pmode, THREAD_POINTER_REGNUM);
 	  tmp1 = gen_reg_rtx (Pmode);
+	  tmp2 = loongarch_unspec_address (loc, SYMBOL_TLS_LE);
 	  dest = gen_reg_rtx (Pmode);
 
-	  if (la_opt_explicit_relocs != EXPLICIT_RELOCS_NONE)
+	  if (loongarch_explicit_relocs_p (SYMBOL_TLS_LE))
 	    {
-	      tmp2 = loongarch_unspec_address (loc, SYMBOL_TLS_LE);
 	      tmp3 = gen_reg_rtx (Pmode);
 	      rtx high = gen_rtx_HIGH (Pmode, copy_rtx (tmp2));
 	      high = loongarch_force_temporary (tmp3, high);
-	      emit_insn (gen_ori_l_lo12 (Pmode, tmp1, high, tmp2));
+
+	      /* The assembler does not implement tls le relax support when the
+		 code model is extreme, so when the code model is extreme, the
+		 old symbol address acquisition method is still used.  */
+	      if (HAVE_AS_TLS_LE_RELAXATION && !TARGET_CMODEL_EXTREME)
+		{
+		  emit_insn (gen_add_tls_le_relax (Pmode, dest, high,
+						   tp, loc));
+		  loongarch_emit_move (dest,
+				       gen_rtx_LO_SUM (Pmode, dest, tmp2));
+		  return dest;
+		}
+	      else
+		emit_insn (gen_ori_l_lo12 (Pmode, tmp1, high, tmp2));
 
 	      if (TARGET_CMODEL_EXTREME)
 		{
-		  gcc_assert (TARGET_EXPLICIT_RELOCS);
-
 		  emit_insn (gen_lui_h_lo20 (tmp1, tmp1, tmp2));
 		  emit_insn (gen_lui_h_hi12 (tmp1, tmp1, tmp2));
 		}
 	    }
 	  else
-	    emit_insn (loongarch_got_load_tls_le (tmp1, loc));
+	    emit_insn (loongarch_load_tls (tmp1, tmp2, SYMBOL_TLS_LE));
 	  emit_insn (gen_add3_insn (dest, tmp1, tp));
 	}
       break;
@@ -3093,7 +3120,7 @@ loongarch_force_address (rtx x, machine_mode mode)
   return x;
 }
 
-static bool
+bool
 loongarch_symbol_extreme_p (enum loongarch_symbol_type type)
 {
   switch (type)
@@ -3134,24 +3161,23 @@ loongarch_split_symbol (rtx temp, rtx addr, machine_mode mode, rtx *low_out)
       || !loongarch_split_symbol_type (symbol_type))
     return false;
 
-  rtx high, temp1 = NULL;
+  rtx high;
 
   if (temp == NULL)
     temp = gen_reg_rtx (Pmode);
-
-  /* Get the 12-31 bits of the address.  */
-  high = gen_rtx_HIGH (Pmode, copy_rtx (addr));
-  high = loongarch_force_temporary (temp, high);
 
   if (loongarch_symbol_extreme_p (symbol_type) && can_create_pseudo_p ())
     {
       gcc_assert (la_opt_explicit_relocs != EXPLICIT_RELOCS_NONE);
 
-      temp1 = gen_reg_rtx (Pmode);
-      emit_move_insn (temp1, gen_rtx_LO_SUM (Pmode, gen_rtx_REG (Pmode, 0),
-					     addr));
-      emit_insn (gen_lui_h_lo20 (temp1, temp1, addr));
-      emit_insn (gen_lui_h_hi12 (temp1, temp1, addr));
+      high = gen_reg_rtx (Pmode);
+      emit_insn (gen_la_pcrel64_two_parts (high, temp, addr));
+    }
+  else
+    {
+      /* Get the 12-31 bits of the address.  */
+      high = gen_rtx_HIGH (Pmode, copy_rtx (addr));
+      high = loongarch_force_temporary (temp, high);
     }
 
   if (low_out)
@@ -3160,7 +3186,7 @@ loongarch_split_symbol (rtx temp, rtx addr, machine_mode mode, rtx *low_out)
       case SYMBOL_PCREL64:
 	if (can_create_pseudo_p ())
 	  {
-	    *low_out = gen_rtx_PLUS (Pmode, high, temp1);
+	    *low_out = gen_rtx_PLUS (Pmode, high, temp);
 	    break;
 	  }
 	/* fall through */
@@ -3172,13 +3198,19 @@ loongarch_split_symbol (rtx temp, rtx addr, machine_mode mode, rtx *low_out)
 	/* SYMBOL_GOT_DISP symbols are loaded from the GOT.  */
 	{
 	  if (TARGET_CMODEL_EXTREME && can_create_pseudo_p ())
-	    *low_out = gen_rtx_MEM (Pmode, gen_rtx_PLUS (Pmode, high, temp1));
+	    *low_out = gen_rtx_MEM (Pmode, gen_rtx_PLUS (Pmode, high,
+							 temp));
 	  else
 	    {
 	      rtx low = gen_rtx_LO_SUM (Pmode, high, addr);
 	      rtx mem = gen_rtx_MEM (Pmode, low);
 	      *low_out = gen_rtx_UNSPEC (Pmode, gen_rtvec (1, mem),
 					 UNSPEC_LOAD_FROM_GOT);
+
+	      /* Nonzero in a mem, if the memory is statically allocated and
+		 read-only.  A common example of the later is a shared library’s
+		 global offset table.  */
+	      MEM_READONLY_P (mem) = 1;
 	    }
 
 	  break;
@@ -3189,6 +3221,22 @@ loongarch_split_symbol (rtx temp, rtx addr, machine_mode mode, rtx *low_out)
       }
 
   return true;
+}
+
+/* Helper loongarch_legitimize_address.  Given X, return true if it
+   is a left shift by 1, 2 or 3 positions or a multiply by 2, 4 or 8.
+
+   This respectively represent canonical shift-add rtxs or scaled
+   memory addresses.  */
+static bool
+mem_shadd_or_shadd_rtx_p (rtx x)
+{
+  return ((GET_CODE (x) == ASHIFT
+	   || GET_CODE (x) == MULT)
+	  && CONST_INT_P (XEXP (x, 1))
+	  && ((GET_CODE (x) == ASHIFT && IN_RANGE (INTVAL (XEXP (x, 1)), 1, 3))
+	      || (GET_CODE (x) == MULT
+		  && IN_RANGE (exact_log2 (INTVAL (XEXP (x, 1))), 1, 3))));
 }
 
 /* This function is used to implement LEGITIMIZE_ADDRESS.  If X can
@@ -3214,6 +3262,33 @@ loongarch_legitimize_address (rtx x, rtx oldx ATTRIBUTE_UNUSED,
   loongarch_split_plus (x, &base, &offset);
   if (offset != 0)
     {
+      /* Handle (plus (plus (mult (a) (mem_shadd_constant)) (fp)) (C)) case.  */
+      if (GET_CODE (base) == PLUS && mem_shadd_or_shadd_rtx_p (XEXP (base, 0))
+	  && IMM12_OPERAND (offset))
+	{
+	  rtx index = XEXP (base, 0);
+	  rtx fp = XEXP (base, 1);
+
+	  if (REG_P (fp) && REGNO (fp) == VIRTUAL_STACK_VARS_REGNUM)
+	    {
+	      /* If we were given a MULT, we must fix the constant
+		 as we're going to create the ASHIFT form.  */
+	      int shift_val = INTVAL (XEXP (index, 1));
+	      if (GET_CODE (index) == MULT)
+		shift_val = exact_log2 (shift_val);
+
+	      rtx reg1 = gen_reg_rtx (Pmode);
+	      rtx reg3 = gen_reg_rtx (Pmode);
+	      loongarch_emit_binary (PLUS, reg1, fp, GEN_INT (offset));
+	      loongarch_emit_binary (PLUS, reg3,
+				     gen_rtx_ASHIFT (Pmode, XEXP (index, 0),
+						     GEN_INT (shift_val)),
+				     reg1);
+
+	      return reg3;
+	    }
+	}
+
       if (!loongarch_valid_base_register_p (base, mode, false))
 	base = copy_to_mode_reg (Pmode, base);
       addr = loongarch_add_offset (NULL, base, offset);
@@ -3363,6 +3438,21 @@ loongarch_legitimize_move (machine_mode mode, rtx dest, rtx src)
     {
       loongarch_legitimize_const_move (mode, dest, src);
       set_unique_reg_note (get_last_insn (), REG_EQUAL, copy_rtx (src));
+      return true;
+    }
+
+  /* Obtain the address of the symbol through the macro instruction
+     of two registers.  */
+  enum loongarch_symbol_type symbol_type;
+  if (TARGET_64BIT && register_operand (dest, mode)
+      && loongarch_symbolic_constant_p (src, &symbol_type)
+      && loongarch_symbol_extreme_p (symbol_type))
+    {
+      gcc_assert (can_create_pseudo_p ());
+      rtx tmp_reg = gen_reg_rtx (DImode);
+      emit_insn (gen_movdi_symbolic_off64 (dest, src, tmp_reg));
+      set_unique_reg_note (get_last_insn (), REG_UNUSED, tmp_reg);
+      set_unique_reg_note (get_last_insn (), REG_EQUAL, src);
       return true;
     }
 
@@ -3840,7 +3930,7 @@ loongarch_rtx_costs (rtx x, machine_mode mode, int outer_code,
       else
 	{
 	  *total = loongarch_cost->int_div_si;
-	  if (TARGET_64BIT && !TARGET_DIV32)
+	  if (TARGET_64BIT && !ISA_HAS_DIV32)
 	    *total += COSTS_N_INSNS (2);
 	}
 
@@ -4060,12 +4150,43 @@ loongarch_vector_costs::determine_suggested_unroll_factor (loop_vec_info loop_vi
 
   /* Use this simple hardware resource model that how many non vld/vst
      vector instructions can be issued per cycle.  */
-  unsigned int issue_info = loongarch_vect_issue_info;
+  unsigned int issue_info = la_vect_issue_info;
   unsigned int reduc_factor = m_reduc_factor > 1 ? m_reduc_factor : 1;
   unsigned int uf = CEIL (reduc_factor * issue_info, nstmts_nonldst);
-  uf = MIN ((unsigned int) loongarch_vect_unroll_limit, uf);
+  uf = MIN ((unsigned int) la_vect_unroll_limit, uf);
 
   return 1 << ceil_log2 (uf);
+}
+
+/* Check if assign stmt rhs op comes from a multiply-add operation.  */
+static bool
+loongarch_multiply_add_p (vec_info *vinfo, stmt_vec_info stmt_info)
+{
+  gassign *assign = dyn_cast<gassign *> (stmt_info->stmt);
+  if (!assign)
+    return false;
+  tree_code code = gimple_assign_rhs_code (assign);
+  if (code != PLUS_EXPR && code != MINUS_EXPR)
+    return false;
+
+  auto is_mul_result = [&](int i)
+    {
+      tree rhs = gimple_op (assign, i);
+      if (TREE_CODE (rhs) != SSA_NAME)
+	return false;
+
+      stmt_vec_info def_stmt_info = vinfo->lookup_def (rhs);
+      if (!def_stmt_info
+	  || STMT_VINFO_DEF_TYPE (def_stmt_info) != vect_internal_def)
+	return false;
+      gassign *rhs_assign = dyn_cast<gassign *> (def_stmt_info->stmt);
+      if (!rhs_assign || gimple_assign_rhs_code (rhs_assign) != MULT_EXPR)
+	return false;
+
+      return true;
+    };
+
+  return is_mul_result (1) || is_mul_result (2);
 }
 
 unsigned
@@ -4080,6 +4201,23 @@ loongarch_vector_costs::add_stmt_cost (int count, vect_cost_for_stmt kind,
     {
       int stmt_cost = loongarch_builtin_vectorization_cost (kind, vectype,
 							    misalign);
+      if (vectype && stmt_info)
+	{
+	  gassign *assign = dyn_cast<gassign *> (STMT_VINFO_STMT (stmt_info));
+	  machine_mode mode = TYPE_MODE (vectype);
+
+	  /* We found through testing that this strategy (the stmt that
+	     matches the multiply-add pattern) has positive returns only
+	     when applied to the 128-bit vector stmt, so this restriction
+	     is currently made.  */
+	  if (kind == vector_stmt && GET_MODE_SIZE (mode) == 16 && assign)
+	    {
+	      if (!vect_is_reduction (stmt_info)
+		  && loongarch_multiply_add_p (m_vinfo, stmt_info))
+		stmt_cost = 0;
+	    }
+	}
+
       retval = adjust_cost_for_freq (stmt_info, where, count * stmt_cost);
       m_costs[where] += retval;
 
@@ -4220,7 +4358,7 @@ loongarch_split_move_p (rtx dest, rtx src)
    SPLIT_TYPE describes the split condition.  */
 
 void
-loongarch_split_move (rtx dest, rtx src, rtx insn_)
+loongarch_split_move (rtx dest, rtx src)
 {
   rtx low_dest;
 
@@ -4256,33 +4394,6 @@ loongarch_split_move (rtx dest, rtx src, rtx insn_)
 	  loongarch_emit_move (low_dest, loongarch_subword (src, false));
 	  loongarch_emit_move (loongarch_subword (dest, true),
 			       loongarch_subword (src, true));
-	}
-    }
-
-  /* This is a hack.  See if the next insn uses DEST and if so, see if we
-     can forward SRC for DEST.  This is most useful if the next insn is a
-     simple store.  */
-  rtx_insn *insn = (rtx_insn *) insn_;
-  struct loongarch_address_info addr = {};
-  if (insn)
-    {
-      rtx_insn *next = next_nonnote_nondebug_insn_bb (insn);
-      if (next)
-	{
-	  rtx set = single_set (next);
-	  if (set && SET_SRC (set) == dest)
-	    {
-	      if (MEM_P (src))
-		{
-		  rtx tmp = XEXP (src, 0);
-		  loongarch_classify_address (&addr, tmp, GET_MODE (tmp),
-					      true);
-		  if (addr.reg && !reg_overlap_mentioned_p (dest, addr.reg))
-		    validate_change (next, &SET_SRC (set), src, false);
-		}
-	      else
-		validate_change (next, &SET_SRC (set), src, false);
-	    }
 	}
     }
 }
@@ -4329,23 +4440,6 @@ loongarch_split_plus_constant (rtx *op, machine_mode mode)
   op[1] = gen_int_mode (a, mode);
   v = v - (unsigned HOST_WIDE_INT) a;
   op[2] = gen_int_mode (v, mode);
-}
-
-/* Return true if a move from SRC to DEST in INSN should be split.  */
-
-bool
-loongarch_split_move_insn_p (rtx dest, rtx src)
-{
-  return loongarch_split_move_p (dest, src);
-}
-
-/* Split a move from SRC to DEST in INSN, given that
-   loongarch_split_move_insn_p holds.  */
-
-void
-loongarch_split_move_insn (rtx dest, rtx src, rtx insn)
-{
-  loongarch_split_move (dest, src, insn);
 }
 
 /* Implement TARGET_CONSTANT_ALIGNMENT.  */
@@ -5123,29 +5217,6 @@ loongarch_zero_if_equal (rtx cmp0, rtx cmp1)
 		       OPTAB_DIRECT);
 }
 
-/* Allocate a floating-point condition-code register of mode MODE.  */
-
-static rtx
-loongarch_allocate_fcc (machine_mode mode)
-{
-  unsigned int regno, count;
-
-  gcc_assert (TARGET_HARD_FLOAT);
-
-  if (mode == FCCmode)
-    count = 1;
-  else
-    gcc_unreachable ();
-
-  cfun->machine->next_fcc += -cfun->machine->next_fcc & (count - 1);
-  if (cfun->machine->next_fcc > FCC_REG_LAST - FCC_REG_FIRST)
-    cfun->machine->next_fcc = 0;
-
-  regno = FCC_REG_FIRST + cfun->machine->next_fcc;
-  cfun->machine->next_fcc += count;
-  return gen_rtx_REG (mode, regno);
-}
-
 /* Sign- or zero-extend OP0 and OP1 for integer comparisons.  */
 
 static void
@@ -5260,7 +5331,7 @@ loongarch_emit_float_compare (enum rtx_code *code, rtx *op0, rtx *op1)
      operands for FCMP.cond.fmt, instead a reversed condition code is
      required and a test for false.  */
   *code = NE;
-  *op0 = loongarch_allocate_fcc (FCCmode);
+  *op0 = gen_reg_rtx (FCCmode);
 
   *op1 = const0_rtx;
   loongarch_emit_binary (cmp_code, *op0, cmp_op0, cmp_op1);
@@ -5415,6 +5486,12 @@ loongarch_expand_conditional_move (rtx *operands)
 	  rtx temp3 = gen_reg_rtx (mode);
 	  emit_insn (gen_rtx_SET (temp3, gen_rtx_IOR (mode, temp, temp2)));
 	  temp3 = gen_lowpart (GET_MODE (operands[0]), temp3);
+	  /* Nonzero in a subreg if it was made when accessing an object that
+	     was promoted to a wider mode in accord with the PROMOTED_MODE
+	     machine description macro.  */
+	  SUBREG_PROMOTED_VAR_P (temp3) = 1;
+	  /* Sets promoted mode for SUBREG_PROMOTED_VAR_P.  */
+	  SUBREG_PROMOTED_SET (temp3, SRP_SIGNED);
 	  loongarch_emit_move (operands[0], temp3);
 	}
       else
@@ -5588,7 +5665,7 @@ loongarch_expand_block_move (rtx dest, rtx src, rtx r_length, rtx r_align)
     return false;
 
   HOST_WIDE_INT length = INTVAL (r_length);
-  if (length > loongarch_max_inline_memcpy_size)
+  if (length > la_max_inline_memcpy_size)
     return false;
 
   HOST_WIDE_INT align = INTVAL (r_align);
@@ -5783,6 +5860,22 @@ loongarch_use_bstrins_for_ior_with_mask (machine_mode mode, rtx *op)
     return -1;
 
   return 0;
+}
+
+/* Rewrite a MEM for simple load/store under -mexplicit-relocs=auto
+   -mcmodel={normal/medium}.  */
+rtx
+loongarch_rewrite_mem_for_simple_ldst (rtx mem)
+{
+  rtx addr = XEXP (mem, 0);
+  rtx hi = gen_rtx_UNSPEC (Pmode, gen_rtvec (1, addr),
+			   UNSPEC_PCALAU12I_GR);
+  rtx new_mem;
+
+  addr = gen_rtx_LO_SUM (Pmode, force_reg (Pmode, hi), addr);
+  new_mem = gen_rtx_MEM (GET_MODE (mem), addr);
+  MEM_COPY_ATTRIBUTES (new_mem, mem);
+  return new_mem;
 }
 
 /* Print the text for PRINT_OPERAND punctation character CH to FILE.
@@ -5992,7 +6085,12 @@ loongarch_print_operand_reloc (FILE *file, rtx op, bool hi64_part,
 	    gcc_unreachable ();
 	}
       else
-	reloc = hi_reloc ? "%le_hi20" : "%le_lo12";
+	{
+	  if (HAVE_AS_TLS_LE_RELAXATION && !TARGET_CMODEL_EXTREME)
+	    reloc = hi_reloc ? "%le_hi20_r" : "%le_lo12_r";
+	  else
+	    reloc = hi_reloc ? "%le_hi20" : "%le_lo12";
+	}
       break;
 
     case SYMBOL_TLSGD:
@@ -6134,7 +6232,7 @@ loongarch_print_operand (FILE *file, rtx op, int letter)
       if (loongarch_cas_failure_memorder_needs_acquire (
 	    memmodel_from_int (INTVAL (op))))
 	fputs ("dbar\t0b10100", file);
-      else if (!TARGET_LD_SEQ_SA)
+      else if (!ISA_HAS_LD_SEQ_SA)
 	fputs ("dbar\t0x700", file);
       break;
 
@@ -6630,7 +6728,7 @@ loongarch_hard_regno_mode_ok_uncached (unsigned int regno, machine_mode mode)
   enum mode_class mclass;
 
   if (mode == FCCmode)
-    return FCC_REG_P (regno);
+    return FCC_REG_P (regno) || GP_REG_P (regno) || FP_REG_P (regno);
 
   size = GET_MODE_SIZE (mode);
   mclass = GET_MODE_CLASS (mode);
@@ -6845,6 +6943,9 @@ loongarch_move_to_gpr_cost (reg_class_t from)
       /* MOVFR2GR, etc.  */
       return 4;
 
+    case FCC_REGS:
+      return loongarch_cost->movcf2gr;
+
     default:
       return 0;
     }
@@ -6866,6 +6967,9 @@ loongarch_move_from_gpr_cost (reg_class_t to)
     case FP_REGS:
       /* MOVGR2FR, etc.  */
       return 4;
+
+    case FCC_REGS:
+      return loongarch_cost->movgr2cf;
 
     default:
       return 0;
@@ -6900,6 +7004,10 @@ loongarch_register_move_cost (machine_mode mode, reg_class_t from,
     return loongarch_move_from_gpr_cost (to);
   if (to == dregs)
     return loongarch_move_to_gpr_cost (from);
+
+  /* fcc -> fcc, fcc -> fpr, or fpr -> fcc. */
+  if (from == FCC_REGS || to == FCC_REGS)
+    return COSTS_N_INSNS (from == to ? 2 : 1);
 
   /* Handles cases that require a GPR temporary.  */
   cost1 = loongarch_move_to_gpr_cost (from);
@@ -6936,6 +7044,40 @@ loongarch_secondary_reload (bool in_p ATTRIBUTE_UNUSED, rtx x,
   int regno;
 
   regno = true_regnum (x);
+
+  if (mode == FCCmode)
+    {
+      if (reg_class_subset_p (rclass, FCC_REGS) && !FP_REG_P (regno))
+	{
+	  if (FCC_REG_P (regno))
+	    return FP_REGS;
+
+	  auto fn = in_p ? loongarch_move_from_gpr_cost
+			 : loongarch_move_to_gpr_cost;
+
+	  if (fn (FCC_REGS) > fn (FP_REGS) + COSTS_N_INSNS (1))
+	    return FP_REGS;
+
+	  return GP_REG_P (regno) ? NO_REGS : GR_REGS;
+	}
+
+      if (reg_class_subset_p (rclass, GR_REGS) && FCC_REG_P (regno))
+	{
+	  auto fn = in_p ? loongarch_move_to_gpr_cost
+			 : loongarch_move_from_gpr_cost;
+
+	  if (fn (FCC_REGS) > fn (FP_REGS) + COSTS_N_INSNS (1))
+	    return FP_REGS;
+
+	  return NO_REGS;
+	}
+
+      if (reg_class_subset_p (rclass, FP_REGS)
+	  && (regno == -1 || MEM_P (x)))
+	return GR_REGS;
+
+      return NO_REGS;
+    }
 
   if (reg_class_subset_p (rclass, FP_REGS))
     {
@@ -7418,12 +7560,25 @@ loongarch_output_mi_thunk (FILE *file, tree thunk_fndecl ATTRIBUTE_UNUSED,
      allowed, otherwise load the address into a register first.  */
   if (use_sibcall_p)
     {
+      /* If TARGET_CMODEL_EXTREME, we cannot do a direct jump at all
+	 and const_call_insn_operand should have returned false.  */
+      gcc_assert (!TARGET_CMODEL_EXTREME);
+
       insn = emit_call_insn (gen_sibcall_internal (fnaddr, const0_rtx));
       SIBLING_CALL_P (insn) = 1;
     }
   else
     {
-      loongarch_emit_move (temp1, fnaddr);
+      if (!TARGET_CMODEL_EXTREME)
+	loongarch_emit_move (temp1, fnaddr);
+      else if (la_opt_explicit_relocs == EXPLICIT_RELOCS_NONE)
+	emit_insn (gen_movdi_symbolic_off64 (temp1, fnaddr, temp2));
+      else
+	{
+	  emit_insn (gen_la_pcrel64_two_parts (temp1, temp2, fnaddr));
+	  emit_move_insn (temp1, gen_rtx_PLUS (Pmode, temp1, temp2));
+	}
+
       emit_jump_insn (gen_indirect_jump (temp1));
     }
 
@@ -7492,32 +7647,14 @@ loongarch_option_override_internal (struct gcc_options *opts,
   loongarch_init_target (&la_target,
 			 la_opt_cpu_arch, la_opt_cpu_tune, la_opt_fpu,
 			 la_opt_simd, la_opt_abi_base, la_opt_abi_ext,
-			 la_opt_cmodel);
+			 la_opt_cmodel, opts->x_la_isa_evolution,
+			 opts_set->x_la_isa_evolution);
 
   /* Handle target-specific options: compute defaults/conflicts etc.  */
   loongarch_config_target (&la_target, NULL, 0);
 
   loongarch_update_gcc_opt_status (&la_target, opts, opts_set);
   loongarch_cpu_option_override (&la_target, opts, opts_set);
-
-  if (la_opt_explicit_relocs != M_OPT_UNSET
-      && la_opt_explicit_relocs_backward != M_OPT_UNSET)
-    error ("do not use %qs (with %qs) and %qs (without %qs) together",
-	   "-mexplicit-relocs=", "=",
-	   la_opt_explicit_relocs_backward ? "-mexplicit-relocs"
-					   : "-mno-explicit-relocs", "=");
-
-  if (la_opt_explicit_relocs_backward != M_OPT_UNSET)
-    la_opt_explicit_relocs = (la_opt_explicit_relocs_backward
-			      ? EXPLICIT_RELOCS_ALWAYS
-			      : EXPLICIT_RELOCS_NONE);
-
-  if (la_opt_explicit_relocs == M_OPT_UNSET)
-    la_opt_explicit_relocs = (HAVE_AS_EXPLICIT_RELOCS
-			      ? (loongarch_mrelax
-				 ? EXPLICIT_RELOCS_AUTO
-				 : EXPLICIT_RELOCS_ALWAYS)
-			      : EXPLICIT_RELOCS_NONE);
 
   if (TARGET_ABI_LP64)
     flag_pcc_struct_return = 0;
@@ -7530,13 +7667,8 @@ loongarch_option_override_internal (struct gcc_options *opts,
 
   /* If the user hasn't specified a branch cost, use the processor's
      default.  */
-  if (loongarch_branch_cost == 0)
-    loongarch_branch_cost = loongarch_cost->branch_cost;
-
-  /* If the user hasn't disabled a feature added during ISA evolution,
-     use the processor's default.  */
-  isa_evolution |= (la_target.isa.evolution &
-		    ~global_options_set.x_isa_evolution);
+  if (la_branch_cost == 0)
+    la_branch_cost = loongarch_cost->branch_cost;
 
   /* Enable sw prefetching at -O3 and higher.  */
   if (opts->x_flag_prefetch_loop_arrays < 0
@@ -7551,10 +7683,6 @@ loongarch_option_override_internal (struct gcc_options *opts,
   switch (la_target.cmodel)
     {
       case CMODEL_EXTREME:
-	if (la_opt_explicit_relocs == EXPLICIT_RELOCS_NONE)
-	  error ("code model %qs is not compatible with %s",
-		 "extreme", "-mexplicit-relocs=none");
-
 	if (opts->x_flag_plt)
 	  {
 	    if (global_options_set.x_flag_plt)
@@ -7623,9 +7751,9 @@ loongarch_option_override_internal (struct gcc_options *opts,
 	{ "vec-rsqrt", RECIP_MASK_VEC_RSQRT },
   };
 
-  if (loongarch_recip_name)
+  if (la_recip_name)
     {
-      char *p = ASTRDUP (loongarch_recip_name);
+      char *p = ASTRDUP (la_recip_name);
       char *q;
       unsigned int mask, i;
       bool invert;
@@ -7666,10 +7794,38 @@ loongarch_option_override_internal (struct gcc_options *opts,
 	    recip_mask |= mask;
 	}
     }
-  if (loongarch_recip)
+  if (la_recip)
     recip_mask |= RECIP_MASK_ALL;
-  if (!TARGET_FRECIPE)
+  if (!ISA_HAS_FRECIPE)
     recip_mask = RECIP_MASK_NONE;
+
+#define INIT_TARGET_FLAG(NAME, INIT) \
+  { \
+    if (!(target_flags_explicit & MASK_##NAME)) \
+      { \
+	if (INIT) \
+	  target_flags |= MASK_##NAME; \
+	else \
+	  target_flags &= ~MASK_##NAME; \
+      } \
+  }
+
+  /* Enable conditional moves for int and float by default.  */
+  INIT_TARGET_FLAG (COND_MOVE_INT, 1)
+  INIT_TARGET_FLAG (COND_MOVE_FLOAT, 1)
+
+  /* Set mrelax default.  */
+  INIT_TARGET_FLAG (LINKER_RELAXATION,
+		    HAVE_AS_MRELAX_OPTION && HAVE_AS_COND_BRANCH_RELAXATION)
+
+#undef INIT_TARGET_FLAG
+
+  if (la_opt_explicit_relocs == M_OPT_UNSET)
+    la_opt_explicit_relocs = (HAVE_AS_EXPLICIT_RELOCS
+			      ? (TARGET_LINKER_RELAXATION
+				 ? EXPLICIT_RELOCS_AUTO
+				 : EXPLICIT_RELOCS_ALWAYS)
+			      : EXPLICIT_RELOCS_NONE);
 }
 
 
@@ -7679,6 +7835,31 @@ static void
 loongarch_option_override (void)
 {
   loongarch_option_override_internal (&global_options, &global_options_set);
+}
+
+/* Implement TARGET_OPTION_SAVE.  */
+static void
+loongarch_option_save (struct cl_target_option *,
+		       struct gcc_options *opts,
+		       struct gcc_options *opts_set)
+{
+  loongarch_update_gcc_opt_status (&la_target, opts, opts_set);
+}
+
+/* Implement TARGET_OPTION_RESTORE.  */
+static void
+loongarch_option_restore (struct gcc_options *,
+			  struct gcc_options *,
+			  struct cl_target_option *ptr)
+{
+  la_target.cpu_arch = ptr->x_la_opt_cpu_arch;
+  la_target.cpu_tune = ptr->x_la_opt_cpu_tune;
+
+  la_target.isa.fpu = ptr->x_la_opt_fpu;
+  la_target.isa.simd = ptr->x_la_opt_simd;
+  la_target.isa.evolution = ptr->x_la_isa_evolution;
+
+  la_target.cmodel = ptr->x_la_opt_cmodel;
 }
 
 /* Implement TARGET_CONDITIONAL_REGISTER_USAGE.  */
@@ -7849,7 +8030,8 @@ struct expand_vec_perm_d
 
 static bool
 loongarch_expand_vselect (rtx target, rtx op0,
-			  const unsigned char *perm, unsigned nelt)
+			  const unsigned char *perm, unsigned nelt,
+			  bool testing_p)
 {
   rtx rperm[MAX_VECT_LEN], x;
   rtx_insn *insn;
@@ -7868,6 +8050,9 @@ loongarch_expand_vselect (rtx target, rtx op0,
       remove_insn (insn);
       return false;
     }
+
+  if (testing_p)
+      remove_insn (insn);
   return true;
 }
 
@@ -7875,7 +8060,8 @@ loongarch_expand_vselect (rtx target, rtx op0,
 
 static bool
 loongarch_expand_vselect_vconcat (rtx target, rtx op0, rtx op1,
-				  const unsigned char *perm, unsigned nelt)
+				  const unsigned char *perm, unsigned nelt,
+				  bool testing_p)
 {
   machine_mode v2mode;
   rtx x;
@@ -7883,7 +8069,7 @@ loongarch_expand_vselect_vconcat (rtx target, rtx op0, rtx op1,
   if (!GET_MODE_2XWIDER_MODE (GET_MODE (op0)).exists (&v2mode))
     return false;
   x = gen_rtx_VEC_CONCAT (v2mode, op0, op1);
-  return loongarch_expand_vselect (target, x, perm, nelt);
+  return loongarch_expand_vselect (target, x, perm, nelt, testing_p);
 }
 
 static tree
@@ -7916,14 +8102,6 @@ loongarch_handle_model_attribute (tree *node, tree name, tree arg, int,
 	  error_at (DECL_SOURCE_LOCATION (decl),
 		    "%qE attribute cannot be specified for register "
 		    "variables", name);
-	  *no_add_attrs = true;
-	  return NULL_TREE;
-	}
-      if (la_opt_explicit_relocs == EXPLICIT_RELOCS_NONE)
-	{
-	  error_at (DECL_SOURCE_LOCATION (decl),
-		    "%qE attribute is not compatible with %s", name,
-		    "-mexplicit-relocs=none");
 	  *no_add_attrs = true;
 	  return NULL_TREE;
 	}
@@ -8145,11 +8323,87 @@ loongarch_set_handled_components (sbitmap components)
 #define TARGET_ASM_ALIGNED_SI_OP "\t.word\t"
 #undef TARGET_ASM_ALIGNED_DI_OP
 #define TARGET_ASM_ALIGNED_DI_OP "\t.dword\t"
-/* Construct (set target (vec_select op0 (parallel selector))) and
-   return true if that's a valid instruction in the active ISA.  */
+
+/* Use the vshuf instruction to implement all 128-bit constant vector
+   permuatation.  */
 
 static bool
-loongarch_expand_lsx_shuffle (struct expand_vec_perm_d *d)
+loongarch_try_expand_lsx_vshuf_const (struct expand_vec_perm_d *d)
+{
+  int i;
+  rtx target, op0, op1, sel, tmp;
+  rtx rperm[MAX_VECT_LEN];
+
+  if (GET_MODE_SIZE (d->vmode) == 16)
+    {
+      target = d->target;
+      op0 = d->op0;
+      op1 = d->one_vector_p ? d->op0 : d->op1;
+
+      if (GET_MODE (op0) != GET_MODE (op1)
+	  || GET_MODE (op0) != GET_MODE (target))
+	return false;
+
+      if (d->testing_p)
+	return true;
+
+      for (i = 0; i < d->nelt; i += 1)
+	  rperm[i] = GEN_INT (d->perm[i]);
+
+      if (d->vmode == E_V2DFmode)
+	{
+	  sel = gen_rtx_CONST_VECTOR (E_V2DImode, gen_rtvec_v (d->nelt, rperm));
+	  tmp = simplify_gen_subreg (E_V2DImode, d->target, d->vmode, 0);
+	  emit_move_insn (tmp, sel);
+	}
+      else if (d->vmode == E_V4SFmode)
+	{
+	  sel = gen_rtx_CONST_VECTOR (E_V4SImode, gen_rtvec_v (d->nelt, rperm));
+	  tmp = simplify_gen_subreg (E_V4SImode, d->target, d->vmode, 0);
+	  emit_move_insn (tmp, sel);
+	}
+      else
+	{
+	  sel = gen_rtx_CONST_VECTOR (d->vmode, gen_rtvec_v (d->nelt, rperm));
+	  emit_move_insn (d->target, sel);
+	}
+
+      switch (d->vmode)
+	{
+	case E_V2DFmode:
+	  emit_insn (gen_lsx_vshuf_d_f (target, target, op1, op0));
+	  break;
+	case E_V2DImode:
+	  emit_insn (gen_lsx_vshuf_d (target, target, op1, op0));
+	  break;
+	case E_V4SFmode:
+	  emit_insn (gen_lsx_vshuf_w_f (target, target, op1, op0));
+	  break;
+	case E_V4SImode:
+	  emit_insn (gen_lsx_vshuf_w (target, target, op1, op0));
+	  break;
+	case E_V8HImode:
+	  emit_insn (gen_lsx_vshuf_h (target, target, op1, op0));
+	  break;
+	case E_V16QImode:
+	  emit_insn (gen_lsx_vshuf_b (target, op1, op0, target));
+	  break;
+	default:
+	  break;
+	}
+
+      return true;
+    }
+  return false;
+}
+
+/* Construct (set target (vec_select op0 (parallel selector))) and
+   return true if that's a valid instruction in the active ISA.
+   In fact, it matches the special constant vector with repeated
+   4-element sets.  */
+
+static bool
+loongarch_is_imm_set_shuffle (struct expand_vec_perm_d *d)
 {
   rtx x, elts[MAX_VECT_LEN];
   rtvec v;
@@ -8168,6 +8422,9 @@ loongarch_expand_lsx_shuffle (struct expand_vec_perm_d *d)
   if (!loongarch_const_vector_shuffle_set_p (x, d->vmode))
     return false;
 
+  if (d->testing_p)
+    return true;
+
   x = gen_rtx_VEC_SELECT (d->vmode, d->op0, x);
   x = gen_rtx_SET (d->target, x);
 
@@ -8178,6 +8435,27 @@ loongarch_expand_lsx_shuffle (struct expand_vec_perm_d *d)
       return false;
     }
   return true;
+}
+
+static bool
+loongarch_expand_vec_perm_even_odd (struct expand_vec_perm_d *);
+
+/* Try to match and expand all kinds of 128-bit const vector permutation
+   cases.  */
+
+static bool
+loongarch_expand_lsx_shuffle (struct expand_vec_perm_d *d)
+{
+  if (!ISA_HAS_LSX && GET_MODE_SIZE (d->vmode) != 16)
+    return false;
+
+  if (loongarch_is_imm_set_shuffle (d))
+      return true;
+
+  if (loongarch_expand_vec_perm_even_odd (d))
+    return true;
+
+  return loongarch_try_expand_lsx_vshuf_const (d);
 }
 
 /* Try to simplify a two vector permutation using 2 intra-lane interleave
@@ -8272,7 +8550,7 @@ loongarch_expand_vec_perm_interleave (struct expand_vec_perm_d *d)
   return true;
 }
 
-/* Implement extract-even and extract-odd permutations.  */
+/* Implement 128-bit and 256-bit extract-even and extract-odd permutations.  */
 
 static bool
 loongarch_expand_vec_perm_even_odd_1 (struct expand_vec_perm_d *d, unsigned odd)
@@ -8287,6 +8565,50 @@ loongarch_expand_vec_perm_even_odd_1 (struct expand_vec_perm_d *d, unsigned odd)
 
   switch (d->vmode)
     {
+    /* 128 bit.  */
+    case E_V2DFmode:
+      if (odd)
+	emit_insn (gen_lsx_vilvh_d_f (d->target, d->op0, d->op1));
+      else
+	emit_insn (gen_lsx_vilvl_d_f (d->target, d->op0, d->op1));
+      break;
+
+    case E_V2DImode:
+      if (odd)
+	emit_insn (gen_lsx_vilvh_d (d->target, d->op0, d->op1));
+      else
+	emit_insn (gen_lsx_vilvl_d (d->target, d->op0, d->op1));
+      break;
+
+    case E_V4SFmode:
+      if (odd)
+	emit_insn (gen_lsx_vpickod_w_f (d->target, d->op0, d->op1));
+      else
+	emit_insn (gen_lsx_vpickev_w_f (d->target, d->op0, d->op1));
+      break;
+
+    case E_V4SImode:
+      if (odd)
+	emit_insn (gen_lsx_vpickod_w (d->target, d->op0, d->op1));
+      else
+	emit_insn (gen_lsx_vpickev_w (d->target, d->op0, d->op1));
+      break;
+
+    case E_V8HImode:
+      if (odd)
+	emit_insn (gen_lsx_vpickod_h (d->target, d->op0, d->op1));
+      else
+	emit_insn (gen_lsx_vpickev_h (d->target, d->op0, d->op1));
+      break;
+
+    case E_V16QImode:
+      if (odd)
+	emit_insn (gen_lsx_vpickod_b (d->target, d->op0, d->op1));
+      else
+	emit_insn (gen_lsx_vpickev_b (d->target, d->op0, d->op1));
+      break;
+
+    /* 256 bit.  */
     case E_V4DFmode:
       /* Shuffle the lanes around into { 0 4 2 6 } and { 1 5 3 7 }.  */
       if (odd)
@@ -8361,7 +8683,7 @@ static bool
 loongarch_expand_vec_perm_even_odd (struct expand_vec_perm_d *d)
 {
   unsigned i, odd, nelt = d->nelt;
-  if (!ISA_HAS_LASX)
+  if (!ISA_HAS_LASX && !ISA_HAS_LSX)
     return false;
 
   odd = d->perm[0];
@@ -8793,143 +9115,6 @@ loongarch_expand_vec_perm (rtx target, rtx op0, rtx op1, rtx sel)
     }
 }
 
-static bool
-loongarch_is_odd_extraction (struct expand_vec_perm_d *);
-
-static bool
-loongarch_is_even_extraction (struct expand_vec_perm_d *);
-
-static bool
-loongarch_try_expand_lsx_vshuf_const (struct expand_vec_perm_d *d)
-{
-  int i;
-  rtx target, op0, op1, sel, tmp;
-  rtx rperm[MAX_VECT_LEN];
-
-  if (d->vmode == E_V2DImode || d->vmode == E_V2DFmode
-	|| d->vmode == E_V4SImode || d->vmode == E_V4SFmode
-	|| d->vmode == E_V8HImode || d->vmode == E_V16QImode)
-    {
-      target = d->target;
-      op0 = d->op0;
-      op1 = d->one_vector_p ? d->op0 : d->op1;
-
-      if (GET_MODE (op0) != GET_MODE (op1)
-	  || GET_MODE (op0) != GET_MODE (target))
-	return false;
-
-      if (d->testing_p)
-	return true;
-
-      /* If match extract-even and extract-odd permutations pattern, use
-       * vselect much better than vshuf.  */
-      if (loongarch_is_odd_extraction (d)
-	  || loongarch_is_even_extraction (d))
-	{
-	  if (loongarch_expand_vselect_vconcat (d->target, d->op0, d->op1,
-						d->perm, d->nelt))
-	    return true;
-
-	  unsigned char perm2[MAX_VECT_LEN];
-	  for (i = 0; i < d->nelt; ++i)
-	    perm2[i] = (d->perm[i] + d->nelt) & (2 * d->nelt - 1);
-
-	  if (loongarch_expand_vselect_vconcat (d->target, d->op1, d->op0,
-						perm2, d->nelt))
-	    return true;
-	}
-
-      for (i = 0; i < d->nelt; i += 1)
-	{
-	  rperm[i] = GEN_INT (d->perm[i]);
-	}
-
-      if (d->vmode == E_V2DFmode)
-	{
-	  sel = gen_rtx_CONST_VECTOR (E_V2DImode, gen_rtvec_v (d->nelt, rperm));
-	  tmp = simplify_gen_subreg (E_V2DImode, d->target, d->vmode, 0);
-	  emit_move_insn (tmp, sel);
-	}
-      else if (d->vmode == E_V4SFmode)
-	{
-	  sel = gen_rtx_CONST_VECTOR (E_V4SImode, gen_rtvec_v (d->nelt, rperm));
-	  tmp = simplify_gen_subreg (E_V4SImode, d->target, d->vmode, 0);
-	  emit_move_insn (tmp, sel);
-	}
-      else
-	{
-	  sel = gen_rtx_CONST_VECTOR (d->vmode, gen_rtvec_v (d->nelt, rperm));
-	  emit_move_insn (d->target, sel);
-	}
-
-      switch (d->vmode)
-	{
-	case E_V2DFmode:
-	  emit_insn (gen_lsx_vshuf_d_f (target, target, op1, op0));
-	  break;
-	case E_V2DImode:
-	  emit_insn (gen_lsx_vshuf_d (target, target, op1, op0));
-	  break;
-	case E_V4SFmode:
-	  emit_insn (gen_lsx_vshuf_w_f (target, target, op1, op0));
-	  break;
-	case E_V4SImode:
-	  emit_insn (gen_lsx_vshuf_w (target, target, op1, op0));
-	  break;
-	case E_V8HImode:
-	  emit_insn (gen_lsx_vshuf_h (target, target, op1, op0));
-	  break;
-	case E_V16QImode:
-	  emit_insn (gen_lsx_vshuf_b (target, op1, op0, target));
-	  break;
-	default:
-	  break;
-	}
-
-      return true;
-    }
-  return false;
-}
-
-static bool
-loongarch_expand_vec_perm_const_1 (struct expand_vec_perm_d *d)
-{
-  unsigned int i, nelt = d->nelt;
-  unsigned char perm2[MAX_VECT_LEN];
-
-  if (d->one_vector_p)
-    {
-      /* Try interleave with alternating operands.  */
-      memcpy (perm2, d->perm, sizeof (perm2));
-      for (i = 1; i < nelt; i += 2)
-	perm2[i] += nelt;
-      if (loongarch_expand_vselect_vconcat (d->target, d->op0, d->op1, perm2,
-					    nelt))
-	return true;
-    }
-  else
-    {
-      if (loongarch_expand_vselect_vconcat (d->target, d->op0, d->op1,
-					    d->perm, nelt))
-	return true;
-
-      /* Try again with swapped operands.  */
-      for (i = 0; i < nelt; ++i)
-	perm2[i] = (d->perm[i] + nelt) & (2 * nelt - 1);
-      if (loongarch_expand_vselect_vconcat (d->target, d->op1, d->op0, perm2,
-					    nelt))
-	return true;
-    }
-
-  if (loongarch_expand_lsx_shuffle (d))
-    return true;
-  if (loongarch_expand_vec_perm_even_odd (d))
-    return true;
-  if (loongarch_expand_vec_perm_interleave (d))
-    return true;
-  return false;
-}
-
 /* Following are the assist function for const vector permutation support.  */
 static bool
 loongarch_is_quad_duplicate (struct expand_vec_perm_d *d)
@@ -8962,74 +9147,6 @@ loongarch_is_quad_duplicate (struct expand_vec_perm_d *d)
 }
 
 static bool
-loongarch_is_double_duplicate (struct expand_vec_perm_d *d)
-{
-  if (!d->one_vector_p)
-    return false;
-
-  if (d->nelt < 8)
-    return false;
-
-  bool result = true;
-  unsigned char buf = d->perm[0];
-
-  for (int i = 1; i < d->nelt; i += 2)
-    {
-      if (d->perm[i] != buf)
-	{
-	  result = false;
-	  break;
-	}
-      if (d->perm[i - 1] != d->perm[i])
-	{
-	  result = false;
-	  break;
-	}
-      buf += d->nelt / 4;
-    }
-
-  return result;
-}
-
-static bool
-loongarch_is_odd_extraction (struct expand_vec_perm_d *d)
-{
-  bool result = true;
-  unsigned char buf = 1;
-
-  for (int i = 0; i < d->nelt; i += 1)
-    {
-      if (buf != d->perm[i])
-	{
-	  result = false;
-	  break;
-	}
-      buf += 2;
-    }
-
-  return result;
-}
-
-static bool
-loongarch_is_even_extraction (struct expand_vec_perm_d *d)
-{
-  bool result = true;
-  unsigned char buf = 0;
-
-  for (int i = 0; i < d->nelt; i += 1)
-    {
-      if (buf != d->perm[i])
-	{
-	  result = false;
-	  break;
-	}
-      buf += 2;
-    }
-
-  return result;
-}
-
-static bool
 loongarch_is_extraction_permutation (struct expand_vec_perm_d *d)
 {
   bool result = true;
@@ -9037,110 +9154,6 @@ loongarch_is_extraction_permutation (struct expand_vec_perm_d *d)
 
   if (buf != 0 || buf != d->nelt)
     return false;
-
-  for (int i = 0; i < d->nelt; i += 1)
-    {
-      if (buf != d->perm[i])
-	{
-	  result = false;
-	  break;
-	}
-      buf += 1;
-    }
-
-  return result;
-}
-
-static bool
-loongarch_is_center_extraction (struct expand_vec_perm_d *d)
-{
-  bool result = true;
-  unsigned buf = d->nelt / 2;
-
-  for (int i = 0; i < d->nelt; i += 1)
-    {
-      if (buf != d->perm[i])
-	{
-	  result = false;
-	  break;
-	}
-      buf += 1;
-    }
-
-  return result;
-}
-
-static bool
-loongarch_is_reversing_permutation (struct expand_vec_perm_d *d)
-{
-  if (!d->one_vector_p)
-    return false;
-
-  bool result = true;
-  unsigned char buf = d->nelt - 1;
-
-  for (int i = 0; i < d->nelt; i += 1)
-    {
-      if (d->perm[i] != buf)
-	{
-	  result = false;
-	  break;
-	}
-
-      buf -= 1;
-    }
-
-  return result;
-}
-
-static bool
-loongarch_is_di_misalign_extract (struct expand_vec_perm_d *d)
-{
-  if (d->nelt != 4 && d->nelt != 8)
-    return false;
-
-  bool result = true;
-  unsigned char buf;
-
-  if (d->nelt == 4)
-    {
-      buf = 1;
-      for (int i = 0; i < d->nelt; i += 1)
-	{
-	  if (buf != d->perm[i])
-	    {
-	      result = false;
-	      break;
-	    }
-
-	  buf += 1;
-	}
-    }
-  else if (d->nelt == 8)
-    {
-      buf = 2;
-      for (int i = 0; i < d->nelt; i += 1)
-	{
-	  if (buf != d->perm[i])
-	    {
-	      result = false;
-	      break;
-	    }
-
-	  buf += 1;
-	}
-    }
-
-  return result;
-}
-
-static bool
-loongarch_is_si_misalign_extract (struct expand_vec_perm_d *d)
-{
-  if (d->vmode != E_V8SImode && d->vmode != E_V8SFmode)
-    return false;
-  bool result = true;
-  unsigned char buf = 1;
 
   for (int i = 0; i < d->nelt; i += 1)
     {
@@ -9214,39 +9227,6 @@ loongarch_is_lasx_lowpart_interleave_2 (struct expand_vec_perm_d *d)
   COMPARE_SELECTOR (40, 24, 32);
 
 #undef COMPARE_SELECTOR
-  return result;
-}
-
-static bool
-loongarch_is_lasx_lowpart_extract (struct expand_vec_perm_d *d)
-{
-  bool result = true;
-  unsigned char buf = 0;
-
-  for (int i = 0; i < d->nelt / 2; i += 1)
-    {
-      if (buf != d->perm[i])
-	{
-	  result = false;
-	  break;
-	}
-      buf += 1;
-    }
-
-  if (result)
-    {
-      buf = d->nelt;
-      for (int i = d->nelt / 2; i < d->nelt; i += 1)
-	{
-	  if (buf != d->perm[i])
-	    {
-	      result = false;
-	      break;
-	    }
-	  buf += 1;
-	}
-    }
-
   return result;
 }
 
@@ -9331,538 +9311,192 @@ loongarch_is_elem_duplicate (struct expand_vec_perm_d *d)
   return result;
 }
 
-inline bool
-loongarch_is_op_reverse_perm (struct expand_vec_perm_d *d)
-{
-  return (d->vmode == E_V4DFmode)
-    && d->perm[0] == 2 && d->perm[1] == 3
-    && d->perm[2] == 0 && d->perm[3] == 1;
-}
-
-static bool
-loongarch_is_single_op_perm (struct expand_vec_perm_d *d)
-{
-  bool result = true;
-
-  for (int i = 0; i < d->nelt; i += 1)
-    {
-      if (d->perm[i] >= d->nelt)
-	{
-	  result = false;
-	  break;
-	}
-    }
-
-  return result;
-}
-
-static bool
-loongarch_is_divisible_perm (struct expand_vec_perm_d *d)
-{
-  bool result = true;
-
-  for (int i = 0; i < d->nelt / 2; i += 1)
-    {
-      if (d->perm[i] >= d->nelt)
-	{
-	  result = false;
-	  break;
-	}
-    }
-
-  if (result)
-    {
-      for (int i = d->nelt / 2; i < d->nelt; i += 1)
-	{
-	  if (d->perm[i] < d->nelt)
-	    {
-	      result = false;
-	      break;
-	    }
-	}
-    }
-
-  return result;
-}
-
-inline bool
-loongarch_is_triple_stride_extract (struct expand_vec_perm_d *d)
-{
-  return (d->vmode == E_V4DImode || d->vmode == E_V4DFmode)
-    && d->perm[0] == 1 && d->perm[1] == 4
-    && d->perm[2] == 7 && d->perm[3] == 0;
-}
-
 /* In LASX, some permutation insn does not have the behavior that gcc expects
- * when compiler wants to emit a vector permutation.
- *
- * 1. What GCC provides via vectorize_vec_perm_const ()'s paramater:
- * When GCC wants to performs a vector permutation, it provides two op
- * reigster, one target register, and a selector.
- * In const vector permutation case, GCC provides selector as a char array
- * that contains original value; in variable vector permuatation
- * (performs via vec_perm<mode> insn template), it provides a vector register.
- * We assume that nelt is the elements numbers inside single vector in current
- * 256bit vector mode.
- *
- * 2. What GCC expects to perform:
- * Two op registers (op0, op1) will "combine" into a 512bit temp vector storage
- * that has 2*nelt elements inside it; the low 256bit is op0, and high 256bit
- * is op1, then the elements are indexed as below:
- *		  0 ~ nelt - 1		nelt ~ 2 * nelt - 1
- *	  |-------------------------|-------------------------|
- *		Low 256bit (op0)	High 256bit (op1)
- * For example, the second element in op1 (V8SImode) will be indexed with 9.
- * Selector is a vector that has the same mode and number of elements  with
- * op0,op1 and target, it's look like this:
- *	      0 ~ nelt - 1
- *	  |-------------------------|
- *	      256bit (selector)
- * It describes which element from 512bit temp vector storage will fit into
- * target's every element slot.
- * GCC expects that every element in selector can be ANY indices of 512bit
- * vector storage (Selector can pick literally any element from op0 and op1, and
- * then fits into any place of target register). This is also what LSX 128bit
- * vshuf.* instruction do similarly, so we can handle 128bit vector permutation
- * by single instruction easily.
- *
- * 3. What LASX permutation instruction does:
- * In short, it just execute two independent 128bit vector permuatation, and
- * it's the reason that we need to do the jobs below.  We will explain it.
- * op0, op1, target, and selector will be separate into high 128bit and low
- * 128bit, and do permutation as the description below:
- *
- *  a) op0's low 128bit and op1's low 128bit "combines" into a 256bit temp
- * vector storage (TVS1), elements are indexed as below:
- *	    0 ~ nelt / 2 - 1	  nelt / 2 ~ nelt - 1
- *	|---------------------|---------------------| TVS1
- *	    op0's low 128bit      op1's low 128bit
- *    op0's high 128bit and op1's high 128bit are "combined" into TVS2 in the
- *    same way.
- *	    0 ~ nelt / 2 - 1	  nelt / 2 ~ nelt - 1
- *	|---------------------|---------------------| TVS2
- *	    op0's high 128bit	op1's high 128bit
- *  b) Selector's low 128bit describes which elements from TVS1 will fit into
- *  target vector's low 128bit.  No TVS2 elements are allowed.
- *  c) Selector's high 128bit describes which elements from TVS2 will fit into
- *  target vector's high 128bit.  No TVS1 elements are allowed.
- *
- * As we can see, if we want to handle vector permutation correctly, we can
- * achieve it in three ways:
- *  a) Modify selector's elements, to make sure that every elements can inform
- *  correct value that will put into target vector.
-    b) Generate extra instruction before/after permutation instruction, for
-    adjusting op vector or target vector, to make sure target vector's value is
-    what GCC expects.
-    c) Use other instructions to process op and put correct result into target.
- */
+   when compiler wants to emit a vector permutation.
+
+   1.  What GCC provides via vectorize_vec_perm_const ()'s paramater:
+   When GCC wants to performs a vector permutation, it provides two op
+   reigster, one target register, and a selector.
+   In const vector permutation case, GCC provides selector as a char array
+   that contains original value; in variable vector permuatation
+   (performs via vec_perm<mode> insn template), it provides a vector register.
+   We assume that nelt is the elements numbers inside single vector in current
+   256bit vector mode.
+
+   2.  What GCC expects to perform:
+   Two op registers (op0, op1) will "combine" into a 512bit temp vector storage
+   that has 2*nelt elements inside it; the low 256bit is op0, and high 256bit
+   is op1, then the elements are indexed as below:
+   0 ~ nelt - 1		nelt ~ 2 * nelt - 1
+   |-------------------------|-------------------------|
+   Low 256bit (op0)	High 256bit (op1)
+   For example, the second element in op1 (V8SImode) will be indexed with 9.
+   Selector is a vector that has the same mode and number of elements  with
+   op0,op1 and target, it's look like this:
+   0 ~ nelt - 1
+   |-------------------------|
+   256bit (selector)
+   It describes which element from 512bit temp vector storage will fit into
+   target's every element slot.
+   GCC expects that every element in selector can be ANY indices of 512bit
+   vector storage (Selector can pick literally any element from op0 and op1, and
+   then fits into any place of target register). This is also what LSX 128bit
+   vshuf.* instruction do similarly, so we can handle 128bit vector permutation
+   by single instruction easily.
+
+   3.  What LASX permutation instruction does:
+   In short, it just execute two independent 128bit vector permuatation, and
+   it's the reason that we need to do the jobs below.  We will explain it.
+   op0, op1, target, and selector will be separate into high 128bit and low
+   128bit, and do permutation as the description below:
+
+   a) op0's low 128bit and op1's low 128bit "combines" into a 256bit temp
+   vector storage (TVS1), elements are indexed as below:
+   0 ~ nelt / 2 - 1	  nelt / 2 ~ nelt - 1
+   |---------------------|---------------------| TVS1
+   op0's low 128bit      op1's low 128bit
+   op0's high 128bit and op1's high 128bit are "combined" into TVS2 in the
+   same way.
+   0 ~ nelt / 2 - 1	  nelt / 2 ~ nelt - 1
+   |---------------------|---------------------| TVS2
+   op0's high 128bit	op1's high 128bit
+   b) Selector's low 128bit describes which elements from TVS1 will fit into
+   target vector's low 128bit.  No TVS2 elements are allowed.
+   c) Selector's high 128bit describes which elements from TVS2 will fit into
+   target vector's high 128bit.  No TVS1 elements are allowed.
+
+   As we can see, if we want to handle vector permutation correctly, we can
+   achieve it in three ways:
+   a) Modify selector's elements, to make sure that every elements can inform
+   correct value that will put into target vector.
+   b) Generate extra instruction before/after permutation instruction, for
+   adjusting op vector or target vector, to make sure target vector's value is
+   what GCC expects.
+   c) Use other instructions to process op and put correct result into target.
+   */
 
 /* Implementation of constant vector permuatation.  This function identifies
- * recognized pattern of permuation selector argument, and use one or more
- * instruction(s) to finish the permutation job correctly.  For unsupported
- * patterns, it will return false.  */
+   recognized pattern of permuation selector argument, and use one or more
+   instruction (s) to finish the permutation job correctly.  For unsupported
+   patterns, it will return false.  */
 
 static bool
-loongarch_expand_vec_perm_const_2 (struct expand_vec_perm_d *d)
+loongarch_expand_vec_perm_const (struct expand_vec_perm_d *d)
 {
-  /* Although we have the LSX vec_perm<mode> template, there's still some
-     128bit vector permuatation operations send to vectorize_vec_perm_const.
-     In this case, we just simpliy wrap them by single vshuf.* instruction,
-     because LSX vshuf.* instruction just have the same behavior that GCC
-     expects.  */
-  if (GET_MODE_SIZE (d->vmode) == 16)
-    return loongarch_try_expand_lsx_vshuf_const (d);
-  else
-    return false;
-
-  bool ok = false, reverse_hi_lo = false, extract_ev_od = false,
-       use_alt_op = false;
+  bool flag = false;
+  unsigned int i;
   unsigned char idx;
-  int i;
   rtx target, op0, op1, sel, tmp;
-  rtx op0_alt = NULL_RTX, op1_alt = NULL_RTX;
   rtx rperm[MAX_VECT_LEN];
   unsigned int remapped[MAX_VECT_LEN];
+  unsigned char perm2[MAX_VECT_LEN];
 
-  /* Try to figure out whether is a recognized permutation selector pattern, if
-     yes, we will reassign some elements with new value in selector argument,
-     and in some cases we will generate some assist insn to complete the
-     permutation. (Even in some cases, we use other insn to impl permutation
-     instead of xvshuf!)
-
-     Make sure to check d->testing_p is false everytime if you want to emit new
-     insn, unless you want to crash into ICE directly.  */
-  if (loongarch_is_quad_duplicate (d))
+  if (GET_MODE_SIZE (d->vmode) == 16)
+    return loongarch_expand_lsx_shuffle (d);
+  else
     {
-      /* Selector example: E_V8SImode, { 0, 0, 0, 0, 4, 4, 4, 4 }
-	 copy first elem from original selector to all elem in new selector.  */
-      idx = d->perm[0];
-      for (i = 0; i < d->nelt; i += 1)
+      if (d->one_vector_p)
 	{
-	  remapped[i] = idx;
-	}
-      /* Selector after: { 0, 0, 0, 0, 0, 0, 0, 0 }.  */
-    }
-  else if (loongarch_is_double_duplicate (d))
-    {
-      /* Selector example: E_V8SImode, { 1, 1, 3, 3, 5, 5, 7, 7 }
-	 one_vector_p == true.  */
-      for (i = 0; i < d->nelt / 2; i += 1)
-	{
-	  idx = d->perm[i];
-	  remapped[i] = idx;
-	  remapped[i + d->nelt / 2] = idx;
-	}
-      /* Selector after: { 1, 1, 3, 3, 1, 1, 3, 3 }.  */
-    }
-  else if (loongarch_is_odd_extraction (d)
-	   || loongarch_is_even_extraction (d))
-    {
-      /* Odd extraction selector sample: E_V4DImode, { 1, 3, 5, 7 }
-	 Selector after: { 1, 3, 1, 3 }.
-	 Even extraction selector sample: E_V4DImode, { 0, 2, 4, 6 }
-	 Selector after: { 0, 2, 0, 2 }.  */
-
-      /* Better implement of extract-even and extract-odd permutations.  */
-      if (loongarch_expand_vec_perm_even_odd (d))
-	return true;
-
-      for (i = 0; i < d->nelt / 2; i += 1)
-	{
-	  idx = d->perm[i];
-	  remapped[i] = idx;
-	  remapped[i + d->nelt / 2] = idx;
-	}
-      /* Additional insn is required for correct result.  See codes below.  */
-      extract_ev_od = true;
-    }
-  else if (loongarch_is_extraction_permutation (d))
-    {
-      /* Selector sample: E_V8SImode, { 0, 1, 2, 3, 4, 5, 6, 7 }.  */
-      if (d->perm[0] == 0)
-	{
-	  for (i = 0; i < d->nelt / 2; i += 1)
-	    {
-	      remapped[i] = i;
-	      remapped[i + d->nelt / 2] = i;
-	    }
+	  /* Try interleave with alternating operands.  */
+	  memcpy (perm2, d->perm, sizeof (perm2));
+	  for (i = 1; i < d->nelt; i += 2)
+	    perm2[i] += d->nelt;
+	  if (loongarch_expand_vselect_vconcat (d->target, d->op0, d->op1,
+						perm2, d->nelt, d->testing_p))
+	    return true;
 	}
       else
 	{
-	  /* { 8, 9, 10, 11, 12, 13, 14, 15 }.  */
-	  for (i = 0; i < d->nelt / 2; i += 1)
-	    {
-	      idx = i + d->nelt / 2;
-	      remapped[i] = idx;
-	      remapped[i + d->nelt / 2] = idx;
-	    }
-	}
-      /* Selector after: { 0, 1, 2, 3, 0, 1, 2, 3 }
-	 { 8, 9, 10, 11, 8, 9, 10, 11 }  */
-    }
-  else if (loongarch_is_center_extraction (d))
-    {
-      /* sample: E_V4DImode, { 2, 3, 4, 5 }
-	 In this condition, we can just copy high 128bit of op0 and low 128bit
-	 of op1 to the target register by using xvpermi.q insn.  */
-      if (!d->testing_p)
-	{
-	  emit_move_insn (d->target, d->op1);
-	  switch (d->vmode)
-	    {
-	      case E_V4DImode:
-		emit_insn (gen_lasx_xvpermi_q_v4di (d->target, d->target,
-						    d->op0, GEN_INT (0x21)));
-		break;
-	      case E_V4DFmode:
-		emit_insn (gen_lasx_xvpermi_q_v4df (d->target, d->target,
-						    d->op0, GEN_INT (0x21)));
-		break;
-	      case E_V8SImode:
-		emit_insn (gen_lasx_xvpermi_q_v8si (d->target, d->target,
-						    d->op0, GEN_INT (0x21)));
-		break;
-	      case E_V8SFmode:
-		emit_insn (gen_lasx_xvpermi_q_v8sf (d->target, d->target,
-						    d->op0, GEN_INT (0x21)));
-		break;
-	      case E_V16HImode:
-		emit_insn (gen_lasx_xvpermi_q_v16hi (d->target, d->target,
-						     d->op0, GEN_INT (0x21)));
-		break;
-	      case E_V32QImode:
-		emit_insn (gen_lasx_xvpermi_q_v32qi (d->target, d->target,
-						     d->op0, GEN_INT (0x21)));
-		break;
-	      default:
-		break;
-	    }
-	}
-      ok = true;
-      /* Finish the funtion directly.  */
-      goto expand_perm_const_2_end;
-    }
-  else if (loongarch_is_reversing_permutation (d))
-    {
-      /* Selector sample: E_V8SImode, { 7, 6, 5, 4, 3, 2, 1, 0 }
-	 one_vector_p == true  */
-      idx = d->nelt / 2 - 1;
-      for (i = 0; i < d->nelt / 2; i += 1)
-	{
-	  remapped[i] = idx;
-	  remapped[i + d->nelt / 2] = idx;
-	  idx -= 1;
-	}
-      /* Selector after: { 3, 2, 1, 0, 3, 2, 1, 0 }
-	 Additional insn will be generated to swap hi and lo 128bit of target
-	 register.  */
-      reverse_hi_lo = true;
-    }
-  else if (loongarch_is_di_misalign_extract (d)
-	   || loongarch_is_si_misalign_extract (d))
-    {
-      /* Selector Sample:
-	 DI misalign: E_V4DImode, { 1, 2, 3, 4 }
-	 SI misalign: E_V8SImode, { 1, 2, 3, 4, 5, 6, 7, 8 }  */
-      if (!d->testing_p)
-	{
-	  /* Copy original op0/op1 value to new temp register.
-	     In some cases, operand register may be used in multiple place, so
-	     we need new regiter instead modify original one, to avoid runtime
-	     crashing or wrong value after execution.  */
-	  use_alt_op = true;
-	  op1_alt = gen_reg_rtx (d->vmode);
-	  emit_move_insn (op1_alt, d->op1);
+	  if (loongarch_expand_vselect_vconcat (d->target, d->op0, d->op1,
+						d->perm, d->nelt,
+						d->testing_p))
+	    return true;
 
-	  /* Adjust op1 for selecting correct value in high 128bit of target
+	  /* Try again with swapped operands.  */
+	  for (i = 0; i < d->nelt; ++i)
+	    perm2[i] = (d->perm[i] + d->nelt) & (2 * d->nelt - 1);
+	  if (loongarch_expand_vselect_vconcat (d->target, d->op1, d->op0,
+						perm2, d->nelt, d->testing_p))
+	    return true;
+	}
+
+      if (loongarch_is_imm_set_shuffle (d))
+	return true;
+
+      if (loongarch_expand_vec_perm_even_odd (d))
+	return true;
+
+      if (loongarch_is_lasx_lowpart_interleave (d)
+	  || loongarch_is_lasx_lowpart_interleave_2 (d)
+	  || loongarch_is_lasx_highpart_interleave (d)
+	  || loongarch_is_lasx_highpart_interleave_2 (d))
+	{
+	  if (loongarch_expand_vec_perm_interleave (d))
+	    return true;
+	}
+
+      if (loongarch_is_quad_duplicate (d))
+	{
+	  if (d->testing_p)
+	    return true;
+	  /* Selector example: E_V8SImode, { 0, 0, 0, 0, 4, 4, 4, 4 }.  */
+	  for (i = 0; i < d->nelt; i += 1)
+	    {
+	      rperm[i] = GEN_INT (d->perm[0]);
+	    }
+	  /* Selector after: { 0, 0, 0, 0, 0, 0, 0, 0 }.  */
+	  flag = true;
+	  goto expand_perm_const_end;
+	}
+
+      if (loongarch_is_extraction_permutation (d))
+	{
+	  if (d->testing_p)
+	    return true;
+	  /* Selector sample: E_V8SImode, { 0, 1, 2, 3, 4, 5, 6, 7 }.  */
+	  if (d->perm[0] == 0)
+	    {
+	      for (i = 0; i < d->nelt / 2; i += 1)
+		{
+		  remapped[i] = i;
+		  remapped[i + d->nelt / 2] = i;
+		}
+	    }
+	  else
+	    {
+	      /* { 8, 9, 10, 11, 12, 13, 14, 15 }.  */
+	      for (i = 0; i < d->nelt / 2; i += 1)
+		{
+		  idx = i + d->nelt / 2;
+		  remapped[i] = idx;
+		  remapped[i + d->nelt / 2] = idx;
+		}
+	    }
+	  /* Selector after: { 0, 1, 2, 3, 0, 1, 2, 3 }
+	     { 8, 9, 10, 11, 8, 9, 10, 11 }  */
+
+	  /* Convert remapped selector array to RTL array.  */
+	  for (i = 0; i < d->nelt; i += 1)
+	    {
+	      rperm[i] = GEN_INT (remapped[i]);
+	    }
+
+	  flag = true;
+	  goto expand_perm_const_end;
+	}
+
+      if (loongarch_is_elem_duplicate (d))
+	{
+	  if (d->testing_p)
+	    return true;
+	  /* Brocast single element (from op0 or op1) to all slot of target
 	     register.
-	     op1: E_V4DImode, { 4, 5, 6, 7 } -> { 2, 3, 4, 5 }.  */
-	  rtx conv_op1 = simplify_gen_subreg (E_V4DImode, op1_alt, d->vmode, 0);
-	  rtx conv_op0 = simplify_gen_subreg (E_V4DImode, d->op0, d->vmode, 0);
-	  emit_insn (gen_lasx_xvpermi_q_v4di (conv_op1, conv_op1,
-					      conv_op0, GEN_INT (0x21)));
-
-	  for (i = 0; i < d->nelt / 2; i += 1)
-	    {
-	      remapped[i] = d->perm[i];
-	      remapped[i + d->nelt / 2] = d->perm[i];
-	    }
-	  /* Selector after:
-	     DI misalign: { 1, 2, 1, 2 }
-	     SI misalign: { 1, 2, 3, 4, 1, 2, 3, 4 }  */
-	}
-    }
-  else if (loongarch_is_lasx_lowpart_interleave (d))
-    {
-      /* Elements from op0's low 18bit and op1's 128bit are inserted into
-	 target register alternately.
-	 sample: E_V4DImode, { 0, 4, 1, 5 }  */
-      if (!d->testing_p)
-	{
-	  /* Prepare temp register instead of modify original op.  */
-	  use_alt_op = true;
-	  op1_alt = gen_reg_rtx (d->vmode);
-	  op0_alt = gen_reg_rtx (d->vmode);
-	  emit_move_insn (op1_alt, d->op1);
-	  emit_move_insn (op0_alt, d->op0);
-
-	  /* Generate subreg for fitting into insn gen function.  */
-	  rtx conv_op1 = simplify_gen_subreg (E_V4DImode, op1_alt, d->vmode, 0);
-	  rtx conv_op0 = simplify_gen_subreg (E_V4DImode, op0_alt, d->vmode, 0);
-
-	  /* Adjust op value in temp register.
-	     op0 = {0,1,2,3}, op1 = {4,5,0,1}  */
-	  emit_insn (gen_lasx_xvpermi_q_v4di (conv_op1, conv_op1,
-					      conv_op0, GEN_INT (0x02)));
-	  /* op0 = {0,1,4,5}, op1 = {4,5,0,1}  */
-	  emit_insn (gen_lasx_xvpermi_q_v4di (conv_op0, conv_op0,
-					      conv_op1, GEN_INT (0x01)));
-
-	  /* Remap indices in selector based on the location of index inside
-	     selector, and vector element numbers in current vector mode.  */
-
-	  /* Filling low 128bit of new selector.  */
-	  for (i = 0; i < d->nelt / 2; i += 1)
-	    {
-	      /* value in odd-indexed slot of low 128bit part of selector
-		 vector.  */
-	      remapped[i] = i % 2 != 0 ? d->perm[i] - d->nelt / 2 : d->perm[i];
-	    }
-	  /* Then filling the high 128bit.  */
-	  for (i = d->nelt / 2; i < d->nelt; i += 1)
-	    {
-	      /* value in even-indexed slot of high 128bit part of
-		 selector vector.  */
-	      remapped[i] = i % 2 == 0
-		? d->perm[i] + (d->nelt / 2) * 3 : d->perm[i];
-	    }
-	}
-    }
-  else if (loongarch_is_lasx_lowpart_interleave_2 (d))
-    {
-      /* Special lowpart interleave case in V32QI vector mode.  It does the same
-	 thing as we can see in if branch that above this line.
-	 Selector sample: E_V32QImode,
-	 {0, 1, 2, 3, 4, 5, 6, 7, 32, 33, 34, 35, 36, 37, 38, 39, 8,
-	 9, 10, 11, 12, 13, 14, 15, 40, 41, 42, 43, 44, 45, 46, 47}  */
-      if (!d->testing_p)
-	{
-	  /* Solution for this case in very simple - covert op into V4DI mode,
-	     and do same thing as previous if branch.  */
-	  op1_alt = gen_reg_rtx (d->vmode);
-	  op0_alt = gen_reg_rtx (d->vmode);
-	  emit_move_insn (op1_alt, d->op1);
-	  emit_move_insn (op0_alt, d->op0);
-
-	  rtx conv_op1 = simplify_gen_subreg (E_V4DImode, op1_alt, d->vmode, 0);
-	  rtx conv_op0 = simplify_gen_subreg (E_V4DImode, op0_alt, d->vmode, 0);
-	  rtx conv_target = simplify_gen_subreg (E_V4DImode, d->target,
-						 d->vmode, 0);
-
-	  emit_insn (gen_lasx_xvpermi_q_v4di (conv_op1, conv_op1,
-					      conv_op0, GEN_INT (0x02)));
-	  emit_insn (gen_lasx_xvpermi_q_v4di (conv_op0, conv_op0,
-					      conv_op1, GEN_INT (0x01)));
-	  remapped[0] = 0;
-	  remapped[1] = 4;
-	  remapped[2] = 1;
-	  remapped[3] = 5;
-
-	  for (i = 0; i < d->nelt; i += 1)
-	    {
-	      rperm[i] = GEN_INT (remapped[i]);
-	    }
-
-	  sel = gen_rtx_CONST_VECTOR (E_V4DImode, gen_rtvec_v (4, rperm));
-	  sel = force_reg (E_V4DImode, sel);
-	  emit_insn (gen_lasx_xvshuf_d (conv_target, sel,
-					conv_op1, conv_op0));
-	}
-
-      ok = true;
-      goto expand_perm_const_2_end;
-    }
-  else if (loongarch_is_lasx_lowpart_extract (d))
-    {
-      /* Copy op0's low 128bit to target's low 128bit, and copy op1's low
-	 128bit to target's high 128bit.
-	 Selector sample: E_V4DImode, { 0, 1, 4 ,5 }  */
-      if (!d->testing_p)
-	{
-	  rtx conv_op1 = simplify_gen_subreg (E_V4DImode, d->op1, d->vmode, 0);
-	  rtx conv_op0 = simplify_gen_subreg (E_V4DImode, d->op0, d->vmode, 0);
-	  rtx conv_target = simplify_gen_subreg (E_V4DImode, d->target,
-						 d->vmode, 0);
-
-	  /* We can achieve the expectation by using sinple xvpermi.q insn.  */
-	  emit_move_insn (conv_target, conv_op1);
-	  emit_insn (gen_lasx_xvpermi_q_v4di (conv_target, conv_target,
-					      conv_op0, GEN_INT (0x20)));
-	}
-
-      ok = true;
-      goto expand_perm_const_2_end;
-    }
-  else if (loongarch_is_lasx_highpart_interleave (d))
-    {
-      /* Similar to lowpart interleave, elements from op0's high 128bit and
-	 op1's high 128bit are inserted into target regiter alternately.
-	 Selector sample: E_V8SImode, { 4, 12, 5, 13, 6, 14, 7, 15 }  */
-      if (!d->testing_p)
-	{
-	  /* Prepare temp op register.  */
-	  use_alt_op = true;
-	  op1_alt = gen_reg_rtx (d->vmode);
-	  op0_alt = gen_reg_rtx (d->vmode);
-	  emit_move_insn (op1_alt, d->op1);
-	  emit_move_insn (op0_alt, d->op0);
-
-	  rtx conv_op1 = simplify_gen_subreg (E_V4DImode, op1_alt, d->vmode, 0);
-	  rtx conv_op0 = simplify_gen_subreg (E_V4DImode, op0_alt, d->vmode, 0);
-	  /* Adjust op value in temp regiter.
-	     op0 = { 0, 1, 2, 3 }, op1 = { 6, 7, 2, 3 }  */
-	  emit_insn (gen_lasx_xvpermi_q_v4di (conv_op1, conv_op1,
-					      conv_op0, GEN_INT (0x13)));
-	  /* op0 = { 2, 3, 6, 7 }, op1 = { 6, 7, 2, 3 }  */
-	  emit_insn (gen_lasx_xvpermi_q_v4di (conv_op0, conv_op0,
-					      conv_op1, GEN_INT (0x01)));
-	  /* Remap indices in selector based on the location of index inside
-	     selector, and vector element numbers in current vector mode.  */
-
-	  /* Filling low 128bit of new selector.  */
-	 for (i = 0; i < d->nelt / 2; i += 1)
-	   {
-	     /* value in even-indexed slot of low 128bit part of selector
-		vector.  */
-	     remapped[i] = i % 2 == 0 ? d->perm[i] - d->nelt / 2 : d->perm[i];
-	   }
-	  /* Then filling the high 128bit.  */
-	 for (i = d->nelt / 2; i < d->nelt; i += 1)
-	   {
-	     /* value in odd-indexed slot of high 128bit part of selector
-		vector.  */
-	      remapped[i] = i % 2 != 0
-		? d->perm[i] - (d->nelt / 2) * 3 : d->perm[i];
-	   }
-	}
-    }
-  else if (loongarch_is_lasx_highpart_interleave_2 (d))
-    {
-      /* Special highpart interleave case in V32QI vector mode.  It does the
-	 same thing as the normal version above.
-	 Selector sample: E_V32QImode,
-	 {16, 17, 18, 19, 20, 21, 22, 23, 48, 49, 50, 51, 52, 53, 54, 55,
-	 24, 25, 26, 27, 28, 29, 30, 31, 56, 57, 58, 59, 60, 61, 62, 63}
-      */
-      if (!d->testing_p)
-	{
-	  /* Convert op into V4DImode and do the things.  */
-	  op1_alt = gen_reg_rtx (d->vmode);
-	  op0_alt = gen_reg_rtx (d->vmode);
-	  emit_move_insn (op1_alt, d->op1);
-	  emit_move_insn (op0_alt, d->op0);
-
-	  rtx conv_op1 = simplify_gen_subreg (E_V4DImode, op1_alt, d->vmode, 0);
-	  rtx conv_op0 = simplify_gen_subreg (E_V4DImode, op0_alt, d->vmode, 0);
-	  rtx conv_target = simplify_gen_subreg (E_V4DImode, d->target,
-						 d->vmode, 0);
-
-	  emit_insn (gen_lasx_xvpermi_q_v4di (conv_op1, conv_op1,
-					      conv_op0, GEN_INT (0x13)));
-	  emit_insn (gen_lasx_xvpermi_q_v4di (conv_op0, conv_op0,
-					      conv_op1, GEN_INT (0x01)));
-	  remapped[0] = 2;
-	  remapped[1] = 6;
-	  remapped[2] = 3;
-	  remapped[3] = 7;
-
-	  for (i = 0; i < d->nelt; i += 1)
-	    {
-	      rperm[i] = GEN_INT (remapped[i]);
-	    }
-
-	  sel = gen_rtx_CONST_VECTOR (E_V4DImode, gen_rtvec_v (4, rperm));
-	  sel = force_reg (E_V4DImode, sel);
-	  emit_insn (gen_lasx_xvshuf_d (conv_target, sel,
-					conv_op1, conv_op0));
-	}
-
-	ok = true;
-	goto expand_perm_const_2_end;
-    }
-  else if (loongarch_is_elem_duplicate (d))
-    {
-      /* Brocast single element (from op0 or op1) to all slot of target
-	 register.
-	 Selector sample:E_V8SImode, { 2, 2, 2, 2, 2, 2, 2, 2 }  */
-      if (!d->testing_p)
-	{
+	     Selector sample:E_V8SImode, { 2, 2, 2, 2, 2, 2, 2, 2 }  */
 	  rtx conv_op1 = simplify_gen_subreg (E_V4DImode, d->op1, d->vmode, 0);
 	  rtx conv_op0 = simplify_gen_subreg (E_V4DImode, d->op0, d->vmode, 0);
 	  rtx temp_reg = gen_reg_rtx (d->vmode);
 	  rtx conv_temp = simplify_gen_subreg (E_V4DImode, temp_reg,
 					       d->vmode, 0);
-
 	  emit_move_insn (temp_reg, d->op0);
 
 	  idx = d->perm[0];
@@ -9871,7 +9505,7 @@ loongarch_expand_vec_perm_const_2 (struct expand_vec_perm_d *d)
 	     value that we need to broardcast, because xvrepl128vei does the
 	     broardcast job from every 128bit of source register to
 	     corresponded part of target register! (A deep sigh.)  */
-	  if (/*idx >= 0 &&*/ idx < d->nelt / 2)
+	  if (idx < d->nelt / 2)
 	    {
 	      emit_insn (gen_lasx_xvpermi_q_v4di (conv_temp, conv_temp,
 						  conv_op0, GEN_INT (0x0)));
@@ -9926,310 +9560,75 @@ loongarch_expand_vec_perm_const_2 (struct expand_vec_perm_d *d)
 	      break;
 	    }
 
-	  /* finish func directly.  */
-	  ok = true;
-	  goto expand_perm_const_2_end;
+	  return true;
 	}
-    }
-  else if (loongarch_is_op_reverse_perm (d))
-    {
-      /* reverse high 128bit and low 128bit in op0.
-	 Selector sample: E_V4DFmode, { 2, 3, 0, 1 }
-	 Use xvpermi.q for doing this job.  */
-      if (!d->testing_p)
+
+expand_perm_const_end:
+      if (flag)
 	{
-	  if (d->vmode == E_V4DImode)
+	  /* Copy selector vector from memory to vector register for later insn
+	     gen function.
+	     If vector's element in floating point value, we cannot fit
+	     selector argument into insn gen function directly, because of the
+	     insn template definition.  As a solution, generate a integral mode
+	     subreg of target, then copy selector vector (that is in integral
+	     mode) to this subreg.  */
+	  switch (d->vmode)
 	    {
-	      emit_insn (gen_lasx_xvpermi_q_v4di (d->target, d->target, d->op0,
-						  GEN_INT (0x01)));
+	    case E_V4DFmode:
+	      sel = gen_rtx_CONST_VECTOR (E_V4DImode, gen_rtvec_v (d->nelt,
+								   rperm));
+	      tmp = simplify_gen_subreg (E_V4DImode, d->target, d->vmode, 0);
+	      emit_move_insn (tmp, sel);
+	      break;
+	    case E_V8SFmode:
+	      sel = gen_rtx_CONST_VECTOR (E_V8SImode, gen_rtvec_v (d->nelt,
+								   rperm));
+	      tmp = simplify_gen_subreg (E_V8SImode, d->target, d->vmode, 0);
+	      emit_move_insn (tmp, sel);
+	      break;
+	    default:
+	      sel = gen_rtx_CONST_VECTOR (d->vmode, gen_rtvec_v (d->nelt,
+								 rperm));
+	      emit_move_insn (d->target, sel);
+	      break;
 	    }
-	  else if (d->vmode == E_V4DFmode)
+
+	  target = d->target;
+	  op0 = d->op0;
+	  op1 = d->one_vector_p ? d->op0 : d->op1;
+
+	  /* We FINALLY can generate xvshuf.* insn.  */
+	  switch (d->vmode)
 	    {
-	      emit_insn (gen_lasx_xvpermi_q_v4df (d->target, d->target, d->op0,
-						  GEN_INT (0x01)));
-	    }
-	  else
-	    {
+	    case E_V4DFmode:
+	      emit_insn (gen_lasx_xvshuf_d_f (target, target, op1, op0));
+	      break;
+	    case E_V4DImode:
+	      emit_insn (gen_lasx_xvshuf_d (target, target, op1, op0));
+	      break;
+	    case E_V8SFmode:
+	      emit_insn (gen_lasx_xvshuf_w_f (target, target, op1, op0));
+	      break;
+	    case E_V8SImode:
+	      emit_insn (gen_lasx_xvshuf_w (target, target, op1, op0));
+	      break;
+	    case E_V16HImode:
+	      emit_insn (gen_lasx_xvshuf_h (target, target, op1, op0));
+	      break;
+	    case E_V32QImode:
+	      emit_insn (gen_lasx_xvshuf_b (target, op1, op0, target));
+	      break;
+	    default:
 	      gcc_unreachable ();
+	      break;
 	    }
-	}
 
-      ok = true;
-      goto expand_perm_const_2_end;
-    }
-  else if (loongarch_is_single_op_perm (d))
-    {
-      /* Permutation that only select elements from op0.  */
-      if (!d->testing_p)
-	{
-	  /* Prepare temp register instead of modify original op.  */
-	  use_alt_op = true;
-	  op0_alt = gen_reg_rtx (d->vmode);
-	  op1_alt = gen_reg_rtx (d->vmode);
-
-	  emit_move_insn (op0_alt, d->op0);
-	  emit_move_insn (op1_alt, d->op1);
-
-	  rtx conv_op0 = simplify_gen_subreg (E_V4DImode, d->op0, d->vmode, 0);
-	  rtx conv_op0a = simplify_gen_subreg (E_V4DImode, op0_alt,
-					       d->vmode, 0);
-	  rtx conv_op1a = simplify_gen_subreg (E_V4DImode, op1_alt,
-					       d->vmode, 0);
-
-	  /* Duplicate op0's low 128bit in op0, then duplicate high 128bit
-	     in op1.  After this, xvshuf.* insn's selector argument can
-	     access all elements we need for correct permutation result.  */
-	  emit_insn (gen_lasx_xvpermi_q_v4di (conv_op0a, conv_op0a, conv_op0,
-					      GEN_INT (0x00)));
-	  emit_insn (gen_lasx_xvpermi_q_v4di (conv_op1a, conv_op1a, conv_op0,
-					      GEN_INT (0x11)));
-
-	  /* In this case, there's no need to remap selector's indices.  */
-	  for (i = 0; i < d->nelt; i += 1)
-	    {
-	      remapped[i] = d->perm[i];
-	    }
-	}
-    }
-  else if (loongarch_is_divisible_perm (d))
-    {
-      /* Divisible perm:
-	 Low 128bit of selector only selects elements of op0,
-	 and high 128bit of selector only selects elements of op1.  */
-
-      if (!d->testing_p)
-	{
-	  /* Prepare temp register instead of modify original op.  */
-	  use_alt_op = true;
-	  op0_alt = gen_reg_rtx (d->vmode);
-	  op1_alt = gen_reg_rtx (d->vmode);
-
-	  emit_move_insn (op0_alt, d->op0);
-	  emit_move_insn (op1_alt, d->op1);
-
-	  rtx conv_op0a = simplify_gen_subreg (E_V4DImode, op0_alt,
-					       d->vmode, 0);
-	  rtx conv_op1a = simplify_gen_subreg (E_V4DImode, op1_alt,
-					       d->vmode, 0);
-	  rtx conv_op0 = simplify_gen_subreg (E_V4DImode, d->op0, d->vmode, 0);
-	  rtx conv_op1 = simplify_gen_subreg (E_V4DImode, d->op1, d->vmode, 0);
-
-	  /* Reorganize op0's hi/lo 128bit and op1's hi/lo 128bit, to make sure
-	     that selector's low 128bit can access all op0's elements, and
-	     selector's high 128bit can access all op1's elements.  */
-	  emit_insn (gen_lasx_xvpermi_q_v4di (conv_op0a, conv_op0a, conv_op1,
-					      GEN_INT (0x02)));
-	  emit_insn (gen_lasx_xvpermi_q_v4di (conv_op1a, conv_op1a, conv_op0,
-					      GEN_INT (0x31)));
-
-	  /* No need to modify indices.  */
-	  for (i = 0; i < d->nelt;i += 1)
-	    {
-	      remapped[i] = d->perm[i];
-	    }
-	}
-    }
-  else if (loongarch_is_triple_stride_extract (d))
-    {
-      /* Selector sample: E_V4DFmode, { 1, 4, 7, 0 }.  */
-      if (!d->testing_p)
-	{
-	  /* Resolve it with brute force modification.  */
-	  remapped[0] = 1;
-	  remapped[1] = 2;
-	  remapped[2] = 3;
-	  remapped[3] = 0;
-	}
-    }
-  else
-    {
-      /* When all of the detections above are failed, we will try last
-	 strategy.
-	 The for loop tries to detect following rules based on indices' value,
-	 its position inside of selector vector ,and strange behavior of
-	 xvshuf.* insn; Then we take corresponding action. (Replace with new
-	 value, or give up whole permutation expansion.)  */
-      for (i = 0; i < d->nelt; i += 1)
-	{
-	  /* % (2 * d->nelt)  */
-	  idx = d->perm[i];
-
-	  /* if index is located in low 128bit of selector vector.  */
-	  if (i < d->nelt / 2)
-	    {
-	      /* Fail case 1: index tries to reach element that located in op0's
-		 high 128bit.  */
-	      if (idx >= d->nelt / 2 && idx < d->nelt)
-		{
-		  goto expand_perm_const_2_end;
-		}
-	      /* Fail case 2: index tries to reach element that located in
-		 op1's high 128bit.  */
-	      if (idx >= (d->nelt + d->nelt / 2))
-		{
-		  goto expand_perm_const_2_end;
-		}
-
-	      /* Success case: index tries to reach elements that located in
-		 op1's low 128bit.  Apply - (nelt / 2) offset to original
-		 value.  */
-	      if (idx >= d->nelt && idx < (d->nelt + d->nelt / 2))
-		{
-		  idx -= d->nelt / 2;
-		}
-	    }
-	  /* if index is located in high 128bit of selector vector.  */
-	  else
-	    {
-	      /* Fail case 1: index tries to reach element that located in
-		 op1's low 128bit.  */
-	      if (idx >= d->nelt && idx < (d->nelt + d->nelt / 2))
-		{
-		  goto expand_perm_const_2_end;
-		}
-	      /* Fail case 2: index tries to reach element that located in
-		 op0's low 128bit.  */
-	      if (idx < (d->nelt / 2))
-		{
-		  goto expand_perm_const_2_end;
-		}
-	      /* Success case: index tries to reach element that located in
-		 op0's high 128bit.  */
-	      if (idx >= d->nelt / 2 && idx < d->nelt)
-		{
-		  idx -= d->nelt / 2;
-		}
-	    }
-	  /* No need to process other case that we did not mentioned.  */
-
-	  /* Assign with original or processed value.  */
-	  remapped[i] = idx;
+	  return true;
 	}
     }
 
-  ok = true;
-  /* If testing_p is true, compiler is trying to figure out that backend can
-     handle this permutation, but doesn't want to generate actual insn.  So
-     if true, exit directly.  */
-  if (d->testing_p)
-    {
-      goto expand_perm_const_2_end;
-    }
-
-  /* Convert remapped selector array to RTL array.  */
-  for (i = 0; i < d->nelt; i += 1)
-    {
-      rperm[i] = GEN_INT (remapped[i]);
-    }
-
-  /* Copy selector vector from memory to vector regiter for later insn gen
-     function.
-     If vector's element in floating point value, we cannot fit selector
-     argument into insn gen function directly, because of the insn template
-     definition.  As a solution, generate a integral mode subreg of target,
-     then copy selector vector (that is in integral mode) to this subreg.  */
-  switch (d->vmode)
-    {
-    case E_V4DFmode:
-      sel = gen_rtx_CONST_VECTOR (E_V4DImode, gen_rtvec_v (d->nelt, rperm));
-      tmp = simplify_gen_subreg (E_V4DImode, d->target, d->vmode, 0);
-      emit_move_insn (tmp, sel);
-      break;
-    case E_V8SFmode:
-      sel = gen_rtx_CONST_VECTOR (E_V8SImode, gen_rtvec_v (d->nelt, rperm));
-      tmp = simplify_gen_subreg (E_V8SImode, d->target, d->vmode, 0);
-      emit_move_insn (tmp, sel);
-      break;
-    default:
-      sel = gen_rtx_CONST_VECTOR (d->vmode, gen_rtvec_v (d->nelt, rperm));
-      emit_move_insn (d->target, sel);
-      break;
-    }
-
-  target = d->target;
-  /* If temp op registers are requested in previous if branch, then use temp
-     register intead of original one.  */
-  if (use_alt_op)
-    {
-      op0 = op0_alt != NULL_RTX ? op0_alt : d->op0;
-      op1 = op1_alt != NULL_RTX ? op1_alt : d->op1;
-    }
-  else
-    {
-      op0 = d->op0;
-      op1 = d->one_vector_p ? d->op0 : d->op1;
-    }
-
-  /* We FINALLY can generate xvshuf.* insn.  */
-  switch (d->vmode)
-    {
-    case E_V4DFmode:
-      emit_insn (gen_lasx_xvshuf_d_f (target, target, op1, op0));
-      break;
-    case E_V4DImode:
-      emit_insn (gen_lasx_xvshuf_d (target, target, op1, op0));
-      break;
-    case E_V8SFmode:
-      emit_insn (gen_lasx_xvshuf_w_f (target, target, op1, op0));
-      break;
-    case E_V8SImode:
-      emit_insn (gen_lasx_xvshuf_w (target, target, op1, op0));
-      break;
-    case E_V16HImode:
-      emit_insn (gen_lasx_xvshuf_h (target, target, op1, op0));
-      break;
-    case E_V32QImode:
-      emit_insn (gen_lasx_xvshuf_b (target, op1, op0, target));
-      break;
-    default:
-      gcc_unreachable ();
-      break;
-    }
-
-  /* Extra insn for swapping the hi/lo 128bit of target vector register.  */
-  if (reverse_hi_lo)
-    {
-      switch (d->vmode)
-	{
-	case E_V4DFmode:
-	  emit_insn (gen_lasx_xvpermi_q_v4df (d->target, d->target,
-					      d->target, GEN_INT (0x1)));
-	  break;
-	case E_V4DImode:
-	  emit_insn (gen_lasx_xvpermi_q_v4di (d->target, d->target,
-					      d->target, GEN_INT (0x1)));
-	  break;
-	case E_V8SFmode:
-	  emit_insn (gen_lasx_xvpermi_q_v8sf (d->target, d->target,
-					      d->target, GEN_INT (0x1)));
-	  break;
-	case E_V8SImode:
-	  emit_insn (gen_lasx_xvpermi_q_v8si (d->target, d->target,
-					      d->target, GEN_INT (0x1)));
-	  break;
-	case E_V16HImode:
-	  emit_insn (gen_lasx_xvpermi_q_v16hi (d->target, d->target,
-					       d->target, GEN_INT (0x1)));
-	  break;
-	case E_V32QImode:
-	  emit_insn (gen_lasx_xvpermi_q_v32qi (d->target, d->target,
-					       d->target, GEN_INT (0x1)));
-	  break;
-	default:
-	  break;
-	}
-    }
-  /* Extra insn required by odd/even extraction.  Swapping the second and third
-     64bit in target vector register.  */
-  else if (extract_ev_od)
-    {
-      rtx converted = simplify_gen_subreg (E_V4DImode, d->target, d->vmode, 0);
-      emit_insn (gen_lasx_xvpermi_d_v4di (converted, converted,
-					  GEN_INT (0xD8)));
-    }
-
-expand_perm_const_2_end:
-  return ok;
+  return false;
 }
 
 /* Implement TARGET_VECTORIZE_VEC_PERM_CONST.  */
@@ -10313,25 +9712,19 @@ loongarch_vectorize_vec_perm_const (machine_mode vmode, machine_mode op_mode,
       if (!d.one_vector_p)
 	d.op1 = gen_raw_REG (d.vmode, LAST_VIRTUAL_REGISTER + 3);
 
-      ok = loongarch_expand_vec_perm_const_2 (&d);
-      if (ok)
-	return ok;
-
       start_sequence ();
-      ok = loongarch_expand_vec_perm_const_1 (&d);
+      ok = loongarch_expand_vec_perm_const (&d);
       end_sequence ();
       return ok;
     }
 
-  ok = loongarch_expand_vec_perm_const_2 (&d);
-  if (!ok)
-    ok = loongarch_expand_vec_perm_const_1 (&d);
+  ok = loongarch_expand_vec_perm_const (&d);
 
   /* If we were given a two-vector permutation which just happened to
      have both input vectors equal, we folded this into a one-vector
      permutation.  There are several loongson patterns that are matched
      via direct vec_select+vec_concat expansion, but we do not have
-     support in loongarch_expand_vec_perm_const_1 to guess the adjustment
+     support in loongarch_expand_vec_perm_const to guess the adjustment
      that should be made for a single operand.  Just try again with
      the original permutation.  */
   if (!ok && which == 3)
@@ -10340,7 +9733,7 @@ loongarch_vectorize_vec_perm_const (machine_mode vmode, machine_mode op_mode,
       d.op1 = op1;
       d.one_vector_p = false;
       memcpy (d.perm, orig_perm, MAX_VECT_LEN);
-      ok = loongarch_expand_vec_perm_const_1 (&d);
+      ok = loongarch_expand_vec_perm_const (&d);
     }
 
   return ok;
@@ -10714,10 +10107,41 @@ loongarch_gen_const_int_vector_shuffle (machine_mode mode, int val)
 void
 loongarch_expand_vector_group_init (rtx target, rtx vals)
 {
-  rtx ops[2] = { force_reg (E_V16QImode, XVECEXP (vals, 0, 0)),
-      force_reg (E_V16QImode, XVECEXP (vals, 0, 1)) };
-  emit_insn (gen_rtx_SET (target, gen_rtx_VEC_CONCAT (E_V32QImode, ops[0],
-						      ops[1])));
+  machine_mode vmode = GET_MODE (target);
+  machine_mode half_mode = VOIDmode;
+  rtx low = XVECEXP (vals, 0, 0);
+  rtx high = XVECEXP (vals, 0, 1);
+
+  switch (vmode)
+    {
+    case E_V32QImode:
+      half_mode = V16QImode;
+      break;
+    case E_V16HImode:
+      half_mode = V8HImode;
+      break;
+    case E_V8SImode:
+      half_mode = V4SImode;
+      break;
+    case E_V4DImode:
+      half_mode = V2DImode;
+      break;
+    case E_V8SFmode:
+      half_mode = V4SFmode;
+      break;
+    case E_V4DFmode:
+      half_mode = V2DFmode;
+      break;
+    default:
+      gcc_unreachable ();
+    }
+
+  if (!register_operand (low, half_mode))
+    low = force_reg (half_mode, low);
+  if (!register_operand (high, half_mode))
+    high = force_reg (half_mode, high);
+  emit_insn (gen_rtx_SET (target,
+			  gen_rtx_VEC_CONCAT (vmode, low, high)));
 }
 
 /* Expand initialization of a vector which has all same elements.  */
@@ -11642,16 +11066,23 @@ void loongarch_emit_swdivsf (rtx res, rtx a, rtx b, machine_mode mode)
   /* x0 = 1./b estimate.  */
   emit_insn (gen_rtx_SET (x0, gen_rtx_UNSPEC (mode, gen_rtvec (1, b),
 					      unspec)));
-  /* 2.0 - b * x0  */
+  /* e0 = 2.0 - b * x0.  */
   emit_insn (gen_rtx_SET (e0, gen_rtx_FMA (mode,
 					   gen_rtx_NEG (mode, b), x0, mtwo)));
 
-  /* x0 = a * x0  */
   if (a != CONST1_RTX (mode))
-    emit_insn (gen_rtx_SET (x0, gen_rtx_MULT (mode, a, x0)));
-
-  /* res = e0 * x0  */
-  emit_insn (gen_rtx_SET (res, gen_rtx_MULT (mode, e0, x0)));
+    {
+      rtx e1 = gen_reg_rtx (mode);
+      /* e1 = a * x0.  */
+      emit_insn (gen_rtx_SET (e1, gen_rtx_MULT (mode, a, x0)));
+      /* res = e0 * e1.  */
+      emit_insn (gen_rtx_SET (res, gen_rtx_MULT (mode, e0, e1)));
+    }
+  else
+    {
+      /* res = e0 * x0.  */
+      emit_insn (gen_rtx_SET (res, gen_rtx_MULT (mode, e0, x0)));
+    }
 }
 
 static bool
@@ -11711,11 +11142,11 @@ loongarch_asm_code_end (void)
 	       loongarch_cpu_strings [la_target.cpu_tune]);
       fprintf (asm_out_file, "%s Base ISA: %s\n", ASM_COMMENT_START,
 	       loongarch_isa_base_strings [la_target.isa.base]);
-      DUMP_FEATURE (TARGET_FRECIPE);
-      DUMP_FEATURE (TARGET_DIV32);
-      DUMP_FEATURE (TARGET_LAM_BH);
-      DUMP_FEATURE (TARGET_LAMCAS);
-      DUMP_FEATURE (TARGET_LD_SEQ_SA);
+      DUMP_FEATURE (ISA_HAS_FRECIPE);
+      DUMP_FEATURE (ISA_HAS_DIV32);
+      DUMP_FEATURE (ISA_HAS_LAM_BH);
+      DUMP_FEATURE (ISA_HAS_LAMCAS);
+      DUMP_FEATURE (ISA_HAS_LD_SEQ_SA);
     }
 
   fputs ("\n\n", asm_out_file);
@@ -11732,6 +11163,10 @@ loongarch_asm_code_end (void)
 
 #undef TARGET_OPTION_OVERRIDE
 #define TARGET_OPTION_OVERRIDE loongarch_option_override
+#undef TARGET_OPTION_SAVE
+#define TARGET_OPTION_SAVE loongarch_option_save
+#undef TARGET_OPTION_RESTORE
+#define TARGET_OPTION_RESTORE loongarch_option_restore
 
 #undef TARGET_LEGITIMIZE_ADDRESS
 #define TARGET_LEGITIMIZE_ADDRESS loongarch_legitimize_address

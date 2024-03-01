@@ -1,6 +1,6 @@
 // Allocator traits -*- C++ -*-
 
-// Copyright (C) 2011-2023 Free Software Foundation, Inc.
+// Copyright (C) 2011-2024 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -37,6 +37,9 @@
 # include <ext/numeric_traits.h>
 # if _GLIBCXX_HOSTED
 #  include <bits/allocator.h>
+# endif
+# if __cpp_exceptions
+#  include <bits/stl_iterator.h> // __make_move_if_noexcept_iterator
 # endif
 #endif
 

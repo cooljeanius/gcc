@@ -1,5 +1,5 @@
 /* Top level of GCC compilers (cc1, cc1plus, etc.)
-   Copyright (C) 1987-2023 Free Software Foundation, Inc.
+   Copyright (C) 1987-2024 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -74,7 +74,10 @@ along with GCC; see the file COPYING3.  If not see
 #include "ipa-reference.h"
 #include "symbol-summary.h"
 #include "tree-vrp.h"
+#include "sreal.h"
+#include "ipa-cp.h"
 #include "ipa-prop.h"
+#include "ipa-utils.h"
 #include "gcse.h"
 #include "omp-offload.h"
 #include "edit-context.h"
@@ -1044,12 +1047,13 @@ general_init (const char *argv0, bool init_signals)
   global_dc->m_show_column
     = global_options_init.x_flag_show_column;
   global_dc->m_internal_error = internal_error_function;
+  const unsigned lang_mask = lang_hooks.option_lang_mask ();
   global_dc->set_option_hooks (option_enabled,
 			       &global_options,
 			       option_name,
 			       get_option_url,
-			       lang_hooks.option_lang_mask ());
-  global_dc->set_urlifier (make_gcc_urlifier ());
+			       lang_mask);
+  global_dc->set_urlifier (make_gcc_urlifier (lang_mask));
 
   if (init_signals)
     {
@@ -2321,11 +2325,8 @@ toplev::main (int argc, char **argv)
      emit some diagnostics here.  */
   invoke_plugin_callbacks (PLUGIN_FINISH, NULL);
 
-  if (flag_diagnostics_generate_patch)
+  if (auto edit_context_ptr = global_dc->get_edit_context ())
     {
-      auto edit_context_ptr = global_dc->get_edit_context ();
-      gcc_assert (edit_context_ptr);
-
       pretty_printer pp;
       pp_show_color (&pp) = pp_show_color (global_dc->printer);
       edit_context_ptr->print_diff (&pp, true);
@@ -2358,7 +2359,11 @@ toplev::finalize (void)
   ipa_fnsummary_cc_finalize ();
   ipa_modref_cc_finalize ();
   ipa_edge_modifications_finalize ();
+  ipa_icf_cc_finalize ();
 
+  ipa_prop_cc_finalize ();
+  ipa_profile_cc_finalize ();
+  ipa_sra_cc_finalize ();
   cgraph_cc_finalize ();
   cgraphunit_cc_finalize ();
   symtab_thunks_cc_finalize ();

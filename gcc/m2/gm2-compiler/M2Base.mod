@@ -1,6 +1,6 @@
 (* M2Base.mod provides a mechanism to check fundamental types.
 
-Copyright (C) 2001-2023 Free Software Foundation, Inc.
+Copyright (C) 2001-2024 Free Software Foundation, Inc.
 Contributed by Gaius Mulley <gaius.mulley@southwales.ac.uk>.
 
 This file is part of GNU Modula-2.
@@ -85,7 +85,8 @@ FROM M2Size IMPORT Size, MakeSize ;
 FROM M2System IMPORT Address, Byte, Word, System, Loc, InitSystem,
                      IntegerN, CardinalN, WordN, SetN, RealN, ComplexN,
                      IsCardinalN, IsIntegerN, IsRealN, IsComplexN,
-                     IsGenericSystemType, IsSameSizePervasiveType ;
+                     IsGenericSystemType, IsSameSizePervasiveType,
+                     IsSystemType ;
 
 FROM M2Options IMPORT NilChecking,
                       WholeDivChecking, WholeValueChecking,
@@ -1990,7 +1991,7 @@ BEGIN
    mt2 := FindMetaType(t2) ;
    CASE Expr[mt1, mt2] OF
 
-   no        :  MetaErrorT2 (NearTok, 'type incompatibility between {%1as} and {%2as}', t1, t2) ;
+   no        :  MetaErrorT2 (NearTok, 'type incompatibility between {%1asd} and {%2asd}', t1, t2) ;
                 FlushErrors  (* unrecoverable at present *) |
    warnfirst,
    first     :  RETURN( t1 ) |
@@ -2002,6 +2003,16 @@ BEGIN
    END ;
    RETURN MakeError (NearTok, NulName)
 END MixMetaTypes ;
+
+
+(*
+   IsUserType - return TRUE if type was created by the user as a synonym.
+*)
+
+PROCEDURE IsUserType (type: CARDINAL) : BOOLEAN ;
+BEGIN
+   RETURN IsType (type) AND (NOT IsBaseType (type)) AND (NOT IsSystemType (type))
+END IsUserType ;
 
 
 (*
@@ -2074,10 +2085,10 @@ BEGIN
       ELSE
          RETURN( CType )
       END
-   ELSIF IsType(t1)
+   ELSIF IsUserType (t1)
    THEN
       RETURN( MixTypes(GetType(t1), t2, NearTok) )
-   ELSIF IsType(t2)
+   ELSIF IsUserType (t2)
    THEN
       RETURN( MixTypes(t1, GetType(t2), NearTok) )
    ELSIF (t1=GetLowestType(t1)) AND (t2=GetLowestType(t2))

@@ -1,5 +1,5 @@
 /* Backend function setup
-   Copyright (C) 2002-2023 Free Software Foundation, Inc.
+   Copyright (C) 2002-2024 Free Software Foundation, Inc.
    Contributed by Paul Brook
 
 This file is part of GCC.
@@ -1524,6 +1524,10 @@ add_attributes_to_decl (symbol_attribute sym_attr, tree list)
 	   || sym_attr.oacc_declare_deviceptr
 	   || sym_attr.oacc_declare_device_resident)
     list = tree_cons (get_identifier ("omp declare target"),
+		      clauses, list);
+
+  if (sym_attr.omp_declare_target_indirect)
+    list = tree_cons (get_identifier ("omp declare target indirect"),
 		      clauses, list);
 
   return list;

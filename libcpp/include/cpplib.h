@@ -1,5 +1,5 @@
 /* Definitions for CPP library.
-   Copyright (C) 1995-2023 Free Software Foundation, Inc.
+   Copyright (C) 1995-2024 Free Software Foundation, Inc.
    Written by Per Bothner, 1994-95.
 
 This program is free software; you can redistribute it and/or modify it
@@ -200,6 +200,7 @@ struct GTY(()) cpp_string {
 #define DECIMAL_INT     (1 << 6) /* Decimal integer, set in c-lex.cc.  */
 #define PURE_ZERO	(1 << 7) /* Single 0 digit, used by the C++ frontend,
 				    set in c-lex.cc.  */
+#define COLON_SCOPE	PURE_ZERO /* Adjacent colons in C < 23.  */
 #define SP_DIGRAPH	(1 << 8) /* # or ## token was a digraph.  */
 #define SP_PREV_WHITE	(1 << 9) /* If whitespace before a ##
 				    operator, or before this token
@@ -1630,5 +1631,12 @@ bool cpp_valid_utf8_p (const char *data, size_t num_bytes);
 
 bool cpp_is_combining_char (cppchar_t c);
 bool cpp_is_printable_char (cppchar_t c);
+
+enum cpp_xid_property {
+  CPP_XID_START = 1,
+  CPP_XID_CONTINUE = 2
+};
+
+unsigned int cpp_check_xid_property (cppchar_t c);
 
 #endif /* ! LIBCPP_CPPLIB_H */

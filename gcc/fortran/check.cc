@@ -1,5 +1,5 @@
 /* Check functions
-   Copyright (C) 2002-2023 Free Software Foundation, Inc.
+   Copyright (C) 2002-2024 Free Software Foundation, Inc.
    Contributed by Andy Vaught & Katherine Holcomb
 
 This file is part of GCC.
@@ -6298,8 +6298,8 @@ gfc_check_transfer (gfc_expr *source, gfc_expr *mold, gfc_expr *size)
   if (source_size < result_size)
     gfc_warning (OPT_Wsurprising,
 		 "Intrinsic TRANSFER at %L has partly undefined result: "
-		 "source size %ld < result size %ld", &source->where,
-		 (long) source_size, (long) result_size);
+		 "source size %zd < result size %zd", &source->where,
+		 source_size, result_size);
 
   return true;
 }

@@ -1,5 +1,5 @@
 /* Data flow functions for trees.
-   Copyright (C) 2001-2023 Free Software Foundation, Inc.
+   Copyright (C) 2001-2024 Free Software Foundation, Inc.
    Contributed by Diego Novillo <dnovillo@redhat.com>
 
 This file is part of GCC.
@@ -230,9 +230,10 @@ dump_dfa_stats (FILE *file)
   fprintf (file, "\n");
 
   if (dfa_stats.num_phis)
-    fprintf (file, "Average number of arguments per PHI node: %.1f (max: %ld)\n",
+    fprintf (file, "Average number of arguments per PHI node: %.1f (max: "
+	     HOST_SIZE_T_PRINT_DEC ")\n",
 	     (float) dfa_stats.num_phi_args / (float) dfa_stats.num_phis,
-	     (long) dfa_stats.max_num_phi_args);
+	     (fmt_size_t) dfa_stats.max_num_phi_args);
 
   fprintf (file, "\n");
 }

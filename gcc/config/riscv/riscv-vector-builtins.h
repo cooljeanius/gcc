@@ -1,5 +1,5 @@
 /* Builtins definitions for RISC-V 'V' Extension for GNU compiler.
-   Copyright (C) 2022-2023 Free Software Foundation, Inc.
+   Copyright (C) 2022-2024 Free Software Foundation, Inc.
    Contributed by Ju-Zhe Zhong (juzhe.zhong@rivai.ai), RiVAI Technologies Ltd.
 
    This file is part of GCC.
@@ -123,6 +123,7 @@ enum required_ext
   ZVKNHB_EXT,  /* Crypto vector Zvknhb sub-ext */
   ZVKSED_EXT,  /* Crypto vector Zvksed sub-ext */
   ZVKSH_EXT,   /* Crypto vector Zvksh sub-ext */
+  XTHEADVECTOR_EXT,   /* XTheadVector extension */
 };
 
 /* Enumerates the RVV operand types.  */
@@ -252,6 +253,8 @@ struct function_group_info
         return TARGET_ZVKSED;
       case ZVKSH_EXT:
         return TARGET_ZVKSH;
+      case XTHEADVECTOR_EXT:
+	return TARGET_XTHEADVECTOR;
       default:
         gcc_unreachable ();
     }

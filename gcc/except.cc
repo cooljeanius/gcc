@@ -1,5 +1,5 @@
 /* Implements exception handling.
-   Copyright (C) 1989-2023 Free Software Foundation, Inc.
+   Copyright (C) 1989-2024 Free Software Foundation, Inc.
    Contributed by Mike Stump <mrs@cygnus.com>.
 
 This file is part of GCC.
@@ -2166,6 +2166,9 @@ expand_builtin_eh_return_data_regno (tree exp)
       error ("argument of %<__builtin_eh_return_regno%> must be constant");
       return constm1_rtx;
     }
+
+  if (!tree_fits_uhwi_p (which))
+    return constm1_rtx;
 
   iwhich = tree_to_uhwi (which);
   iwhich = EH_RETURN_DATA_REGNO (iwhich);

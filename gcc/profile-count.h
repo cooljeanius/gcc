@@ -1,5 +1,5 @@
 /* Profile counter container type.
-   Copyright (C) 2017-2023 Free Software Foundation, Inc.
+   Copyright (C) 2017-2024 Free Software Foundation, Inc.
    Contributed by Jan Hubicka
 
 This file is part of GCC.
@@ -1298,9 +1298,6 @@ public:
 
   /* Output THIS to F.  */
   void dump (FILE *f, struct function *fun = NULL) const;
-
-  /* Output THIS to BUFFER.  */
-  void dump (char *buffer, struct function *fun = NULL) const;
 
   /* Print THIS to stderr.  */
   void debug () const;

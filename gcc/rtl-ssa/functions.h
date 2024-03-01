@@ -1,5 +1,5 @@
 // Function-related RTL SSA classes                                 -*- C++ -*-
-// Copyright (C) 2020-2023 Free Software Foundation, Inc.
+// Copyright (C) 2020-2024 Free Software Foundation, Inc.
 //
 // This file is part of GCC.
 //
@@ -72,6 +72,13 @@ public:
   set_info *create_set (obstack_watermark &watermark,
 			insn_info *insn,
 			resource_info resource);
+
+  // Create a temporary use of SET as part of a change to INSN.
+  // SET can be a pre-existing definition or one that is being created
+  // as part of the same change group.
+  use_info *create_use (obstack_watermark &watermark,
+			insn_info *insn,
+			set_info *set);
 
   // Create a temporary insn with code INSN_CODE and pattern PAT.
   insn_info *create_insn (obstack_watermark &watermark,
@@ -294,8 +301,10 @@ private:
   void process_uses_of_deleted_def (set_info *);
   insn_info *add_placeholder_after (insn_info *);
   void possibly_queue_changes (insn_change &);
-  void finalize_new_accesses (insn_change &, insn_info *);
-  void apply_changes_to_insn (insn_change &);
+  void finalize_new_accesses (insn_change &, insn_info *,
+			      hash_set<def_info *> &);
+  void apply_changes_to_insn (insn_change &,
+			      hash_set<def_info *> &);
 
   void init_function_data ();
   void calculate_potential_phi_regs (build_info &);

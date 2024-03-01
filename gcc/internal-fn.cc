@@ -1,5 +1,5 @@
 /* Internal functions.
-   Copyright (C) 2011-2023 Free Software Foundation, Inc.
+   Copyright (C) 2011-2024 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -52,6 +52,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "explow.h"
 #include "rtl-iter.h"
 #include "gimple-range.h"
+#include "fold-const-call.h"
 
 /* For lang_hooks.types.type_for_mode.  */
 #include "langhooks.h"
@@ -5107,9 +5108,63 @@ expand_BITINTTOFLOAT (internal_fn, gcall *stmt)
     emit_move_insn (target, val);
 }
 
+static bool
+expand_bitquery (internal_fn fn, gcall *stmt)
+{
+  tree lhs = gimple_call_lhs (stmt);
+  if (lhs == NULL_TREE)
+    return false;
+  tree arg = gimple_call_arg (stmt, 0);
+  if (TREE_CODE (arg) == INTEGER_CST)
+    {
+      tree ret = fold_const_call (as_combined_fn (fn), TREE_TYPE (arg), arg);
+      gcc_checking_assert (ret && TREE_CODE (ret) == INTEGER_CST);
+      expand_assignment (lhs, ret, false);
+      return false;
+    }
+  return true;
+}
+
+void
+expand_CLRSB (internal_fn fn, gcall *stmt)
+{
+  if (expand_bitquery (fn, stmt))
+    expand_unary_optab_fn (fn, stmt, clrsb_optab);
+}
+
+void
+expand_CLZ (internal_fn fn, gcall *stmt)
+{
+  if (expand_bitquery (fn, stmt))
+    expand_unary_optab_fn (fn, stmt, clz_optab);
+}
+
+void
+expand_CTZ (internal_fn fn, gcall *stmt)
+{
+  if (expand_bitquery (fn, stmt))
+    expand_unary_optab_fn (fn, stmt, ctz_optab);
+}
+
+void
+expand_FFS (internal_fn fn, gcall *stmt)
+{
+  if (expand_bitquery (fn, stmt))
+    expand_unary_optab_fn (fn, stmt, ffs_optab);
+}
+
+void
+expand_PARITY (internal_fn fn, gcall *stmt)
+{
+  if (expand_bitquery (fn, stmt))
+    expand_unary_optab_fn (fn, stmt, parity_optab);
+}
+
 void
 expand_POPCOUNT (internal_fn fn, gcall *stmt)
 {
+  if (!expand_bitquery (fn, stmt))
+    return;
   if (gimple_call_num_args (stmt) == 1)
     {
       expand_unary_optab_fn (fn, stmt, popcount_optab);
@@ -5118,10 +5173,13 @@ expand_POPCOUNT (internal_fn fn, gcall *stmt)
   /* If .POPCOUNT call has 2 arguments, match_single_bit_test marked it
      because the result is only used in an equality comparison against 1.
      Use rtx costs in that case to determine if .POPCOUNT (arg) == 1
-     or (arg ^ (arg - 1)) > arg - 1 is cheaper.  */
+     or (arg ^ (arg - 1)) > arg - 1 is cheaper.
+     If .POPCOUNT second argument is 0, we additionally know that arg
+     is non-zero, so use arg & (arg - 1) == 0 instead.  */
   bool speed_p = optimize_insn_for_speed_p ();
   tree lhs = gimple_call_lhs (stmt);
   tree arg = gimple_call_arg (stmt, 0);
+  bool nonzero_arg = integer_zerop (gimple_call_arg (stmt, 1));
   tree type = TREE_TYPE (arg);
   machine_mode mode = TYPE_MODE (type);
   do_pending_stack_adjust ();
@@ -5147,11 +5205,15 @@ expand_POPCOUNT (internal_fn fn, gcall *stmt)
 				   1, OPTAB_DIRECT);
   if (argm1 == NULL_RTX)
     goto fail;
-  rtx argxorargm1 = expand_simple_binop (mode, XOR, op0, argm1, NULL_RTX,
-					 1, OPTAB_DIRECT);
+  rtx argxorargm1 = expand_simple_binop (mode, nonzero_arg ? AND : XOR, op0,
+					 argm1, NULL_RTX, 1, OPTAB_DIRECT);
   if (argxorargm1 == NULL_RTX)
     goto fail;
-  rtx cmp = emit_store_flag (NULL_RTX, GTU, argxorargm1, argm1, mode, 1, 1);
+  rtx cmp;
+  if (nonzero_arg)
+    cmp = emit_store_flag (NULL_RTX, EQ, argxorargm1, const0_rtx, mode, 1, 1);
+  else
+    cmp = emit_store_flag (NULL_RTX, GTU, argxorargm1, argm1, mode, 1, 1);
   if (cmp == NULL_RTX)
     goto fail;
   rtx_insn *cmp_insns = get_insns ();

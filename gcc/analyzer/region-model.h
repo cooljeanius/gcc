@@ -1,5 +1,5 @@
 /* Classes for modeling the state of memory.
-   Copyright (C) 2019-2023 Free Software Foundation, Inc.
+   Copyright (C) 2019-2024 Free Software Foundation, Inc.
    Contributed by David Malcolm <dmalcolm@redhat.com>.
 
 This file is part of GCC.
@@ -347,10 +347,10 @@ class region_model
   void update_for_return_gcall (const gcall *call_stmt,
                                 region_model_context *ctxt);
 
-  const region *push_frame (function *fun, const vec<const svalue *> *arg_sids,
+  const region *push_frame (const function &fun, const vec<const svalue *> *arg_sids,
 			    region_model_context *ctxt);
   const frame_region *get_current_frame () const { return m_current_frame; }
-  function * get_current_function () const;
+  const function *get_current_function () const;
   void pop_frame (tree result_lvalue,
 		  const svalue **out_result,
 		  region_model_context *ctxt,
@@ -486,6 +486,10 @@ class region_model
 					  tree expr,
 					  const svalue **out_sval,
 					  region_model_context *ctxt) const;
+  const svalue *scan_for_null_terminator_1 (const region *reg,
+					    tree expr,
+					    const svalue **out_sval,
+					    region_model_context *ctxt) const;
 
   bool region_exists_p (const region *reg) const;
 

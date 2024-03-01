@@ -1,7 +1,7 @@
-/* General types and functions that are uselful for processing of OpenMP,
-   OpenACC and similar directivers at various stages of compilation.
+/* General types and functions that are useful for processing of OpenMP,
+   OpenACC and similar directives at various stages of compilation.
 
-   Copyright (C) 2005-2023 Free Software Foundation, Inc.
+   Copyright (C) 2005-2024 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -18,8 +18,6 @@ for more details.
 You should have received a copy of the GNU General Public License
 along with GCC; see the file COPYING3.  If not see
 <http://www.gnu.org/licenses/>.  */
-
-/* Find an OMP clause of type KIND within CLAUSES.  */
 
 #include "config.h"
 #include "system.h"
@@ -45,11 +43,11 @@ along with GCC; see the file COPYING3.  If not see
 #include "data-streamer.h"
 #include "streamer-hooks.h"
 #include "opts.h"
-#include "omp-general.h"
 #include "tree-pretty-print.h"
 
 enum omp_requires omp_requires_mask;
 
+/* Find an OMP clause of type KIND within CLAUSES.  */
 tree
 omp_find_clause (tree clauses, enum omp_clause_code kind)
 {
@@ -117,7 +115,8 @@ omp_adjust_for_condition (location_t loc, enum tree_code *cond_code, tree *n2,
 
     case NE_EXPR:
       gcc_assert (TREE_CODE (step) == INTEGER_CST);
-      if (TREE_CODE (TREE_TYPE (v)) == INTEGER_TYPE)
+      if (TREE_CODE (TREE_TYPE (v)) == INTEGER_TYPE
+	  || TREE_CODE (TREE_TYPE (v)) == BITINT_TYPE)
 	{
 	  if (integer_onep (step))
 	    *cond_code = LT_EXPR;
@@ -411,6 +410,7 @@ omp_extract_for_data (gomp_for *for_stmt, struct omp_for_data *fd,
       loop->v = gimple_omp_for_index (for_stmt, i);
       gcc_assert (SSA_VAR_P (loop->v));
       gcc_assert (TREE_CODE (TREE_TYPE (loop->v)) == INTEGER_TYPE
+		  || TREE_CODE (TREE_TYPE (loop->v)) == BITINT_TYPE
 		  || TREE_CODE (TREE_TYPE (loop->v)) == POINTER_TYPE);
       var = TREE_CODE (loop->v) == SSA_NAME ? SSA_NAME_VAR (loop->v) : loop->v;
       loop->n1 = gimple_omp_for_initial (for_stmt, i);
@@ -481,9 +481,17 @@ omp_extract_for_data (gomp_for *for_stmt, struct omp_for_data *fd,
 	  else if (i == 0
 		   || TYPE_PRECISION (iter_type)
 		      < TYPE_PRECISION (TREE_TYPE (loop->v)))
-	    iter_type
-	      = build_nonstandard_integer_type
-		  (TYPE_PRECISION (TREE_TYPE (loop->v)), 1);
+	    {
+	      if (TREE_CODE (iter_type) == BITINT_TYPE
+		  || TREE_CODE (TREE_TYPE (loop->v)) == BITINT_TYPE)
+		iter_type
+		  = build_bitint_type (TYPE_PRECISION (TREE_TYPE (loop->v)),
+				       1);
+	      else
+		iter_type
+		  = build_nonstandard_integer_type
+			(TYPE_PRECISION (TREE_TYPE (loop->v)), 1);
+	    }
 	}
       else if (iter_type != long_long_unsigned_type_node)
 	{
@@ -749,7 +757,8 @@ omp_extract_for_data (gomp_for *for_stmt, struct omp_for_data *fd,
 	  if (t && integer_zerop (t))
 	    count = build_zero_cst (long_long_unsigned_type_node);
 	  else if ((i == 0 || count != NULL_TREE)
-		   && TREE_CODE (TREE_TYPE (loop->v)) == INTEGER_TYPE
+		   && (TREE_CODE (TREE_TYPE (loop->v)) == INTEGER_TYPE
+		       || TREE_CODE (TREE_TYPE (loop->v)) == BITINT_TYPE)
 		   && TREE_CONSTANT (loop->n1)
 		   && TREE_CONSTANT (loop->n2)
 		   && TREE_CODE (loop->step) == INTEGER_CST)
@@ -1154,7 +1163,7 @@ struct omp_ts_info omp_ts_map[] =
    },
    { "device_num",
      (1 << OMP_TRAIT_SET_TARGET_DEVICE),
-     OMP_TRAIT_PROPERTY_EXPR, false,
+     OMP_TRAIT_PROPERTY_DEV_NUM_EXPR, false,
      NULL
    },
    { "vendor",
@@ -1199,7 +1208,7 @@ struct omp_ts_info omp_ts_map[] =
    },
    { "condition",
      (1 << OMP_TRAIT_SET_USER),
-     OMP_TRAIT_PROPERTY_EXPR, true,
+     OMP_TRAIT_PROPERTY_BOOL_EXPR, true,
      NULL
    },
    { "target",
@@ -1234,7 +1243,7 @@ struct omp_ts_info omp_ts_map[] =
 /* Return a name from PROP, a property in selectors accepting
    name lists.  */
 
-static const char *
+const char *
 omp_context_name_list_prop (tree prop)
 {
   gcc_assert (OMP_TP_NAME (prop) == OMP_TP_NAMELIST_NODE);
@@ -2874,9 +2883,8 @@ oacc_launch_pack (unsigned code, tree device, unsigned op)
   return res;
 }
 
-/* FIXME: What is the following comment for? */
-/* Look for compute grid dimension clauses and convert to an attribute
-   attached to FN.  This permits the target-side code to (a) massage
+/* Openacc compute grid dimension clauses are converted to an attribute
+   attached to the function.  This permits the target-side code to (a) massage
    the dimensions, (b) emit that data and (c) optimize.  Non-constant
    dimensions are pushed onto ARGS.
 
@@ -2890,9 +2898,8 @@ oacc_launch_pack (unsigned code, tree device, unsigned op)
    dimensions, keyed by the device type.  The first entry will be the
    default.  Well, that's the plan.  */
 
-/* Replace any existing oacc fn attribute with updated dimensions.  */
-
-/* Variant working on a list of attributes.  */
+/* Replace any existing oacc fn attribute in ATTRIBS with updated
+   dimensions.  */
 
 tree
 oacc_replace_fn_attrib_attr (tree attribs, tree dims)
@@ -2905,7 +2912,8 @@ oacc_replace_fn_attrib_attr (tree attribs, tree dims)
   return tree_cons (ident, dims, attribs);
 }
 
-/* Variant working on a function decl.  */
+/* Replace any existing oacc fn attribute on FN with updated
+   dimensions.  */
 
 void
 oacc_replace_fn_attrib (tree fn, tree dims)

@@ -1,5 +1,5 @@
 /* Optimize by combining instructions for GNU compiler.
-   Copyright (C) 1987-2023 Free Software Foundation, Inc.
+   Copyright (C) 1987-2024 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -8227,12 +8227,20 @@ make_compound_operation_int (scalar_int_mode mode, rtx *x_ptr,
 	  int sub_width;
 	  if ((REG_P (sub) || MEM_P (sub))
 	      && GET_MODE_PRECISION (sub_mode).is_constant (&sub_width)
-	      && sub_width < mode_width)
+	      && sub_width < mode_width
+	      && (!WORD_REGISTER_OPERATIONS
+		  || sub_width >= BITS_PER_WORD
+		  /* On WORD_REGISTER_OPERATIONS targets the bits
+		     beyond sub_mode aren't considered undefined,
+		     so optimize only if it is a MEM load when MEM loads
+		     zero extend, because then the upper bits are all zero.  */
+		  || (MEM_P (sub)
+		      && load_extend_op (sub_mode) == ZERO_EXTEND)))
 	    {
 	      unsigned HOST_WIDE_INT mode_mask = GET_MODE_MASK (sub_mode);
 	      unsigned HOST_WIDE_INT mask;
 
-	      /* original AND constant with all the known zero bits set */
+	      /* Original AND constant with all the known zero bits set.  */
 	      mask = UINTVAL (XEXP (x, 1)) | (~nonzero_bits (sub, sub_mode));
 	      if ((mask & mode_mask) == mode_mask)
 		{
@@ -9737,7 +9745,7 @@ make_field_assignment (rtx x)
       if (width >= HOST_BITS_PER_WIDE_INT)
 	ze_mask = -1;
       else
-	ze_mask = ((unsigned HOST_WIDE_INT)1 << width) - 1;
+	ze_mask = (HOST_WIDE_INT_1U << width) - 1;
 
       /* Complete overlap.  We can remove the source AND.  */
       if ((and_mask & ze_mask) == ze_mask)

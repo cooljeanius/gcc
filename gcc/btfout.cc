@@ -1,5 +1,5 @@
 /* Output BTF format from GCC.
-   Copyright (C) 2021-2023 Free Software Foundation, Inc.
+   Copyright (C) 2021-2024 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -35,6 +35,8 @@ along with GCC; see the file COPYING3.  If not see
 #include "diagnostic-core.h"
 #include "cgraph.h"
 #include "varasm.h"
+#include "stringpool.h"  /* For lookup_attribute.  */
+#include "attribs.h" /* For lookup_attribute.  */
 #include "dwarf2out.h" /* For lookup_decl_die.  */
 
 static int btf_label_num;
@@ -440,6 +442,11 @@ btf_collect_datasec (ctf_container_ref ctfc)
       if (dtd == NULL)
 	continue;
 
+      if (DECL_EXTERNAL (func->decl)
+	  && (lookup_attribute ("kernel_helper",
+				DECL_ATTRIBUTES (func->decl))) != NULL_TREE)
+	continue;
+
       /* Functions actually get two types: a BTF_KIND_FUNC_PROTO, and
 	 also a BTF_KIND_FUNC.  But the CTF container only allocates one
 	 type per function, which matches closely with BTF_KIND_FUNC_PROTO.
@@ -450,7 +457,8 @@ btf_collect_datasec (ctf_container_ref ctfc)
       func_dtd->dtd_data.ctti_type = dtd->dtd_type;
       func_dtd->linkage = dtd->linkage;
       func_dtd->dtd_name = dtd->dtd_name;
-      func_dtd->dtd_type = num_types_added + num_types_created;
+      /* +1 for the sentinel type not in the types map.  */
+      func_dtd->dtd_type = num_types_added + num_types_created + 1;
 
       /* Only the BTF_KIND_FUNC type actually references the name. The
 	 BTF_KIND_FUNC_PROTO is always anonymous.  */
@@ -473,8 +481,7 @@ btf_collect_datasec (ctf_container_ref ctfc)
 
 	  struct btf_var_secinfo info;
 
-	  /* +1 for the sentinel type not in the types map.  */
-	  info.type = func_dtd->dtd_type + 1;
+	  info.type = func_dtd->dtd_type;
 
 	  /* Both zero at compile time.  */
 	  info.size = 0;
@@ -1105,17 +1112,20 @@ static void
 output_btf_strs (ctf_container_ref ctfc)
 {
   ctf_string_t * ctf_string = ctfc->ctfc_strtable.ctstab_head;
+  static int str_pos = 0;
 
   while (ctf_string)
     {
-      dw2_asm_output_nstring (ctf_string->cts_str, -1, "btf_string");
+      dw2_asm_output_nstring (ctf_string->cts_str, -1, "btf_string, str_pos = 0x%x", str_pos);
+      str_pos += strlen(ctf_string->cts_str) + 1;
       ctf_string = ctf_string->cts_next;
     }
 
   ctf_string = ctfc->ctfc_aux_strtable.ctstab_head;
   while (ctf_string)
     {
-      dw2_asm_output_nstring (ctf_string->cts_str, -1, "btf_aux_string");
+      dw2_asm_output_nstring (ctf_string->cts_str, -1, "btf_aux_string, str_pos = 0x%x", str_pos);
+      str_pos += strlen(ctf_string->cts_str) + 1;
       ctf_string = ctf_string->cts_next;
     }
 }
@@ -1266,8 +1276,10 @@ output_btf_types (ctf_container_ref ctfc)
 static void
 output_btf_func_types (ctf_container_ref ctfc)
 {
-  for (size_t i = 0; i < vec_safe_length (funcs); i++)
-    btf_asm_func_type (ctfc, (*funcs)[i], i);
+  ctf_dtdef_ref ref;
+  unsigned i;
+  FOR_EACH_VEC_ELT (*funcs, i, ref)
+    btf_asm_func_type (ctfc, ref, i);
 }
 
 /* Output all BTF_KIND_DATASEC records.  */
@@ -1440,6 +1452,22 @@ btf_finalize (void)
   ctf_container_ref tu_ctfc = ctf_get_tu_ctfc ();
   ctfc_delete_container (tu_ctfc);
   tu_ctfc = NULL;
+}
+
+/* Traversal function for all BTF_KIND_FUNC type records.  */
+
+bool
+traverse_btf_func_types (funcs_traverse_callback callback, void *data)
+{
+  ctf_dtdef_ref ref;
+  unsigned i;
+  FOR_EACH_VEC_ELT (*funcs, i, ref)
+    {
+      bool stop = callback (ref, data);
+      if (stop == true)
+	return true;
+    }
+  return false;
 }
 
 #include "gt-btfout.h"

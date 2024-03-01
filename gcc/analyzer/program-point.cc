@@ -1,5 +1,5 @@
 /* Classes for representing locations within the program.
-   Copyright (C) 2019-2023 Free Software Foundation, Inc.
+   Copyright (C) 2019-2024 Free Software Foundation, Inc.
    Contributed by David Malcolm <dmalcolm@redhat.com>.
 
 This file is part of GCC.
@@ -230,7 +230,7 @@ function_point::final_stmt_p () const
 /* Create a function_point representing the entrypoint of function FUN.  */
 
 function_point
-function_point::from_function_entry (const supergraph &sg, function *fun)
+function_point::from_function_entry (const supergraph &sg, const function &fun)
 {
   return before_supernode (sg.get_node_for_function_entry (fun), NULL);
 }
@@ -698,7 +698,7 @@ program_point::origin (const region_model_manager &mgr)
 program_point
 program_point::from_function_entry (const region_model_manager &mgr,
 				    const supergraph &sg,
-				    function *fun)
+				    const function &fun)
 {
   return program_point (function_point::from_function_entry (sg, fun),
 			mgr.get_empty_call_string ());

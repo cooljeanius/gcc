@@ -1,5 +1,5 @@
 /* Pipeline hazard description translator.
-   Copyright (C) 2000-2023 Free Software Foundation, Inc.
+   Copyright (C) 2000-2024 Free Software Foundation, Inc.
 
    Written by Vladimir Makarov <vmakarov@redhat.com>
 
@@ -3416,13 +3416,13 @@ finish_alt_states (void)
 
 /* Set bit number bitno in the bit string.  The macro is not side
    effect proof.  */
-#define bitmap_set_bit(bitstring, bitno)					  \
+#define bitmap_set_bit(bitstring, bitno)				  \
   ((bitstring)[(bitno) / (sizeof (*(bitstring)) * CHAR_BIT)] |=		  \
-	(HOST_WIDE_INT)1 << (bitno) % (sizeof (*(bitstring)) * CHAR_BIT))
+	HOST_WIDE_INT_1 << (bitno) % (sizeof (*(bitstring)) * CHAR_BIT))
 
 #define CLEAR_BIT(bitstring, bitno)					  \
   ((bitstring)[(bitno) / (sizeof (*(bitstring)) * CHAR_BIT)] &=		  \
-	~((HOST_WIDE_INT)1 << (bitno) % (sizeof (*(bitstring)) * CHAR_BIT)))
+	~(HOST_WIDE_INT_1 << (bitno) % (sizeof (*(bitstring)) * CHAR_BIT)))
 
 /* Test if bit number bitno in the bitstring is set.  The macro is not
    side effect proof.  */

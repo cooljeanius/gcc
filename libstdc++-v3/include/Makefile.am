@@ -1,6 +1,6 @@
 ## Makefile for the include subdirectory of the GNU C++ Standard library.
 ##
-## Copyright (C) 2001-2023 Free Software Foundation, Inc.
+## Copyright (C) 2001-2024 Free Software Foundation, Inc.
 ##
 ## This file is part of the libstdc++ version 3 distribution.
 ## Process this file with automake to produce Makefile.in.
@@ -104,6 +104,7 @@ std_headers = \
 	${std_srcdir}/streambuf \
 	${std_srcdir}/string \
 	${std_srcdir}/system_error \
+	${std_srcdir}/text_encoding \
 	${std_srcdir}/thread \
 	${std_srcdir}/unordered_map \
 	${std_srcdir}/unordered_set \
@@ -159,8 +160,11 @@ bits_freestanding = \
 	${bits_srcdir}/stl_raw_storage_iter.h \
 	${bits_srcdir}/stl_relops.h \
 	${bits_srcdir}/stl_uninitialized.h \
+	${bits_srcdir}/text_encoding-data.h \
 	${bits_srcdir}/version.h \
 	${bits_srcdir}/string_view.tcc \
+	${bits_srcdir}/unicode.h \
+	${bits_srcdir}/unicode-data.h \
 	${bits_srcdir}/uniform_int_dist.h \
 	${bits_srcdir}/unique_ptr.h \
 	${bits_srcdir}/uses_allocator.h \

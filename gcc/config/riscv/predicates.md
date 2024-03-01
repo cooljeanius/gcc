@@ -1,5 +1,5 @@
 ;; Predicate description for RISC-V target.
-;; Copyright (C) 2011-2023 Free Software Foundation, Inc.
+;; Copyright (C) 2011-2024 Free Software Foundation, Inc.
 ;; Contributed by Andrew Waterman (andrew@sifive.com).
 ;; Based on MIPS target for GNU compiler.
 ;;
@@ -425,10 +425,32 @@
   (ior (match_operand 0 "register_operand")
        (match_code "const_int")))
 
+(define_predicate "const_int6s_operand"
+  (and (match_code "const_int")
+       (match_test "IN_RANGE (INTVAL (op), -32, 31)")))
+
+(define_predicate "int6s_operand"
+  (ior (match_operand 0 "const_int6s_operand")
+       (match_operand 0 "register_operand")))
+
+(define_predicate "const_int2_operand"
+  (and (match_code "const_int")
+       (match_test "IN_RANGE (INTVAL (op), 0, 3)")))
+
+(define_predicate "const_int6_operand"
+  (and (match_code "const_int")
+       (match_test "IN_RANGE (INTVAL (op), 0, 63)")))
+
+(define_predicate "int6_operand"
+  (ior (match_operand 0 "const_int6_operand")
+       (match_operand 0 "register_operand")))
+
 ;; Predicates for the V extension.
 (define_special_predicate "vector_length_operand"
   (ior (match_operand 0 "pmode_register_operand")
-       (match_operand 0 "const_csr_operand")))
+       (and (ior (match_test "TARGET_XTHEADVECTOR && rtx_equal_p (op, const0_rtx)")
+		 (match_test "!TARGET_XTHEADVECTOR"))
+    (match_operand 0 "const_csr_operand"))))
 
 (define_special_predicate "autovec_length_operand"
   (ior (match_operand 0 "pmode_register_operand")

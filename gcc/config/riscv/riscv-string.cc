@@ -1,5 +1,5 @@
 /* Subroutines used to expand string operations for RISC-V.
-   Copyright (C) 2023 Free Software Foundation, Inc.
+   Copyright (C) 2023-2024 Free Software Foundation, Inc.
 
    This file is part of GCC.
 
@@ -773,7 +773,8 @@ riscv_expand_block_move_scalar (rtx dest, rtx src, rtx length)
 bool
 riscv_expand_block_move (rtx dest, rtx src, rtx length)
 {
-  if (TARGET_VECTOR && stringop_strategy & STRATEGY_VECTOR)
+  if ((TARGET_VECTOR && !TARGET_XTHEADVECTOR)
+      && stringop_strategy & STRATEGY_VECTOR)
     {
       bool ok = riscv_vector::expand_block_move (dest, src, length);
       if (ok)

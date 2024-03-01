@@ -1,6 +1,6 @@
 (* M2Comp.mod continually calls the compiler for every source file.
 
-Copyright (C) 2001-2023 Free Software Foundation, Inc.
+Copyright (C) 2001-2024 Free Software Foundation, Inc.
 Contributed by Gaius Mulley <gaius.mulley@southwales.ac.uk>.
 
 This file is part of GNU Modula-2.
@@ -869,11 +869,11 @@ BEGIN
       END
    ELSIF GenModuleList
    THEN
-      IF NOT IsDefinitionForC (sym)
+      IF IsDefImp (sym) AND (NOT IsDefinitionForC (sym))
       THEN
          (* The implementation module is only useful if -fgen-module-list= is
-            used (to gather all dependencies) although we do not insist upon finding the
-            implementation module.  *)
+            used (to gather all dependencies).  Note that we do not insist
+            upon finding the implementation module.  *)
          LibName := NIL ;
          IF FindSourceModFile (SymName, FileName, LibName)
          THEN

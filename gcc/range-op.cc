@@ -1,5 +1,5 @@
 /* Code for range operators.
-   Copyright (C) 2017-2023 Free Software Foundation, Inc.
+   Copyright (C) 2017-2024 Free Software Foundation, Inc.
    Contributed by Andrew MacLeod <amacleod@redhat.com>
    and Aldy Hernandez <aldyh@redhat.com>.
 
@@ -435,8 +435,10 @@ update_known_bitmask (irange &r, tree_code code,
       bit_value_unop (code, sign, prec, &widest_value, &widest_mask,
 		      TYPE_SIGN (lh.type ()),
 		      TYPE_PRECISION (lh.type ()),
-		      widest_int::from (lh_bits.value (), sign),
-		      widest_int::from (lh_bits.mask (), sign));
+		      widest_int::from (lh_bits.value (),
+					TYPE_SIGN (lh.type ())),
+		      widest_int::from (lh_bits.mask (),
+					TYPE_SIGN (lh.type ())));
       break;
     case GIMPLE_BINARY_RHS:
       bit_value_binop (code, sign, prec, &widest_value, &widest_mask,

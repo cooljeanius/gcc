@@ -1,5 +1,5 @@
 // Implementation of access-related functions for RTL SSA           -*- C++ -*-
-// Copyright (C) 2020-2023 Free Software Foundation, Inc.
+// Copyright (C) 2020-2024 Free Software Foundation, Inc.
 //
 // This file is part of GCC.
 //
@@ -1464,6 +1464,16 @@ function_info::create_set (obstack_watermark &watermark,
   auto set = change_alloc<set_info> (watermark, insn, resource);
   set->m_is_temp = true;
   return set;
+}
+
+use_info *
+function_info::create_use (obstack_watermark &watermark,
+			   insn_info *insn,
+			   set_info *set)
+{
+  auto use = change_alloc<use_info> (watermark, insn, set->resource (), set);
+  use->m_is_temp = true;
+  return use;
 }
 
 // Return true if ACCESS1 can represent ACCESS2 and if ACCESS2 can

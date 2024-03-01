@@ -1,5 +1,5 @@
 /* d-target.cc -- Target interface for the D front end.
-   Copyright (C) 2013-2023 Free Software Foundation, Inc.
+   Copyright (C) 2013-2024 Free Software Foundation, Inc.
 
 GCC is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -335,7 +335,7 @@ Target::isVectorOpSupported (Type *type, EXP op, Type *)
 const char *
 TargetCPP::toMangle (Dsymbol *s)
 {
-  return toCppMangleItanium (s);
+  return dmd::toCppMangleItanium (s);
 }
 
 /* Return the symbol mangling of CD for C++ linkage.  */
@@ -343,7 +343,7 @@ TargetCPP::toMangle (Dsymbol *s)
 const char *
 TargetCPP::typeInfoMangle (ClassDeclaration *cd)
 {
-  return cppTypeInfoMangleItanium (cd);
+  return dmd::cppTypeInfoMangleItanium (cd);
 }
 
 /* Get mangle name of a this-adjusting thunk to the function declaration FD
@@ -352,7 +352,7 @@ TargetCPP::typeInfoMangle (ClassDeclaration *cd)
 const char *
 TargetCPP::thunkMangle (FuncDeclaration *fd, int offset)
 {
-  return cppThunkMangleItanium (fd, offset);
+  return dmd::cppThunkMangleItanium (fd, offset);
 }
 
 /* For a vendor-specific type, return a string containing the C++ mangling.
@@ -381,11 +381,11 @@ TargetCPP::parameterType (Type *type)
   Type *tvalist = target.va_listType (Loc (), NULL);
   if (type->ty == TY::Tsarray && tvalist->ty == TY::Tsarray)
     {
-      Type *tb = type->toBasetype ()->mutableOf ();
+      Type *tb = dmd::mutableOf (type->toBasetype ());
       if (tb == tvalist)
 	{
-	  tb = type->nextOf ()->pointerTo ();
-	  type = tb->castMod (type->mod);
+	  tb = dmd::pointerTo (type->nextOf ());
+	  type = dmd::castMod (tb, type->mod);
 	}
     }
 

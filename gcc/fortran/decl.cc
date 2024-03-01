@@ -1,5 +1,5 @@
 /* Declaration statement matcher
-   Copyright (C) 2002-2023 Free Software Foundation, Inc.
+   Copyright (C) 2002-2024 Free Software Foundation, Inc.
    Contributed by Andy Vaught
 
 This file is part of GCC.
@@ -4081,6 +4081,21 @@ gfc_get_pdt_instance (gfc_actual_arglist *param_list, gfc_symbol **sym,
 	  instance->attr.extension = c2->ts.u.derived->attr.extension + 1;
 
 	  continue;
+	}
+
+      /* Addressing PR82943, this will fix the issue where a function or
+	 subroutine is declared as not a member of the PDT instance.
+	 The reason for this is because the PDT instance did not have access
+	 to its template's f2k_derived namespace in order to find the
+	 typebound procedures.
+
+	 The number of references to the PDT template's f2k_derived will
+	 ensure that f2k_derived is properly freed later on.  */
+
+      if (!instance->f2k_derived && pdt->f2k_derived)
+	{
+	  instance->f2k_derived = pdt->f2k_derived;
+	  instance->f2k_derived->refs++;
 	}
 
       /* Set the component kind using the parameterized expression.  */

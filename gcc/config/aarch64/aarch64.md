@@ -1,5 +1,5 @@
 ;; Machine description for AArch64 architecture.
-;; Copyright (C) 2009-2023 Free Software Foundation, Inc.
+;; Copyright (C) 2009-2024 Free Software Foundation, Inc.
 ;; Contributed by ARM Ltd.
 ;;
 ;; This file is part of GCC.
@@ -438,6 +438,12 @@
 		       simd nosimd sve fp16 sme])
 
 (define_enum_attr "arch" "arches" (const_string "any"))
+
+;; Whether a normal INSN in fact contains a call.  Sometimes we represent
+;; calls to functions that use an ad-hoc ABI as normal insns, both for
+;; optimization reasons and to avoid the need to describe the ABI to
+;; target-independent code.
+(define_attr "is_call" "no,yes" (const_string "no"))
 
 ;; [For compatibility with Arm in pipeline models]
 ;; Attribute that specifies whether or not the instruction touches fp
@@ -5395,7 +5401,7 @@
   [(set_attr "type" "alus_imm")]
 )
 
-(define_insn "*and<mode>3nr_compare0"
+(define_insn "@aarch64_and<mode>3nr_compare0"
   [(set (reg:CC_NZV CC_REGNUM)
 	(compare:CC_NZV
 	 (and:GPI (match_operand:GPI 0 "register_operand")

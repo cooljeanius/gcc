@@ -1,6 +1,6 @@
 # libstdc++ "tool init file" for DejaGNU
 
-# Copyright (C) 2001-2023 Free Software Foundation, Inc.
+# Copyright (C) 2001-2024 Free Software Foundation, Inc.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -615,11 +615,14 @@ proc v3_target_compile { source dest type options } {
 	}
     }
 
-    # Small adjustment for MinGW hosts.
-    if { $dest == "/dev/null" && [ishost "*-*-mingw*"] } {
+    # Small adjustment for Windows hosts.
+    if { $dest == "/dev/null"
+	  && [info exists ::env(OS)] && [string match "Windows*" $::env(OS)] } {
 	if { $type == "executable" } {
 	    set dest "x.exe"
 	} else {
+	    # Windows uses special file named "nul" as a substitute for
+	    # /dev/null
 	    set dest "nul"
 	}
     }

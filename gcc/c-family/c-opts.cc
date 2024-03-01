@@ -1,5 +1,5 @@
 /* C/ObjC/C++ command line option handling.
-   Copyright (C) 2002-2023 Free Software Foundation, Inc.
+   Copyright (C) 2002-2024 Free Software Foundation, Inc.
    Contributed by Neil Booth.
 
 This file is part of GCC.
@@ -998,6 +998,11 @@ c_common_post_options (const char **pfilename)
 		       warn_deprecated_enum_float_conv,
 		       cxx_dialect >= cxx20 && warn_deprecated);
 
+  /* -Wtemplate-id-cdtor is enabled by default in C++20.  */
+  SET_OPTION_IF_UNSET (&global_options, &global_options_set,
+		       warn_template_id_cdtor,
+		       cxx_dialect >= cxx20 || warn_cxx20_compat);
+
   /* Declone C++ 'structors if -Os.  */
   if (flag_declone_ctor_dtor == -1)
     flag_declone_ctor_dtor = optimize_size;
@@ -1138,6 +1143,11 @@ c_common_post_options (const char **pfilename)
      work with the standard.  */
   if (cxx_dialect >= cxx20 || flag_concepts_ts)
     flag_concepts = 1;
+
+  /* -fconcepts-ts will be removed in GCC 15.  */
+  if (flag_concepts_ts)
+    inform (input_location, "%<-fconcepts-ts%> is deprecated and will be "
+	    "removed in GCC 15; please convert your code to C++20 concepts");
 
   /* -fimmediate-escalation has no effect when immediate functions are not
      supported.  */

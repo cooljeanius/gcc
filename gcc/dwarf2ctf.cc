@@ -1,5 +1,5 @@
 /* Generate CTF types and objects from the GCC DWARF.
-   Copyright (C) 2021-2023 Free Software Foundation, Inc.
+   Copyright (C) 2021-2024 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -944,7 +944,10 @@ ctf_debug_finalize (const char *filename, bool btf)
   if (btf)
     {
       btf_output (filename);
-      btf_finalize ();
+      /* btf_finalize when compiling BPF applciations gets deallocated by the
+	 BPF target in bpf_file_end.  */
+      if (btf_debuginfo_p () && !btf_with_core_debuginfo_p ())
+	btf_finalize ();
     }
 
   else
@@ -1027,11 +1030,8 @@ ctf_debug_finish (const char * filename)
   /* Emit BTF debug info here when CO-RE relocations need to be generated.
      BTF with CO-RE relocations needs to be generated when CO-RE is in effect
      for the BPF target.  */
-  if (btf_with_core_debuginfo_p ())
-    {
-      gcc_assert (btf_debuginfo_p ());
-      ctf_debug_finalize (filename, btf_debuginfo_p ());
-    }
+  if (btf_debuginfo_p () && btf_with_core_debuginfo_p ())
+    ctf_debug_finalize (filename, btf_debuginfo_p ());
 }
 
 #include "gt-dwarf2ctf.h"

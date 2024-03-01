@@ -1,5 +1,5 @@
 /* Definitions for code generation pass of GNU compiler.
-   Copyright (C) 1987-2023 Free Software Foundation, Inc.
+   Copyright (C) 1987-2024 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -302,6 +302,9 @@ extern rtx expand_expr_real_1 (tree, rtx, machine_mode,
 			       enum expand_modifier, rtx *, bool);
 extern rtx expand_expr_real_2 (sepops, rtx, machine_mode,
 			       enum expand_modifier);
+extern rtx expand_expr_real_gassign (gassign *, rtx, machine_mode,
+				     enum expand_modifier modifier,
+				     rtx * = nullptr, bool = false);
 
 /* Generate code for computing expression EXP.
    An rtx for the computed value is returned.  The value is never null.

@@ -1,5 +1,5 @@
 /* Utility routines for data type conversion for GCC.
-   Copyright (C) 1987-2023 Free Software Foundation, Inc.
+   Copyright (C) 1987-2024 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -762,7 +762,8 @@ convert_to_integer_1 (tree type, tree expr, bool dofold)
 	      {
 		/* If shift count is less than the width of the truncated type,
 		   really shift.  */
-		if (tree_int_cst_lt (TREE_OPERAND (expr, 1), TYPE_SIZE (type)))
+		if (wi::to_widest (TREE_OPERAND (expr, 1))
+		    < TYPE_PRECISION (type))
 		  /* In this case, shifting is like multiplication.  */
 		  goto trunc1;
 		else

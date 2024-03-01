@@ -1,5 +1,5 @@
 /* Header file for the value range relational processing.
-   Copyright (C) 2020-2023 Free Software Foundation, Inc.
+   Copyright (C) 2020-2024 Free Software Foundation, Inc.
    Contributed by Andrew MacLeod <amacleod@redhat.com>
 
 This file is part of GCC.
@@ -718,6 +718,7 @@ equiv_oracle::add_equiv_to_block (basic_block bb, bitmap equiv_set)
 
   // Check if this is the first time a block has an equivalence added.
   // and create a header block. And set the summary for this block.
+  limit_check (bb);
   if (!m_equiv[bb->index])
     {
       ptr = (equiv_chain *) obstack_alloc (&m_chain_obstack,

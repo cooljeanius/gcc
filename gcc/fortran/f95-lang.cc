@@ -1,5 +1,5 @@
 /* gfortran backend interface
-   Copyright (C) 2000-2023 Free Software Foundation, Inc.
+   Copyright (C) 2000-2024 Free Software Foundation, Inc.
    Contributed by Paul Brook.
 
 This file is part of GCC.
@@ -95,6 +95,8 @@ static const attribute_spec gfc_gnu_attributes[] =
   { "omp declare target", 0, -1, true,  false, false, false,
     gfc_handle_omp_declare_target_attribute, NULL },
   { "omp declare target link", 0, 0, true,  false, false, false,
+    gfc_handle_omp_declare_target_attribute, NULL },
+  { "omp declare target indirect", 0, 0, true,  false, false, false,
     gfc_handle_omp_declare_target_attribute, NULL },
   { "oacc function", 0, -1, true,  false, false, false,
     gfc_handle_omp_declare_target_attribute, NULL },

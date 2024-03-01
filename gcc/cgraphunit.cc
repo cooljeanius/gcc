@@ -1,5 +1,5 @@
 /* Driver of optimization process
-   Copyright (C) 2003-2023 Free Software Foundation, Inc.
+   Copyright (C) 2003-2024 Free Software Foundation, Inc.
    Contributed by Jan Hubicka
 
 This file is part of GCC.
@@ -191,6 +191,8 @@ along with GCC; see the file COPYING3.  If not see
 #include "debug.h"
 #include "symbol-summary.h"
 #include "tree-vrp.h"
+#include "sreal.h"
+#include "ipa-cp.h"
 #include "ipa-prop.h"
 #include "gimple-pretty-print.h"
 #include "plugin.h"
@@ -918,7 +920,8 @@ process_function_and_variable_attributes (cgraph_node *first,
 	  /* redefining extern inline function makes it DECL_UNINLINABLE.  */
 	  && !DECL_UNINLINABLE (decl))
 	warning_at (DECL_SOURCE_LOCATION (decl), OPT_Wattributes,
-		    "%<always_inline%> function might not be inlinable");
+		    "%<always_inline%> function might not be inlinable"
+		    " unless also declared %<inline%>");
 
       process_common_attributes (node, decl);
     }

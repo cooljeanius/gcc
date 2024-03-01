@@ -1,5 +1,5 @@
 /* C-compiler utilities for types and variables storage layout
-   Copyright (C) 1987-2023 Free Software Foundation, Inc.
+   Copyright (C) 1987-2024 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -474,6 +474,32 @@ bitwise_type_for_mode (machine_mode mode)
 
   gcc_checking_assert (GET_MODE_INNER (mode) == mode);
   return inner_type;
+}
+
+/* Find a mode that can be used for efficient bitwise operations on SIZE
+   bits, if one exists.  */
+
+opt_machine_mode
+bitwise_mode_for_size (poly_uint64 size)
+{
+  if (known_le (size, (unsigned int) MAX_FIXED_MODE_SIZE))
+    return mode_for_size (size, MODE_INT, true);
+
+  machine_mode mode, ret = VOIDmode;
+  FOR_EACH_MODE_FROM (mode, MIN_MODE_VECTOR_INT)
+    if (known_eq (GET_MODE_BITSIZE (mode), size)
+	&& (ret == VOIDmode || GET_MODE_INNER (mode) == QImode)
+	&& have_regs_of_mode[mode]
+	&& targetm.vector_mode_supported_p (mode))
+      {
+	if (GET_MODE_INNER (mode) == QImode)
+	  return mode;
+	else if (ret == VOIDmode)
+	  ret = mode;
+      }
+  if (ret != VOIDmode)
+    return ret;
+  return opt_machine_mode ();
 }
 
 /* Find a mode that is suitable for representing a vector with NUNITS

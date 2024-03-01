@@ -1,6 +1,6 @@
 (* M2LexBuf.mod provides a buffer for m2.lex.
 
-Copyright (C) 2001-2023 Free Software Foundation, Inc.
+Copyright (C) 2001-2024 Free Software Foundation, Inc.
 Contributed by Gaius Mulley <gaius.mulley@southwales.ac.uk>.
 
 This file is part of GNU Modula-2.
@@ -1154,7 +1154,7 @@ END isSrcToken ;
    MakeVirtualTok - providing caret, left, right are associated with a source file
                     and exist on the same src line then
                     create and return a new tokenno which is created from
-                    tokenno range1 and range2.  Otherwise return caret.
+                    tokenno left and right.  Otherwise return caret.
 *)
 
 PROCEDURE MakeVirtualTok (caret, left, right: CARDINAL) : CARDINAL ;
@@ -1182,6 +1182,17 @@ BEGIN
    END ;
    RETURN caret
 END MakeVirtualTok ;
+
+
+(*
+   MakeVirtual2Tok - creates and return a new tokenno which is created from
+                     two tokens left and right.
+*)
+
+PROCEDURE MakeVirtual2Tok (left, right: CARDINAL) : CARDINAL ;
+BEGIN
+   RETURN MakeVirtualTok (left, left, right)
+END MakeVirtual2Tok ;
 
 
 (* ***********************************************************************

@@ -1,4 +1,4 @@
-@c Copyright (C) 2002-2023 Free Software Foundation, Inc.
+@c Copyright (C) 2002-2024 Free Software Foundation, Inc.
 @c This is part of the GCC manual.
 @c For copying conditions, see the file gcc.texi.
 
@@ -585,6 +585,11 @@ The front end's manuals should be mentioned in
 and the online manuals should be linked to from
 @file{onlinedocs/index.html}.
 @item
+If the front end has its own manual with its own index of options, the
+generated @file{Option-Index.html} should be added to
+@code{PER_LANGUAGE_OPTION_INDEXES} in @file{gcc/regenerate-opt-urls.py}
+and to @code{OPT_URLS_HTML_DEPS} in @file{gcc/Makefile.in}.
+@item
 Any old releases or CVS repositories of the front end, before its
 inclusion in GCC, should be made available on the GCC web site at
 @uref{https://gcc.gnu.org/pub/gcc/old-releases/}.
@@ -812,6 +817,10 @@ Documentation in @file{gcc/doc/invoke.texi} for any command-line
 options supported by this target (@pxref{Run-time Target, , Run-time
 Target Specification}).  This means both entries in the summary table
 of options and details of the individual options.
+@item
+An entry in @file{gcc/regenerate-opt-urls.py}'s TARGET_SPECIFIC_PAGES
+dictionary mapping from target-specific HTML documentation pages
+to the target specific source directory.
 @item
 Documentation in @file{gcc/doc/extend.texi} for any target-specific
 attributes supported (@pxref{Target Attributes, , Defining
@@ -1636,6 +1645,14 @@ Target supports hardware vectors of @code{float} when
 @option{-funsafe-math-optimizations} is not in effect.
 This implies @code{vect_float}.
 
+@item vect_early_break
+Target supports vectorization codegen of loops with early breaks.
+This requires an implementation of the cbranch optab for vectors.
+
+@item vect_early_break_hw
+Target supports hardware vectorization and running of loops with early breaks.
+This requires an implementation of the cbranch optab for vectors.
+
 @item vect_int
 Target supports hardware vectors of @code{int}.
 
@@ -2335,6 +2352,26 @@ AArch64 target that is able to generate and execute armv8.3-a FJCVTZS
 instruction.
 @end table
 
+@subsubsection LoongArch specific attributes
+
+@table @code
+@item loongarch_sx
+LoongArch target that generates instructions for SX.
+
+@item loongarch_asx
+LoongArch target that generates instructions for ASX.
+
+@item loongarch_sx_hw
+LoongArch target that is able to generate and execute SX code.
+
+@item loongarch_asx_hw
+LoongArch target that is able to generate and execute ASX code.
+
+@item loongarch_call36_support
+LoongArch binutils supports call36 relocation.
+
+@end table
+
 @subsubsection MIPS-specific attributes
 
 @table @code
@@ -2405,9 +2442,6 @@ PowerPC target supports hardware double-precision floating-point.
 
 @item powerpc_htm_ok
 PowerPC target supports @code{-mhtm}
-
-@item powerpc_p8vector_ok
-PowerPC target supports @code{-mpower8-vector}
 
 @item powerpc_popcntb_ok
 PowerPC target supports the @code{popcntb} instruction, indicating
@@ -2487,6 +2521,9 @@ Test system has support for the CORE-V ALU extension.
 
 @item cv_elw
 Test system has support for the CORE-V ELW extension.
+
+@item cv_simd
+Test system has support for the CORE-V SIMD extension.
 
 @end table
 
@@ -2663,6 +2700,10 @@ Target requires a command line argument to enable a SIMD instruction set.
 
 @item xorsign
 Target supports the xorsign optab expansion.
+
+@item ifn_copysign
+Target supports the copysign optab expansion of float and double for
+both scalar and vector modes.
 
 @end table
 
@@ -2856,6 +2897,18 @@ Target supports Graphite optimizations.
 @item fixed_point
 Target supports fixed-point extension to C.
 
+@item bitint
+Target supports _BitInt(N).
+
+@item bitint128
+Target supports _BitInt(128).
+
+@item bitint575
+Target supports _BitInt(575).
+
+@item bitint65535
+Target supports _BitInt(65535).
+
 @item fopenacc
 Target supports OpenACC via @option{-fopenacc}.
 
@@ -2952,6 +3005,9 @@ Target supports @option{-mpe-aligned-commons}.
 
 @item pie
 Target supports @option{-pie}, @option{-fpie} and @option{-fPIE}.
+
+@item linker_plugin
+Target supports the linker plugin.
 
 @item rdynamic
 Target supports @option{-rdynamic}.
@@ -3205,6 +3261,11 @@ instructions, if any.
 @item tls
 Add the target-specific flags needed to use thread-local storage.
 
+@item vect_early_break
+Add the target-specific flags needed to enable early break vectorization for
+a target, if any.  This requires the target to have an implementation of the
+@code{cbranch} optab.
+
 @item weak_undefined
 Add the flags needed to enable support for weak undefined symbols.
 @end table
@@ -3276,6 +3337,10 @@ system.  Some tests are incompatible with DejaGnu's handling of remote
 hosts, which involves copying the source file to the host and compiling
 it with a relative path and "@code{-o a.out}".
 
+@item dg-require-linker-plugin ""
+Skip the test is the target does not support the linker plugin.
+This is equivalent to @code{dg-require-effective-target linker_plugin}.
+
 @item dg-require-mkfifo ""
 Skip the test if the target does not support @code{mkfifo}.
 
@@ -3334,6 +3399,10 @@ excluding LTO sections.
 @item scan-assembler-times @var{regex} @var{num} [@{ target/xfail @var{selector} @}]
 Passes if @var{regex} is matched exactly @var{num} times in the test's
 assembler output, excluding LTO sections.
+
+@item scan-assembler-bound @var{regex} @var{cmp} @var{num} [@{ target/xfail @var{selector} @}]
+Passes if @var{regex} is matched @var{cmp} @var{num} times in the test's
+assembler output, excluding LTO sections. @var{cmp} is a comparitor.
 
 @item scan-assembler-dem @var{regex} [@{ target/xfail @var{selector} @}]
 Passes if @var{regex} matches text in the test's demangled assembler output,

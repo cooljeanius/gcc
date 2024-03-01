@@ -1,5 +1,5 @@
 /* Definitions of target machine for GNU compiler.
-   Copyright (C) 1999-2023 Free Software Foundation, Inc.
+   Copyright (C) 1999-2024 Free Software Foundation, Inc.
    Contributed by James E. Wilson <wilson@cygnus.com> and
 		  David Mosberger <davidm@hpl.hp.com>.
 
@@ -3896,7 +3896,7 @@ ia64_start_function (FILE *file, const char *fnname,
   fputs ("\t.proc ", file);
   assemble_name (file, fnname);
   fputc ('\n', file);
-  ASM_OUTPUT_LABEL (file, fnname);
+  ASM_OUTPUT_FUNCTION_LABEL (file, fnname, decl);
 }
 
 /* Called after register allocation to add any instructions needed for the

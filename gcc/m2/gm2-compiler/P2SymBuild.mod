@@ -1,6 +1,6 @@
 (* P2SymBuild.mod pass 2 symbol creation.
 
-Copyright (C) 2001-2023 Free Software Foundation, Inc.
+Copyright (C) 2001-2024 Free Software Foundation, Inc.
 Contributed by Gaius Mulley <gaius.mulley@southwales.ac.uk>.
 
 This file is part of GNU Modula-2.
@@ -55,7 +55,7 @@ FROM SymbolTable IMPORT NulSym,
                         GetCurrentModule, GetMainModule,
                         MakeTemporary, CheckAnonymous, IsNameAnonymous,
                         MakeConstLit,
-                        MakeConstLitString,
+                        MakeConstString,
                         MakeSubrange,
                         MakeVar, MakeType, PutType,
                         MakeModuleCtor,
@@ -87,7 +87,7 @@ FROM SymbolTable IMPORT NulSym,
                         MakeVarient, MakeFieldVarient,
                         MakeArray, PutArraySubscript,
                         MakeSubscript, PutSubscript,
-                        PutConstString, GetString,
+                        PutConstStringKnown, GetString,
                         PutArray, IsArray,
                         GetType, SkipType,
                         IsProcType, MakeProcType,
@@ -790,7 +790,7 @@ BEGIN
    THEN
       stop
    END ;
-   Sym := MakeConstLitString (tok, makekey (string (Mark (Slice (Mark (InitStringCharStar (KeyToCharStar (name))), 1, -1))))) ;
+   Sym := MakeConstString (tok, makekey (string (Mark (Slice (Mark (InitStringCharStar (KeyToCharStar (name))), 1, -1))))) ;
    PushTFtok (Sym, NulSym, tok) ;
    Annotate ("%1s(%1d)|%3d||constant string")
 END BuildString ;
@@ -3050,7 +3050,7 @@ BEGIN
    CASE type OF
 
    set        :  PutConstSet(Sym) |
-   str        :  PutConstString(GetTokenNo(), Sym, MakeKey('')) |
+   str        :  PutConstStringKnown (GetTokenNo(), Sym, MakeKey(''), FALSE, FALSE) |
    array,
    constructor:  PutConstructor(Sym) |
    cast       :  PutConst(Sym, castType) |

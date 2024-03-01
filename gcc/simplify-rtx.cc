@@ -1,5 +1,5 @@
 /* RTL simplification functions for GNU compiler.
-   Copyright (C) 1987-2023 Free Software Foundation, Inc.
+   Copyright (C) 1987-2024 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -1305,7 +1305,7 @@ simplify_context::simplify_unary_operation_1 (rtx_code code, machine_mode mode,
 	  			   > GET_MODE_UNIT_SIZE (mode)
 	  			   ? FLOAT_TRUNCATE : FLOAT_EXTEND,
 				   mode,
-				   XEXP (op, 0), mode);
+				   XEXP (op, 0), GET_MODE (XEXP (op, 0)));
 
       /*  (float_truncate (float x)) is (float x)  */
       if ((GET_CODE (op) == FLOAT || GET_CODE (op) == UNSIGNED_FLOAT)

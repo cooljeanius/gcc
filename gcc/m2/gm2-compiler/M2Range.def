@@ -1,6 +1,6 @@
 (* M2Range.def exports procedures which maintain the range checking.
 
-Copyright (C) 2008-2023 Free Software Foundation, Inc.
+Copyright (C) 2008-2024 Free Software Foundation, Inc.
 Contributed by Gaius Mulley <gaius.mulley@southwales.ac.uk>.
 
 This file is part of GNU Modula-2.
@@ -117,11 +117,23 @@ PROCEDURE InitDecRangeCheck (d, e: CARDINAL) : CARDINAL ;
 (*
    InitForLoopBeginRangeCheck - returns a range check node which
                                 remembers the information necessary
-                                so that a range check for FOR d := e TO .. DO
-                                can be generated later on.
+                                so that a range check for
+                                FOR des := expr1 TO expr2 DO
+                                can be generated later on.  expr2 is
+                                only used to type check with des.
 *)
 
-PROCEDURE InitForLoopBeginRangeCheck (d, e: CARDINAL) : CARDINAL ;
+PROCEDURE InitForLoopBeginRangeCheck (des, destok,
+                                      expr1, expr1tok,
+                                      expr2, expr2tok,
+                                      byconst, byconsttok: CARDINAL) : CARDINAL ;
+
+
+(*
+   PutRangeForIncrement - places incrementquad into the range record.
+*)
+
+PROCEDURE PutRangeForIncrement (range: CARDINAL; incrementquad: CARDINAL) ;
 
 
 (*

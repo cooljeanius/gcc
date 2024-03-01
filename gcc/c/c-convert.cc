@@ -1,5 +1,5 @@
 /* Language-level data type conversion for GNU C.
-   Copyright (C) 1987-2023 Free Software Foundation, Inc.
+   Copyright (C) 1987-2024 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -150,8 +150,7 @@ c_convert (tree type, tree expr, bool init_const)
 
     case BOOLEAN_TYPE:
     convert_to_boolean:
-      return fold_convert_loc
-	(loc, type, c_objc_common_truthvalue_conversion (input_location, expr));
+      return c_objc_common_truthvalue_conversion (input_location, expr, type);
 
     case POINTER_TYPE:
       /* The type nullptr_t may be converted to a pointer type.  The result is

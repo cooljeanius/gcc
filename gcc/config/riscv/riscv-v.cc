@@ -1,6 +1,6 @@
 /* Subroutines used for code generation for RISC-V 'V' Extension for
    GNU compiler.
-   Copyright (C) 2022-2023 Free Software Foundation, Inc.
+   Copyright (C) 2022-2024 Free Software Foundation, Inc.
    Contributed by Juzhe Zhong (juzhe.zhong@rivai.ai), RiVAI Technologies Ltd.
 
    This file is part of GCC.
@@ -66,6 +66,15 @@ imm_avl_p (machine_mode mode)
 	   ? (IN_RANGE (nunits.to_constant (), 0, 31))
 	   /* Only allowed in VLS-VLMAX mode.  */
 	   : false;
+}
+
+/* Return true if LEN is equal to NUNITS that out of the range [0, 31].  */
+static bool
+is_vlmax_len_p (machine_mode mode, rtx len)
+{
+  poly_int64 value;
+  return poly_int_rtx_p (len, &value)
+	 && known_eq (value, GET_MODE_NUNITS (mode));
 }
 
 /* Helper functions for insn_flags && insn_types */
@@ -198,6 +207,13 @@ public:
     add_input_operand (frm_rtx, Pmode);
   }
 
+  void
+  add_rounding_mode_operand (enum fixed_point_rounding_mode rounding_mode)
+  {
+    rtx frm_rtx = gen_int_mode (rounding_mode, Pmode);
+    add_input_operand (frm_rtx, Pmode);
+  }
+
   /* Return the vtype mode based on insn_flags.
      vtype mode mean the mode vsetvl insn set. */
   machine_mode
@@ -325,6 +341,10 @@ public:
       add_rounding_mode_operand (FRM_RMM);
     else if (m_insn_flags & FRM_RNE_P)
       add_rounding_mode_operand (FRM_RNE);
+    else if (m_insn_flags & VXRM_RNU_P)
+      add_rounding_mode_operand (VXRM_RNU);
+    else if (m_insn_flags & VXRM_RDN_P)
+      add_rounding_mode_operand (VXRM_RDN);
 
     gcc_assert (insn_data[(int) icode].n_operands == m_opno);
     expand (icode, any_mem_p);
@@ -423,6 +443,7 @@ public:
   }
 
   bool can_duplicate_repeating_sequence_p ();
+  bool is_repeating_sequence ();
   rtx get_merged_repeating_sequence ();
 
   bool repeating_sequence_use_merge_profitable_p ();
@@ -463,12 +484,25 @@ rvv_builder::can_duplicate_repeating_sequence_p ()
 {
   poly_uint64 new_size = exact_div (full_nelts (), npatterns ());
   unsigned int new_inner_size = m_inner_bits_size * npatterns ();
-  if (!int_mode_for_size (new_inner_size, 0).exists (&m_new_inner_mode)
+  if (m_inner_mode == Pmode
+      || !int_mode_for_size (new_inner_size, 0).exists (&m_new_inner_mode)
       || GET_MODE_SIZE (m_new_inner_mode) > UNITS_PER_WORD
       || !get_vector_mode (m_new_inner_mode, new_size).exists (&m_new_mode))
     return false;
   if (full_nelts ().is_constant ())
     return repeating_sequence_p (0, full_nelts ().to_constant (), npatterns ());
+  return nelts_per_pattern () == 1;
+}
+
+/* Return true if the vector is a simple sequence with one pattern and all
+   elements the same.  */
+bool
+rvv_builder::is_repeating_sequence ()
+{
+  if (npatterns () > 1)
+    return false;
+  if (full_nelts ().is_constant ())
+    return repeating_sequence_p (0, full_nelts ().to_constant (), 1);
   return nelts_per_pattern () == 1;
 }
 
@@ -2524,6 +2558,15 @@ expand_vec_init (rtx target, rtx vals)
     v.quick_push (XVECEXP (vals, 0, i));
   v.finalize ();
 
+  /* If the sequence is v = { a, a, a, a } just broadcast an element.  */
+  if (v.is_repeating_sequence ())
+    {
+      machine_mode mode = GET_MODE (target);
+      rtx dup = expand_vector_broadcast (mode, v.elt (0));
+      emit_move_insn (target, dup);
+      return;
+    }
+
   if (nelts > 3)
     {
       /* Case 1: Convert v = { a, b, a, b } into v = { ab, ab }.  */
@@ -3771,12 +3814,11 @@ expand_select_vl (rtx *ops)
 void
 expand_load_store (rtx *ops, bool is_load)
 {
-  poly_int64 value;
   rtx mask = ops[2];
   rtx len = ops[3];
   machine_mode mode = GET_MODE (ops[0]);
 
-  if (poly_int_rtx_p (len, &value) && known_eq (value, GET_MODE_NUNITS (mode)))
+  if (is_vlmax_len_p (mode, len))
     {
       /* If the length operand is equal to VF, it is VLMAX load/store.  */
       if (is_load)
@@ -3840,13 +3882,17 @@ expand_cond_len_op (unsigned icode, insn_flags op_type, rtx *ops, rtx len)
   rtx mask = ops[1];
   machine_mode mode = GET_MODE (dest);
   machine_mode mask_mode = GET_MODE (mask);
-  poly_int64 value;
   bool is_dummy_mask = rtx_equal_p (mask, CONSTM1_RTX (mask_mode));
-  bool is_vlmax_len
-    = poly_int_rtx_p (len, &value) && known_eq (value, GET_MODE_NUNITS (mode));
+  bool is_vlmax_len = is_vlmax_len_p (mode, len);
 
   unsigned insn_flags = HAS_DEST_P | HAS_MASK_P | HAS_MERGE_P | op_type;
-  if (is_dummy_mask)
+  /* FIXME: We don't support simplification of COND_LEN_NEG (..., dummy len,
+     dummy mask) into NEG_EXPR in GIMPLE FOLD yet.  So, we do such
+     simplification in RISC-V backend and may do that in middle-end in the
+     future.  */
+  if (is_dummy_mask && is_vlmax_len)
+    insn_flags |= TDEFAULT_POLICY_P | MDEFAULT_POLICY_P;
+  else if (is_dummy_mask)
     insn_flags |= TU_POLICY_P | MDEFAULT_POLICY_P;
   else if (is_vlmax_len)
     insn_flags |= TDEFAULT_POLICY_P | MU_POLICY_P;
@@ -4011,8 +4057,7 @@ expand_gather_scatter (rtx *ops, bool is_load)
   scalar_mode inner_idx_mode = GET_MODE_INNER (idx_mode);
   unsigned inner_offsize = GET_MODE_BITSIZE (inner_idx_mode);
   poly_int64 nunits = GET_MODE_NUNITS (vec_mode);
-  poly_int64 value;
-  bool is_vlmax = poly_int_rtx_p (len, &value) && known_eq (value, nunits);
+  bool is_vlmax = is_vlmax_len_p (vec_mode, len);
 
   /* Extend the offset element to address width.  */
   if (inner_offsize < BITS_PER_WORD)
@@ -4129,13 +4174,15 @@ expand_reduction (unsigned unspec, unsigned insn_flags, rtx *ops, rtx init)
 
   rtx m1_tmp = gen_reg_rtx (m1_mode);
   rtx scalar_move_ops[] = {m1_tmp, init};
-  emit_nonvlmax_insn (code_for_pred_broadcast (m1_mode), SCALAR_MOVE_OP,
-		      scalar_move_ops,
-		      need_mask_operand_p (insn_flags) ? ops[3]
-						       : CONST1_RTX (Pmode));
+  insn_code icode = code_for_pred_broadcast (m1_mode);
+  if (need_mask_operand_p (insn_flags))
+    emit_nonvlmax_insn (icode, SCALAR_MOVE_OP, scalar_move_ops, ops[3]);
+  else
+    emit_vlmax_insn (icode, SCALAR_MOVE_OP, scalar_move_ops);
+
   rtx m1_tmp2 = gen_reg_rtx (m1_mode);
   rtx reduc_ops[] = {m1_tmp2, vector_src, m1_tmp};
-  insn_code icode = code_for_pred (unspec, vmode);
+  icode = code_for_pred (unspec, vmode);
 
   if (need_mask_operand_p (insn_flags))
     {
@@ -4192,14 +4239,13 @@ prepare_ternary_operands (rtx *ops)
 void
 expand_lanes_load_store (rtx *ops, bool is_load)
 {
-  poly_int64 value;
   rtx mask = ops[2];
   rtx len = ops[3];
   rtx addr = is_load ? XEXP (ops[1], 0) : XEXP (ops[0], 0);
   rtx reg = is_load ? ops[0] : ops[1];
   machine_mode mode = GET_MODE (ops[0]);
 
-  if (poly_int_rtx_p (len, &value) && known_eq (value, GET_MODE_NUNITS (mode)))
+  if (is_vlmax_len_p (mode, len))
     {
       /* If the length operand is equal to VF, it is VLMAX load/store.  */
       if (is_load)
@@ -4245,14 +4291,13 @@ expand_fold_extract_last (rtx *ops)
   rtx else_label = gen_label_rtx ();
   rtx end_label = gen_label_rtx ();
   rtx len = ops[4];
-  poly_int64 value;
   machine_mode mode = GET_MODE (vect);
   machine_mode mask_mode = GET_MODE (mask);
   rtx compress_vect = gen_reg_rtx (mode);
   rtx slide_vect = gen_reg_rtx (mode);
   insn_code icode;
 
-  if (poly_int_rtx_p (len, &value) && known_eq (value, GET_MODE_NUNITS (mode)))
+  if (is_vlmax_len_p (mode, len))
     len = NULL_RTX;
 
   /* Calculate the number of 1-bit in mask. */
@@ -4383,7 +4428,7 @@ cmp_lmul_gt_one (machine_mode mode)
 bool
 vls_mode_valid_p (machine_mode vls_mode)
 {
-  if (!TARGET_VECTOR)
+  if (!TARGET_VECTOR || TARGET_XTHEADVECTOR)
     return false;
 
   if (riscv_autovec_preference == RVV_SCALABLE)
@@ -5106,6 +5151,41 @@ estimated_poly_value (poly_int64 val, unsigned int kind)
   /* If the core provides width information, use that.  */
   HOST_WIDE_INT over_min_vlen = width_source - TARGET_MIN_VLEN;
   return val.coeffs[0] + val.coeffs[1] * over_min_vlen / TARGET_MIN_VLEN;
+}
+
+/* Return true it is whole register-register move.  */
+bool
+whole_reg_to_reg_move_p (rtx *ops, machine_mode mode, int avl_type_index)
+{
+  /* An operation is a whole-register move if either
+     (1) Its vlmax operand equals VLMAX
+     (2) Its vl operand equals the number of units of its mode.  */
+  if (register_operand (ops[0], mode)
+      && register_operand (ops[3], mode)
+      && satisfies_constraint_vu (ops[2])
+      && satisfies_constraint_Wc1 (ops[1]))
+    {
+      if (INTVAL (ops[avl_type_index]) == VLMAX)
+	return true;
+      /* AVL propagation PASS will transform FIXED-VLMAX with NUNITS < 32
+	 into NON-VLMAX with LEN = NUNITS.  */
+      else if (CONST_INT_P (ops[4])
+	       && known_eq (INTVAL (ops[4]), GET_MODE_NUNITS (mode)))
+	return true;
+    }
+  return false;
+}
+
+/* Return true if we can transform vmv.v.x/vfmv.v.f to vmv.s.x/vfmv.s.f.  */
+bool
+splat_to_scalar_move_p (rtx *ops)
+{
+  return satisfies_constraint_Wc1 (ops[1])
+	 && satisfies_constraint_vu (ops[2])
+	 && !MEM_P (ops[3])
+	 && satisfies_constraint_c01 (ops[4])
+	 && INTVAL (ops[7]) == NONVLMAX
+	 && known_ge (GET_MODE_SIZE (Pmode), GET_MODE_SIZE (GET_MODE (ops[3])));
 }
 
 } // namespace riscv_vector

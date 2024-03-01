@@ -1,5 +1,5 @@
 /* Definitions and declarations for stor-layout.cc.
-   Copyright (C) 2013-2023 Free Software Foundation, Inc.
+   Copyright (C) 2013-2024 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -101,6 +101,8 @@ extern tree make_unsigned_type (int);
 extern opt_machine_mode mode_for_size_tree (const_tree, enum mode_class, int);
 
 extern tree bitwise_type_for_mode (machine_mode);
+
+extern opt_machine_mode bitwise_mode_for_size (poly_uint64);
 
 /* Given a VAR_DECL, PARM_DECL or RESULT_DECL, clears the results of
    a previous call to layout_decl and calls it again.  */

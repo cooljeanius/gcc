@@ -1,5 +1,5 @@
 /* Subroutines for insn-output.cc for SPARC.
-   Copyright (C) 1987-2023 Free Software Foundation, Inc.
+   Copyright (C) 1987-2024 Free Software Foundation, Inc.
    Contributed by Michael Tiemann (tiemann@cygnus.com)
    64-bit SPARC-V9 support by Michael Tiemann, Jim Wilson, and Doug Evans,
    at Cygnus Support.
@@ -1052,6 +1052,7 @@ atomic_insn_for_leon3_p (rtx_insn *insn)
 {
   switch (INSN_CODE (insn))
     {
+    case CODE_FOR_membar_storeload:
     case CODE_FOR_swapsi:
     case CODE_FOR_ldstub:
     case CODE_FOR_atomic_compare_and_swap_leon3_1:
@@ -1118,6 +1119,7 @@ next_active_non_empty_insn (rtx_insn *insn)
   while (insn
 	 && (GET_CODE (PATTERN (insn)) == UNSPEC_VOLATILE
 	     || GET_CODE (PATTERN (insn)) == ASM_INPUT
+	     || get_attr_length (insn) == 0
 	     || (USEFUL_INSN_P (insn)
 		 && (asm_noperands (PATTERN (insn)) >= 0)
 		 && !strcmp (decode_asm_operands (PATTERN (insn),

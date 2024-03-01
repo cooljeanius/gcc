@@ -1,5 +1,5 @@
 /* Functions to support general ended bitmaps.
-   Copyright (C) 1997-2023 Free Software Foundation, Inc.
+   Copyright (C) 1997-2024 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -2706,7 +2706,7 @@ bitmap_hash (const_bitmap head)
       for (ix = 0; ix != BITMAP_ELEMENT_WORDS; ix++)
 	hash ^= ptr->bits[ix];
     }
-  return (hashval_t)hash;
+  return iterative_hash (&hash, sizeof (hash), 0);
 }
 
 

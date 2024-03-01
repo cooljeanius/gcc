@@ -2,7 +2,7 @@
    from omp-general.h so that it may also be used in the Fortran parser
    without reference to tree data structures.
 
-   Copyright (C) 2023 Free Software Foundation, Inc.
+   Copyright (C) 2023-2024 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -64,7 +64,8 @@ enum omp_tp_type {
   OMP_TRAIT_PROPERTY_NONE,
   OMP_TRAIT_PROPERTY_ID,
   OMP_TRAIT_PROPERTY_NAME_LIST,
-  OMP_TRAIT_PROPERTY_EXPR,
+  OMP_TRAIT_PROPERTY_DEV_NUM_EXPR,
+  OMP_TRAIT_PROPERTY_BOOL_EXPR,
   OMP_TRAIT_PROPERTY_CLAUSE_LIST,
   OMP_TRAIT_PROPERTY_EXTENSION
 };

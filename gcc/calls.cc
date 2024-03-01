@@ -1,5 +1,5 @@
 /* Convert function calls to rtl insns, for GNU C compiler.
-   Copyright (C) 1989-2023 Free Software Foundation, Inc.
+   Copyright (C) 1989-2024 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -4580,8 +4580,8 @@ emit_library_call_value_1 (int retval, rtx orgfun, rtx value,
 		}
 	    }
 
-	  emit_push_insn (val, mode, NULL_TREE, NULL_RTX, parm_align,
-			  partial, reg, 0, argblock,
+	  emit_push_insn (val, mode, lang_hooks.types.type_for_mode (mode, 0),
+			  NULL_RTX, parm_align, partial, reg, 0, argblock,
 			  (gen_int_mode
 			   (argvec[argnum].locate.offset.constant, Pmode)),
 			  reg_parm_stack_space,

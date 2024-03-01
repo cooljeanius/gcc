@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2023, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2024, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -5679,19 +5679,19 @@ package body Sem_Res is
                Set_Is_Dynamic_Coextension (N, False);
                Set_Is_Static_Coextension  (N, False);
 
-               --  Anonymous access-to-controlled objects are not finalized on
-               --  time because this involves run-time ownership and currently
-               --  this property is not available. In rare cases the object may
-               --  not be finalized at all. Warn on potential issues involving
-               --  anonymous access-to-controlled objects.
+               --  Objects allocated through anonymous access types are not
+               --  finalized on time because this involves run-time ownership
+               --  and currently this property is not available. In rare cases
+               --  the object might not be finalized at all. Warn on potential
+               --  issues involving anonymous access-to-controlled types.
 
                if Ekind (Typ) = E_Anonymous_Access_Type
                  and then Is_Controlled_Active (Desig_T)
                then
                   Error_Msg_N
-                    ("??object designated by anonymous access object might "
+                    ("??object designated by anonymous access value might "
                      & "not be finalized until its enclosing library unit "
-                     & "goes out of scope", N);
+                     & "goes out of scope, or not be finalized at all", N);
                   Error_Msg_N ("\use named access type instead", N);
                end if;
             end if;
@@ -7193,7 +7193,7 @@ package body Sem_Res is
       --  In GNATprove mode, expansion is disabled, but we want to inline some
       --  subprograms to facilitate formal verification. Indirect calls through
       --  a subprogram type or within a generic cannot be inlined. Inlining is
-      --  performed only for calls subject to SPARK_Mode on.
+      --  performed only for calls subject to SPARK_Mode => On.
 
       elsif GNATprove_Mode
         and then SPARK_Mode = On
@@ -7206,10 +7206,13 @@ package body Sem_Res is
          if Nkind (Nam_Decl) = N_Subprogram_Declaration then
             Body_Id := Corresponding_Body (Nam_Decl);
 
-            --  Nothing to do if the subprogram is not eligible for inlining in
-            --  GNATprove mode, or inlining is disabled with switch -gnatdm
+            --  Nothing to do if the subprogram is not inlined (because it is
+            --  recursive, directly or indirectly), or is not eligible for
+            --  inlining GNATprove mode (because of properties of the
+            --  subprogram itself), or inlining has been disabled with switch
+            --  -gnatdm.
 
-            if not Is_Inlined_Always (Nam_UA)
+            if not Is_Inlined (Nam_UA)
               or else not Can_Be_Inlined_In_GNATprove_Mode (Nam_UA, Body_Id)
               or else Debug_Flag_M
             then

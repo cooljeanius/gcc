@@ -1,5 +1,5 @@
 /* Definitions of target machine for GNU compiler, for IBM RS/6000.
-   Copyright (C) 1992-2023 Free Software Foundation, Inc.
+   Copyright (C) 1992-2024 Free Software Foundation, Inc.
    Contributed by Richard Kenner (kenner@vlsi1.ultra.nyu.edu)
 
    This file is part of GCC.
@@ -103,13 +103,12 @@
 /* Common ASM definitions used by ASM_SPEC among the various targets for
    handling -mcpu=xxx switches.  There is a parallel list in driver-rs6000.cc to
    provide the default assembler options if the user uses -mcpu=native, so if
-   you make changes here, make them also there.  PR63177: Do not pass -mpower8
-   to the assembler if -mpower9-vector was also used.  */
+   you make changes here, make them also there.  */
 #define ASM_CPU_SPEC \
 "%{mcpu=native: %(asm_cpu_native); \
   mcpu=power10: -mpower10; \
   mcpu=power9: -mpower9; \
-  mcpu=power8|mcpu=powerpc64le: %{mpower9-vector: -mpower9;: -mpower8}; \
+  mcpu=power8|mcpu=powerpc64le: -mpower8; \
   mcpu=power7: -mpower7; \
   mcpu=power6x: -mpower6 %{!mvsx:%{!maltivec:-maltivec}}; \
   mcpu=power6: -mpower6 %{!mvsx:%{!maltivec:-maltivec}}; \
@@ -163,8 +162,7 @@
   mcpu=e5500: -me5500; \
   mcpu=e6500: -me6500; \
   mcpu=titan: -mtitan; \
-  !mcpu*: %{mpower9-vector: -mpower9; \
-	    mpower8-vector|mcrypto|mdirect-move|mhtm: -mpower8; \
+  !mcpu*: %{mcrypto|mdirect-move|mhtm: -mpower8; \
 	    mvsx: -mpower7; \
 	    mpowerpc64: -mppc64;: %(asm_default)}; \
   :%eMissing -mcpu option in ASM_CPU_SPEC?\n} \
@@ -484,10 +482,6 @@ extern int rs6000_vector_align[];
 /* Whether we should avoid (SUBREG:SI (REG:SF) and (SUBREG:SF (REG:SI).  */
 #define TARGET_NO_SF_SUBREG	TARGET_DIRECT_MOVE_64BIT
 #define TARGET_ALLOW_SF_SUBREG	(!TARGET_DIRECT_MOVE_64BIT)
-
-/* This wants to be set for p8 and newer.  On p7, overlapping unaligned
-   loads are slow. */
-#define TARGET_EFFICIENT_OVERLAPPING_UNALIGNED TARGET_EFFICIENT_UNALIGNED_VSX
 
 /* Byte/char syncs were added as phased in for ISA 2.06B, but are not present
    in power7, so conditionalize them on p8 features.  TImode syncs need quad
@@ -814,7 +808,7 @@ enum data_align { align_abi, align_opt, align_both };
 
 #define FIXED_REGISTERS  \
   {/* GPRs */					   \
-   0, 1, FIXED_R2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, FIXED_R13, 0, 0, \
+   0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, FIXED_R13, 0, 0, \
    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, \
    /* FPRs */					   \
    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, \

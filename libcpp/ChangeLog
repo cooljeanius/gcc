@@ -1,3 +1,24 @@
+2024-02-22  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c/114007
+	* include/cpplib.h (COLON_SCOPE): Define to PURE_ZERO.
+	* lex.cc (_cpp_lex_direct): When lexing CPP_COLON with another
+	colon after it, if !CPP_OPTION (pfile, scope) set COLON_SCOPE
+	flag on the first CPP_COLON token.
+
+2024-02-01  Lewis Hyatt  <lhyatt@gmail.com>
+
+	PR preprocessor/105608
+	* pch.cc (cpp_read_state): Set a valid location for restored
+	macros.
+
+2024-01-04  Raiki Tamura  <tamaron1203@gmail.com>
+
+	* charset.cc (cpp_check_xid_property): New.
+	* include/cpplib.h
+	(cpp_check_xid_property): New.
+	(enum cpp_xid_property): New.
+
 2023-12-13  Jakub Jelinek  <jakub@redhat.com>
 
 	PR preprocessor/112956
@@ -7973,7 +7994,7 @@
 	* include/symtab.h: Moved from gcc/hashtable.h.  Change header
 	guard name.
 
-Copyright (C) 2004-2023 Free Software Foundation, Inc.
+Copyright (C) 2004-2024 Free Software Foundation, Inc.
 
 Copying and distribution of this file, with or without modification,
 are permitted in any medium without royalty provided the copyright
