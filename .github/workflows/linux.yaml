@@ -56,7 +56,7 @@ jobs:
 
       - name: Cache
         id: cache-deps
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         env:
           cache-name: cache-downloaded-prerequisites
         with:
@@ -86,8 +86,6 @@ jobs:
                 --prefix=/usr \
                 --with-gcc-major-version-only \
                 --program-prefix=x86_64-linux-gnu- \
-                --enable-shared \
-                --enable-linker-build-id \
                 --libexecdir=/usr/lib \
                 --without-included-gettext \
                 --enable-threads=posix \
@@ -142,6 +140,11 @@ jobs:
         run: |
           cd ../build
           sudo make install
+          sudo make install-info
+          sudo make install-dvi
+          sudo make install-pdf
+          sudo make install-html
+          sudo make dir.info
 
       - name: Tests
         if: success()
@@ -179,7 +182,7 @@ jobs:
           done
 
       - name: Upload a Build Artifact
-        uses: actions/upload-artifact@v4.0.0
+        uses: actions/upload-artifact@v4.3.1
         with:
           # Artifact name
           name: logfiles
