@@ -2984,23 +2984,13 @@ redirect_all_calls (copy_body_data * id, basic_block bb)
       gimple *stmt = gsi_stmt (si);
       if (is_gimple_call (stmt))
 	{
-	  tree old_lhs = gimple_call_lhs (stmt);
 	  struct cgraph_edge *edge = id->dst_node->get_edge (stmt);
 	  if (edge)
 	    {
 	      if (!id->killed_new_ssa_names)
 		id->killed_new_ssa_names = new hash_set<tree> (16);
-	      gimple *new_stmt
-		= cgraph_edge::redirect_call_stmt_to_callee (edge,
-		    id->killed_new_ssa_names);
-	      if (old_lhs
-		  && TREE_CODE (old_lhs) == SSA_NAME
-		  && !gimple_call_lhs (new_stmt))
-		/* In case of IPA-SRA removing the LHS, the name should have
-		   been already added to the hash.  But in case of redirecting
-		   to builtin_unreachable it was not and the name still should
-		   be pruned from debug statements.  */
-		id->killed_new_ssa_names->add (old_lhs);
+	      cgraph_edge::redirect_call_stmt_to_callee (edge,
+		id->killed_new_ssa_names);
 
 	      if (stmt == last && id->call_stmt && maybe_clean_eh_stmt (stmt))
 		gimple_purge_dead_eh_edges (bb);
@@ -4669,7 +4659,8 @@ prepend_lexical_block (tree current_block, tree new_block)
   BLOCK_SUPERCONTEXT (new_block) = current_block;
 }
 
-/* Add local variables from CALLEE to CALLER.  */
+/* Add local variables from CALLEE to CALLER.  If set for condition coverage,
+   copy basic condition -> expression mapping to CALLER.  */
 
 static inline void
 add_local_variables (struct function *callee, struct function *caller,
@@ -4699,6 +4690,23 @@ add_local_variables (struct function *callee, struct function *caller,
 	  }
 	add_local_decl (caller, new_var);
       }
+
+  /* If -fcondition-coverage is used and the caller has conditions, copy the
+     mapping into the caller but and the end so the caller and callee
+     expressions aren't mixed.  */
+  if (callee->cond_uids)
+    {
+      if (!caller->cond_uids)
+	caller->cond_uids = new hash_map <gcond*, unsigned> ();
+
+      unsigned dst_max_uid = 0;
+      for (auto itr : *callee->cond_uids)
+	if (itr.second >= dst_max_uid)
+	  dst_max_uid = itr.second + 1;
+
+      for (auto itr : *callee->cond_uids)
+	caller->cond_uids->put (itr.first, itr.second + dst_max_uid);
+    }
 }
 
 /* Add to BINDINGS a debug stmt resetting SRCVAR if inlining might
