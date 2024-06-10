@@ -138,6 +138,7 @@ gcn_option_override (void)
       : gcn_arch == PROCESSOR_VEGA20 ? ISA_GCN5
       : gcn_arch == PROCESSOR_GFX908 ? ISA_CDNA1
       : gcn_arch == PROCESSOR_GFX90a ? ISA_CDNA2
+      : gcn_arch == PROCESSOR_GFX90c ? ISA_GCN5
       : gcn_arch == PROCESSOR_GFX1030 ? ISA_RDNA2
       : gcn_arch == PROCESSOR_GFX1036 ? ISA_RDNA2
       : gcn_arch == PROCESSOR_GFX1100 ? ISA_RDNA3
@@ -196,6 +197,7 @@ gcn_option_override (void)
 	flag_xnack = HSACO_ATTR_OFF;
 	break;
       case PROCESSOR_GFX90a:
+      case PROCESSOR_GFX90c:
 	flag_xnack = HSACO_ATTR_ANY;
 	break;
       default:
@@ -3050,6 +3052,8 @@ gcn_omp_device_kind_arch_isa (enum omp_device_kind_arch_isa trait,
 	return gcn_arch == PROCESSOR_GFX908;
       if (strcmp (name, "gfx90a") == 0)
 	return gcn_arch == PROCESSOR_GFX90a;
+      if (strcmp (name, "gfx90c") == 0)
+	return gcn_arch == PROCESSOR_GFX90c;
       if (strcmp (name, "gfx1030") == 0)
 	return gcn_arch == PROCESSOR_GFX1030;
       if (strcmp (name, "gfx1036") == 0)
@@ -5231,6 +5235,14 @@ gcn_vector_mode_supported_p (machine_mode mode)
 static machine_mode
 gcn_vectorize_preferred_simd_mode (scalar_mode mode)
 {
+  bool v32;
+  if (gcn_preferred_vectorization_factor == 32)
+    v32 = true;
+  else if (gcn_preferred_vectorization_factor == 64)
+    v32 = false;
+  else if (gcn_preferred_vectorization_factor != -1)
+    gcc_unreachable ();
+  else if (TARGET_RDNA2_PLUS)
   /* RDNA devices have 32-lane vectors with limited support for 64-bit vectors
      (in particular, permute operations are only available for cases that don't
      span the 32-lane boundary).
@@ -5238,7 +5250,11 @@ gcn_vectorize_preferred_simd_mode (scalar_mode mode)
      From the RDNA3 manual: "Hardware may choose to skip either half if the
      EXEC mask for that half is all zeros...". This means that preferring
      32-lanes is a good stop-gap until we have proper wave32 support.  */
-  if (TARGET_RDNA2_PLUS)
+    v32 = true;
+  else
+    v32 = false;
+
+  if (v32)
     switch (mode)
       {
       case E_QImode:
@@ -6583,6 +6599,10 @@ output_file_start (void)
       break;
     case PROCESSOR_GFX90a:
       cpu = "gfx90a";
+      break;
+    case PROCESSOR_GFX90c:
+      cpu = "gfx90c";
+      sram_ecc = "";
       break;
     case PROCESSOR_GFX1030:
       cpu = "gfx1030";

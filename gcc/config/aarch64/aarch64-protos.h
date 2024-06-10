@@ -1014,9 +1014,9 @@ bool aarch64_general_check_builtin_call (location_t, vec<location_t>,
 
 namespace aarch64_sve {
   void init_builtins ();
-  void handle_arm_sve_h ();
-  void handle_arm_sme_h ();
-  void handle_arm_neon_sve_bridge_h ();
+  void handle_arm_sve_h (bool);
+  void handle_arm_sme_h (bool);
+  void handle_arm_neon_sve_bridge_h (bool);
   tree builtin_decl (unsigned, bool);
   bool builtin_type_p (const_tree);
   bool builtin_type_p (const_tree, unsigned int *, unsigned int *);
@@ -1109,6 +1109,11 @@ extern bool aarch64_harden_sls_blr_p (void);
 extern void aarch64_output_patchable_area (unsigned int, bool);
 
 extern void aarch64_adjust_reg_alloc_order ();
+
+extern void mingw_pe_maybe_record_exported_symbol (tree, const char *, int);
+extern unsigned int mingw_pe_section_type_flags (tree, const char *, int);
+extern void mingw_pe_unique_section (tree, int);
+extern void mingw_pe_encode_section_info (tree, rtx, int);
 
 bool aarch64_optimize_mode_switching (aarch64_mode_entity);
 void aarch64_restore_za (rtx);

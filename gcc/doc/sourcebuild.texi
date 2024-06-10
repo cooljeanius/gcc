@@ -1320,9 +1320,15 @@ to @var{var_value} before execution of the program created by the test.
 Specify additional files, other than source files, that must be copied
 to the system where the compiler runs.
 
-@item @{ dg-additional-sources "@var{filelist}" @}
+@item @{ dg-additional-sources "@var{filelist}" [@{ target @var{selector} @}] @}
 Specify additional source files to appear in the compile line
 following the main test file.
+If the directive includes the optional @samp{@{ @var{selector} @}}
+then the additional sources are only added if the target system
+matches the @var{selector}.
+Additional sources are generally used only in @samp{link} and @samp{run}
+tests; they are reported as unsupported and discarded in other kinds of
+tests that direct the compiler to output to a single file.
 @end table
 
 @subsubsection Add checks at the end of a test
@@ -2837,6 +2843,9 @@ can be included without error when @option{-mbig-endian} is passed.
 @item stpcpy
 Target provides @code{stpcpy} function.
 
+@item strndup
+Target provides @code{strndup} function.
+
 @item sysconf
 Target supports @code{sysconf}.
 
@@ -2870,6 +2879,9 @@ Target supports weak undefined symbols
 @table @code
 @item R_flag_in_section
 Target supports the 'R' flag in .section directive in assembly inputs.
+
+@item asm_goto_with_outputs
+Target supports 'asm goto' with outputs.
 
 @item automatic_stack_alignment
 Target supports automatic stack alignment.
@@ -2945,6 +2957,9 @@ Target is using an LLVM assembler and/or linker, instead of GNU Binutils.
 
 @item lra
 Target supports local register allocator (LRA).
+This must not be called (results in @code{ERROR}) for targets that
+don't do register allocation, and therefore neither use nor don't use
+LRA.
 
 @item lto
 Compiler has been configured to support link-time optimization (LTO).

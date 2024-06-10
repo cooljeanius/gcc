@@ -22,6 +22,7 @@ along with GCC; see the file COPYING3.  If not see
 
 #include "config.h"
 #define INCLUDE_MEMORY
+#define INCLUDE_VECTOR
 #include "system.h"
 #include "coretypes.h"
 #include "make-unique.h"
@@ -645,8 +646,10 @@ class tainted_allocation_size : public taint_diagnostic
 {
 public:
   tainted_allocation_size (const taint_state_machine &sm, tree arg,
+			   const svalue *size_in_bytes,
 			   enum bounds has_bounds, enum memory_space mem_space)
   : taint_diagnostic (sm, arg, has_bounds),
+    m_size_in_bytes (size_in_bytes),
     m_mem_space (mem_space)
   {
   }
@@ -781,7 +784,18 @@ public:
 	}
   }
 
+  void maybe_add_sarif_properties (sarif_object &result_obj)
+    const final override
+  {
+    taint_diagnostic::maybe_add_sarif_properties (result_obj);
+    sarif_property_bag &props = result_obj.get_or_create_properties ();
+#define PROPERTY_PREFIX "gcc/analyzer/tainted_allocation_size/"
+    props.set (PROPERTY_PREFIX "size_in_bytes", m_size_in_bytes->to_json ());
+#undef PROPERTY_PREFIX
+  }
+
 private:
+  const svalue *m_size_in_bytes;
   enum memory_space m_mem_space;
 };
 
@@ -1611,14 +1625,6 @@ region_model::check_region_for_taint (const region *reg,
 	  }
 	  break;
 
-	case RK_CAST:
-	  {
-	    const cast_region *cast_reg
-	      = as_a <const cast_region *> (iter_region);
-	    iter_region = cast_reg->get_original_region ();
-	    continue;
-	  }
-
 	case RK_SIZED:
 	  {
 	    const sized_region *sized_reg
@@ -1678,7 +1684,7 @@ region_model::check_dynamic_size_for_taint (enum memory_space mem_space,
     {
       tree arg = get_representative_tree (size_in_bytes);
       ctxt->warn (make_unique<tainted_allocation_size>
-		    (taint_sm, arg, b, mem_space));
+		    (taint_sm, arg, size_in_bytes, b, mem_space));
     }
 }
 

@@ -4286,11 +4286,7 @@ bitint_large_huge::lower_addsub_overflow (tree obj, gimple *stmt)
 		  bool single_comparison
 		    = (startlimb + 2 >= fin || (startlimb & 1) != (i & 1));
 		  if (!single_comparison)
-		    {
-		      cmp_code = GE_EXPR;
-		      if (!check_zero && (start % limb_prec) == 0)
-			single_comparison = true;
-		    }
+		    cmp_code = GE_EXPR;
 		  else if ((startlimb & 1) == (i & 1))
 		    cmp_code = EQ_EXPR;
 		  else
@@ -5320,7 +5316,7 @@ bitint_large_huge::lower_call (tree obj, gimple *stmt)
 	  arg = make_ssa_name (TREE_TYPE (arg));
 	  gimple *g = gimple_build_assign (arg, v);
 	  gsi_insert_before (&gsi, g, GSI_SAME_STMT);
-	  if (returns_twice)
+	  if (returns_twice && bb_has_abnormal_pred (gimple_bb (stmt)))
 	    {
 	      m_returns_twice_calls.safe_push (stmt);
 	      returns_twice = false;
@@ -7172,8 +7168,13 @@ gimple_lower_bitint (void)
 	  gimple_stmt_iterator gsi = gsi_after_labels (gimple_bb (stmt));
 	  while (gsi_stmt (gsi) != stmt)
 	    {
-	      arg_stmts.safe_push (gsi_stmt (gsi));
-	      gsi_remove (&gsi, false);
+	      if (is_gimple_debug (gsi_stmt (gsi)))
+		gsi_next (&gsi);
+	      else
+		{
+		  arg_stmts.safe_push (gsi_stmt (gsi));
+		  gsi_remove (&gsi, false);
+		}
 	    }
 	  gimple *g;
 	  basic_block bb = NULL;

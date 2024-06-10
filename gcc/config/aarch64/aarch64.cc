@@ -103,6 +103,10 @@
 /* Defined for convenience.  */
 #define POINTER_BYTES (POINTER_SIZE / BITS_PER_UNIT)
 
+/* Maximum bytes set for an inline memset expansion.  With -Os use 3 STP
+   and 1 MOVI/DUP (same size as a call).  */
+#define MAX_SET_SIZE(speed) (speed ? 256 : 96)
+
 /* Flags that describe how a function shares certain architectural state
    with its callers.
 
@@ -6583,6 +6587,7 @@ aarch64_return_in_memory_1 (const_tree type)
   int count;
 
   if (!AGGREGATE_TYPE_P (type)
+      && TREE_CODE (type) != BITINT_TYPE
       && TREE_CODE (type) != COMPLEX_TYPE
       && TREE_CODE (type) != VECTOR_TYPE)
     /* Simple scalar types always returned in registers.  */
@@ -6742,6 +6747,37 @@ aarch64_function_arg_alignment (machine_mode mode, const_tree type,
     }
 
   return alignment;
+}
+
+/* Return true if TYPE describes a _BitInt(N) or an angreggate that uses the
+   _BitInt(N) type.  These include ARRAY_TYPE's with an element that is a
+   _BitInt(N) or an aggregate that uses it, and a RECORD_TYPE or a UNION_TYPE
+   with a field member that is a _BitInt(N) or an aggregate that uses it.
+   Return false otherwise.  */
+
+static bool
+bitint_or_aggr_of_bitint_p (tree type)
+{
+  if (!type)
+    return false;
+
+  if (TREE_CODE (type) == BITINT_TYPE)
+    return true;
+
+  /* If ARRAY_TYPE, check it's element type.  */
+  if (TREE_CODE (type) == ARRAY_TYPE)
+    return bitint_or_aggr_of_bitint_p (TREE_TYPE (type));
+
+  /* If RECORD_TYPE or UNION_TYPE, check the fields' types.  */
+  if (RECORD_OR_UNION_TYPE_P (type))
+    for (tree field = TYPE_FIELDS (type); field; field = TREE_CHAIN (field))
+      {
+	if (TREE_CODE (field) != FIELD_DECL)
+	  continue;
+	if (bitint_or_aggr_of_bitint_p (TREE_TYPE (field)))
+	  return true;
+      }
+  return false;
 }
 
 /* Layout a function argument according to the AAPCS64 rules.  The rule
@@ -6907,6 +6943,10 @@ aarch64_layout_arg (cumulative_args_t pcum_v, const function_arg_info &arg)
 	      && (!alignment || abi_break_gcc_9 < alignment)
 	      && (!abi_break_gcc_13 || alignment < abi_break_gcc_13));
 
+  /* _BitInt(N) was only added in GCC 14.  */
+  bool warn_pcs_change_le_gcc14
+    = warn_pcs_change && !bitint_or_aggr_of_bitint_p (type);
+
   /* allocate_ncrn may be false-positive, but allocate_nvrn is quite reliable.
      The following code thus handles passing by SIMD/FP registers first.  */
 
@@ -6978,14 +7018,14 @@ aarch64_layout_arg (cumulative_args_t pcum_v, const function_arg_info &arg)
 	{
 	  /* Emit a warning if the alignment changed when taking the
 	     'packed' attribute into account.  */
-	  if (warn_pcs_change
+	  if (warn_pcs_change_le_gcc14
 	      && abi_break_gcc_13
 	      && ((abi_break_gcc_13 == 16 * BITS_PER_UNIT)
 		  != (alignment == 16 * BITS_PER_UNIT)))
 	    inform (input_location, "parameter passing for argument of type "
 		    "%qT changed in GCC 13.1", type);
 
-	  if (warn_pcs_change
+	  if (warn_pcs_change_le_gcc14
 	      && abi_break_gcc_14
 	      && ((abi_break_gcc_14 == 16 * BITS_PER_UNIT)
 		  != (alignment == 16 * BITS_PER_UNIT)))
@@ -6998,7 +7038,8 @@ aarch64_layout_arg (cumulative_args_t pcum_v, const function_arg_info &arg)
 	     passed by reference rather than value.  */
 	  if (alignment == 16 * BITS_PER_UNIT)
 	    {
-	      if (warn_pcs_change && abi_break_gcc_9)
+	      if (warn_pcs_change_le_gcc14
+		  && abi_break_gcc_9)
 		inform (input_location, "parameter passing for argument of type "
 			"%qT changed in GCC 9.1", type);
 	      ++ncrn;
@@ -7056,14 +7097,14 @@ aarch64_layout_arg (cumulative_args_t pcum_v, const function_arg_info &arg)
 on_stack:
   pcum->aapcs_stack_words = size / UNITS_PER_WORD;
 
-  if (warn_pcs_change
+  if (warn_pcs_change_le_gcc14
       && abi_break_gcc_13
       && ((abi_break_gcc_13 >= 16 * BITS_PER_UNIT)
 	  != (alignment >= 16 * BITS_PER_UNIT)))
     inform (input_location, "parameter passing for argument of type "
 	    "%qT changed in GCC 13.1", type);
 
-  if (warn_pcs_change
+  if (warn_pcs_change_le_gcc14
       && abi_break_gcc_14
       && ((abi_break_gcc_14 >= 16 * BITS_PER_UNIT)
 	  != (alignment >= 16 * BITS_PER_UNIT)))
@@ -7075,7 +7116,8 @@ on_stack:
       int new_size = ROUND_UP (pcum->aapcs_stack_size, 16 / UNITS_PER_WORD);
       if (pcum->aapcs_stack_size != new_size)
 	{
-	  if (warn_pcs_change && abi_break_gcc_9)
+	  if (warn_pcs_change_le_gcc14
+	      && abi_break_gcc_9)
 	    inform (input_location, "parameter passing for argument of type "
 		    "%qT changed in GCC 9.1", type);
 	  pcum->aapcs_stack_size = new_size;
@@ -10362,9 +10404,7 @@ aarch64_mode_valid_for_sched_fusion_p (machine_mode mode)
 	 || mode == SDmode || mode == DDmode
 	 || (aarch64_vector_mode_supported_p (mode)
 	     && (known_eq (GET_MODE_SIZE (mode), 8)
-		 || (known_eq (GET_MODE_SIZE (mode), 16)
-		    && (aarch64_tune_params.extra_tuning_flags
-			& AARCH64_EXTRA_TUNE_NO_LDP_STP_QREGS) == 0)));
+		 || known_eq (GET_MODE_SIZE (mode), 16)));
 }
 
 /* Return true if REGNO is a virtual pointer register, or an eliminable
@@ -13172,29 +13212,33 @@ aarch64_output_sme_zero_za (rtx mask)
   /* The last entry in the list has the form "za7.d }", but that's the
      same length as "za7.d, ".  */
   static char buffer[sizeof("zero\t{ ") + sizeof ("za7.d, ") * 8 + 1];
-  unsigned int i = 0;
-  i += snprintf (buffer + i, sizeof (buffer) - i, "zero\t");
-  const char *prefix = "{ ";
   for (auto &tile : tiles)
     {
       unsigned int tile_mask = tile.mask;
       unsigned int tile_index = 0;
+      unsigned int i = snprintf (buffer, sizeof (buffer), "zero\t");
+      const char *prefix = "{ ";
+      auto remaining_mask = mask_val;
       while (tile_mask < 0x100)
 	{
-	  if ((mask_val & tile_mask) == tile_mask)
+	  if ((remaining_mask & tile_mask) == tile_mask)
 	    {
 	      i += snprintf (buffer + i, sizeof (buffer) - i, "%sza%d.%c",
 			     prefix, tile_index, tile.letter);
 	      prefix = ", ";
-	      mask_val &= ~tile_mask;
+	      remaining_mask &= ~tile_mask;
 	    }
 	  tile_mask <<= 1;
 	  tile_index += 1;
 	}
+      if (remaining_mask == 0)
+	{
+	  gcc_assert (i + 3 <= sizeof (buffer));
+	  snprintf (buffer + i, sizeof (buffer) - i, " }");
+	  return buffer;
+	}
     }
-  gcc_assert (mask_val == 0 && i + 3 <= sizeof (buffer));
-  snprintf (buffer + i, sizeof (buffer) - i, " }");
-  return buffer;
+  gcc_unreachable ();
 }
 
 /* Return size in bits of an arithmetic operand which is shifted/scaled and
@@ -14305,10 +14349,24 @@ aarch64_rtx_costs (rtx x, machine_mode mode, int outer ATTRIBUTE_UNUSED,
       return false;
 
     case CTZ:
-      *cost = COSTS_N_INSNS (2);
-
-      if (speed)
-	*cost += extra_cost->alu.clz + extra_cost->alu.rev;
+      if (VECTOR_MODE_P (mode))
+	{
+	  *cost = COSTS_N_INSNS (3);
+	  if (speed)
+	    *cost += extra_cost->vect.alu * 3;
+	}
+      else if (TARGET_CSSC)
+	{
+	  *cost = COSTS_N_INSNS (1);
+	  if (speed)
+	    *cost += extra_cost->alu.clz;
+	}
+      else
+	{
+	  *cost = COSTS_N_INSNS (2);
+	  if (speed)
+	    *cost += extra_cost->alu.clz + extra_cost->alu.rev;
+	}
       return false;
 
     case COMPARE:
@@ -16477,10 +16535,6 @@ aarch64_advsimd_ldp_stp_p (enum vect_cost_for_stmt kind,
       return false;
     }
 
-  if (aarch64_tune_params.extra_tuning_flags
-      & AARCH64_EXTRA_TUNE_NO_LDP_STP_QREGS)
-    return false;
-
   return is_gimple_assign (stmt_info->stmt);
 }
 
@@ -17127,9 +17181,6 @@ aarch64_stp_sequence_cost (unsigned int count, vect_cost_for_stmt kind,
     case unaligned_store:
       /* Count 1 insn per vector if we can't form STP Q pairs.  */
       if (aarch64_sve_mode_p (TYPE_MODE (vectype)))
-	return count * 2;
-      if (aarch64_tune_params.extra_tuning_flags
-	  & AARCH64_EXTRA_TUNE_NO_LDP_STP_QREGS)
 	return count * 2;
 
       if (stmt_info)
@@ -19657,6 +19708,10 @@ typedef struct
 #define AARCH64_FMV_FEATURE(NAME, FEAT_NAME, C) \
   {NAME, 1ULL << FEAT_##FEAT_NAME, ::feature_deps::fmv_deps_##FEAT_NAME},
 
+/* The "rdma" alias uses a different FEAT_NAME to avoid a duplicate
+   feature_deps name.  */
+#define FEAT_RDMA FEAT_RDM
+
 /* FMV features are listed in priority order, to make it easier to sort target
    strings.  */
 static aarch64_fmv_feature_datum aarch64_fmv_feature_data[] = {
@@ -19700,7 +19755,7 @@ aarch64_parse_fmv_features (const char *str, aarch64_feature_flags *isa_flags,
       if (len == 0)
 	return AARCH_PARSE_MISSING_ARG;
 
-      static const int num_features = ARRAY_SIZE (aarch64_fmv_feature_data);
+      int num_features = ARRAY_SIZE (aarch64_fmv_feature_data);
       int i;
       for (i = 0; i < num_features; i++)
 	{
@@ -19899,7 +19954,8 @@ compare_feature_masks (aarch64_fmv_feature_mask mask1,
   auto diff_mask = mask1 ^ mask2;
   if (diff_mask == 0ULL)
     return 0;
-  for (int i = FEAT_MAX - 1; i > 0; i--)
+  int num_features = ARRAY_SIZE (aarch64_fmv_feature_data);
+  for (int i = num_features - 1; i >= 0; i--)
     {
       auto bit_mask = aarch64_fmv_feature_data[i].feature_mask;
       if (diff_mask & bit_mask)
@@ -19982,7 +20038,8 @@ aarch64_mangle_decl_assembler_name (tree decl, tree id)
 
       name += "._";
 
-      for (int i = 0; i < FEAT_MAX; i++)
+      int num_features = ARRAY_SIZE (aarch64_fmv_feature_data);
+      for (int i = 0; i < num_features; i++)
 	{
 	  if (feature_mask & aarch64_fmv_feature_data[i].feature_mask)
 	    {
@@ -21266,19 +21323,25 @@ aarch64_gimplify_va_arg_expr (tree valist, tree type, gimple_seq *pre_p,
       rsize = ROUND_UP (size, UNITS_PER_WORD);
       nregs = rsize / UNITS_PER_WORD;
 
-      if (align <= 8 && abi_break_gcc_13 && warn_psabi)
+      if (align <= 8
+	  && abi_break_gcc_13
+	  && warn_psabi
+	  && !bitint_or_aggr_of_bitint_p (type))
 	inform (input_location, "parameter passing for argument of type "
 		"%qT changed in GCC 13.1", type);
 
       if (warn_psabi
 	  && abi_break_gcc_14
-	  && (abi_break_gcc_14 > 8 * BITS_PER_UNIT) != (align > 8))
+	  && (abi_break_gcc_14 > 8 * BITS_PER_UNIT) != (align > 8)
+	  && !bitint_or_aggr_of_bitint_p (type))
 	inform (input_location, "parameter passing for argument of type "
 		"%qT changed in GCC 14.1", type);
 
       if (align > 8)
 	{
-	  if (abi_break_gcc_9 && warn_psabi)
+	  if (abi_break_gcc_9
+	      && warn_psabi
+	      && !bitint_or_aggr_of_bitint_p (type))
 	    inform (input_location, "parameter passing for argument of type "
 		    "%qT changed in GCC 9.1", type);
 	  dw_align = true;
@@ -21950,6 +22013,11 @@ aarch64_composite_type_p (const_tree type,
     return false;
 
   if (type && (AGGREGATE_TYPE_P (type) || TREE_CODE (type) == COMPLEX_TYPE))
+    return true;
+
+  if (type
+      && TREE_CODE (type) == BITINT_TYPE
+      && int_size_in_bytes (type) > 16)
     return true;
 
   if (mode == BLKmode
@@ -25265,26 +25333,25 @@ aarch64_output_sve_ptrues (rtx const_unspec)
 void
 aarch64_split_combinev16qi (rtx operands[3])
 {
-  unsigned int dest = REGNO (operands[0]);
-  unsigned int src1 = REGNO (operands[1]);
-  unsigned int src2 = REGNO (operands[2]);
   machine_mode halfmode = GET_MODE (operands[1]);
-  unsigned int halfregs = REG_NREGS (operands[1]);
-  rtx destlo, desthi;
 
   gcc_assert (halfmode == V16QImode);
 
-  if (src1 == dest && src2 == dest + halfregs)
+  rtx destlo = simplify_gen_subreg (halfmode, operands[0],
+				    GET_MODE (operands[0]), 0);
+  rtx desthi = simplify_gen_subreg (halfmode, operands[0],
+				    GET_MODE (operands[0]),
+				    GET_MODE_SIZE (halfmode));
+
+  bool skiplo = rtx_equal_p (destlo, operands[1]);
+  bool skiphi = rtx_equal_p (desthi, operands[2]);
+
+  if (skiplo && skiphi)
     {
       /* No-op move.  Can't split to nothing; emit something.  */
       emit_note (NOTE_INSN_DELETED);
       return;
     }
-
-  /* Preserve register attributes for variable tracking.  */
-  destlo = gen_rtx_REG_offset (operands[0], halfmode, dest, 0);
-  desthi = gen_rtx_REG_offset (operands[0], halfmode, dest + halfregs,
-			       GET_MODE_SIZE (halfmode));
 
   /* Special case of reversed high/low parts.  */
   if (reg_overlap_mentioned_p (operands[2], destlo)
@@ -25298,16 +25365,16 @@ aarch64_split_combinev16qi (rtx operands[3])
     {
       /* Try to avoid unnecessary moves if part of the result
 	 is in the right place already.  */
-      if (src1 != dest)
+      if (!skiplo)
 	emit_move_insn (destlo, operands[1]);
-      if (src2 != dest + halfregs)
+      if (!skiphi)
 	emit_move_insn (desthi, operands[2]);
     }
   else
     {
-      if (src2 != dest + halfregs)
+      if (!skiphi)
 	emit_move_insn (desthi, operands[2]);
-      if (src1 != dest)
+      if (!skiplo)
 	emit_move_insn (destlo, operands[1]);
     }
 }
@@ -25520,7 +25587,6 @@ static bool
 aarch64_evpc_reencode (struct expand_vec_perm_d *d)
 {
   expand_vec_perm_d newd;
-  unsigned HOST_WIDE_INT nelt;
 
   if (d->vec_flags != VEC_ADVSIMD)
     return false;
@@ -25535,24 +25601,10 @@ aarch64_evpc_reencode (struct expand_vec_perm_d *d)
   if (new_mode == word_mode)
     return false;
 
-  /* to_constant is safe since this routine is specific to Advanced SIMD
-     vectors.  */
-  nelt = d->perm.length ().to_constant ();
+  vec_perm_indices newpermindices;
 
-  vec_perm_builder newpermconst;
-  newpermconst.new_vector (nelt / 2, nelt / 2, 1);
-
-  /* Convert the perm constant if we can.  Require even, odd as the pairs.  */
-  for (unsigned int i = 0; i < nelt; i += 2)
-    {
-      poly_int64 elt0 = d->perm[i];
-      poly_int64 elt1 = d->perm[i + 1];
-      poly_int64 newelt;
-      if (!multiple_p (elt0, 2, &newelt) || maybe_ne (elt0 + 1, elt1))
-	return false;
-      newpermconst.quick_push (newelt.to_constant ());
-    }
-  newpermconst.finalize ();
+  if (!newpermindices.new_shrunk_vector (d->perm, 2))
+    return false;
 
   newd.vmode = new_mode;
   newd.vec_flags = VEC_ADVSIMD;
@@ -25564,7 +25616,8 @@ aarch64_evpc_reencode (struct expand_vec_perm_d *d)
   newd.testing_p = d->testing_p;
   newd.one_vector_p = d->one_vector_p;
 
-  newd.perm.new_vector (newpermconst, newd.one_vector_p ? 1 : 2, nelt / 2);
+  newd.perm.new_vector (newpermindices.encoding (), newd.one_vector_p ? 1 : 2,
+			newpermindices.nelts_per_input ());
   return aarch64_expand_vec_perm_const_1 (&newd);
 }
 
@@ -26515,15 +26568,6 @@ aarch64_move_pointer (rtx pointer, poly_int64 amount)
 				    next, amount);
 }
 
-/* Return a new RTX holding the result of moving POINTER forward by the
-   size of the mode it points to.  */
-
-static rtx
-aarch64_progress_pointer (rtx pointer)
-{
-  return aarch64_move_pointer (pointer, GET_MODE_SIZE (GET_MODE (pointer)));
-}
-
 /* Expand a cpymem/movmem using the MOPS extension.  OPERANDS are taken
    from the cpymem/movmem pattern.  IS_MEMMOVE is true if this is a memmove
    rather than memcpy.  Return true iff we succeeded.  */
@@ -26566,11 +26610,9 @@ aarch64_expand_cpymem (rtx *operands, bool is_memmove)
     return aarch64_expand_cpymem_mops (operands, is_memmove);
 
   unsigned HOST_WIDE_INT size = UINTVAL (operands[2]);
-  bool use_ldpq = TARGET_SIMD && !(aarch64_tune_params.extra_tuning_flags
-				   & AARCH64_EXTRA_TUNE_NO_LDP_STP_QREGS);
 
   /* Set inline limits for memmove/memcpy.  MOPS has a separate threshold.  */
-  unsigned max_copy_size = use_ldpq ? 256 : 128;
+  unsigned max_copy_size = TARGET_SIMD ? 256 : 128;
   unsigned mops_threshold = is_memmove ? aarch64_mops_memmove_size_threshold
 				       : aarch64_mops_memcpy_size_threshold;
 
@@ -26651,48 +26693,6 @@ aarch64_expand_cpymem (rtx *operands, bool is_memmove)
   return true;
 }
 
-/* Like aarch64_copy_one_block_and_progress_pointers, except for memset where
-   SRC is a register we have created with the duplicated value to be set.  */
-static void
-aarch64_set_one_block_and_progress_pointer (rtx src, rtx *dst,
-					    machine_mode mode)
-{
-  /* If we are copying 128bits or 256bits, we can do that straight from
-     the SIMD register we prepared.  */
-  if (known_eq (GET_MODE_BITSIZE (mode), 256))
-    {
-      mode = GET_MODE (src);
-      /* "Cast" the *dst to the correct mode.  */
-      *dst = adjust_address (*dst, mode, 0);
-      /* Emit the memset.  */
-      emit_move_insn (*dst, src);
-      emit_move_insn (aarch64_move_pointer (*dst, 16), src);
-
-      /* Move the pointers forward.  */
-      *dst = aarch64_move_pointer (*dst, 32);
-      return;
-    }
-  if (known_eq (GET_MODE_BITSIZE (mode), 128))
-    {
-      /* "Cast" the *dst to the correct mode.  */
-      *dst = adjust_address (*dst, GET_MODE (src), 0);
-      /* Emit the memset.  */
-      emit_move_insn (*dst, src);
-      /* Move the pointers forward.  */
-      *dst = aarch64_move_pointer (*dst, 16);
-      return;
-    }
-  /* For copying less, we have to extract the right amount from src.  */
-  rtx reg = lowpart_subreg (mode, src, GET_MODE (src));
-
-  /* "Cast" the *dst to the correct mode.  */
-  *dst = adjust_address (*dst, mode, 0);
-  /* Emit the memset.  */
-  emit_move_insn (*dst, reg);
-  /* Move the pointer forward.  */
-  *dst = aarch64_progress_pointer (*dst);
-}
-
 /* Expand a setmem using the MOPS instructions.  OPERANDS are the same
    as for the setmem pattern.  Return true iff we succeed.  */
 static bool
@@ -26719,24 +26719,21 @@ aarch64_expand_setmem_mops (rtx *operands)
 bool
 aarch64_expand_setmem (rtx *operands)
 {
-  int n, mode_bits;
+  int mode_bytes;
   unsigned HOST_WIDE_INT len;
   rtx dst = operands[0];
   rtx val = operands[2], src;
   unsigned align = UINTVAL (operands[3]);
   rtx base;
-  machine_mode cur_mode = BLKmode, next_mode;
+  machine_mode mode = BLKmode, next_mode;
 
   /* Variable-sized or strict-align memset may use the MOPS expansion.  */
   if (!CONST_INT_P (operands[1]) || !TARGET_SIMD
       || (STRICT_ALIGNMENT && align < 16))
     return aarch64_expand_setmem_mops (operands);
 
-  bool size_p = optimize_function_for_size_p (cfun);
-
-  /* Default the maximum to 256-bytes when considering only libcall vs
-     SIMD broadcast sequence.  */
-  unsigned max_set_size = 256;
+  /* Set inline limits for memset.  MOPS has a separate threshold.  */
+  unsigned max_set_size = MAX_SET_SIZE (optimize_function_for_speed_p (cfun));
   unsigned mops_threshold = aarch64_mops_memset_size_threshold;
 
   len = UINTVAL (operands[1]);
@@ -26745,91 +26742,51 @@ aarch64_expand_setmem (rtx *operands)
   if (len > max_set_size || (TARGET_MOPS && len > mops_threshold))
     return aarch64_expand_setmem_mops (operands);
 
-  int cst_val = !!(CONST_INT_P (val) && (INTVAL (val) != 0));
-  /* The MOPS sequence takes:
-     3 instructions for the memory storing
-     + 1 to move the constant size into a reg
-     + 1 if VAL is a non-zero constant to move into a reg
-    (zero constants can use XZR directly).  */
-  unsigned mops_cost = 3 + 1 + cst_val;
-  /* A libcall to memset in the worst case takes 3 instructions to prepare
-     the arguments + 1 for the call.  */
-  unsigned libcall_cost = 4;
-
-  /* Attempt a sequence with a vector broadcast followed by stores.
-     Count the number of operations involved to see if it's worth it
-     against the alternatives.  A simple counter simd_ops on the
-     algorithmically-relevant operations is used rather than an rtx_insn count
-     as all the pointer adjusmtents and mode reinterprets will be optimized
-     away later.  */
-  start_sequence ();
-  unsigned simd_ops = 0;
-
   base = copy_to_mode_reg (Pmode, XEXP (dst, 0));
   dst = adjust_automodify_address (dst, VOIDmode, base, 0);
 
   /* Prepare the val using a DUP/MOVI v0.16B, val.  */
-  src = expand_vector_broadcast (V16QImode, val);
-  src = force_reg (V16QImode, src);
-  simd_ops++;
-  /* Convert len to bits to make the rest of the code simpler.  */
-  n = len * BITS_PER_UNIT;
+  val = expand_vector_broadcast (V16QImode, val);
+  val = force_reg (V16QImode, val);
 
-  /* Maximum amount to copy in one go.  We allow 256-bit chunks based on the
-     AARCH64_EXTRA_TUNE_NO_LDP_STP_QREGS tuning parameter.  */
-  const int copy_limit = (aarch64_tune_params.extra_tuning_flags
-			  & AARCH64_EXTRA_TUNE_NO_LDP_STP_QREGS)
-			  ? GET_MODE_BITSIZE (TImode) : 256;
-
-  while (n > 0)
+  int offset = 0;
+  while (len > 0)
     {
       /* Find the largest mode in which to do the copy without
 	 over writing.  */
       opt_scalar_int_mode mode_iter;
       FOR_EACH_MODE_IN_CLASS (mode_iter, MODE_INT)
-	if (GET_MODE_BITSIZE (mode_iter.require ()) <= MIN (n, copy_limit))
-	  cur_mode = mode_iter.require ();
+	if (GET_MODE_SIZE (mode_iter.require ()) <= MIN (len, 16))
+	  mode = mode_iter.require ();
 
-      gcc_assert (cur_mode != BLKmode);
+      gcc_assert (mode != BLKmode);
 
-      mode_bits = GET_MODE_BITSIZE (cur_mode).to_constant ();
-      aarch64_set_one_block_and_progress_pointer (src, &dst, cur_mode);
-      simd_ops++;
-      n -= mode_bits;
+      mode_bytes = GET_MODE_SIZE (mode).to_constant ();
+
+      src = val;
+
+      /* Prefer Q-register accesses.  */
+      if (mode_bytes == 16)
+	mode = V16QImode;
+      else
+	src = lowpart_subreg (mode, src, GET_MODE (val));
+
+      emit_move_insn (adjust_address (dst, mode, offset), src);
+      len -= mode_bytes;
+      offset += mode_bytes;
 
       /* Emit trailing writes using overlapping unaligned accesses
-	(when !STRICT_ALIGNMENT) - this is smaller and faster.  */
-      if (n > 0 && n < copy_limit / 2 && !STRICT_ALIGNMENT)
+	 (when !STRICT_ALIGNMENT) - this is smaller and faster.  */
+      if (len > 0 && len < 16 && !STRICT_ALIGNMENT)
 	{
-	  next_mode = smallest_mode_for_size (n, MODE_INT);
-	  int n_bits = GET_MODE_BITSIZE (next_mode).to_constant ();
-	  gcc_assert (n_bits <= mode_bits);
-	  dst = aarch64_move_pointer (dst, (n - n_bits) / BITS_PER_UNIT);
-	  n = n_bits;
+	  next_mode = smallest_mode_for_size (len * BITS_PER_UNIT, MODE_INT);
+	  int n_bytes = GET_MODE_SIZE (next_mode).to_constant ();
+	  gcc_assert (n_bytes <= mode_bytes);
+	  offset -= n_bytes - len;
+	  len = n_bytes;
 	}
     }
-  rtx_insn *seq = get_insns ();
-  end_sequence ();
 
-  if (size_p)
-    {
-      /* When optimizing for size we have 3 options: the SIMD broadcast sequence,
-	 call to memset or the MOPS expansion.  */
-      if (TARGET_MOPS
-	  && mops_cost <= libcall_cost
-	  && mops_cost <= simd_ops)
-	return aarch64_expand_setmem_mops (operands);
-      /* If MOPS is not available or not shorter pick a libcall if the SIMD
-	 sequence is too long.  */
-      else if (libcall_cost < simd_ops)
-	return false;
-      emit_insn (seq);
-      return true;
-    }
-
-  /* At this point the SIMD broadcast sequence is the best choice when
-     optimizing for speed.  */
-  emit_insn (seq);
   return true;
 }
 
@@ -28431,6 +28388,42 @@ aarch64_excess_precision (enum excess_precision_type type)
 	gcc_unreachable ();
     }
   return FLT_EVAL_METHOD_UNPREDICTABLE;
+}
+
+/* Implement TARGET_C_BITINT_TYPE_INFO.
+   Return true if _BitInt(N) is supported and fill its details into *INFO.  */
+bool
+aarch64_bitint_type_info (int n, struct bitint_info *info)
+{
+  if (TARGET_BIG_END)
+    return false;
+
+  if (n <= 8)
+    info->limb_mode = QImode;
+  else if (n <= 16)
+    info->limb_mode = HImode;
+  else if (n <= 32)
+    info->limb_mode = SImode;
+  else if (n <= 64)
+    info->limb_mode = DImode;
+  else if (n <= 128)
+    info->limb_mode = TImode;
+  else
+    /* The AAPCS for AArch64 defines _BitInt(N > 128) as an array with
+       type {signed,unsigned} __int128[M] where M*128 >= N.  However, to be
+       able to use libgcc's implementation to support large _BitInt's we need
+       to use a LIMB_MODE that is no larger than 'long long'.  This is why we
+       use DImode for our internal LIMB_MODE and we define the ABI_LIMB_MODE to
+       be TImode to ensure we are ABI compliant.  */
+    info->limb_mode = DImode;
+
+  if (n > 128)
+    info->abi_limb_mode = TImode;
+  else
+    info->abi_limb_mode = info->limb_mode;
+  info->big_endian = TARGET_BIG_END;
+  info->extended = false;
+  return true;
 }
 
 /* Implement TARGET_SCHED_CAN_SPECULATE_INSN.  Return true if INSN can be
@@ -30556,6 +30549,9 @@ aarch64_run_selftests (void)
 
 #undef TARGET_C_EXCESS_PRECISION
 #define TARGET_C_EXCESS_PRECISION aarch64_excess_precision
+
+#undef TARGET_C_BITINT_TYPE_INFO
+#define TARGET_C_BITINT_TYPE_INFO aarch64_bitint_type_info
 
 #undef  TARGET_EXPAND_BUILTIN
 #define TARGET_EXPAND_BUILTIN aarch64_expand_builtin

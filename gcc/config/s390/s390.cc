@@ -78,6 +78,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "tree-pass.h"
 #include "context.h"
 #include "builtins.h"
+#include "ifcvt.h"
 #include "rtl-iter.h"
 #include "intl.h"
 #include "tm-constrs.h"
@@ -9984,7 +9985,7 @@ s390_const_int_pool_entry_p (rtx mem, HOST_WIDE_INT *val)
      - (mem (unspec [(symbol_ref) (reg)] UNSPEC_LTREF)).
      - (mem (symbol_ref)).  */
 
-  if (!MEM_P (mem))
+  if (!MEM_P (mem) || GET_MODE_CLASS (GET_MODE (mem)) != MODE_INT)
     return false;
 
   rtx addr = XEXP (mem, 0);
@@ -9998,8 +9999,18 @@ s390_const_int_pool_entry_p (rtx mem, HOST_WIDE_INT *val)
     return false;
 
   rtx val_rtx = get_pool_constant (sym);
-  if (!CONST_INT_P (val_rtx))
+  machine_mode mode = get_pool_mode (sym);
+  if (!CONST_INT_P (val_rtx)
+      || GET_MODE_CLASS (mode) != MODE_INT
+      || GET_MODE_SIZE (mode) < GET_MODE_SIZE (GET_MODE (mem)))
     return false;
+
+  if (mode != GET_MODE (mem))
+    {
+      val_rtx = simplify_subreg (GET_MODE (mem), val_rtx, mode, 0);
+      if (val_rtx == NULL_RTX || !CONST_INT_P (val_rtx))
+	return false;
+    }
 
   if (val != nullptr)
     *val = INTVAL (val_rtx);
@@ -16094,7 +16105,7 @@ s390_option_override_internal (struct gcc_options *opts,
     }
   else
     {
-      if (TARGET_CPU_VX_P (opts))
+      if (TARGET_CPU_VX_P (opts) && TARGET_ZARCH_P (opts->x_target_flags))
 	/* Enable vector support if available and not explicitly disabled
 	   by user.  E.g. with -m31 -march=z13 -mzarch */
 	opts->x_target_flags |= MASK_OPT_VX;
@@ -17923,6 +17934,36 @@ expand_perm_as_a_vlbr_vstbr_candidate (const struct expand_vec_perm_d &d)
   return false;
 }
 
+static bool
+expand_perm_as_replicate (const struct expand_vec_perm_d &d)
+{
+  unsigned char i;
+  unsigned char elem;
+  rtx base = d.op0;
+  rtx insn;
+  /* Needed to silence maybe-uninitialized warning.  */
+  gcc_assert (d.nelt > 0);
+  elem = d.perm[0];
+  for (i = 1; i < d.nelt; ++i)
+    if (d.perm[i] != elem)
+      return false;
+  if (!d.testing_p)
+    {
+      if (elem >= d.nelt)
+	{
+	  base = d.op1;
+	  elem -= d.nelt;
+	}
+      insn = maybe_gen_vec_splat (d.vmode, d.target, base, GEN_INT (elem));
+      if (insn == NULL_RTX)
+	return false;
+      emit_insn (insn);
+      return true;
+    }
+  else
+    return maybe_code_for_vec_splat (d.vmode) != CODE_FOR_nothing;
+}
+
 /* Try to find the best sequence for the vector permute operation
    described by D.  Return true if the operation could be
    expanded.  */
@@ -17939,6 +17980,9 @@ vectorize_vec_perm_const_1 (const struct expand_vec_perm_d &d)
     return true;
 
   if (expand_perm_as_a_vlbr_vstbr_candidate (d))
+    return true;
+
+  if (expand_perm_as_replicate (d))
     return true;
 
   return false;
@@ -17992,6 +18036,34 @@ s390_vectorize_vec_perm_const (machine_mode vmode, machine_mode op_mode,
     d.only_op1 = true;
 
   return vectorize_vec_perm_const_1 (d);
+}
+
+/* Consider a NOCE conversion as profitable if there is at least one
+   conditional move.  */
+
+static bool
+s390_noce_conversion_profitable_p (rtx_insn *seq, struct noce_if_info *if_info)
+{
+  if (if_info->speed_p)
+    {
+      for (rtx_insn *insn = seq; insn; insn = NEXT_INSN (insn))
+	{
+	  rtx set = single_set (insn);
+	  if (set == NULL)
+	    continue;
+	  if (GET_CODE (SET_SRC (set)) != IF_THEN_ELSE)
+	    continue;
+	  rtx src = SET_SRC (set);
+	  machine_mode mode = GET_MODE (src);
+	  if (GET_MODE_CLASS (mode) != MODE_INT
+	      && GET_MODE_CLASS (mode) != MODE_FLOAT)
+	    continue;
+	  if (GET_MODE_SIZE (mode) > UNITS_PER_WORD)
+	    continue;
+	  return true;
+	}
+    }
+  return default_noce_conversion_profitable_p (seq, if_info);
 }
 
 /* Initialize GCC target structure.  */
@@ -18306,6 +18378,9 @@ s390_vectorize_vec_perm_const (machine_mode vmode, machine_mode op_mode,
 
 #undef TARGET_VECTORIZE_VEC_PERM_CONST
 #define TARGET_VECTORIZE_VEC_PERM_CONST s390_vectorize_vec_perm_const
+
+#undef TARGET_NOCE_CONVERSION_PROFITABLE_P
+#define TARGET_NOCE_CONVERSION_PROFITABLE_P s390_noce_conversion_profitable_p
 
 struct gcc_target targetm = TARGET_INITIALIZER;
 

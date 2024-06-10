@@ -22,6 +22,9 @@ along with GCC; see the file COPYING3.  If not see
 /* LoongArch external variables defined in loongarch.cc.  */
 
 #include "config/loongarch/loongarch-opts.h"
+#include "config/loongarch/loongarch-evolution.h"
+
+#define SWITCHABLE_TARGET 1
 
 #define TARGET_SUPPORTS_WIDE_INT 1
 

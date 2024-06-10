@@ -64,6 +64,7 @@ extern const char *riscv_arch_help (int argc, const char **argv);
    --with-abi is ignored if -mabi is specified.
    --with-tune is ignored if -mtune or -mcpu is specified.
    --with-isa-spec is ignored if -misa-spec is specified.
+   --with-tls is ignored if -mtls-dialect is specified.
 
    But using default -march/-mtune value if -mcpu don't have valid option.  */
 #define OPTION_DEFAULT_SPECS \
@@ -73,8 +74,9 @@ extern const char *riscv_arch_help (int argc, const char **argv);
   {"arch", "%{!march=*:"						\
 	   "  %{!mcpu=*:-march=%(VALUE)}"				\
 	   "  %{mcpu=*:%:riscv_expand_arch_from_cpu(%* %(VALUE))}}" },	\
-  {"abi", "%{!mabi=*:-mabi=%(VALUE)}" }, \
-  {"isa_spec", "%{!misa-spec=*:-misa-spec=%(VALUE)}" }, \
+  {"abi", "%{!mabi=*:-mabi=%(VALUE)}" },				\
+  {"isa_spec", "%{!misa-spec=*:-misa-spec=%(VALUE)}" },			\
+  {"tls", "%{!mtls-dialect=*:-mtls-dialect=%(VALUE)}"},         	\
 
 #ifdef IN_LIBGCC2
 #undef TARGET_64BIT
@@ -313,7 +315,7 @@ ASM_MISA_SPEC
 	- FRAME_POINTER_REGNUM
    - 1 vl register
    - 1 vtype register
-   - 30 unused registers for future expansion
+   - 28 unused registers for future expansion
    - 32 vector registers  */
 
 #define FIRST_PSEUDO_REGISTER 128
@@ -624,6 +626,28 @@ enum reg_class
   (((VALUE) | ((1UL<<31) - IMM_REACH)) == ((1UL<<31) - IMM_REACH)	\
    || ((VALUE) | ((1UL<<31) - IMM_REACH)) + IMM_REACH == 0)
 
+/* True if a VALUE (constant) can be expressed as sum of two S12 constants
+   (in range -2048 to 2047).
+   Range check logic:
+     from: min S12 + 1 (or -1 depending on what side of zero)
+       to: two times the min S12 value (to max out S12 bits).  */
+
+#define SUM_OF_TWO_S12_N(VALUE)						\
+  (((VALUE) >= (-2048 * 2)) && ((VALUE) <= (-2048 - 1)))
+
+#define SUM_OF_TWO_S12_P(VALUE)						\
+  (((VALUE) >= (2047 + 1)) && ((VALUE) <= (2047 * 2)))
+
+#define SUM_OF_TWO_S12(VALUE)						\
+  (SUM_OF_TWO_S12_N (VALUE) || SUM_OF_TWO_S12_P (VALUE))
+
+/* Variant with first value 8 byte aligned if involving stack regs.  */
+#define SUM_OF_TWO_S12_P_ALGN(VALUE)				\
+  (((VALUE) >= (2032 + 1)) && ((VALUE) <= (2032 * 2)))
+
+#define SUM_OF_TWO_S12_ALGN(VALUE)				\
+  (SUM_OF_TWO_S12_N (VALUE) || SUM_OF_TWO_S12_P_ALGN (VALUE))
+
 /* If this is a single bit mask, then we can load it with bseti.  Special
    handling of SImode 0x80000000 on RV64 is done in riscv_build_integer_1. */
 #define SINGLE_BIT_MASK_OPERAND(VALUE)					\
@@ -681,6 +705,12 @@ enum reg_class
 
 #define GP_RETURN GP_ARG_FIRST
 #define FP_RETURN (UNITS_PER_FP_ARG == 0 ? GP_RETURN : FP_ARG_FIRST)
+#define V_RETURN  V_REG_FIRST
+
+#define GP_RETURN_FIRST GP_ARG_FIRST
+#define GP_RETURN_LAST  GP_ARG_FIRST + 1
+#define FP_RETURN_FIRST FP_RETURN
+#define FP_RETURN_LAST  FP_RETURN + 1
 
 #define MAX_ARGS_IN_REGISTERS \
   (riscv_abi == ABI_ILP32E || riscv_abi == ABI_LP64E \
@@ -711,8 +741,6 @@ enum reg_class
 
 #define FUNCTION_VALUE(VALTYPE, FUNC) \
   riscv_function_value (VALTYPE, FUNC, VOIDmode)
-
-#define FUNCTION_VALUE_REGNO_P(N) ((N) == GP_RETURN || (N) == FP_RETURN)
 
 /* 1 if N is a possible register number for function argument passing.
    We have no FP argument registers when soft-float.  */
@@ -905,6 +933,10 @@ extern enum riscv_cc get_riscv_cc (const rtx use);
  ((riscv_microarchitecture == sifive_7) \
   || (riscv_microarchitecture == sifive_p400) \
   || (riscv_microarchitecture == sifive_p600))
+
+/* True if the target supports misaligned vector loads and stores.  */
+#define TARGET_VECTOR_MISALIGN_SUPPORTED \
+   riscv_vector_unaligned_access_p
 
 #define LOGICAL_OP_NON_SHORT_CIRCUIT 0
 
@@ -1133,6 +1165,7 @@ while (0)
 #ifndef USED_FOR_TARGET
 extern const enum reg_class riscv_regno_to_class[];
 extern bool riscv_slow_unaligned_access_p;
+extern bool riscv_vector_unaligned_access_p;
 extern bool riscv_user_wants_strict_align;
 extern unsigned riscv_stack_boundary;
 extern unsigned riscv_bytes_per_vector_chunk;
@@ -1227,5 +1260,8 @@ extern void riscv_remove_unneeded_save_restore_calls (void);
 
 #define HAVE_POST_MODIFY_DISP TARGET_XTHEADMEMIDX
 #define HAVE_PRE_MODIFY_DISP  TARGET_XTHEADMEMIDX
+
+/* Check TLS Descriptors mechanism is selected.  */
+#define TARGET_TLSDESC (riscv_tls_dialect == TLS_DESCRIPTORS)
 
 #endif /* ! GCC_RISCV_H */

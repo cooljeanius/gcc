@@ -5344,6 +5344,7 @@ loongarch_expand_conditional_move (rtx *operands)
   rtx op1_extend = op1;
 
   /* Record whether operands[2] and operands[3] modes are promoted to word_mode.  */
+  bool promote_op[2] = {false, false};
   bool promote_p = false;
   machine_mode mode = GET_MODE (operands[0]);
 
@@ -5351,9 +5352,15 @@ loongarch_expand_conditional_move (rtx *operands)
     loongarch_emit_float_compare (&code, &op0, &op1);
   else
     {
-      if ((REGNO (op0) == REGNO (operands[2])
-	   || (REGNO (op1) == REGNO (operands[3]) && (op1 != const0_rtx)))
-	  && (GET_MODE_SIZE (GET_MODE (op0)) < word_mode))
+      if (GET_MODE_SIZE (GET_MODE (op0)) < word_mode)
+	{
+	  promote_op[0] = (REG_P (op0) && REG_P (operands[2]) &&
+			   REGNO (op0) == REGNO (operands[2]));
+	  promote_op[1] = (REG_P (op1) && REG_P (operands[3]) &&
+			   REGNO (op1) == REGNO (operands[3]));
+	}
+
+      if (promote_op[0] || promote_op[1])
 	{
 	  mode = word_mode;
 	  promote_p = true;
@@ -5395,7 +5402,7 @@ loongarch_expand_conditional_move (rtx *operands)
 
       if (promote_p)
 	{
-	  if (REGNO (XEXP (operands[1], 0)) == REGNO (operands[2]))
+	  if (promote_op[0])
 	    op2 = op0_extend;
 	  else
 	    {
@@ -5403,7 +5410,7 @@ loongarch_expand_conditional_move (rtx *operands)
 	      op2 = force_reg (mode, op2);
 	    }
 
-	  if (REGNO (XEXP (operands[1], 1)) == REGNO (operands[3]))
+	  if (promote_op[1])
 	    op3 = op1_extend;
 	  else
 	    {
@@ -7570,15 +7577,19 @@ loongarch_global_init (void)
 	loongarch_dwarf_regno[i] = INVALID_REGNUM;
     }
 
+  /* Function to allocate machine-dependent function status.  */
+  init_machine_status = &loongarch_init_machine_status;
+};
+
+static void
+loongarch_reg_init (void)
+{
   /* Set up loongarch_hard_regno_mode_ok.  */
   for (int mode = 0; mode < MAX_MACHINE_MODE; mode++)
     for (int regno = 0; regno < FIRST_PSEUDO_REGISTER; regno++)
       loongarch_hard_regno_mode_ok_p[mode][regno]
 	= loongarch_hard_regno_mode_ok_uncached (regno, (machine_mode) mode);
-
-  /* Function to allocate machine-dependent function status.  */
-  init_machine_status = &loongarch_init_machine_status;
-};
+}
 
 static void
 loongarch_option_override_internal (struct loongarch_target *target,
@@ -7605,20 +7616,92 @@ loongarch_option_override_internal (struct loongarch_target *target,
 
   /* Override some options according to the resolved target.  */
   loongarch_target_option_override (target, opts, opts_set);
+
+  target_option_default_node = target_option_current_node
+    = build_target_option_node (opts, opts_set);
+
+  loongarch_reg_init ();
 }
+
+/* Remember the last target of loongarch_set_current_function.  */
+
+static GTY(()) tree loongarch_previous_fndecl;
+
+/* Restore or save the TREE_TARGET_GLOBALS from or to new_tree.
+   Used by loongarch_set_current_function to
+   make sure optab availability predicates are recomputed when necessary.  */
+
+static void
+loongarch_save_restore_target_globals (tree new_tree)
+{
+  if (TREE_TARGET_GLOBALS (new_tree))
+    restore_target_globals (TREE_TARGET_GLOBALS (new_tree));
+  else if (new_tree == target_option_default_node)
+    restore_target_globals (&default_target_globals);
+  else
+    TREE_TARGET_GLOBALS (new_tree) = save_target_globals_default_opts ();
+}
+
+/* Implement TARGET_SET_CURRENT_FUNCTION.  */
+
+static void
+loongarch_set_current_function (tree fndecl)
+{
+  if (fndecl == loongarch_previous_fndecl)
+    return;
+
+  tree old_tree;
+  if (loongarch_previous_fndecl == NULL_TREE)
+    old_tree = target_option_current_node;
+  else if (DECL_FUNCTION_SPECIFIC_TARGET (loongarch_previous_fndecl))
+    old_tree = DECL_FUNCTION_SPECIFIC_TARGET (loongarch_previous_fndecl);
+  else
+    old_tree = target_option_default_node;
+
+  if (fndecl == NULL_TREE)
+    {
+      if (old_tree != target_option_current_node)
+	{
+	  loongarch_previous_fndecl = NULL_TREE;
+	  cl_target_option_restore (&global_options, &global_options_set,
+				    TREE_TARGET_OPTION
+				    (target_option_current_node));
+	}
+      return;
+    }
+
+  tree new_tree = DECL_FUNCTION_SPECIFIC_TARGET (fndecl);
+  if (new_tree == NULL_TREE)
+    new_tree = target_option_default_node;
+
+  loongarch_previous_fndecl = fndecl;
+
+  if (new_tree == old_tree)
+    return;
+
+  cl_target_option_restore (&global_options, &global_options_set,
+			    TREE_TARGET_OPTION (new_tree));
+
+  loongarch_reg_init ();
+
+  loongarch_save_restore_target_globals (new_tree);
+}
+
+
 
 /* Implement TARGET_OPTION_OVERRIDE.  */
 
 static void
 loongarch_option_override (void)
 {
+  /* Global initializations.  */
+  loongarch_global_init ();
+
   /* Setting up the target configuration.  */
   loongarch_option_override_internal (&la_target,
 				      &global_options,
 				      &global_options_set);
 
-  /* Global initializations.  */
-  loongarch_global_init ();
 }
 
 /* Implement TARGET_OPTION_SAVE.  */
@@ -9533,9 +9616,10 @@ loongarch_cpu_sched_reassociation_width (struct loongarch_target *target,
 
   switch (target->cpu_tune)
     {
-    case CPU_LOONGARCH64:
-    case CPU_LA464:
-    case CPU_LA664:
+    case TUNE_GENERIC:
+    case TUNE_LOONGARCH64:
+    case TUNE_LA464:
+    case TUNE_LA664:
       /* Vector part.  */
       if (LSX_SUPPORTED_MODE_P (mode) || LASX_SUPPORTED_MODE_P (mode))
 	{
@@ -10904,9 +10988,9 @@ loongarch_asm_code_end (void)
   if (flag_verbose_asm)
     {
       fprintf (asm_out_file, "\n%s CPU: %s\n", ASM_COMMENT_START,
-	       loongarch_cpu_strings [la_target.cpu_arch]);
+	       loongarch_arch_strings[la_target.cpu_arch]);
       fprintf (asm_out_file, "%s Tune: %s\n", ASM_COMMENT_START,
-	       loongarch_cpu_strings [la_target.cpu_tune]);
+	       loongarch_tune_strings[la_target.cpu_tune]);
       fprintf (asm_out_file, "%s Base ISA: %s\n", ASM_COMMENT_START,
 	       loongarch_isa_base_strings [la_target.isa.base]);
       DUMP_FEATURE (ISA_HAS_FRECIPE);
@@ -10934,6 +11018,9 @@ loongarch_asm_code_end (void)
 #define TARGET_OPTION_SAVE loongarch_option_save
 #undef TARGET_OPTION_RESTORE
 #define TARGET_OPTION_RESTORE loongarch_option_restore
+
+#undef TARGET_SET_CURRENT_FUNCTION
+#define TARGET_SET_CURRENT_FUNCTION loongarch_set_current_function
 
 #undef TARGET_LEGITIMIZE_ADDRESS
 #define TARGET_LEGITIMIZE_ADDRESS loongarch_legitimize_address
