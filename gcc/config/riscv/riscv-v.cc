@@ -912,14 +912,14 @@ calculate_ratio (unsigned int sew, enum vlmul_type vlmul)
 }
 
 /* SCALABLE means that the vector-length is agnostic (run-time invariant and
-   compile-time unknown). FIXED meands that the vector-length is specific
-   (compile-time known). Both RVV_SCALABLE and RVV_FIXED_VLMAX are doing
+   compile-time unknown). ZVL meands that the vector-length is specific
+   (compile-time known by march like zvl*b). Both SCALABLE and ZVL are doing
    auto-vectorization using VLMAX vsetvl configuration.  */
 static bool
 autovec_use_vlmax_p (void)
 {
-  return (riscv_autovec_preference == RVV_SCALABLE
-	  || riscv_autovec_preference == RVV_FIXED_VLMAX);
+  return rvv_vector_bits == RVV_VECTOR_BITS_SCALABLE
+	  || rvv_vector_bits == RVV_VECTOR_BITS_ZVL;
 }
 
 /* This function emits VLMAX vrgather instruction. Emit vrgather.vx/vi when sel
@@ -1484,28 +1484,6 @@ expand_const_vector (rtx target, rtx src)
 	      rtx ops[] = {target, tmp1, tmp2, mask};
 	      emit_vlmax_insn (code_for_pred_merge (mode), MERGE_OP, ops);
 	    }
-	}
-      else if (npatterns == 1 && nelts_per_pattern == 3)
-	{
-	  /* Generate the following CONST_VECTOR:
-	     { base0, base1, base1 + step, base1 + step * 2, ... }  */
-	  rtx base0 = builder.elt (0);
-	  rtx base1 = builder.elt (1);
-	  rtx base2 = builder.elt (2);
-
-	  rtx step = simplify_binary_operation (MINUS, builder.inner_mode (),
-						base2, base1);
-
-	  /* Step 1 - { base1, base1 + step, base1 + step * 2, ... }  */
-	  rtx tmp = gen_reg_rtx (mode);
-	  expand_vec_series (tmp, base1, step);
-	  /* Step 2 - { base0, base1, base1 + step, base1 + step * 2, ... }  */
-	  if (!rtx_equal_p (base0, const0_rtx))
-	    base0 = force_reg (builder.inner_mode (), base0);
-
-	  insn_code icode = optab_handler (vec_shl_insert_optab, mode);
-	  gcc_assert (icode != CODE_FOR_nothing);
-	  emit_insn (GEN_FCN (icode) (target, tmp, base0));
 	}
       else
 	/* TODO: We will enable more variable-length vector in the future.  */
@@ -2338,7 +2316,7 @@ preferred_simd_mode (scalar_mode mode)
   if (autovec_use_vlmax_p ())
     {
       /* We use LMUL = 1 as base bytesize which is BYTES_PER_RISCV_VECTOR and
-	 riscv_autovec_lmul as multiply factor to calculate the the NUNITS to
+	 rvv_max_lmul as multiply factor to calculate the NUNITS to
 	 get the auto-vectorization mode.  */
       poly_uint64 nunits;
       poly_uint64 vector_size = BYTES_PER_RISCV_VECTOR * TARGET_MAX_LMUL;
@@ -2775,7 +2753,8 @@ vectorize_related_mode (machine_mode vector_mode, scalar_mode element_mode,
 /* Expand an RVV comparison.  */
 
 void
-expand_vec_cmp (rtx target, rtx_code code, rtx op0, rtx op1)
+expand_vec_cmp (rtx target, rtx_code code, rtx op0, rtx op1, rtx mask,
+		rtx maskoff)
 {
   machine_mode mask_mode = GET_MODE (target);
   machine_mode data_mode = GET_MODE (op0);
@@ -2785,8 +2764,8 @@ expand_vec_cmp (rtx target, rtx_code code, rtx op0, rtx op1)
     {
       rtx lt = gen_reg_rtx (mask_mode);
       rtx gt = gen_reg_rtx (mask_mode);
-      expand_vec_cmp (lt, LT, op0, op1);
-      expand_vec_cmp (gt, GT, op0, op1);
+      expand_vec_cmp (lt, LT, op0, op1, mask, maskoff);
+      expand_vec_cmp (gt, GT, op0, op1, mask, maskoff);
       icode = code_for_pred (IOR, mask_mode);
       rtx ops[] = {target, lt, gt};
       emit_vlmax_insn (icode, BINARY_MASK_OP, ops);
@@ -2794,33 +2773,16 @@ expand_vec_cmp (rtx target, rtx_code code, rtx op0, rtx op1)
     }
 
   rtx cmp = gen_rtx_fmt_ee (code, mask_mode, op0, op1);
-  rtx ops[] = {target, cmp, op0, op1};
-  emit_vlmax_insn (icode, COMPARE_OP, ops);
-}
-
-void
-expand_vec_cmp (rtx target, rtx_code code, rtx mask, rtx maskoff, rtx op0,
-		rtx op1)
-{
-  machine_mode mask_mode = GET_MODE (target);
-  machine_mode data_mode = GET_MODE (op0);
-  insn_code icode = get_cmp_insn_code (code, data_mode);
-
-  if (code == LTGT)
+  if (!mask && !maskoff)
     {
-      rtx lt = gen_reg_rtx (mask_mode);
-      rtx gt = gen_reg_rtx (mask_mode);
-      expand_vec_cmp (lt, LT, mask, maskoff, op0, op1);
-      expand_vec_cmp (gt, GT, mask, maskoff, op0, op1);
-      icode = code_for_pred (IOR, mask_mode);
-      rtx ops[] = {target, lt, gt};
-      emit_vlmax_insn (icode, BINARY_MASK_OP, ops);
-      return;
+      rtx ops[] = {target, cmp, op0, op1};
+      emit_vlmax_insn (icode, COMPARE_OP, ops);
     }
-
-  rtx cmp = gen_rtx_fmt_ee (code, mask_mode, op0, op1);
-  rtx ops[] = {target, mask, maskoff, cmp, op0, op1};
-  emit_vlmax_insn (icode, COMPARE_OP_MU, ops);
+  else
+    {
+      rtx ops[] = {target, mask, maskoff, cmp, op0, op1};
+      emit_vlmax_insn (icode, COMPARE_OP_MU, ops);
+    }
 }
 
 /* Expand an RVV floating-point comparison:
@@ -2898,7 +2860,7 @@ expand_vec_cmp_float (rtx target, rtx_code code, rtx op0, rtx op1,
       else
 	{
 	  /* vmfeq.vv    v0, vb, vb, v0.t  */
-	  expand_vec_cmp (eq0, EQ, eq0, eq0, op1, op1);
+	  expand_vec_cmp (eq0, EQ, op1, op1, eq0, eq0);
 	}
       break;
     default:
@@ -2916,7 +2878,7 @@ expand_vec_cmp_float (rtx target, rtx_code code, rtx op0, rtx op1,
   if (code == ORDERED)
     emit_move_insn (target, eq0);
   else
-    expand_vec_cmp (eq0, code, eq0, eq0, op0, op1);
+    expand_vec_cmp (eq0, code, op0, op1, eq0, eq0);
 
   if (can_invert_p)
     {
@@ -3596,6 +3558,10 @@ shuffle_extract_and_slide1up_patterns (struct expand_vec_perm_d *d)
   return true;
 }
 
+/* This looks for a series pattern in the provided vector permute structure D.
+   If successful it emits a series insn as well as a gather to implement it.
+   Return true if successful, false otherwise.  */
+
 static bool
 shuffle_series_patterns (struct expand_vec_perm_d *d)
 {
@@ -4032,7 +3998,7 @@ expand_gather_scatter (rtx *ops, bool is_load)
 {
   rtx ptr, vec_offset, vec_reg;
   bool zero_extend_p;
-  int scale_log2;
+  int shift;
   rtx mask = ops[5];
   rtx len = ops[6];
   if (is_load)
@@ -4041,7 +4007,7 @@ expand_gather_scatter (rtx *ops, bool is_load)
       ptr = ops[1];
       vec_offset = ops[2];
       zero_extend_p = INTVAL (ops[3]);
-      scale_log2 = exact_log2 (INTVAL (ops[4]));
+      shift = exact_log2 (INTVAL (ops[4]));
     }
   else
     {
@@ -4049,7 +4015,7 @@ expand_gather_scatter (rtx *ops, bool is_load)
       ptr = ops[0];
       vec_offset = ops[1];
       zero_extend_p = INTVAL (ops[2]);
-      scale_log2 = exact_log2 (INTVAL (ops[3]));
+      shift = exact_log2 (INTVAL (ops[3]));
     }
 
   machine_mode vec_mode = GET_MODE (vec_reg);
@@ -4059,9 +4025,12 @@ expand_gather_scatter (rtx *ops, bool is_load)
   poly_int64 nunits = GET_MODE_NUNITS (vec_mode);
   bool is_vlmax = is_vlmax_len_p (vec_mode, len);
 
+  bool use_widening_shift = false;
+
   /* Extend the offset element to address width.  */
   if (inner_offsize < BITS_PER_WORD)
     {
+      use_widening_shift = TARGET_ZVBB && zero_extend_p && shift == 1;
       /* 7.2. Vector Load/Store Addressing Modes.
 	 If the vector offset elements are narrower than XLEN, they are
 	 zero-extended to XLEN before adding to the ptr effective address. If
@@ -4070,8 +4039,8 @@ expand_gather_scatter (rtx *ops, bool is_load)
 	 raise an illegal instruction exception if the EEW is not supported for
 	 offset elements.
 
-	 RVV spec only refers to the scale_log == 0 case.  */
-      if (!zero_extend_p || scale_log2 != 0)
+	 RVV spec only refers to the shift == 0 case.  */
+      if (!zero_extend_p || shift)
 	{
 	  if (zero_extend_p)
 	    inner_idx_mode
@@ -4080,19 +4049,32 @@ expand_gather_scatter (rtx *ops, bool is_load)
 	    inner_idx_mode = int_mode_for_size (BITS_PER_WORD, 0).require ();
 	  machine_mode new_idx_mode
 	    = get_vector_mode (inner_idx_mode, nunits).require ();
-	  rtx tmp = gen_reg_rtx (new_idx_mode);
-	  emit_insn (gen_extend_insn (tmp, vec_offset, new_idx_mode, idx_mode,
-				      zero_extend_p ? true : false));
-	  vec_offset = tmp;
+	  if (!use_widening_shift)
+	    {
+	      rtx tmp = gen_reg_rtx (new_idx_mode);
+	      emit_insn (gen_extend_insn (tmp, vec_offset, new_idx_mode, idx_mode,
+					  zero_extend_p ? true : false));
+	      vec_offset = tmp;
+	    }
 	  idx_mode = new_idx_mode;
 	}
     }
 
-  if (scale_log2 != 0)
+  if (shift)
     {
-      rtx tmp = expand_binop (idx_mode, ashl_optab, vec_offset,
-			      gen_int_mode (scale_log2, Pmode), NULL_RTX, 0,
-			      OPTAB_DIRECT);
+      rtx tmp;
+      if (!use_widening_shift)
+	tmp = expand_binop (idx_mode, ashl_optab, vec_offset,
+			    gen_int_mode (shift, Pmode), NULL_RTX, 0,
+			    OPTAB_DIRECT);
+      else
+	{
+	  tmp = gen_reg_rtx (idx_mode);
+	  insn_code icode = code_for_pred_vwsll_scalar (idx_mode);
+	  rtx ops[] = {tmp, vec_offset, const1_rtx};
+	  emit_vlmax_insn (icode, BINARY_OP, ops);
+	}
+
       vec_offset = tmp;
     }
 
@@ -4431,7 +4413,7 @@ vls_mode_valid_p (machine_mode vls_mode)
   if (!TARGET_VECTOR || TARGET_XTHEADVECTOR)
     return false;
 
-  if (riscv_autovec_preference == RVV_SCALABLE)
+  if (rvv_vector_bits == RVV_VECTOR_BITS_SCALABLE)
     {
       if (GET_MODE_CLASS (vls_mode) != MODE_VECTOR_BOOL
 	  && !ordered_p (TARGET_MAX_LMUL * BITS_PER_RISCV_VECTOR,
@@ -4448,7 +4430,7 @@ vls_mode_valid_p (machine_mode vls_mode)
       return true;
     }
 
-  if (riscv_autovec_preference == RVV_FIXED_VLMAX)
+  if (rvv_vector_bits == RVV_VECTOR_BITS_ZVL)
     {
       machine_mode inner_mode = GET_MODE_INNER (vls_mode);
       int precision = GET_MODE_PRECISION (inner_mode).to_constant ();
@@ -4510,7 +4492,7 @@ vls_mode_valid_p (machine_mode vls_mode)
       All double floating point will be unchanged for ceil if it is
       greater than and equal to 4503599627370496.
  */
-static rtx
+rtx
 get_fp_rounding_coefficient (machine_mode inner_mode)
 {
   REAL_VALUE_TYPE real;
@@ -4649,6 +4631,16 @@ emit_vec_cvt_x_f_rtz (rtx op_dest, rtx op_src, rtx mask,
       rtx cvt_x_ops[] = {op_dest, mask, op_dest, op_src};
       emit_vlmax_insn (icode, type, cvt_x_ops);
     }
+}
+
+static void
+emit_vec_saddu (rtx op_dest, rtx op_1, rtx op_2, insn_type type,
+		machine_mode vec_mode)
+{
+  rtx ops[] = {op_dest, op_1, op_2};
+  insn_code icode = code_for_pred (US_PLUS, vec_mode);
+
+  emit_vlmax_insn (icode, type, ops);
 }
 
 void
@@ -4876,6 +4868,15 @@ expand_vec_lfloor (rtx op_0, rtx op_1, machine_mode vec_fp_mode,
 {
   emit_vec_rounding_to_integer (op_0, op_1, UNARY_OP_FRM_RDN, vec_fp_mode,
 				vec_int_mode);
+}
+
+/* Expand the standard name usadd<mode>3 for vector mode,  we can leverage
+   the vector fixed point vector single-width saturating add directly.  */
+
+void
+expand_vec_usadd (rtx op_0, rtx op_1, rtx op_2, machine_mode vec_mode)
+{
+  emit_vec_saddu (op_0, op_1, op_2, BINARY_OP, vec_mode);
 }
 
 /* Vectorize popcount by the Wilkes-Wheeler-Gill algorithm that libgcc uses as
@@ -5123,13 +5124,13 @@ estimated_poly_value (poly_int64 val, unsigned int kind)
   unsigned int width_source
     = BITS_PER_RISCV_VECTOR.is_constant ()
 	? (unsigned int) BITS_PER_RISCV_VECTOR.to_constant ()
-	: (unsigned int) RVV_SCALABLE;
+	: (unsigned int) RVV_VECTOR_BITS_SCALABLE;
 
   /* If there is no core-specific information then the minimum and likely
      values are based on TARGET_MIN_VLEN vectors and the maximum is based on
      the architectural maximum of 65536 bits.  */
   unsigned int min_vlen_bytes = TARGET_MIN_VLEN / 8 - 1;
-  if (width_source == RVV_SCALABLE)
+  if (width_source == RVV_VECTOR_BITS_SCALABLE)
     switch (kind)
       {
       case POLY_VALUE_MIN:

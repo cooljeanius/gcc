@@ -64,10 +64,10 @@ Warray-bounds=
 UrlSuffix(gcc/Warning-Options.html#index-Warray-bounds)
 
 Wuse-after-free
-UrlSuffix(gcc/C_002b_002b-Dialect-Options.html#index-Wno-use-after-free)
+UrlSuffix(gcc/Warning-Options.html#index-Wno-use-after-free)
 
 Wuse-after-free=
-UrlSuffix(gcc/C_002b_002b-Dialect-Options.html#index-Wno-use-after-free)
+UrlSuffix(gcc/Warning-Options.html#index-Wno-use-after-free)
 
 Wattributes
 UrlSuffix(gcc/Warning-Options.html#index-Wattributes)
@@ -279,6 +279,9 @@ UrlSuffix(gcc/Warning-Options.html#index-Wcoverage-mismatch)
 
 Wcoverage-invalid-line-number
 UrlSuffix(gcc/Warning-Options.html#index-Wcoverage-invalid-line-number)
+
+Wcoverage-too-many-conditions
+UrlSuffix(gcc/Warning-Options.html#index-Wcoverage-too-many-conditions)
 
 Wmissing-profile
 UrlSuffix(gcc/Warning-Options.html#index-Wmissing-profile)
@@ -530,6 +533,9 @@ UrlSuffix(gcc/Diagnostic-Message-Formatting-Options.html#index-fdiagnostics-show
 
 fdiagnostics-show-caret
 UrlSuffix(gcc/Diagnostic-Message-Formatting-Options.html#index-fdiagnostics-show-caret)
+
+fdiagnostics-show-event-links
+UrlSuffix(gcc/Diagnostic-Message-Formatting-Options.html#index-fdiagnostics-show-event-links)
 
 fdiagnostics-show-labels
 UrlSuffix(gcc/Diagnostic-Message-Formatting-Options.html#index-fdiagnostics-show-labels)
@@ -1057,6 +1063,9 @@ UrlSuffix(gcc/Instrumentation-Options.html#index-fprofile-abs-path)
 ;   duplicate: 'gcc/Instrumentation-Options.html#index-fprofile-arcs'
 ;   duplicate: 'gcc/Other-Builtins.html#index-fprofile-arcs-1'
 
+fcondition-coverage
+UrlSuffix(gcc/Instrumentation-Options.html#index-fcondition-coverage)
+
 fprofile-dir=
 UrlSuffix(gcc/Instrumentation-Options.html#index-fprofile-dir)
 
@@ -1329,6 +1338,9 @@ UrlSuffix(gcc/Optimize-Options.html#index-fstrict-aliasing)
 
 fstrict-overflow
 UrlSuffix(gcc/Code-Gen-Options.html#index-fstrict-overflow)
+
+fstrub=disable
+UrlSuffix(gcc/Instrumentation-Options.html#index-fstrub_003ddisable)
 
 fstrub=strict
 UrlSuffix(gcc/Instrumentation-Options.html#index-fstrub_003dstrict)

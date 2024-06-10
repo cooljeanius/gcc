@@ -20,12 +20,14 @@ along with GCC; see the file COPYING3.  If not see
 
 #include "config.h"
 #define INCLUDE_MEMORY
+#define INCLUDE_VECTOR
 #include "system.h"
 #include "coretypes.h"
 #include "tree.h"
 #include "function.h"
 #include "basic-block.h"
 #include "gimple.h"
+#include "diagnostic-core.h"
 #include "diagnostic.h"
 #include "tree-diagnostic.h"
 #include "analyzer/analyzer.h"

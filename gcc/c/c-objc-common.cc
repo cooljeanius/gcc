@@ -27,9 +27,10 @@ along with GCC; see the file COPYING3.  If not see
 #include "gimple-pretty-print.h"
 #include "langhooks.h"
 #include "c-objc-common.h"
-#include "gcc-rich-location.h"
+#include "c-family/c-type-mismatch.h"
 #include "stringpool.h"
 #include "attribs.h"
+#include "dwarf2.h"
 
 static bool c_tree_printer (pretty_printer *, text_info *, const char *,
 			    int, bool, bool, bool, bool *, const char **);
@@ -129,6 +130,8 @@ get_aka_type (tree type)
 
       result = get_aka_type (orig_type);
     }
+  else if (TREE_CODE (type) == ENUMERAL_TYPE)
+    return type;
   else
     {
       tree canonical = TYPE_CANONICAL (type);
@@ -417,16 +420,6 @@ c_var_mod_p (tree x, tree fn ATTRIBUTE_UNUSED)
 alias_set_type
 c_get_alias_set (tree t)
 {
-  /* Allow aliasing between enumeral types and the underlying
-     integer type.  This is required since those are compatible types.  */
-  if (TREE_CODE (t) == ENUMERAL_TYPE)
-    return get_alias_set (ENUM_UNDERLYING_TYPE (t));
-
-  /* Structs with variable size can alias different incompatible
-     structs.  Let them alias anything.   */
-  if (RECORD_OR_UNION_TYPE_P (t) && C_TYPE_VARIABLE_SIZE (t))
-    return 0;
-
   return c_common_get_alias_set (t);
 }
 
@@ -445,4 +438,26 @@ bool
 instantiation_dependent_expression_p (tree)
 {
   return false;
+}
+
+/* Return -1 if dwarf ATTR shouldn't be added for TYPE, or the attribute
+   value otherwise.  */
+int
+c_type_dwarf_attribute (const_tree type, int attr)
+{
+  if (type == NULL_TREE)
+    return -1;
+
+  switch (attr)
+    {
+    case DW_AT_export_symbols:
+      if (RECORD_OR_UNION_TYPE_P (type) && TYPE_NAME (type) == NULL_TREE)
+	return 1;
+      break;
+
+    default:
+      break;
+    }
+
+  return -1;
 }

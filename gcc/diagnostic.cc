@@ -253,6 +253,7 @@ diagnostic_context::initialize (int n_opts)
   m_source_printing.show_line_numbers_p = false;
   m_source_printing.min_margin_width = 0;
   m_source_printing.show_ruler_p = false;
+  m_source_printing.show_event_links_p = false;
   m_report_bug = false;
   m_extra_output_kind = EXTRA_DIAGNOSTIC_OUTPUT_none;
   if (const char *var = getenv ("GCC_EXTRA_DIAGNOSTIC_OUTPUT"))
@@ -802,8 +803,8 @@ diagnostic_context::action_after_output (diagnostic_t diag_kind)
     case DK_FATAL:
       if (m_abort_on_error)
 	real_abort ();
-      finish ();
       fnotice (stderr, "compilation terminated.\n");
+      finish ();
       exit (FATAL_EXIT_CODE);
 
     default:
@@ -1136,8 +1137,7 @@ classify_diagnostic (const diagnostic_context *context,
       if (old_kind == DK_UNSPECIFIED)
 	{
 	  old_kind = !context->option_enabled_p (option_index)
-	    ? DK_IGNORED : (context->warning_as_error_requested_p ()
-			    ? DK_ERROR : DK_WARNING);
+	    ? DK_IGNORED : DK_ANY;
 	  m_classify_diagnostic[option_index] = old_kind;
 	}
 
@@ -1472,7 +1472,15 @@ diagnostic_context::diagnostic_enabled (diagnostic_info *diagnostic)
      option.  */
   if (diag_class == DK_UNSPECIFIED
       && !option_unspecified_p (diagnostic->option_index))
-    diagnostic->kind = m_option_classifier.get_current_override (diagnostic->option_index);
+    {
+      const diagnostic_t new_kind
+	= m_option_classifier.get_current_override (diagnostic->option_index);
+      if (new_kind != DK_ANY)
+	/* DK_ANY means the diagnostic is not to be ignored, but we don't want
+	   to change it specifically to DK_ERROR or DK_WARNING; we want to
+	   preserve whatever the caller has specified.  */
+	diagnostic->kind = new_kind;
+    }
 
   /* This allows for future extensions, like temporarily disabling
      warnings for ranges of source code.  */
@@ -2264,6 +2272,16 @@ diagnostic_context::emit_diagram (const diagnostic_diagram &diagram)
 void
 fnotice (FILE *file, const char *cmsgid, ...)
 {
+  /* If the user requested one of the machine-readable diagnostic output
+     formats on stderr (e.g. -fdiagnostics-format=sarif-stderr), then
+     emitting free-form text on stderr will lead to corrupt output.
+     Skip the message for such cases.  */
+  if (file == stderr && global_dc)
+    if (const diagnostic_output_format *output_format
+	  = global_dc->get_output_format ())
+      if (output_format->machine_readable_stderr_p ())
+	return;
+
   va_list ap;
 
   va_start (ap, cmsgid);
@@ -2428,6 +2446,7 @@ diagnostic_text_output_format::on_diagram (const diagnostic_diagram &diagram)
 
 void
 diagnostic_output_format_init (diagnostic_context *context,
+			       const char *main_input_filename_,
 			       const char *base_file_name,
 			       enum diagnostics_output_format format,
 			       bool json_formatting)
@@ -2453,11 +2472,13 @@ diagnostic_output_format_init (diagnostic_context *context,
 
     case DIAGNOSTICS_OUTPUT_FORMAT_SARIF_STDERR:
       diagnostic_output_format_init_sarif_stderr (context,
+						  main_input_filename_,
 						  json_formatting);
       break;
 
     case DIAGNOSTICS_OUTPUT_FORMAT_SARIF_FILE:
       diagnostic_output_format_init_sarif_file (context,
+						main_input_filename_,
 						json_formatting,
 						base_file_name);
       break;
@@ -2499,7 +2520,8 @@ set_text_art_charset (enum diagnostic_text_art_charset charset)
 /* class simple_diagnostic_path : public diagnostic_path.  */
 
 simple_diagnostic_path::simple_diagnostic_path (pretty_printer *event_pp)
-  : m_event_pp (event_pp)
+: m_event_pp (event_pp),
+  m_localize_events (true)
 {
   add_thread ("main");
 }
@@ -2545,7 +2567,7 @@ simple_diagnostic_path::add_thread (const char *name)
    stack depth DEPTH.
 
    Use m_context's printer to format FMT, as the text of the new
-   event.
+   event.  Localize FMT iff m_localize_events is set.
 
    Return the id of the new event.  */
 
@@ -2562,7 +2584,8 @@ simple_diagnostic_path::add_event (location_t loc, tree fndecl, int depth,
 
   va_start (ap, fmt);
 
-  text_info ti (_(fmt), &ap, 0, nullptr, &rich_loc);
+  text_info ti (m_localize_events ? _(fmt) : fmt,
+		&ap, 0, nullptr, &rich_loc);
   pp_format (pp, &ti);
   pp_output_formatted_text (pp);
 
@@ -2610,6 +2633,16 @@ simple_diagnostic_path::add_thread_event (diagnostic_thread_id_t thread_id,
   return diagnostic_event_id_t (m_events.length () - 1);
 }
 
+/* Mark the most recent event on this path (which must exist) as being
+   connected to the next one to be added.  */
+
+void
+simple_diagnostic_path::connect_to_next_event ()
+{
+  gcc_assert (m_events.length () > 0);
+  m_events[m_events.length () - 1]->connect_to_next_event ();
+}
+
 /* struct simple_diagnostic_event.  */
 
 /* simple_diagnostic_event's ctor.  */
@@ -2621,6 +2654,7 @@ simple_diagnostic_event (location_t loc,
 			 const char *desc,
 			 diagnostic_thread_id_t thread_id)
 : m_loc (loc), m_fndecl (fndecl), m_depth (depth), m_desc (xstrdup (desc)),
+  m_connected_to_next_event (false),
   m_thread_id (thread_id)
 {
 }

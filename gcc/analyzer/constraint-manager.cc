@@ -20,6 +20,7 @@ along with GCC; see the file COPYING3.  If not see
 
 #include "config.h"
 #define INCLUDE_MEMORY
+#define INCLUDE_VECTOR
 #include "system.h"
 #include "coretypes.h"
 #include "tree.h"
@@ -462,6 +463,14 @@ bounded_range::to_json () const
   return range_obj;
 }
 
+std::unique_ptr<text_art::widget>
+bounded_range::make_dump_widget (const text_art::dump_widget_info &dwi) const
+{
+  using text_art::tree_widget;
+  return tree_widget::from_fmt (dwi, default_tree_printer,
+				"%qE ... %qE", m_lower, m_upper);
+}
+
 /* Subroutine of bounded_range::to_json.  */
 
 void
@@ -727,6 +736,14 @@ bounded_ranges::to_json () const
     arr_obj->append (m_ranges[i].to_json ());
 
   return arr_obj;
+}
+
+void
+bounded_ranges::add_to_dump_widget (text_art::tree_widget &parent,
+				    const text_art::dump_widget_info &dwi) const
+{
+  for (auto &range : m_ranges)
+    parent.add_child (range.make_dump_widget (dwi));
 }
 
 /* Determine whether (X OP RHS_CONST) is known to be true or false
@@ -1129,6 +1146,39 @@ equiv_class::to_json () const
   return ec_obj;
 }
 
+std::unique_ptr<text_art::widget>
+equiv_class::make_dump_widget (const text_art::dump_widget_info &dwi,
+			       unsigned id) const
+{
+  using text_art::tree_widget;
+  std::unique_ptr<tree_widget> ec_widget;
+
+  {
+    pretty_printer pp;
+    pp_string (&pp, "Equivalence class ");
+    equiv_class_id (id).print (&pp);
+    ec_widget = tree_widget::make (dwi, &pp);
+  }
+
+  for (const svalue *sval : m_vars)
+    {
+      pretty_printer pp;
+      pp_format_decoder (&pp) = default_tree_printer;
+      sval->dump_to_pp (&pp, true);
+      ec_widget->add_child (tree_widget::make (dwi, &pp));
+    }
+
+  if (m_constant)
+    {
+      pretty_printer pp;
+      pp_format_decoder (&pp) = default_tree_printer;
+      pp_printf (&pp, "%qE", m_constant);
+      ec_widget->add_child (tree_widget::make (dwi, &pp));
+    }
+
+  return std::move (ec_widget);
+}
+
 /* Generate a hash value for this equiv_class.
    This relies on the ordering of m_vars, and so this object needs to
    have been canonicalized for this to be meaningful.  */
@@ -1354,6 +1404,17 @@ constraint::to_json () const
   return con_obj;
 }
 
+std::unique_ptr<text_art::widget>
+constraint::make_dump_widget (const text_art::dump_widget_info &dwi,
+			      const constraint_manager &cm) const
+{
+  pretty_printer pp;
+  pp_format_decoder (&pp) = default_tree_printer;
+  pp_show_color (&pp) = true;
+  print (&pp, cm);
+  return text_art::tree_widget::make (dwi, &pp);
+}
+
 /* Generate a hash value for this constraint.  */
 
 hashval_t
@@ -1428,6 +1489,18 @@ bounded_ranges_constraint::to_json () const
   con_obj->set ("ranges", m_ranges->to_json ());
 
   return con_obj;
+}
+
+std::unique_ptr<text_art::widget>
+bounded_ranges_constraint::
+make_dump_widget (const text_art::dump_widget_info &dwi) const
+{
+  using text_art::tree_widget;
+  std::unique_ptr<tree_widget> brc_widget
+    (tree_widget::from_fmt (dwi, nullptr,
+			    "ec%i bounded ranges", m_ec_id.as_int ()));
+  m_ranges->add_to_dump_widget (*brc_widget.get (), dwi);
+  return std::move (brc_widget);
 }
 
 bool
@@ -1754,6 +1827,33 @@ constraint_manager::to_json () const
   }
 
   return cm_obj;
+}
+
+std::unique_ptr<text_art::widget>
+constraint_manager::make_dump_widget (const text_art::dump_widget_info &dwi) const
+{
+  using text_art::tree_widget;
+  std::unique_ptr<tree_widget> cm_widget
+    (tree_widget::make (dwi, "Constraints"));
+
+  /* Equivalence classes.  */
+  unsigned i;
+  equiv_class *ec;
+  FOR_EACH_VEC_ELT (m_equiv_classes, i, ec)
+    cm_widget->add_child (ec->make_dump_widget (dwi, i));
+
+  /* Constraints.  */
+  for (const constraint &c : m_constraints)
+    cm_widget->add_child (c.make_dump_widget (dwi, *this));
+
+  /* m_bounded_ranges_constraints.  */
+  for (const auto &brc : m_bounded_ranges_constraints)
+    cm_widget->add_child (brc.make_dump_widget (dwi));
+
+  if (cm_widget->get_num_children () == 0)
+    return nullptr;
+
+  return std::move (cm_widget);
 }
 
 /* Attempt to add the constraint LHS OP RHS to this constraint_manager.
@@ -3374,8 +3474,8 @@ namespace selftest {
 static void
 test_range ()
 {
-  tree int_0 = build_int_cst (integer_type_node, 0);
-  tree int_1 = build_int_cst (integer_type_node, 1);
+  tree int_0 = integer_zero_node;
+  tree int_1 = integer_one_node;
   tree int_2 = build_int_cst (integer_type_node, 2);
   tree int_5 = build_int_cst (integer_type_node, 5);
 
@@ -3419,7 +3519,7 @@ static void
 test_constraint_conditions ()
 {
   tree int_42 = build_int_cst (integer_type_node, 42);
-  tree int_0 = build_int_cst (integer_type_node, 0);
+  tree int_0 = integer_zero_node;
 
   tree x = build_global_decl ("x", integer_type_node);
   tree y = build_global_decl ("y", integer_type_node);
@@ -3874,7 +3974,7 @@ test_transitivity ()
 static void
 test_constant_comparisons ()
 {
-  tree int_1 = build_int_cst (integer_type_node, 1);
+  tree int_1 = integer_one_node;
   tree int_3 = build_int_cst (integer_type_node, 3);
   tree int_4 = build_int_cst (integer_type_node, 4);
   tree int_5 = build_int_cst (integer_type_node, 5);
@@ -4058,7 +4158,7 @@ static void
 test_constraint_impl ()
 {
   tree int_42 = build_int_cst (integer_type_node, 42);
-  tree int_0 = build_int_cst (integer_type_node, 0);
+  tree int_0 = integer_zero_node;
 
   tree x = build_global_decl ("x", integer_type_node);
   tree y = build_global_decl ("y", integer_type_node);
@@ -4220,7 +4320,7 @@ test_many_constants ()
 static void
 test_purging (void)
 {
-  tree int_0 = build_int_cst (integer_type_node, 0);
+  tree int_0 = integer_zero_node;
   tree a = build_global_decl ("a", integer_type_node);
   tree b = build_global_decl ("b", integer_type_node);
 
@@ -4654,7 +4754,7 @@ test_bits (void)
 {
   region_model_manager mgr;
 
-  tree int_0 = build_int_cst (integer_type_node, 0);
+  tree int_0 = integer_zero_node;
   tree int_0x80 = build_int_cst (integer_type_node, 0x80);
   tree int_0xff = build_int_cst (integer_type_node, 0xff);
   tree x = build_global_decl ("x", integer_type_node);

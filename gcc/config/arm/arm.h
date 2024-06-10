@@ -2111,8 +2111,8 @@ enum arm_auto_incmodes
       ? (ADDR_DIFF_VEC_FLAGS (body).offset_unsigned = 0, HImode)	\
       : SImode)								\
    : (TARGET_THUMB2							\
-      ? ((min > 0 && max < 0x200) ? QImode				\
-      : (min > 0 && max <= 0x20000) ? HImode				\
+      ? ((min >= 0 && max < 0x200) ? QImode				\
+      : (min >= 0 && max < 0x20000) ? HImode				\
       : SImode)								\
    : ((min >= 0 && max < 1024)						\
       ? (ADDR_DIFF_VEC_FLAGS (body).offset_unsigned = 1, QImode)	\
@@ -2374,6 +2374,21 @@ extern int making_const_table;
     thumb2_final_prescan_insn (INSN);			\
   else if (TARGET_THUMB1)				\
     thumb1_final_prescan_insn (INSN)
+
+/* These defines are useful to refer to the value of the mve_unpredicated_insn
+   insn attribute.  Note that, because these use the get_attr_* function, these
+   will change recog_data if (INSN) isn't current_insn.  */
+#define MVE_VPT_PREDICABLE_INSN_P(INSN)					\
+  (recog_memoized (INSN) >= 0						\
+   && get_attr_mve_unpredicated_insn (INSN) != CODE_FOR_nothing)
+
+#define MVE_VPT_PREDICATED_INSN_P(INSN)					\
+  (MVE_VPT_PREDICABLE_INSN_P (INSN)					\
+   && recog_memoized (INSN) != get_attr_mve_unpredicated_insn (INSN))
+
+#define MVE_VPT_UNPREDICATED_INSN_P(INSN)				\
+  (MVE_VPT_PREDICABLE_INSN_P (INSN)					\
+   && recog_memoized (INSN) == get_attr_mve_unpredicated_insn (INSN))
 
 #define ARM_SIGN_EXTEND(x)  ((HOST_WIDE_INT)			\
   (HOST_BITS_PER_WIDE_INT <= 32 ? (unsigned HOST_WIDE_INT) (x)	\

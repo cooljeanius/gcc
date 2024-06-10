@@ -209,7 +209,6 @@ ftms = {
   values = {
     v = 201304;
     cxxmin = 14;
-    extra_cond = "!defined(_GLIBCXX_DEBUG)";
   };
 };
 
@@ -739,6 +738,7 @@ ftms = {
   values = {
     v = 201907;
     cxxmin = 20;
+    extra_cond = "(__GCC_ATOMIC_INT_LOCK_FREE | __GCC_ATOMIC_LONG_LOCK_FREE | __GCC_ATOMIC_CHAR_LOCK_FREE) & 2";
   };
 };
 
@@ -1238,6 +1238,15 @@ ftms = {
 };
 
 ftms = {
+  name = constrained_equality;
+  values = {
+    v = 202403;
+    cxxmin = 20;
+    extra_cond = "__glibcxx_three_way_comparison";
+  };
+};
+
+ftms = {
   name = erase_if;
   values = {
     v = 202002;
@@ -1456,7 +1465,7 @@ ftms = {
 };
 
 //ftms = {
-//  name = container_ranges;
+//  name = containers_ranges;
 //  values = {
 //    v = 202202;
 //    cxxmin = 23;
@@ -1638,6 +1647,15 @@ ftms = {
 };
 
 ftms = {
+  name = generator;
+  values = {
+    v = 202207;
+    cxxmin = 23;
+    extra_cond = "__glibcxx_coroutine && __cpp_sized_deallocation";
+  };
+};
+
+ftms = {
   name = ios_noreplace;
   values = {
     v = 202207;
@@ -1719,6 +1737,14 @@ ftms = {
 };
 
 ftms = {
+  name = tuple_like;
+  values = {
+    v = 202207;
+    cxxmin = 23;
+  };
+};
+
+ftms = {
   name = unreachable;
   values = {
     v = 202202;
@@ -1739,6 +1765,14 @@ ftms = {
   name = ratio;
   values = {
     v = 202306;
+    cxxmin = 26;
+  };
+};
+
+ftms = {
+  name = reference_wrapper;
+  values = {
+    v = 202403;
     cxxmin = 26;
   };
 };
@@ -1772,19 +1806,10 @@ ftms = {
 };
 
 ftms = {
-  name = generator;
+  name = ranges_concat;
   values = {
-    v = 202207;
-    cxxmin = 23;
-    extra_cond = "__glibcxx_coroutine";
-  };
-};
-
-ftms = {
-  name = tuple_like;
-  values = {
-    v = 202207;
-    cxxmin = 23;
+    v = 202403;
+    cxxmin = 26;
   };
 };
 

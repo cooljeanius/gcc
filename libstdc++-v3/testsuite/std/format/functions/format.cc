@@ -157,6 +157,11 @@ test_std_examples()
 
     // Restore
     std::locale::global(std::locale::classic());
+
+    string s5 = format("{}", -100); // PR libstdc++/114325
+    VERIFY(s5 == "-100");
+    string s6 = format("{:d} {:d}", -123, 999);
+    VERIFY(s6 == "-123 999");
   }
 }
 
@@ -242,6 +247,14 @@ test_locale()
 
   s = std::format(cloc, "{:05L}", -1.0); // PR libstdc++/110968
   VERIFY( s == "-0001" );
+
+  // PR libstdc++/114863 grouping applied to nan and inf
+  double inf = std::numeric_limits<double>::infinity();
+  s = std::format(eloc, "{0:Le} {0:Lf} {0:Lg}", -inf);
+  VERIFY( s == "-inf -inf -inf" );
+  double nan = std::numeric_limits<double>::quiet_NaN();
+  s = std::format(eloc, "{0:Le} {0:Lf} {0:Lg}", -nan);
+  VERIFY( s == "-nan -nan -nan" );
 
   // Restore
   std::locale::global(cloc);

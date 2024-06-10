@@ -178,13 +178,6 @@ class line_table_test
   ~line_table_test ();
 };
 
-/* Helper function for selftests that need a function decl.  */
-
-extern tree make_fndecl (tree return_type,
-			 const char *name,
-			 vec <tree> &param_types,
-			 bool is_variadic = false);
-
 /* Run TESTCASE multiple times, once for each case in our test matrix.  */
 
 extern void
@@ -227,6 +220,7 @@ extern void attribs_cc_tests ();
 extern void bitmap_cc_tests ();
 extern void cgraph_cc_tests ();
 extern void convert_cc_tests ();
+extern void diagnostic_color_cc_tests ();
 extern void diagnostic_format_json_cc_tests ();
 extern void diagnostic_show_locus_cc_tests ();
 extern void digraph_cc_tests ();
@@ -369,6 +363,18 @@ extern int num_passes;
     ::selftest::pass (SELFTEST_LOCATION, desc_);	       \
   else							       \
     ::selftest::fail (SELFTEST_LOCATION, desc_);	       \
+  SELFTEST_END_STMT
+
+/* Like ASSERT_NE, but treat LOC as the effective location of the
+   selftest.  */
+
+#define ASSERT_NE_AT(LOC, VAL1, VAL2)		       \
+  SELFTEST_BEGIN_STMT					       \
+  const char *desc_ = "ASSERT_NE (" #VAL1 ", " #VAL2 ")"; \
+  if ((VAL1) != (VAL2))				       \
+    ::selftest::pass ((LOC), desc_);			       \
+  else							       \
+    ::selftest::fail ((LOC), desc_);			       \
   SELFTEST_END_STMT
 
 /* Evaluate VAL1 and VAL2 and compare them with maybe_ne, calling

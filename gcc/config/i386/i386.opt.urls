@@ -40,7 +40,8 @@ UrlSuffix(gcc/x86-Options.html#index-march-16)
 mlarge-data-threshold=
 UrlSuffix(gcc/x86-Options.html#index-mlarge-data-threshold)
 
-; skipping UrlSuffix for 'mcmodel=' due to finding no URLs
+mcmodel=
+UrlSuffix(gcc/x86-Options.html#index-mcmodel_003d-7)
 
 mcpu=
 UrlSuffix(gcc/x86-Options.html#index-mcpu-14)
@@ -128,7 +129,7 @@ mstackrealign
 UrlSuffix(gcc/x86-Options.html#index-mstackrealign)
 
 mtls-dialect=
-UrlSuffix(gcc/x86-Options.html#index-mtls-dialect-1)
+UrlSuffix(gcc/x86-Options.html#index-mtls-dialect-2)
 
 mtls-direct-seg-refs
 UrlSuffix(gcc/x86-Options.html#index-mtls-direct-seg-refs)
@@ -146,7 +147,7 @@ miamcu
 UrlSuffix(gcc/x86-Options.html#index-miamcu)
 
 mabi=
-UrlSuffix(gcc/x86-Options.html#index-mabi-6)
+UrlSuffix(gcc/x86-Options.html#index-mabi-7)
 
 mcall-ms2sysv-xlogues
 UrlSuffix(gcc/x86-Options.html#index-mcall-ms2sysv-xlogues)
@@ -183,6 +184,9 @@ UrlSuffix(gcc/x86-Options.html#index-mmove-max)
 
 mstore-max=
 UrlSuffix(gcc/x86-Options.html#index-mstore-max)
+
+mnoreturn-no-callee-saved-registers
+UrlSuffix(gcc/x86-Options.html#index-mnoreturn-no-callee-saved-registers)
 
 m32
 UrlSuffix(gcc/x86-Options.html#index-m32-2)
@@ -235,12 +239,6 @@ UrlSuffix(gcc/x86-Options.html#index-mavx2)
 mavx512f
 UrlSuffix(gcc/x86-Options.html#index-mavx512f)
 
-mavx512pf
-UrlSuffix(gcc/x86-Options.html#index-mavx512pf)
-
-mavx512er
-UrlSuffix(gcc/x86-Options.html#index-mavx512er)
-
 mavx512cd
 UrlSuffix(gcc/x86-Options.html#index-mavx512cd)
 
@@ -258,12 +256,6 @@ UrlSuffix(gcc/x86-Options.html#index-mavx512ifma)
 
 mavx512vbmi
 UrlSuffix(gcc/x86-Options.html#index-mavx512vbmi)
-
-mavx5124fmaps
-UrlSuffix(gcc/x86-Options.html#index-mavx5124fmaps)
-
-mavx5124vnniw
-UrlSuffix(gcc/x86-Options.html#index-mavx5124vnniw)
 
 mavx512vpopcntdq
 UrlSuffix(gcc/x86-Options.html#index-mavx512vpopcntdq)
@@ -405,9 +397,6 @@ UrlSuffix(gcc/x86-Options.html#index-mrdrnd)
 
 mf16c
 UrlSuffix(gcc/x86-Options.html#index-mf16c)
-
-mprefetchwt1
-UrlSuffix(gcc/x86-Options.html#index-mprefetchwt1)
 
 mfentry
 UrlSuffix(gcc/x86-Options.html#index-mfentry)
@@ -596,6 +585,12 @@ UrlSuffix(gcc/x86-Options.html#index-msm4)
 
 mapxf
 UrlSuffix(gcc/x86-Options.html#index-mapxf)
+
+mapx-inline-asm-use-gpr32
+UrlSuffix(gcc/x86-Options.html#index-mapx-inline-asm-use-gpr32)
+
+mevex512
+UrlSuffix(gcc/x86-Options.html#index-mevex512)
 
 musermsr
 UrlSuffix(gcc/x86-Options.html#index-musermsr)

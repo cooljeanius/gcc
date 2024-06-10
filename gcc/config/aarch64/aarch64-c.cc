@@ -75,6 +75,7 @@ aarch64_define_unconditional_macros (cpp_reader *pfile)
 
   builtin_define ("__ARM_STATE_ZA");
   builtin_define ("__ARM_STATE_ZT0");
+  builtin_define ("__ARM_NEON_SVE_BRIDGE");
 
   /* Define keyword attributes like __arm_streaming as macros that expand
      to the associated [[...]] attribute.  Use __extension__ in the attribute
@@ -235,9 +236,9 @@ aarch64_update_cpp_builtins (cpp_reader *pfile)
   if (aarch_ra_sign_scope != AARCH_FUNCTION_NONE)
     {
       int v = 0;
-      if (aarch_ra_sign_key == AARCH_KEY_A)
+      if (aarch64_ra_sign_key == AARCH64_KEY_A)
 	v |= 1;
-      if (aarch_ra_sign_key == AARCH_KEY_B)
+      if (aarch64_ra_sign_key == AARCH64_KEY_B)
 	v |= 2;
       if (aarch_ra_sign_scope == AARCH_FUNCTION_ALL)
 	v |= 4;
@@ -344,15 +345,15 @@ aarch64_pragma_aarch64 (cpp_reader *)
 
   const char *name = TREE_STRING_POINTER (x);
   if (strcmp (name, "arm_sve.h") == 0)
-    aarch64_sve::handle_arm_sve_h ();
+    aarch64_sve::handle_arm_sve_h (false);
   else if (strcmp (name, "arm_sme.h") == 0)
-    aarch64_sve::handle_arm_sme_h ();
+    aarch64_sve::handle_arm_sme_h (false);
   else if (strcmp (name, "arm_neon.h") == 0)
     handle_arm_neon_h ();
   else if (strcmp (name, "arm_acle.h") == 0)
     handle_arm_acle_h ();
   else if (strcmp (name, "arm_neon_sve_bridge.h") == 0)
-    aarch64_sve::handle_arm_neon_sve_bridge_h ();
+    aarch64_sve::handle_arm_neon_sve_bridge_h (false);
   else
     error ("unknown %<#pragma GCC aarch64%> option %qs", name);
 }

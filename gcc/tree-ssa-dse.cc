@@ -49,6 +49,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "cfgloop.h"
 #include "tree-data-ref.h"
 #include "internal-fn.h"
+#include "tree-ssa.h"
 
 /* This file implements dead store elimination.
 
@@ -658,6 +659,7 @@ increment_start_addr (gimple *stmt, tree *where, int increment)
 					      *where,
 					      build_int_cst (ptr_type_node,
 							     increment)));
+  STRIP_USELESS_TYPE_CONVERSION (*where);
 }
 
 /* STMT is builtin call that writes bytes in bitmap ORIG, some bytes are dead
@@ -969,14 +971,13 @@ static hash_map<gimple *, data_reference_p> *dse_stmt_to_dr_map;
    if only clobber statements influenced the classification result.
    Returns the classification.  */
 
-dse_store_status
+static dse_store_status
 dse_classify_store (ao_ref *ref, gimple *stmt,
 		    bool byte_tracking_enabled, sbitmap live_bytes,
-		    bool *by_clobber_p, tree stop_at_vuse)
+		    bool *by_clobber_p, tree stop_at_vuse, int &cnt,
+		    bitmap visited)
 {
   gimple *temp;
-  int cnt = 0;
-  auto_bitmap visited;
   std::unique_ptr<data_reference, void(*)(data_reference_p)>
     dra (nullptr, free_data_ref);
 
@@ -1236,6 +1237,19 @@ dse_classify_store (ao_ref *ref, gimple *stmt,
       /* If all defs kill the ref we are done.  */
       if (defs.is_empty ())
 	return DSE_STORE_DEAD;
+      /* If more than one def survives we have to analyze multiple
+	 paths.  We can handle this by recursing, sharing 'visited'
+	 to avoid redundant work and limiting it by shared 'cnt'.
+	 For now do not bother with byte-tracking in this case.  */
+      while (defs.length () > 1)
+	{
+	  if (dse_classify_store (ref, defs.last (), false, NULL,
+				  by_clobber_p, stop_at_vuse, cnt,
+				  visited) != DSE_STORE_DEAD)
+	    break;
+	  byte_tracking_enabled = false;
+	  defs.pop ();
+	}
       /* If more than one def survives fail.  */
       if (defs.length () > 1)
 	{
@@ -1261,6 +1275,17 @@ dse_classify_store (ao_ref *ref, gimple *stmt,
     }
   /* Continue walking until there are no more live bytes.  */
   while (1);
+}
+
+dse_store_status
+dse_classify_store (ao_ref *ref, gimple *stmt,
+		    bool byte_tracking_enabled, sbitmap live_bytes,
+		    bool *by_clobber_p, tree stop_at_vuse)
+{
+  int cnt = 0;
+  auto_bitmap visited;
+  return dse_classify_store (ref, stmt, byte_tracking_enabled, live_bytes,
+			     by_clobber_p, stop_at_vuse, cnt, visited);
 }
 
 

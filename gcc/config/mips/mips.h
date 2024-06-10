@@ -251,7 +251,7 @@ struct mips_cpu_info {
 				     || ISA_HAS_MSA))
 
 /* ISA load/store instructions can handle unaligned address */
-#define ISA_HAS_UNALIGNED_ACCESS (TARGET_UNALIGNED_ACCESS \
+#define ISA_HAS_UNALIGNED_ACCESS (!TARGET_STRICT_ALIGN \
 				 && (mips_isa_rev >= 6))
 
 /* The ISA compression flags that are currently in effect.  */
@@ -694,6 +694,9 @@ struct mips_cpu_info {
 	builtin_define ("__mips_compact_branches_always");		\
       else 								\
 	builtin_define ("__mips_compact_branches_optimal");		\
+									\
+      if (STRICT_ALIGNMENT)						\
+	builtin_define ("__mips_strict_alignment");			\
     }									\
   while (0)
 
@@ -1258,6 +1261,8 @@ struct mips_cpu_info {
 /* ISA has data prefetch, LL and SC with limited 9-bit displacement.  */
 #define ISA_HAS_9BIT_DISPLACEMENT	(mips_isa_rev >= 6		\
 					 || ISA_HAS_MIPS16E2)
+
+#define ISA_HAS_FMIN_FMAX	(mips_isa_rev >= 6)
 
 /* ISA has data indexed prefetch instructions.  This controls use of
    'prefx', along with TARGET_HARD_FLOAT and TARGET_DOUBLE_FLOAT.
