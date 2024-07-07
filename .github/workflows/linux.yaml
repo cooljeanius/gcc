@@ -36,7 +36,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get -qq update
-          sudo apt-get -y install cc-multilib build-essential flex zlib1g-dev gnat gdc expect dejagnu libc-dev libc-devtools texlive findutils binutils autogen gettext autopoint libasprintf-dev libgettextpo-dev mailutils mailutils-mh procmail emacs exim4-base msmtp bsd-mailx
+          sudo apt-get -y install gcc-multilib build-essential flex zlib1g-dev gnat gdc expect dejagnu libc-dev libc-devtools texlive findutils binutils autogen gettext autopoint libasprintf-dev libgettextpo-dev mailutils mailutils-mh procmail emacs exim4-base msmtp bsd-mailx
 
       - name: Install dependencies for aarch64
         if: success() && contains(matrix.target, 'aarch64')
