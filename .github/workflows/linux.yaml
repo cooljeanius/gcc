@@ -36,7 +36,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get -qq update
-          sudo apt install -y gcc-multilib build-essential flex zlib1g-dev gnat gdc expect dejagnu libc-dev libc-devtools texlive findutils binutils autogen gettext autopoint libasprintf-dev libgettextpo-dev mailutils mailutils-mh procmail emacs exim4-base msmtp bsd-mailx
+          sudo apt-get -y install cc-multilib build-essential flex zlib1g-dev gnat gdc expect dejagnu libc-dev libc-devtools texlive findutils binutils autogen gettext autopoint libasprintf-dev libgettextpo-dev mailutils mailutils-mh procmail emacs exim4-base msmtp bsd-mailx
 
       - name: Install dependencies for aarch64
         if: success() && contains(matrix.target, 'aarch64')
@@ -50,8 +50,8 @@ jobs:
         run: |
           if test -z "${revision}"; then revision=0; fi
           {
-              date
-              echo "$(TZ=UTC date) (revision ${revision})"
+              sync && date
+              sync && echo "$(TZ=UTC date) (revision ${revision})"
           } > LAST_UPDATED
 
       - name: Cache
@@ -117,7 +117,7 @@ jobs:
           if test -r build.log; then grep -i "error:" build.log; \
           elif test -r ../build/build.log; then grep -i "error:" ../build/build.log; \
           elif test -e ../build/Makefile; then \
-            sudo apt install remake; \
+            sudo apt-get -y install remake; \
             cd ../build; \
             remake -dpPw --trace=full; \
           elif test -d ../build; then \
@@ -149,8 +149,11 @@ jobs:
       - name: Tests
         if: success()
         run: |
-          if test -x /usr/bin/x86_64-linux-gnu-gcc; then /usr/bin/x86_64-linux-gnu-gcc --version; elif test -x ../build/gcc/xgcc; then ../build/gcc/xgcc --version; fi
-          if test -x /usr/bin/x86_64-linux-gnu-gcc; then /usr/bin/x86_64-linux-gnu-gcc -v; elif test -x ../build/gcc/xgcc; then ../build/gcc/xgcc --v; fi
+          if test -x /usr/bin/x86_64-linux-gnu-gcc; then \
+            /usr/bin/x86_64-linux-gnu-gcc --version && /usr/bin/x86_64-linux-gnu-gcc -v; \
+          elif test -x ../build/gcc/xgcc; then \
+            ../build/gcc/xgcc --version && sync && ../build/gcc/xgcc -v; \
+          fi
           cd ../build
           if test -e build.log; then make warning.log; fi
           time (make -k -j"$(nproc)" check RUNTESTFLAGS="compile.exp dg-torture.exp execute.exp old-deja.exp" | tee testsuite_output.log)
@@ -159,13 +162,14 @@ jobs:
             if test -x mail-report-with-warnings.log; then \
               echo "attempting to send mail-report-with-warnings.log"; \
               ./mail-report-with-warnings.log; \
-              stat mail-report-with-warnings.log; \
+              stat mail-report-with-warnings.log && wc -l mail-report-with-warnings.log; \
             elif test -x mail-report.log; then \
               echo "attempting to send mail-report.log"; \
               ./mail-report.log; \
-              stat mail-report.log; \
+              stat mail-report.log && wc -l mail-report.log && du mail-report.log; \
             elif test -e testsuite_output.log; then \
               echo "TODO: figure out a way to send testsuite_output.log"; \
+              stat testsuite_output.log && wc -l testsuite_output.log && du testsuite_output.log; \
             else \
               echo "Nothing to send."; \
             fi; \
