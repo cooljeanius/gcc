@@ -972,6 +972,7 @@ maybe_convert_cond (tree cond)
      result in a TARGET_EXPR, pick it up from there.  */
   if (DECL_DECOMPOSITION_P (cond)
       && DECL_DECOMP_IS_BASE (cond)
+      && DECL_DECOMP_BASE (cond)
       && TREE_CODE (DECL_DECOMP_BASE (cond)) == TARGET_EXPR)
     cond = TARGET_EXPR_SLOT (DECL_DECOMP_BASE (cond));
 
@@ -1714,6 +1715,7 @@ finish_switch_cond (tree cond, tree switch_stmt)
 	 conversion result in a TARGET_EXPR, pick it up from there.  */
       if (DECL_DECOMPOSITION_P (cond)
 	  && DECL_DECOMP_IS_BASE (cond)
+	  && DECL_DECOMP_BASE (cond)
 	  && TREE_CODE (DECL_DECOMP_BASE (cond)) == TARGET_EXPR)
 	cond = TARGET_EXPR_SLOT (DECL_DECOMP_BASE (cond));
       cond = build_expr_type_conversion (WANT_INT | WANT_ENUM, cond, true);
@@ -2968,7 +2970,7 @@ finish_call_expr (tree fn, vec<tree, va_gc> **args, bool disallow_virtual,
 	     -Wredundant-move warning.  */
 	  suppress_warning (result, OPT_Wpessimizing_move);
 
-	  if (cfun)
+	  if (cfun && cp_function_chain && !cp_unevaluated_operand)
 	    {
 	      bool abnormal = true;
 	      for (lkp_iterator iter (maybe_get_fns (fn)); iter; ++iter)
@@ -3065,20 +3067,9 @@ finish_call_expr (tree fn, vec<tree, va_gc> **args, bool disallow_virtual,
     }
   else if (concept_check_p (fn))
     {
-      /* FN is actually a template-id referring to a concept definition.  */
-      tree id = unpack_concept_check (fn);
-      tree tmpl = TREE_OPERAND (id, 0);
-      tree args = TREE_OPERAND (id, 1);
-
-      if (!function_concept_p (tmpl))
-	{
-	  error_at (EXPR_LOC_OR_LOC (fn, input_location),
-		    "cannot call a concept as a function");
-	  return error_mark_node;
-	}
-
-      /* Ensure the result is wrapped as a call expression.  */
-      result = build_concept_check (tmpl, args, tf_warning_or_error);
+      error_at (EXPR_LOC_OR_LOC (fn, input_location),
+		"cannot call a concept as a function");
+      return error_mark_node;
     }
   else if (is_overloaded_fn (fn))
     {
@@ -4353,7 +4344,7 @@ finish_id_expression_1 (tree id_expression,
 	  /* Name lookup failed.  */
 	  if (scope
 	      && (!TYPE_P (scope)
-		  || (!dependent_type_p (scope)
+		  || (!dependentish_scope_p (scope)
 		      && !(identifier_p (id_expression)
 			   && IDENTIFIER_CONV_OP_P (id_expression)
 			   && dependent_type_p (TREE_TYPE (id_expression))))))
@@ -4979,6 +4970,7 @@ simplify_aggr_init_expr (tree *tp)
     = CALL_EXPR_OPERATOR_SYNTAX (aggr_init_expr);
   CALL_EXPR_ORDERED_ARGS (call_expr) = CALL_EXPR_ORDERED_ARGS (aggr_init_expr);
   CALL_EXPR_REVERSE_ARGS (call_expr) = CALL_EXPR_REVERSE_ARGS (aggr_init_expr);
+  CALL_EXPR_MUST_TAIL_CALL (call_expr) = AGGR_INIT_EXPR_MUST_TAIL (aggr_init_expr);
 
   if (style == ctor)
     {

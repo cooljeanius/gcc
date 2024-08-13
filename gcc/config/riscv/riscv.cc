@@ -719,6 +719,15 @@ riscv_min_arithmetic_precision (void)
   return 32;
 }
 
+/* Get the arch string from an options object.  */
+
+template <class T>
+static const char *
+get_arch_str (const T *opts)
+{
+  return opts->x_riscv_arch_string;
+}
+
 template <class T>
 static const char *
 get_tune_str (const T *opts)
@@ -1158,7 +1167,7 @@ riscv_build_integer (struct riscv_integer_op *codes, HOST_WIDE_INT value,
     }
 
   /* With pack we can generate a 64 bit constant with the same high
-     and low 32 bits triviall.  */
+     and low 32 bits trivially.  */
   if (cost > 3 && TARGET_64BIT && TARGET_ZBKB)
     {
       unsigned HOST_WIDE_INT loval = value & 0xffffffff;
@@ -1174,7 +1183,7 @@ riscv_build_integer (struct riscv_integer_op *codes, HOST_WIDE_INT value,
 
       /* An arbitrary 64 bit constant can be synthesized in 5 instructions
 	 using zbkb.  We may do better than that if the upper or lower half
-	 can be synthsized with a single LUI, ADDI or BSET.  Regardless the
+	 can be synthesized with a single LUI, ADDI or BSET.  Regardless the
 	 basic steps are the same.  */
       if (cost > 3 && can_create_pseudo_p ())
 	{
@@ -3113,37 +3122,6 @@ riscv_legitimize_poly_move (machine_mode mode, rtx dest, rtx tmp, rtx src)
     }
 }
 
-/* Adjust scalable frame of vector for prologue && epilogue. */
-
-static void
-riscv_v_adjust_scalable_frame (rtx target, poly_int64 offset, bool epilogue)
-{
-  rtx tmp = RISCV_PROLOGUE_TEMP (Pmode);
-  rtx adjust_size = RISCV_PROLOGUE_TEMP2 (Pmode);
-  rtx insn, dwarf, adjust_frame_rtx;
-
-  riscv_legitimize_poly_move (Pmode, adjust_size, tmp,
-			      gen_int_mode (offset, Pmode));
-
-  if (epilogue)
-    insn = gen_add3_insn (target, target, adjust_size);
-  else
-    insn = gen_sub3_insn (target, target, adjust_size);
-
-  insn = emit_insn (insn);
-
-  RTX_FRAME_RELATED_P (insn) = 1;
-
-  adjust_frame_rtx
-    = gen_rtx_SET (target,
-		   plus_constant (Pmode, target, epilogue ? offset : -offset));
-
-  dwarf = alloc_reg_note (REG_FRAME_RELATED_EXPR, copy_rtx (adjust_frame_rtx),
-			  NULL_RTX);
-
-  REG_NOTES (insn) = dwarf;
-}
-
 /* Take care below subreg const_poly_int move:
 
    1. (set (subreg:DI (reg:TI 237) 8)
@@ -3221,16 +3199,17 @@ riscv_legitimize_move (machine_mode mode, rtx dest, rtx src)
 				    (const_poly_int:HI [m, n])
 				    (const_poly_int:SI [m, n]).  */
 	  rtx tmp = gen_reg_rtx (Pmode);
-	  riscv_legitimize_poly_move (Pmode, gen_lowpart (Pmode, dest), tmp,
-				      src);
+	  rtx tmp2 = gen_reg_rtx (Pmode);
+	  riscv_legitimize_poly_move (Pmode, tmp2, tmp, src);
+	  emit_move_insn (dest, gen_lowpart (mode, tmp2));
 	}
       else
 	{
 	  /* In RV32 system, handle (const_poly_int:SI [m, n])
 				    (const_poly_int:DI [m, n]).
 	     In RV64 system, handle (const_poly_int:DI [m, n]).
-       FIXME: Maybe we could gen SImode in RV32 and then sign-extend to DImode,
-       the offset should not exceed 4GiB in general.  */
+	     FIXME: Maybe we could gen SImode in RV32 and then sign-extend to
+	     DImode, the offset should not exceed 4GiB in general.  */
 	  rtx tmp = gen_reg_rtx (mode);
 	  riscv_legitimize_poly_move (mode, dest, tmp, src);
 	}
@@ -3636,9 +3615,11 @@ riscv_rtx_costs (rtx x, machine_mode mode, int outer_code, int opno ATTRIBUTE_UN
 		    && XEXP (x, 2) == CONST0_RTX (GET_MODE (XEXP (x, 1))))
 		   || (GET_CODE (XEXP (x, 2)) == REG
 		       && XEXP (x, 1) == CONST0_RTX (GET_MODE (XEXP (x, 2))))
-		   || (GET_CODE (XEXP (x, 1)) == REG
+		   || (COMPARISON_P (XEXP (x, 0))
+		       && GET_CODE (XEXP (x, 1)) == REG
 		       && rtx_equal_p (XEXP (x, 1), XEXP (XEXP (x, 0), 0)))
-		   || (GET_CODE (XEXP (x, 1)) == REG
+		   || (COMPARISON_P (XEXP (x, 0))
+		       && GET_CODE (XEXP (x, 1)) == REG
 		       && rtx_equal_p (XEXP (x, 2), XEXP (XEXP (x, 0), 0)))))
 	{
 	  *total = COSTS_N_INSNS (1);
@@ -5504,7 +5485,7 @@ riscv_init_cumulative_args (CUMULATIVE_ARGS *cum, tree fntype, rtx, tree, int)
 static bool
 riscv_vector_type_p (const_tree type)
 {
-  /* Currently, only builtin scalabler vector type is allowed, in the future,
+  /* Currently, only builtin scalable vector type is allowed, in the future,
      more vector types may be allowed, such as GNU vector type, etc.  */
   return riscv_vector::builtin_type_p (type);
 }
@@ -6014,11 +5995,14 @@ riscv_validate_vector_type (const_tree type, const char *hint)
   bool float_type_p = riscv_vector_float_type_p (type);
 
   if (float_type_p && element_bitsize == 16
-    && !TARGET_VECTOR_ELEN_FP_16_P (riscv_vector_elen_flags))
+      && (!TARGET_VECTOR_ELEN_FP_16_P (riscv_vector_elen_flags)
+	  && !TARGET_VECTOR_ELEN_BF_16_P (riscv_vector_elen_flags)))
     {
-      error_at (input_location,
-		"%s %qT requires the zvfhmin or zvfh ISA extension",
-		hint, type);
+      const char *name = IDENTIFIER_POINTER (DECL_NAME (TYPE_NAME (type)));
+      if (strstr (name, "vfloat"))
+	error_at (input_location,
+		  "%s %qT requires the zvfhmin or zvfh ISA extension",
+		  hint, type);
       return;
     }
 
@@ -6485,6 +6469,7 @@ riscv_asm_output_opcode (FILE *asm_out_file, const char *p)
    'A'	Print the atomic operation suffix for memory model OP.
    'I'	Print the LR suffix for memory model OP.
    'J'	Print the SC suffix for memory model OP.
+   'L'	Print a non-temporal locality hints instruction.
    'z'	Print x0 if OP is zero, otherwise print OP normally.
    'i'	Print i if the operand is not a register.
    'S'	Print shift-index of single-bit mask OP.
@@ -6678,6 +6663,27 @@ riscv_print_operand (FILE *file, rtx op, int letter)
 	fputs (".rl", file);
       break;
     }
+
+    case 'L':
+      {
+	const char *ntl_hint = NULL;
+	switch (INTVAL (op))
+	  {
+	  case 0:
+	    ntl_hint = "ntl.all";
+	    break;
+	  case 1:
+	    ntl_hint = "ntl.pall";
+	    break;
+	  case 2:
+	    ntl_hint = "ntl.p1";
+	    break;
+	  }
+
+      if (ntl_hint)
+	asm_fprintf (file, "%s\n\t", ntl_hint);
+      break;
+      }
 
     case 'i':
       if (code != REG)
@@ -7241,6 +7247,10 @@ riscv_compute_frame_info (void)
   unsigned int num_v_saved = 0;
 
   frame = &cfun->machine->frame;
+
+  /* Adjust the outgoing arguments size if required.  Keep it in sync with what
+     the mid-end is doing.  */
+  crtl->outgoing_args_size = STACK_DYNAMIC_OFFSET (cfun);
 
   /* In an interrupt function, there are two cases in which t0 needs to be used:
      1, If we have a large frame, then we need to save/restore t0.  We check for
@@ -7857,12 +7867,12 @@ riscv_adjust_multi_push_cfi_prologue (int saved_size)
 }
 
 static void
-riscv_emit_stack_tie (void)
+riscv_emit_stack_tie (rtx reg)
 {
   if (Pmode == SImode)
-    emit_insn (gen_stack_tiesi (stack_pointer_rtx, hard_frame_pointer_rtx));
+    emit_insn (gen_stack_tiesi (stack_pointer_rtx, reg));
   else
-    emit_insn (gen_stack_tiedi (stack_pointer_rtx, hard_frame_pointer_rtx));
+    emit_insn (gen_stack_tiedi (stack_pointer_rtx, reg));
 }
 
 /*zcmp multi push and pop code_for_push_pop function ptr array  */
@@ -7894,6 +7904,109 @@ static const code_for_push_pop_t code_for_push_pop[ZCMP_MAX_GRP_SLOTS][ZCMP_OP_N
       code_for_gpr_multi_popret_up_to_s11,
       code_for_gpr_multi_popretz_up_to_s11}};
 
+/*  Set a probe loop for stack clash protection.  */
+static void
+riscv_allocate_and_probe_stack_loop (rtx tmp, enum rtx_code code,
+				     rtx op0, rtx op1, bool vector,
+				     HOST_WIDE_INT offset)
+{
+  tmp = riscv_force_temporary (tmp, gen_int_mode (offset, Pmode));
+
+  /* Loop.  */
+  rtx label = gen_label_rtx ();
+  emit_label (label);
+
+  /* Allocate and probe stack.  */
+  emit_insn (gen_sub3_insn (stack_pointer_rtx, stack_pointer_rtx, tmp));
+  emit_stack_probe (plus_constant (Pmode, stack_pointer_rtx,
+		    STACK_CLASH_CALLER_GUARD));
+  emit_insn (gen_blockage ());
+
+  /* Adjust the remaining vector length.  */
+  if (vector)
+    emit_insn (gen_sub3_insn (op0, op0, tmp));
+
+  /* Branch if there's still more bytes to probe.  */
+  riscv_expand_conditional_branch (label, code, op0, op1);
+  JUMP_LABEL (get_last_insn ()) = label;
+
+  emit_insn (gen_blockage ());
+}
+
+/* Adjust scalable frame of vector for prologue && epilogue. */
+
+static void
+riscv_v_adjust_scalable_frame (rtx target, poly_int64 offset, bool epilogue)
+{
+  rtx tmp = RISCV_PROLOGUE_TEMP (Pmode);
+  rtx adjust_size = RISCV_PROLOGUE_TEMP2 (Pmode);
+  rtx insn, dwarf, adjust_frame_rtx;
+
+  riscv_legitimize_poly_move (Pmode, adjust_size, tmp,
+			      gen_int_mode (offset, Pmode));
+
+  /* If doing stack clash protection then we use a loop to allocate and probe
+     the stack.  */
+  if (flag_stack_clash_protection && !epilogue)
+    {
+      HOST_WIDE_INT min_probe_threshold
+	= (1 << param_stack_clash_protection_guard_size) - STACK_CLASH_CALLER_GUARD;
+
+      if (!frame_pointer_needed)
+	{
+	  /* This is done to provide unwinding information for the stack
+	     adjustments we're about to do, however to prevent the optimizers
+	     from removing the T3 move and leaving the CFA note (which would be
+	     very wrong) we tie the old and new stack pointer together.
+	     The tie will expand to nothing but the optimizers will not touch
+	     the instruction.  */
+	  insn = get_last_insn ();
+	  rtx stack_ptr_copy = gen_rtx_REG (Pmode, RISCV_STACK_CLASH_VECTOR_CFA_REGNUM);
+	  emit_move_insn (stack_ptr_copy, stack_pointer_rtx);
+	  riscv_emit_stack_tie (stack_ptr_copy);
+
+	  /* We want the CFA independent of the stack pointer for the
+	     duration of the loop.  */
+	  add_reg_note (insn, REG_CFA_DEF_CFA, stack_ptr_copy);
+	  RTX_FRAME_RELATED_P (insn) = 1;
+	}
+
+      riscv_allocate_and_probe_stack_loop (tmp, GE, adjust_size, tmp, true,
+					   min_probe_threshold);
+
+      /* Allocate the residual.  */
+      insn = emit_insn (gen_sub3_insn (target, target, adjust_size));
+
+      /* Now reset the CFA register if needed.  */
+      if (!frame_pointer_needed)
+	{
+	  add_reg_note (insn, REG_CFA_DEF_CFA,
+			plus_constant (Pmode, stack_pointer_rtx, -offset));
+	  RTX_FRAME_RELATED_P (insn) = 1;
+	}
+
+      return;
+    }
+
+  if (epilogue)
+    insn = gen_add3_insn (target, target, adjust_size);
+  else
+    insn = gen_sub3_insn (target, target, adjust_size);
+
+  insn = emit_insn (insn);
+
+  RTX_FRAME_RELATED_P (insn) = 1;
+
+  adjust_frame_rtx
+    = gen_rtx_SET (target,
+		   plus_constant (Pmode, target, epilogue ? offset : -offset));
+
+  dwarf = alloc_reg_note (REG_FRAME_RELATED_EXPR, copy_rtx (adjust_frame_rtx),
+			  NULL_RTX);
+
+  REG_NOTES (insn) = dwarf;
+}
+
 static rtx
 riscv_gen_multi_push_pop_insn (riscv_zcmp_op_t op, HOST_WIDE_INT adj_size,
 			       unsigned int regs_num)
@@ -7914,6 +8027,176 @@ get_multi_push_fpr_mask (unsigned max_fprs_push)
     if (riscv_save_reg_p (regno))
       mask_fprs_push |= 1 << (regno - FP_REG_FIRST), num_f_pushed++;
   return mask_fprs_push;
+}
+
+/* Allocate SIZE bytes of stack space using TEMP1 as a scratch register.
+   If SIZE is not large enough to require a probe this function will only
+   adjust the stack.
+
+   We emit barriers after each stack adjustment to prevent optimizations from
+   breaking the invariant that we never drop the stack more than a page.  This
+   invariant is needed to make it easier to correctly handle asynchronous
+   events, e.g. if we were to allow the stack to be dropped by more than a page
+   and then have multiple probes up and we take a signal somewhere in between
+   then the signal handler doesn't know the state of the stack and can make no
+   assumptions about which pages have been probed.  */
+
+static void
+riscv_allocate_and_probe_stack_space (rtx temp1, HOST_WIDE_INT size)
+{
+  HOST_WIDE_INT guard_size
+    = 1 << param_stack_clash_protection_guard_size;
+  HOST_WIDE_INT guard_used_by_caller = STACK_CLASH_CALLER_GUARD;
+  HOST_WIDE_INT byte_sp_alignment = STACK_BOUNDARY / BITS_PER_UNIT;
+  HOST_WIDE_INT min_probe_threshold = guard_size - guard_used_by_caller;
+  rtx insn;
+
+  /* We should always have a positive probe threshold.  */
+  gcc_assert (min_probe_threshold > 0);
+
+  /* If SIZE is not large enough to require probing, just adjust the stack and
+     exit.  */
+  if (known_lt (size, min_probe_threshold)
+      || !flag_stack_clash_protection)
+    {
+      if (flag_stack_clash_protection)
+	{
+	  if (known_eq (cfun->machine->frame.total_size, 0))
+	    dump_stack_clash_frame_info (NO_PROBE_NO_FRAME, false);
+	  else
+	    dump_stack_clash_frame_info (NO_PROBE_SMALL_FRAME, true);
+	}
+
+      if (SMALL_OPERAND (-size))
+	{
+	  insn = gen_add3_insn (stack_pointer_rtx, stack_pointer_rtx, GEN_INT (-size));
+	  RTX_FRAME_RELATED_P (emit_insn (insn)) = 1;
+	}
+      else if (SUM_OF_TWO_S12_ALGN (-size))
+	{
+	  HOST_WIDE_INT one, two;
+	  riscv_split_sum_of_two_s12 (-size, &one, &two);
+	  insn = gen_add3_insn (stack_pointer_rtx, stack_pointer_rtx,
+				GEN_INT (one));
+	  RTX_FRAME_RELATED_P (emit_insn (insn)) = 1;
+	  insn = gen_add3_insn (stack_pointer_rtx, stack_pointer_rtx,
+				GEN_INT (two));
+	  RTX_FRAME_RELATED_P (emit_insn (insn)) = 1;
+	}
+      else
+	{
+	  temp1 = riscv_force_temporary (temp1, GEN_INT (-size));
+	  emit_insn (gen_add3_insn (stack_pointer_rtx, stack_pointer_rtx, temp1));
+	  insn = plus_constant (Pmode, stack_pointer_rtx, -size);
+	  insn = gen_rtx_SET (stack_pointer_rtx, insn);
+	  riscv_set_frame_expr (insn);
+	}
+
+      /* We must have allocated the remainder of the stack frame.
+	 Emit a stack tie if we have a frame pointer so that the
+	 allocation is ordered WRT fp setup and subsequent writes
+	 into the frame.  */
+      if (frame_pointer_needed)
+	riscv_emit_stack_tie (hard_frame_pointer_rtx);
+
+      return;
+    }
+
+  gcc_assert (multiple_p (size, byte_sp_alignment));
+
+  if (dump_file)
+    fprintf (dump_file,
+	     "Stack clash prologue: " HOST_WIDE_INT_PRINT_DEC
+	     " bytes, probing will be required.\n", size);
+
+  /* Round size to the nearest multiple of guard_size, and calculate the
+     residual as the difference between the original size and the rounded
+     size.  */
+  HOST_WIDE_INT rounded_size = ROUND_DOWN (size, guard_size);
+  HOST_WIDE_INT residual = size - rounded_size;
+
+  /* We can handle a small number of allocations/probes inline.  Otherwise
+     punt to a loop.  */
+  if (rounded_size <= STACK_CLASH_MAX_UNROLL_PAGES * guard_size)
+    {
+      temp1 = riscv_force_temporary (temp1, gen_int_mode (guard_size, Pmode));
+      for (HOST_WIDE_INT i = 0; i < rounded_size; i += guard_size)
+	{
+	  emit_insn (gen_sub3_insn (stack_pointer_rtx, stack_pointer_rtx, temp1));
+	  insn = plus_constant (Pmode, stack_pointer_rtx, -guard_size);
+	  insn = gen_rtx_SET (stack_pointer_rtx, insn);
+	  riscv_set_frame_expr (insn);
+	  emit_stack_probe (plus_constant (Pmode, stack_pointer_rtx,
+					   guard_used_by_caller));
+	  emit_insn (gen_blockage ());
+	}
+      dump_stack_clash_frame_info (PROBE_INLINE, size != rounded_size);
+    }
+  else
+    {
+      /* Compute the ending address.  */
+      rtx temp2 = gen_rtx_REG (Pmode, RISCV_PROLOGUE_TEMP2_REGNUM);
+      temp2 = riscv_force_temporary (temp2, gen_int_mode (rounded_size, Pmode));
+      insn = emit_insn (gen_sub3_insn (temp2, stack_pointer_rtx, temp2));
+
+      if (!frame_pointer_needed)
+	{
+	  /* We want the CFA independent of the stack pointer for the
+	     duration of the loop.  */
+	  add_reg_note (insn, REG_CFA_DEF_CFA,
+			plus_constant (Pmode, temp1, rounded_size));
+	  RTX_FRAME_RELATED_P (insn) = 1;
+	}
+
+      /* This allocates and probes the stack.  */
+      riscv_allocate_and_probe_stack_loop (temp1, NE, stack_pointer_rtx, temp2,
+					   false, guard_size);
+
+      /* Now reset the CFA register if needed.  */
+      if (!frame_pointer_needed)
+	{
+	  insn = get_last_insn ();
+	  add_reg_note (insn, REG_CFA_DEF_CFA,
+			plus_constant (Pmode, stack_pointer_rtx, rounded_size));
+	  RTX_FRAME_RELATED_P (insn) = 1;
+	}
+
+      dump_stack_clash_frame_info (PROBE_LOOP, size != rounded_size);
+    }
+
+  /* Handle any residuals.  Residuals of at least MIN_PROBE_THRESHOLD have to
+     be probed.  This maintains the requirement that each page is probed at
+     least once.  For initial probing we probe only if the allocation is
+     more than GUARD_SIZE - buffer, and below the saved registers we probe
+     if the amount is larger than buffer.  GUARD_SIZE - buffer + buffer ==
+     GUARD_SIZE.  This works that for any allocation that is large enough to
+     trigger a probe here, we'll have at least one, and if they're not large
+     enough for this code to emit anything for them, The page would have been
+     probed by the saving of FP/LR either by this function or any callees.  If
+     we don't have any callees then we won't have more stack adjustments and so
+     are still safe.  */
+  if (residual)
+    {
+      gcc_assert (guard_used_by_caller + byte_sp_alignment <= size);
+
+      temp1 = riscv_force_temporary (temp1, gen_int_mode (residual, Pmode));
+      emit_insn (gen_sub3_insn (stack_pointer_rtx, stack_pointer_rtx, temp1));
+      insn = plus_constant (Pmode, stack_pointer_rtx, -residual);
+      insn = gen_rtx_SET (stack_pointer_rtx, insn);
+      riscv_set_frame_expr (insn);
+      if (residual >= min_probe_threshold)
+	{
+	  if (dump_file)
+	    fprintf (dump_file,
+		     "Stack clash prologue residuals: "
+		     HOST_WIDE_INT_PRINT_DEC " bytes, probing will be required."
+		     "\n", residual);
+
+	  emit_stack_probe (plus_constant (Pmode, stack_pointer_rtx,
+					   guard_used_by_caller));
+	  emit_insn (gen_blockage ());
+	}
+    }
 }
 
 /* Expand the "prologue" pattern.  */
@@ -8043,7 +8326,7 @@ riscv_expand_prologue (void)
 			    GEN_INT ((frame->hard_frame_pointer_offset - remaining_size).to_constant ()));
       RTX_FRAME_RELATED_P (emit_insn (insn)) = 1;
 
-      riscv_emit_stack_tie ();
+      riscv_emit_stack_tie (hard_frame_pointer_rtx);
     }
 
   /* Save the V registers.  */
@@ -8074,46 +8357,18 @@ riscv_expand_prologue (void)
 	     allocation is ordered WRT fp setup and subsequent writes
 	     into the frame.  */
 	  if (frame_pointer_needed)
-	    riscv_emit_stack_tie ();
+	    riscv_emit_stack_tie (hard_frame_pointer_rtx);
 	  return;
 	}
 
-      if (SMALL_OPERAND (-constant_frame))
-	{
-	  insn = gen_add3_insn (stack_pointer_rtx, stack_pointer_rtx,
-				GEN_INT (-constant_frame));
-	  RTX_FRAME_RELATED_P (emit_insn (insn)) = 1;
-	}
-      else if (SUM_OF_TWO_S12_ALGN (-constant_frame))
-	{
-	  HOST_WIDE_INT one, two;
-	  riscv_split_sum_of_two_s12 (-constant_frame, &one, &two);
-	  insn = gen_add3_insn (stack_pointer_rtx, stack_pointer_rtx,
-				GEN_INT (one));
-	  RTX_FRAME_RELATED_P (emit_insn (insn)) = 1;
-	  insn = gen_add3_insn (stack_pointer_rtx, stack_pointer_rtx,
-				GEN_INT (two));
-	  RTX_FRAME_RELATED_P (emit_insn (insn)) = 1;
-	}
+      riscv_allocate_and_probe_stack_space (RISCV_PROLOGUE_TEMP (Pmode), constant_frame);
+    }
+  else if (flag_stack_clash_protection)
+    {
+      if (known_eq (frame->total_size, 0))
+	dump_stack_clash_frame_info (NO_PROBE_NO_FRAME, false);
       else
-	{
-	  riscv_emit_move (RISCV_PROLOGUE_TEMP (Pmode), GEN_INT (-constant_frame));
-	  emit_insn (gen_add3_insn (stack_pointer_rtx,
-				    stack_pointer_rtx,
-				    RISCV_PROLOGUE_TEMP (Pmode)));
-
-	  /* Describe the effect of the previous instructions.  */
-	  insn = plus_constant (Pmode, stack_pointer_rtx, -constant_frame);
-	  insn = gen_rtx_SET (stack_pointer_rtx, insn);
-	  riscv_set_frame_expr (insn);
-	}
-
-      /* We must have allocated the remainder of the stack frame.
-	 Emit a stack tie if we have a frame pointer so that the
-	 allocation is ordered WRT fp setup and subsequent writes
-	 into the frame.  */
-      if (frame_pointer_needed)
-	riscv_emit_stack_tie ();
+	dump_stack_clash_frame_info (NO_PROBE_SMALL_FRAME, true);
     }
 }
 
@@ -8167,52 +8422,6 @@ riscv_adjust_libcall_cfi_epilogue ()
   return dwarf;
 }
 
-/* return true if popretz pattern can be matched.
-   set (reg 10 a0) (const_int 0)
-   use (reg 10 a0)
-   NOTE_INSN_EPILOGUE_BEG  */
-static rtx_insn *
-riscv_zcmp_can_use_popretz (void)
-{
-  rtx_insn *insn = NULL, *use = NULL, *clear = NULL;
-
-  /* sequence stack for NOTE_INSN_EPILOGUE_BEG*/
-  struct sequence_stack *outer_seq = get_current_sequence ()->next;
-  if (!outer_seq)
-    return NULL;
-  insn = outer_seq->first;
-  if (!insn || !NOTE_P (insn) || NOTE_KIND (insn) != NOTE_INSN_EPILOGUE_BEG)
-    return NULL;
-
-  /* sequence stack for the insn before NOTE_INSN_EPILOGUE_BEG*/
-  outer_seq = outer_seq->next;
-  if (outer_seq)
-    insn = outer_seq->last;
-
-  /* skip notes  */
-  while (insn && NOTE_P (insn))
-    {
-      insn = PREV_INSN (insn);
-    }
-  use = insn;
-
-  /* match use (reg 10 a0)  */
-  if (use == NULL || !INSN_P (use) || GET_CODE (PATTERN (use)) != USE
-      || !REG_P (XEXP (PATTERN (use), 0))
-      || REGNO (XEXP (PATTERN (use), 0)) != A0_REGNUM)
-    return NULL;
-
-  /* match set (reg 10 a0) (const_int 0 [0])  */
-  clear = PREV_INSN (use);
-  if (clear != NULL && INSN_P (clear) && GET_CODE (PATTERN (clear)) == SET
-      && REG_P (SET_DEST (PATTERN (clear)))
-      && REGNO (SET_DEST (PATTERN (clear))) == A0_REGNUM
-      && SET_SRC (PATTERN (clear)) == const0_rtx)
-    return clear;
-
-  return NULL;
-}
-
 static void
 riscv_gen_multi_pop_insn (bool use_multi_pop_normal, unsigned mask,
 			  unsigned multipop_size)
@@ -8223,13 +8432,6 @@ riscv_gen_multi_pop_insn (bool use_multi_pop_normal, unsigned mask,
   if (!use_multi_pop_normal)
     insn = emit_insn (
       riscv_gen_multi_push_pop_insn (POP_IDX, multipop_size, regs_count));
-  else if (rtx_insn *clear_a0_insn = riscv_zcmp_can_use_popretz ())
-    {
-      delete_insn (NEXT_INSN (clear_a0_insn));
-      delete_insn (clear_a0_insn);
-      insn = emit_jump_insn (
-	riscv_gen_multi_push_pop_insn (POPRETZ_IDX, multipop_size, regs_count));
-    }
   else
     insn = emit_jump_insn (
       riscv_gen_multi_push_pop_insn (POPRET_IDX, multipop_size, regs_count));
@@ -8301,7 +8503,7 @@ riscv_expand_epilogue (int style)
   if (cfun->calls_alloca)
     {
       /* Emit a barrier to prevent loads from a deallocated stack.  */
-      riscv_emit_stack_tie ();
+      riscv_emit_stack_tie (hard_frame_pointer_rtx);
       need_barrier_p = false;
 
       poly_int64 adjust_offset = -frame->hard_frame_pointer_offset;
@@ -8395,7 +8597,7 @@ riscv_expand_epilogue (int style)
   if (known_gt (step1, 0))
     {
       /* Emit a barrier to prevent loads from a deallocated stack.  */
-      riscv_emit_stack_tie ();
+      riscv_emit_stack_tie (hard_frame_pointer_rtx);
       need_barrier_p = false;
 
       /* Restore the scalable frame which is assigned in prologue.  */
@@ -8495,7 +8697,7 @@ riscv_expand_epilogue (int style)
     frame->mask = mask; /* Undo the above fib.  */
 
   if (need_barrier_p)
-    riscv_emit_stack_tie ();
+    riscv_emit_stack_tie (hard_frame_pointer_rtx);
 
   /* Deallocate the final bit of the frame.  */
   if (step2.to_constant () > 0)
@@ -9469,17 +9671,16 @@ riscv_declare_function_name (FILE *stream, const char *name, tree fndecl)
     {
       fprintf (stream, "\t.option push\n");
 
-      std::string *target_name = riscv_func_target_get (fndecl);
-      std::string isa = target_name != NULL
-	? *target_name
-	: riscv_cmdline_subset_list ()->to_string (true);
-      fprintf (stream, "\t.option arch, %s\n", isa.c_str ());
-      riscv_func_target_remove_and_destory (fndecl);
-
       struct cl_target_option *local_cl_target =
 	TREE_TARGET_OPTION (DECL_FUNCTION_SPECIFIC_TARGET (fndecl));
       struct cl_target_option *global_cl_target =
 	TREE_TARGET_OPTION (target_option_default_node);
+
+      const char *local_arch_str = get_arch_str (local_cl_target);
+      const char *arch_str = local_arch_str != NULL
+	? local_arch_str
+	: riscv_arch_str (true).c_str ();
+      fprintf (stream, "\t.option arch, %s\n", arch_str);
       const char *local_tune_str = get_tune_str (local_cl_target);
       const char *global_tune_str = get_tune_str (global_cl_target);
       if (strcmp (local_tune_str, global_tune_str) != 0)
@@ -9710,6 +9911,11 @@ riscv_override_options_internal (struct gcc_options *opts)
   else if (!TARGET_MUL_OPTS_P (opts) && TARGET_DIV_OPTS_P (opts))
     error ("%<-mdiv%> requires %<-march%> to subsume the %<M%> extension");
 
+  /* We might use a multiplication to calculate the scalable vector length at
+     runtime.  Therefore, require the M extension.  */
+  if (TARGET_VECTOR && !TARGET_MUL)
+    sorry ("Currently the %<V%> implementation requires the %<M%> extension");
+
   /* Likewise floating-point division and square root.  */
   if ((TARGET_HARD_FLOAT_OPTS_P (opts) || TARGET_ZFINX_OPTS_P (opts))
       && ((target_flags_explicit & MASK_FDIV) == 0))
@@ -9832,6 +10038,18 @@ riscv_option_override (void)
 	error ("rv64e requires lp64e ABI");
     }
 
+  /* ILP32E does not support the 'd' extension.  */
+  if (riscv_abi == ABI_ILP32E && UNITS_PER_FP_REG > 4)
+    error ("ILP32E ABI does not support the %qc extension",
+	   UNITS_PER_FP_REG > 8 ? 'Q' : 'D');
+
+  if (riscv_abi == ABI_LP64E)
+    {
+      if (warning (OPT_Wdeprecated, "LP64E ABI is marked for deprecation in GCC"))
+	inform (UNKNOWN_LOCATION, "if you need LP64E please notify the GCC "
+		"project via %{PR116152%}", "https://gcc.gnu.org/PR116152");
+    }
+
   /* Zfinx require abi ilp32, ilp32e, lp64 or lp64e.  */
   if (TARGET_ZFINX
       && riscv_abi != ABI_ILP32 && riscv_abi != ABI_LP64
@@ -9913,6 +10131,23 @@ riscv_option_override (void)
 
       riscv_stack_protector_guard_offset = offs;
     }
+
+  int guard_size = param_stack_clash_protection_guard_size;
+
+  /* Enforce that interval is the same size as guard size so the mid-end does
+     the right thing.  */
+  SET_OPTION_IF_UNSET (&global_options, &global_options_set,
+		       param_stack_clash_protection_probe_interval,
+		       guard_size);
+
+  /* The maybe_set calls won't update the value if the user has explicitly set
+     one.  Which means we need to validate that probing interval and guard size
+     are equal.  */
+  int probe_interval
+    = param_stack_clash_protection_probe_interval;
+  if (guard_size != probe_interval)
+    error ("stack clash guard size %<%d%> must be equal to probing interval "
+	   "%<%d%>", guard_size, probe_interval);
 
   SET_OPTION_IF_UNSET (&global_options, &global_options_set,
 		       param_sched_pressure_algorithm,
@@ -10322,9 +10557,10 @@ riscv_cannot_copy_insn_p (rtx_insn *insn)
 /* Implement TARGET_SLOW_UNALIGNED_ACCESS.  */
 
 static bool
-riscv_slow_unaligned_access (machine_mode, unsigned int)
+riscv_slow_unaligned_access (machine_mode mode, unsigned int)
 {
-  return riscv_slow_unaligned_access_p;
+  return VECTOR_MODE_P (mode) ? TARGET_VECTOR_MISALIGN_SUPPORTED
+			      : riscv_slow_unaligned_access_p;
 }
 
 static bool
@@ -11484,7 +11720,11 @@ riscv_preferred_else_value (unsigned ifn, tree vectype, unsigned int nops,
 			    tree *ops)
 {
   if (riscv_v_ext_mode_p (TYPE_MODE (vectype)))
-    return get_or_create_ssa_default_def (cfun, create_tmp_var (vectype));
+    {
+      tree tmp_var = create_tmp_var (vectype);
+      TREE_NO_WARNING (tmp_var) = 1;
+      return get_or_create_ssa_default_def (cfun, tmp_var);
+    }
 
   return default_preferred_else_value (ifn, vectype, nops, ops);
 }
@@ -11629,26 +11869,66 @@ void
 riscv_expand_ussub (rtx dest, rtx x, rtx y)
 {
   machine_mode mode = GET_MODE (dest);
-  rtx pmode_x = gen_lowpart (Pmode, x);
-  rtx pmode_y = gen_lowpart (Pmode, y);
-  rtx pmode_lt = gen_reg_rtx (Pmode);
-  rtx pmode_minus = gen_reg_rtx (Pmode);
-  rtx pmode_dest = gen_reg_rtx (Pmode);
+  rtx xmode_x = gen_lowpart (Xmode, x);
+  rtx xmode_y = gen_lowpart (Xmode, y);
+  rtx xmode_lt = gen_reg_rtx (Xmode);
+  rtx xmode_minus = gen_reg_rtx (Xmode);
+  rtx xmode_dest = gen_reg_rtx (Xmode);
 
   /* Step-1: minus = x - y  */
-  riscv_emit_binary (MINUS, pmode_minus, pmode_x, pmode_y);
+  riscv_emit_binary (MINUS, xmode_minus, xmode_x, xmode_y);
 
   /* Step-2: lt = x < y  */
-  riscv_emit_binary (LTU, pmode_lt, pmode_x, pmode_y);
+  riscv_emit_binary (LTU, xmode_lt, xmode_x, xmode_y);
 
   /* Step-3: lt = lt - 1 (lt + (-1))  */
-  riscv_emit_binary (PLUS, pmode_lt, pmode_lt, CONSTM1_RTX (Pmode));
+  riscv_emit_binary (PLUS, xmode_lt, xmode_lt, CONSTM1_RTX (Xmode));
 
-  /* Step-4: pmode_dest = minus & lt  */
-  riscv_emit_binary (AND, pmode_dest, pmode_lt, pmode_minus);
+  /* Step-4: xmode_dest = minus & lt  */
+  riscv_emit_binary (AND, xmode_dest, xmode_lt, xmode_minus);
 
-  /* Step-5: dest = pmode_dest  */
-  emit_move_insn (dest, gen_lowpart (mode, pmode_dest));
+  /* Step-5: dest = xmode_dest  */
+  emit_move_insn (dest, gen_lowpart (mode, xmode_dest));
+}
+
+/* Implement the unsigned saturation truncation for int mode.
+
+   b = SAT_TRUNC (a);
+   =>
+   1. max = half truncated max
+   2. lt = a < max
+   3. lt = lt - 1 (lt 0, ge -1)
+   4. d = a | lt
+   5. b = (trunc)d  */
+
+void
+riscv_expand_ustrunc (rtx dest, rtx src)
+{
+  machine_mode mode = GET_MODE (dest);
+  rtx xmode_max = gen_reg_rtx (Xmode);
+  unsigned precision = GET_MODE_PRECISION (mode).to_constant ();
+
+  gcc_assert (precision < 64);
+
+  uint64_t max = ((uint64_t)1u << precision) - 1u;
+  rtx xmode_src = gen_lowpart (Xmode, src);
+  rtx xmode_dest = gen_reg_rtx (Xmode);
+  rtx xmode_lt = gen_reg_rtx (Xmode);
+
+  /* Step-1: max = half truncated max  */
+  emit_move_insn (xmode_max, gen_int_mode (max, Xmode));
+
+  /* Step-2: lt = src < max  */
+  riscv_emit_binary (LTU, xmode_lt, xmode_src, xmode_max);
+
+  /* Step-3: lt = lt - 1  */
+  riscv_emit_binary (PLUS, xmode_lt, xmode_lt, CONSTM1_RTX (Xmode));
+
+  /* Step-4: xmode_dest = lt | src  */
+  riscv_emit_binary (IOR, xmode_dest, xmode_lt, xmode_src);
+
+  /* Step-5: dest = xmode_dest  */
+  emit_move_insn (dest, gen_lowpart (mode, xmode_dest));
 }
 
 /* Implement TARGET_C_MODE_FOR_FLOATING_TYPE.  Return TFmode for
@@ -11661,6 +11941,15 @@ riscv_c_mode_for_floating_type (enum tree_index ti)
   if (ti == TI_LONG_DOUBLE_TYPE)
     return TFmode;
   return default_mode_for_floating_type (ti);
+}
+
+/* On riscv we have an ABI defined safe buffer.  This constant is used to
+   determining the probe offset for alloca.  */
+
+static HOST_WIDE_INT
+riscv_stack_clash_protection_alloca_probe_range (void)
+{
+  return STACK_CLASH_CALLER_GUARD;
 }
 
 /* Initialize the GCC target structure.  */
@@ -11970,6 +12259,10 @@ riscv_c_mode_for_floating_type (enum tree_index ti)
 #undef TARGET_VECTORIZE_PREFERRED_VECTOR_ALIGNMENT
 #define TARGET_VECTORIZE_PREFERRED_VECTOR_ALIGNMENT \
   riscv_vectorize_preferred_vector_alignment
+
+#undef TARGET_STACK_CLASH_PROTECTION_ALLOCA_PROBE_RANGE
+#define TARGET_STACK_CLASH_PROTECTION_ALLOCA_PROBE_RANGE \
+  riscv_stack_clash_protection_alloca_probe_range
 
 /* Mode switching hooks.  */
 

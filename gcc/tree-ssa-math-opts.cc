@@ -6129,6 +6129,7 @@ math_opts_dom_walker::after_dom_children (basic_block bb)
 
 	    case PLUS_EXPR:
 	      match_unsigned_saturation_add (&gsi, as_a<gassign *> (stmt));
+	      match_unsigned_saturation_sub (&gsi, as_a<gassign *> (stmt));
 	      /* fall-through  */
 	    case MINUS_EXPR:
 	      if (!convert_plusminus_to_widen (&gsi, stmt, code))
@@ -6168,6 +6169,10 @@ math_opts_dom_walker::after_dom_children (basic_block bb)
 	    case COND_EXPR:
 	    case BIT_AND_EXPR:
 	      match_unsigned_saturation_sub (&gsi, as_a<gassign *> (stmt));
+	      break;
+
+	    case NOP_EXPR:
+	      match_unsigned_saturation_trunc (&gsi, as_a<gassign *> (stmt));
 	      break;
 
 	    default:;

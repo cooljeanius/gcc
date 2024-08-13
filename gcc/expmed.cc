@@ -986,6 +986,18 @@ store_integral_bit_field (rtx op0, opt_scalar_int_mode op0_mode,
 	    = backwards ^ reverse
 	      ? MAX ((int) bitsize - (i + 1) * BITS_PER_WORD, 0)
 	      : i * BITS_PER_WORD;
+
+	  /* No further action is needed if the target is a register and if
+	     this field lies completely outside that register.  */
+	  if (REG_P (op0) && known_ge (bitnum + bit_offset,
+				       GET_MODE_BITSIZE (GET_MODE (op0))))
+	    {
+	      if (backwards ^ reverse)
+		continue;
+	      /* For forward operation we are finished.  */
+	      return true;
+	    }
+
 	  /* Starting word number in the value.  */
 	  const unsigned int wordnum
 	    = backwards
@@ -5632,11 +5644,9 @@ emit_store_flag_1 (rtx target, enum rtx_code code, rtx op0, rtx op1,
   enum insn_code icode;
   machine_mode compare_mode;
   enum mode_class mclass;
-  enum rtx_code scode;
 
   if (unsignedp)
     code = unsigned_condition (code);
-  scode = swap_condition (code);
 
   /* If one operand is constant, make it the second one.  Only do this
      if the other operand is not constant as well.  */
@@ -5751,6 +5761,8 @@ emit_store_flag_1 (rtx target, enum rtx_code code, rtx op0, rtx op1,
 
 	  if (GET_MODE_CLASS (mode) == MODE_FLOAT)
 	    {
+	      enum rtx_code scode = swap_condition (code);
+
 	      tem = emit_cstore (target, icode, scode, mode, compare_mode,
 				 unsignedp, op1, op0, normalizep, target_mode);
 	      if (tem)

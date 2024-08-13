@@ -2970,10 +2970,9 @@ $ @samp{directory to the sources}/contrib/test_summary
 @node Limitations, Objectives, Regression tests, Using
 @section Limitations
 
-Logitech compatibility library is incomplete.  The principle modules
-for this platform exist however for a comprehensive list of completed
-modules please check the documentation
-@url{gm2.html}.
+The Logitech compatibility library is incomplete.  The primary
+modules for this platform exist, though for a comprehensive list
+of completed modules please check the documentation.
 
 @node Objectives, FAQ, Limitations, Using
 @section Objectives
@@ -3014,9 +3013,9 @@ You can subscribe to the GNU Modula-2 mailing by sending an
 email to:
 @email{gm2-subscribe@@nongnu.org}
 or by
-@url{http://lists.nongnu.org/mailman/listinfo/gm2}.
+@url{https://lists.nongnu.org/mailman/listinfo/gm2}.
 The mailing list contents can be viewed
-@url{http://lists.gnu.org/archive/html/gm2}.
+@url{https://lists.gnu.org/archive/html/gm2}.
 
 @node Other languages, , Community, Using
 @section Other languages for GCC

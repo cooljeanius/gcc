@@ -185,77 +185,6 @@ package body Freeze is
    --  the designated type. Otherwise freezing the access type does not freeze
    --  the designated type.
 
-   function Should_Freeze_Type
-     (Typ : Entity_Id; E : Entity_Id; N : Node_Id) return Boolean;
-   --  If Typ is in the current scope, then return True.
-   --  N is a node whose source location corresponds to the freeze point.
-   --  ??? Expression functions (represented by E) shouldn't freeze types in
-   --  general, but our current expansion and freezing model requires an early
-   --  freezing when the dispatch table is needed or when building an aggregate
-   --  with a subtype of Typ, so return True also in this case.
-   --  Note that expression function completions do freeze and are
-   --  handled in Sem_Ch6.Analyze_Expression_Function.
-
-   ------------------------
-   -- Should_Freeze_Type --
-   ------------------------
-
-   function Should_Freeze_Type
-     (Typ : Entity_Id; E : Entity_Id; N : Node_Id) return Boolean
-   is
-      function Is_Dispatching_Call_Or_Aggregate
-        (N : Node_Id) return Traverse_Result;
-      --  Return Abandon if N is a dispatching call to a subprogram
-      --  declared in the same scope as Typ or an aggregate whose type
-      --  is Typ.
-
-      --------------------------------------
-      -- Is_Dispatching_Call_Or_Aggregate --
-      --------------------------------------
-
-      function Is_Dispatching_Call_Or_Aggregate
-        (N : Node_Id) return Traverse_Result is
-      begin
-         if Nkind (N) = N_Function_Call
-           and then Present (Controlling_Argument (N))
-           and then Scope (Entity (Original_Node (Name (N))))
-                      = Scope (Typ)
-         then
-            return Abandon;
-         elsif Nkind (N) in N_Aggregate
-                          | N_Extension_Aggregate
-                          | N_Delta_Aggregate
-           and then Base_Type (Etype (N)) = Base_Type (Typ)
-         then
-            return Abandon;
-         else
-            return OK;
-         end if;
-      end Is_Dispatching_Call_Or_Aggregate;
-
-      -------------------------
-      -- Need_Dispatch_Table --
-      -------------------------
-
-      function Need_Dispatch_Table is new
-        Traverse_Func (Is_Dispatching_Call_Or_Aggregate);
-      --  Return Abandon if the input expression requires access to
-      --  Typ's dispatch table.
-
-      Decl : constant Node_Id :=
-        (if No (E) then E else Original_Node (Unit_Declaration_Node (E)));
-
-   --  Start of processing for Should_Freeze_Type
-
-   begin
-      return Within_Scope (Typ, Current_Scope)
-        or else (Nkind (N) = N_Subprogram_Renaming_Declaration
-                 and then Present (Corresponding_Formal_Spec (N)))
-        or else (Present (Decl)
-                 and then Nkind (Decl) = N_Expression_Function
-                 and then Need_Dispatch_Table (Expression (Decl)) = Abandon);
-   end Should_Freeze_Type;
-
    procedure Process_Default_Expressions
      (E     : Entity_Id;
       After : in out Node_Id);
@@ -281,6 +210,17 @@ package body Freeze is
    --  Scalar_Storage_Order or an explicit setting of this aspect with an
    --  attribute definition clause occurs, then these two flags are reset in
    --  any case, so call will have no effect.
+
+   function Should_Freeze_Type
+     (Typ : Entity_Id;
+      E   : Entity_Id;
+      N   : Node_Id) return Boolean;
+   --  True if Typ should be frozen when the profile of E is being frozen at N.
+
+   --  ??? Expression functions that are not completions shouldn't freeze types
+   --  but our current expansion and freezing model requires an early freezing
+   --  when the tag of Typ is needed or for an aggregate with a subtype of Typ,
+   --  so we return True in these cases.
 
    procedure Undelay_Type (T : Entity_Id);
    --  T is a type of a component that we know to be an Itype. We don't want
@@ -645,6 +585,13 @@ package body Freeze is
              Chars => Chars (Defining_Identifier (Param_Spec))));
          Next (Param_Spec);
       end loop;
+
+      --  Copy SPARK pragma from renaming declaration
+
+      Set_SPARK_Pragma
+        (Defining_Unit_Name (Spec), SPARK_Pragma (New_S));
+      Set_SPARK_Pragma_Inherited
+        (Defining_Unit_Name (Spec), SPARK_Pragma_Inherited (New_S));
 
       --  In GNATprove, prefer to generate an expression function whenever
       --  possible, to benefit from the more precise analysis in that case
@@ -3168,7 +3115,6 @@ package body Freeze is
               Find_Aspect (Typ, Aspect_No_Parts);
             Curr_Aspect_Spec : Entity_Id;
          begin
-
             --  Examine Typ's associated node, when present, since aspect
             --  specifications do not get transferred when nodes get rewritten.
 
@@ -3235,7 +3181,6 @@ package body Freeze is
             Aspect_Spec : constant Entity_Id :=
               Find_Aspect_No_Parts (Typ);
          begin
-
             --  Return the value of the aspect when present
 
             if Present (Aspect_Spec) then
@@ -7875,7 +7820,24 @@ package body Freeze is
          --  type itself, and we treat Default_Component_Value similarly for
          --  the sake of uniformity).
 
-         if Is_First_Subtype (E) and then Has_Default_Aspect (E) then
+         --  But for an inherited Default_Value aspect specification, the type
+         --  of the aspect remains the parent type. RM 3.3.1(11.1), a dynamic
+         --  semantics rule, says "The implicit initial value for a scalar
+         --  subtype that has the Default_Value aspect specified is the value
+         --  of that aspect converted to the nominal subtype". For an inherited
+         --  Default_Value aspect specification, no conversion is evaluated at
+         --  the point of the derived type declaration.
+
+         if Is_First_Subtype (E)
+           and then Has_Default_Aspect (E)
+           and then
+             (not Is_Scalar_Type (E)
+                or else
+              not Is_Derived_Type (E)
+                or else
+              Default_Aspect_Value (E)
+                /= Default_Aspect_Value (Etype (Base_Type (E))))
+         then
             declare
                Nam : Name_Id;
                Exp : Node_Id;
@@ -10314,18 +10276,6 @@ package body Freeze is
       then
          Check_Overriding_Indicator (E, Empty, Is_Primitive (E));
       end if;
-
-      Retype := Get_Fullest_View (Etype (E));
-
-      if Transform_Function_Array
-        and then Nkind (Parent (E)) = N_Function_Specification
-        and then Is_Array_Type (Retype)
-        and then Is_Constrained (Retype)
-        and then not Is_Unchecked_Conversion_Instance (E)
-        and then not Rewritten_For_C (E)
-      then
-         Build_Procedure_Form (Unit_Declaration_Node (E));
-      end if;
    end Freeze_Subprogram;
 
    ----------------------
@@ -10605,6 +10555,104 @@ package body Freeze is
          end if;
       end if;
    end Set_SSO_From_Default;
+
+   ------------------------
+   -- Should_Freeze_Type --
+   ------------------------
+
+   function Should_Freeze_Type
+     (Typ : Entity_Id;
+      E   : Entity_Id;
+      N   : Node_Id) return Boolean
+   is
+      Decl : constant Node_Id := Original_Node (Unit_Declaration_Node (E));
+
+      function Is_Dispatching_Call_Or_Tagged_Result_Or_Aggregate
+        (N : Node_Id) return Traverse_Result;
+      --  Return Abandon if N is a dispatching call to a subprogram
+      --  declared in the same scope as Typ, or a tagged result that
+      --  needs specific expansion, or an aggregate whose type is Typ.
+
+      function Check_Freezing is new
+        Traverse_Func (Is_Dispatching_Call_Or_Tagged_Result_Or_Aggregate);
+      --  Return Abandon if the input expression requires freezing Typ
+
+      function Within_Simple_Return_Statement (N : Node_Id) return Boolean;
+      --  Determine whether N is the expression of a simple return statement,
+      --  or the dependent expression of a conditional expression which is
+      --  the expression of a simple return statement, including recursively.
+
+      -------------------------------------------------------
+      -- Is_Dispatching_Call_Or_Tagged_Result_Or_Aggregate --
+      -------------------------------------------------------
+
+      function Is_Dispatching_Call_Or_Tagged_Result_Or_Aggregate
+        (N : Node_Id) return Traverse_Result
+      is
+      begin
+         if Nkind (N) = N_Function_Call
+           and then Present (Controlling_Argument (N))
+           and then Scope (Entity (Original_Node (Name (N)))) = Scope (Typ)
+         then
+            return Abandon;
+
+         --  The expansion done in Expand_Simple_Function_Return will assign
+         --  the tag to the result in this case.
+
+         elsif Is_Conversion_Or_Reference_To_Formal (N)
+           and then Within_Simple_Return_Statement (N)
+           and then Etype (N) = Typ
+           and then Is_Tagged_Type (Typ)
+           and then not Is_Class_Wide_Type (Typ)
+         then
+            return Abandon;
+
+         elsif Nkind (N) in N_Aggregate
+                          | N_Delta_Aggregate
+                          | N_Extension_Aggregate
+           and then Base_Type (Etype (N)) = Base_Type (Typ)
+         then
+            return Abandon;
+
+         else
+            return OK;
+         end if;
+      end Is_Dispatching_Call_Or_Tagged_Result_Or_Aggregate;
+
+      ------------------------------------
+      -- Within_Simple_Return_Statement --
+      ------------------------------------
+
+      function Within_Simple_Return_Statement (N : Node_Id) return Boolean is
+         Par : constant Node_Id := Parent (N);
+
+      begin
+         if Nkind (Par) = N_Simple_Return_Statement then
+            return True;
+
+         elsif Nkind (Par) = N_Case_Expression_Alternative then
+            return Within_Simple_Return_Statement (Parent (Par));
+
+         elsif Nkind (Par) = N_If_Expression
+           and then N /= First (Expressions (Par))
+         then
+            return Within_Simple_Return_Statement (Par);
+
+         else
+            return False;
+         end if;
+      end Within_Simple_Return_Statement;
+
+   --  Start of processing for Should_Freeze_Type
+
+   begin
+      return Within_Scope (Typ, Current_Scope)
+        or else (Nkind (N) = N_Subprogram_Renaming_Declaration
+                  and then Present (Corresponding_Formal_Spec (N)))
+        or else (Present (Decl)
+                  and then Nkind (Decl) = N_Expression_Function
+                  and then Check_Freezing (Expression (Decl)) = Abandon);
+   end Should_Freeze_Type;
 
    ------------------
    -- Undelay_Type --

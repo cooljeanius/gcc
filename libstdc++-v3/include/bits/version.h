@@ -529,7 +529,12 @@
 #undef __glibcxx_want_type_trait_variable_templates
 
 #if !defined(__cpp_lib_variant)
-# if (__cplusplus >= 202002L) && (__cpp_concepts >= 202002L && __cpp_constexpr >= 201811L)
+# if (__cplusplus >  202302L) && (__cpp_concepts >= 202002L && __cpp_constexpr >= 201811L && __cpp_explicit_this_parameter)
+#  define __glibcxx_variant 202306L
+#  if defined(__glibcxx_want_all) || defined(__glibcxx_want_variant)
+#   define __cpp_lib_variant 202306L
+#  endif
+# elif (__cplusplus >= 202002L) && (__cpp_concepts >= 202002L && __cpp_constexpr >= 201811L)
 #  define __glibcxx_variant 202106L
 #  if defined(__glibcxx_want_all) || defined(__glibcxx_want_variant)
 #   define __cpp_lib_variant 202106L
@@ -1304,10 +1309,15 @@
 #undef __glibcxx_want_barrier
 
 #if !defined(__cpp_lib_format)
-# if (__cplusplus >= 202002L) && _GLIBCXX_HOSTED
-#  define __glibcxx_format 202110L
+# if (__cplusplus >  202302L) && _GLIBCXX_HOSTED
+#  define __glibcxx_format 202311L
 #  if defined(__glibcxx_want_all) || defined(__glibcxx_want_format)
-#   define __cpp_lib_format 202110L
+#   define __cpp_lib_format 202311L
+#  endif
+# elif (__cplusplus >= 202002L) && _GLIBCXX_HOSTED
+#  define __glibcxx_format 202304L
+#  if defined(__glibcxx_want_all) || defined(__glibcxx_want_format)
+#   define __cpp_lib_format 202304L
 #  endif
 # endif
 #endif /* !defined(__cpp_lib_format) && defined(__glibcxx_want_format) */
@@ -2022,5 +2032,15 @@
 # endif
 #endif /* !defined(__cpp_lib_ranges_concat) && defined(__glibcxx_want_ranges_concat) */
 #undef __glibcxx_want_ranges_concat
+
+#if !defined(__cpp_lib_constexpr_new)
+# if (__cplusplus >  202302L) && (__cpp_constexpr >= 202406L)
+#  define __glibcxx_constexpr_new 202406L
+#  if defined(__glibcxx_want_all) || defined(__glibcxx_want_constexpr_new)
+#   define __cpp_lib_constexpr_new 202406L
+#  endif
+# endif
+#endif /* !defined(__cpp_lib_constexpr_new) && defined(__glibcxx_want_constexpr_new) */
+#undef __glibcxx_want_constexpr_new
 
 #undef __glibcxx_want_all

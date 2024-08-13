@@ -19,7 +19,7 @@
 
 @copying
 @quotation
-GNAT User's Guide for Native Platforms , Jun 24, 2024
+GNAT User's Guide for Native Platforms , Jul 29, 2024
 
 AdaCore
 

@@ -2589,6 +2589,9 @@ public:
     void add_partial_entities (vec<tree, va_gc> *);
     void add_class_entities (vec<tree, va_gc> *);
 
+  private:
+    void add_deduction_guides (tree decl);
+
   public:    
     void find_dependencies (module_state *);
     bool finalize_dependencies ();
@@ -2955,7 +2958,8 @@ private:
 public:
   tree decl_container ();
   tree key_mergeable (int tag, merge_kind, tree decl, tree inner, tree type,
-		      tree container, bool is_attached);
+		      tree container, bool is_attached,
+		      bool is_imported_temploid_friend);
   unsigned binfo_mergeable (tree *);
 
 private:
@@ -6000,6 +6004,10 @@ trees_out::core_vals (tree t)
 
       if (state)
 	state->write_location (*this, t->decl_minimal.locus);
+
+      if (streaming_p ())
+	if (has_warning_spec (t))
+	  u (get_warning_spec (t));
     }
 
   if (CODE_CONTAINS_STRUCT (code, TS_TYPE_COMMON))
@@ -6112,6 +6120,10 @@ trees_out::core_vals (tree t)
     {
       if (state)
 	state->write_location (*this, t->exp.locus);
+
+      if (streaming_p ())
+	if (has_warning_spec (t))
+	  u (get_warning_spec (t));
 
       /* Walk in forward order, as (for instance) REQUIRES_EXPR has a
          bunch of unscoped parms on its first operand.  It's safer to
@@ -6576,6 +6588,8 @@ trees_in::core_vals (tree t)
       /* Don't zap the locus just yet, we don't record it correctly
 	 and thus lose all location information.  */
       t->decl_minimal.locus = state->read_location (*this);
+      if (has_warning_spec (t))
+	put_warning_spec (t, u ());
     }
 
   if (CODE_CONTAINS_STRUCT (code, TS_TYPE_COMMON))
@@ -6654,6 +6668,8 @@ trees_in::core_vals (tree t)
   if (CODE_CONTAINS_STRUCT (code, TS_EXP))
     {
       t->exp.locus = state->read_location (*this);
+      if (has_warning_spec (t))
+	put_warning_spec (t, u ());
 
       bool vl = TREE_CODE_CLASS (code) == tcc_vl_exp;
       for (unsigned limit = (vl ? VL_EXP_OPERAND_LENGTH (t)
@@ -7791,6 +7807,7 @@ trees_out::decl_value (tree decl, depset *dep)
 		       || !TYPE_PTRMEMFUNC_P (TREE_TYPE (decl)));
 
   merge_kind mk = get_merge_kind (decl, dep);
+  bool is_imported_temploid_friend = imported_temploid_friends->get (decl);
 
   if (CHECKING_P)
     {
@@ -7826,13 +7843,11 @@ trees_out::decl_value (tree decl, depset *dep)
 		  && DECL_MODULE_ATTACH_P (not_tmpl))
 		is_attached = true;
 
-	      /* But don't consider imported temploid friends as attached,
-		 since importers will need to merge this decl even if it was
-		 attached to a different module.  */
-	      if (imported_temploid_friends->get (decl))
-		is_attached = false;
-
 	      bits.b (is_attached);
+
+	      /* Also tell the importer whether this is an imported temploid
+		 friend, which has implications for merging.  */
+	      bits.b (is_imported_temploid_friend);
 	    }
 	  bits.b (dep && dep->has_defn ());
 	}
@@ -8009,13 +8024,12 @@ trees_out::decl_value (tree decl, depset *dep)
 	}
     }
 
-  if (TREE_CODE (inner) == FUNCTION_DECL
-      || TREE_CODE (inner) == TYPE_DECL)
+  if (is_imported_temploid_friend)
     {
       /* Write imported temploid friends so that importers can reconstruct
 	 this information on stream-in.  */
       tree* slot = imported_temploid_friends->get (decl);
-      tree_node (slot ? *slot : NULL_TREE);
+      tree_node (*slot);
     }
 
   bool is_typedef = false;
@@ -8094,6 +8108,7 @@ trees_in::decl_value ()
 {
   int tag = 0;
   bool is_attached = false;
+  bool is_imported_temploid_friend = false;
   bool has_defn = false;
   unsigned mk_u = u ();
   if (mk_u >= MK_hwm || !merge_kind_name[mk_u])
@@ -8114,7 +8129,10 @@ trees_in::decl_value ()
 	{
 	  bits_in bits = stream_bits ();
 	  if (!(mk & MK_template_mask) && !state->is_header ())
-	    is_attached = bits.b ();
+	    {
+	      is_attached = bits.b ();
+	      is_imported_temploid_friend = bits.b ();
+	    }
 
 	  has_defn = bits.b ();
 	}
@@ -8219,7 +8237,7 @@ trees_in::decl_value ()
     parm_tag = fn_parms_init (inner);
 
   tree existing = key_mergeable (tag, mk, decl, inner, type, container,
-				 is_attached);
+				 is_attached, is_imported_temploid_friend);
   tree existing_inner = existing;
   if (existing)
     {
@@ -8324,8 +8342,7 @@ trees_in::decl_value ()
 	}
     }
 
-  if (TREE_CODE (inner) == FUNCTION_DECL
-      || TREE_CODE (inner) == TYPE_DECL)
+  if (is_imported_temploid_friend)
     if (tree owner = tree_node ())
       if (is_new)
 	imported_temploid_friends->put (decl, owner);
@@ -11162,7 +11179,8 @@ check_mergeable_decl (merge_kind mk, tree decl, tree ovl, merge_key const &key)
 
 tree
 trees_in::key_mergeable (int tag, merge_kind mk, tree decl, tree inner,
-			 tree type, tree container, bool is_attached)
+			 tree type, tree container, bool is_attached,
+			 bool is_imported_temploid_friend)
 {
   const char *kind = "new";
   tree existing = NULL_TREE;
@@ -11304,6 +11322,7 @@ trees_in::key_mergeable (int tag, merge_kind mk, tree decl, tree inner,
 
 	  case NAMESPACE_DECL:
 	    if (is_attached
+		&& !is_imported_temploid_friend
 		&& !(state->is_module () || state->is_partition ()))
 	      kind = "unique";
 	    else
@@ -11335,6 +11354,7 @@ trees_in::key_mergeable (int tag, merge_kind mk, tree decl, tree inner,
 	    break;
 
 	  case TYPE_DECL:
+	    gcc_checking_assert (!is_imported_temploid_friend);
 	    if (is_attached && !(state->is_module () || state->is_partition ())
 		/* Implicit member functions can come from
 		   anywhere.  */
@@ -12672,9 +12692,9 @@ trees_in::read_enum_def (tree defn, tree maybe_template)
 	  if (known_decl && new_decl)
 	    {
 	      inform (DECL_SOURCE_LOCATION (new_decl),
-		      "... this enumerator %qD", new_decl);
+		      "enumerator %qD does not match ...", new_decl);
 	      inform (DECL_SOURCE_LOCATION (known_decl),
-		      "enumerator %qD does not match ...", known_decl);
+		      "... this enumerator %qD", known_decl);
 	    }
 	  else if (known_decl || new_decl)
 	    {
@@ -13122,13 +13142,17 @@ bool
 depset::hash::add_binding_entity (tree decl, WMB_Flags flags, void *data_)
 {
   auto data = static_cast <add_binding_data *> (data_);
+  decl = strip_using_decl (decl);
 
   if (!(TREE_CODE (decl) == NAMESPACE_DECL && !DECL_NAMESPACE_ALIAS (decl)))
     {
       tree inner = decl;
 
       if (TREE_CODE (inner) == CONST_DECL
-	  && TREE_CODE (DECL_CONTEXT (inner)) == ENUMERAL_TYPE)
+	  && TREE_CODE (DECL_CONTEXT (inner)) == ENUMERAL_TYPE
+	  /* A using-decl could make a CONST_DECL purview for a non-purview
+	     enumeration.  */
+	  && (!DECL_LANG_SPECIFIC (inner) || !DECL_MODULE_PURVIEW_P (inner)))
 	inner = TYPE_NAME (DECL_CONTEXT (inner));
       else if (TREE_CODE (inner) == TEMPLATE_DECL)
 	inner = DECL_TEMPLATE_RESULT (inner);
@@ -13156,18 +13180,26 @@ depset::hash::add_binding_entity (tree decl, WMB_Flags flags, void *data_)
 	/* Ignore NTTP objects.  */
 	return false;
 
-      bool unscoped_enum_const_p = false;
+      if (deduction_guide_p (decl))
+	{
+	  /* Ignore deduction guides, bindings for them will be created within
+	     find_dependencies for their class template.  But still build a dep
+	     for them so that we don't discard them.  */
+	  data->hash->make_dependency (decl, EK_FOR_BINDING);
+	  return false;
+	}
+
       if (!(flags & WMB_Using) && CP_DECL_CONTEXT (decl) != data->ns)
 	{
-	  /* A using that lost its wrapper or an unscoped enum
-	     constant.  */
-	  /* FIXME: Ensure that unscoped enums are differentiated from
-	     'using enum' declarations when PR c++/114683 is fixed.  */
-	  unscoped_enum_const_p = (TREE_CODE (decl) == CONST_DECL);
+	  /* An unscoped enum constant implicitly brought into the containing
+	     namespace.  We treat this like a using-decl.  */
+	  gcc_checking_assert (TREE_CODE (decl) == CONST_DECL);
+
 	  flags = WMB_Flags (flags | WMB_Using);
-	  if (DECL_MODULE_EXPORT_P (TREE_CODE (decl) == CONST_DECL
-				    ? TYPE_NAME (TREE_TYPE (decl))
-				    : STRIP_TEMPLATE (decl)))
+	  if (DECL_MODULE_EXPORT_P (TYPE_NAME (TREE_TYPE (decl)))
+	      /* A using-decl can make an enum constant exported for a
+		 non-exported enumeration.  */
+	      || (DECL_LANG_SPECIFIC (decl) && DECL_MODULE_EXPORT_P (decl)))
 	    flags = WMB_Flags (flags | WMB_Export);
 	}
 
@@ -13225,8 +13257,7 @@ depset::hash::add_binding_entity (tree decl, WMB_Flags flags, void *data_)
       if (flags & WMB_Using)
 	{
 	  decl = ovl_make (decl, NULL_TREE);
-	  if (!unscoped_enum_const_p)
-	    OVL_USING_P (decl) = true;
+	  OVL_USING_P (decl) = true;
 	  OVL_PURVIEW_P (decl) = true;
 	  if (flags & WMB_Export)
 	    OVL_EXPORT_P (decl) = true;
@@ -13250,12 +13281,8 @@ depset::hash::add_binding_entity (tree decl, WMB_Flags flags, void *data_)
       data->met_namespace = true;
       if (data->hash->add_namespace_entities (decl, data->partitions))
 	{
-	  /* It contains an exported thing, so it is exported.
-
-	     FIXME we have to set DECL_MODULE_PURVIEW_P instead of asserting
-	     that it is already set because of the c++/114683 issue with
-	     exported using-declarations; see do_nonmember_using_decl.  */
-	  DECL_MODULE_PURVIEW_P (decl) = true;
+	  /* It contains an exported thing, so it is exported.  */
+	  gcc_checking_assert (DECL_MODULE_PURVIEW_P (decl));
 	  DECL_MODULE_EXPORT_P (decl) = true;
 	}
 
@@ -13590,6 +13617,50 @@ find_pending_key (tree decl, tree *decl_p = nullptr)
   return ns;
 }
 
+/* Creates bindings and dependencies for all deduction guides of
+   the given class template DECL as needed.  */
+
+void
+depset::hash::add_deduction_guides (tree decl)
+{
+  /* Alias templates never have deduction guides.  */
+  if (DECL_ALIAS_TEMPLATE_P (decl))
+    return;
+
+  /* We don't need to do anything for class-scope deduction guides,
+     as they will be added as members anyway.  */
+  if (!DECL_NAMESPACE_SCOPE_P (decl))
+    return;
+
+  tree ns = CP_DECL_CONTEXT (decl);
+  tree name = dguide_name (decl);
+
+  /* We always add all deduction guides with a given name at once,
+     so if there's already a binding there's nothing to do.  */
+  if (find_binding (ns, name))
+    return;
+
+  tree guides = lookup_qualified_name (ns, name, LOOK_want::NORMAL,
+				       /*complain=*/false);
+  if (guides == error_mark_node)
+    return;
+
+  /* We have bindings to add.  */
+  depset *binding = make_binding (ns, name);
+  add_namespace_context (binding, ns);
+
+  depset **slot = binding_slot (ns, name, /*insert=*/true);
+  *slot = binding;
+
+  for (lkp_iterator it (guides); it; ++it)
+    {
+      gcc_checking_assert (!TREE_VISITED (*it));
+      depset *dep = make_dependency (*it, EK_FOR_BINDING);
+      binding->deps.safe_push (dep);
+      dep->deps.safe_push (binding);
+    }
+}
+
 /* Iteratively find dependencies.  During the walk we may find more
    entries on the same binding that need walking.  */
 
@@ -13648,6 +13719,10 @@ depset::hash::find_dependencies (module_state *module)
 		    walker.write_definition (decl);
 		}
 	      walker.end ();
+
+	      if (!walker.is_key_order ()
+		  && DECL_CLASS_TEMPLATE_P (decl))
+		add_deduction_guides (decl);
 
 	      if (!walker.is_key_order ()
 		  && TREE_CODE (decl) == TEMPLATE_DECL
@@ -13744,6 +13819,10 @@ binding_cmp (const void *a_, const void *b_)
       a_export = OVL_EXPORT_P (a_ent);
       a_ent = OVL_FUNCTION (a_ent);
     }
+  else if (TREE_CODE (a_ent) == CONST_DECL
+	   && DECL_LANG_SPECIFIC (a_ent)
+	   && DECL_MODULE_EXPORT_P (a_ent))
+    a_export = true;
   else
     a_export = DECL_MODULE_EXPORT_P (TREE_CODE (a_ent) == CONST_DECL
 				     ? TYPE_NAME (TREE_TYPE (a_ent))
@@ -13756,6 +13835,10 @@ binding_cmp (const void *a_, const void *b_)
       b_export = OVL_EXPORT_P (b_ent);
       b_ent = OVL_FUNCTION (b_ent);
     }
+  else if (TREE_CODE (b_ent) == CONST_DECL
+	   && DECL_LANG_SPECIFIC (b_ent)
+	   && DECL_MODULE_EXPORT_P (b_ent))
+    b_export = true;
   else
     b_export = DECL_MODULE_EXPORT_P (TREE_CODE (b_ent) == CONST_DECL
 				     ? TYPE_NAME (TREE_TYPE (b_ent))
@@ -14964,7 +15047,6 @@ enum ct_bind_flags
   cbf_export = 0x1,	/* An exported decl.  */
   cbf_hidden = 0x2,	/* A hidden (friend) decl.  */
   cbf_using = 0x4,	/* A using decl.  */
-  cbf_wrapped = 0x8,  	/* ... that is wrapped.  */
 };
 
 /* DEP belongs to a different cluster, seed it to prevent
@@ -15127,13 +15209,9 @@ module_state::write_cluster (elf_out *to, depset *scc[], unsigned size,
 		    if (!(TREE_CODE (bound) == CONST_DECL
 			  && UNSCOPED_ENUM_P (TREE_TYPE (bound))
 			  && decl == TYPE_NAME (TREE_TYPE (bound))))
-		      {
-			/* An unscope enumerator in its enumeration's
-			   scope is not a using.  */
-			flags |= cbf_using;
-			if (OVL_USING_P (ovl))
-			  flags |= cbf_wrapped;
-		      }
+		      /* An unscoped enumerator in its enumeration's
+			 scope is not a using.  */
+		      flags |= cbf_using;
 		    if (OVL_EXPORT_P (ovl))
 		      flags |= cbf_export;
 		  }
@@ -15144,6 +15222,11 @@ module_state::write_cluster (elf_out *to, depset *scc[], unsigned size,
 		    if (dep->is_hidden ())
 		      flags |= cbf_hidden;
 		    else if (DECL_MODULE_EXPORT_P (STRIP_TEMPLATE (bound)))
+		      flags |= cbf_export;
+		    else if (deduction_guide_p (bound))
+		      /* Deduction guides are always exported so that they are
+			 visible to name lookup whenever their class template
+			 is reachable.  */
 		      flags |= cbf_export;
 		  }
 
@@ -15278,6 +15361,7 @@ module_state::read_cluster (unsigned snum)
 	    tree visible = NULL_TREE;
 	    tree type = NULL_TREE;
 	    bool dedup = false;
+	    bool global_p = is_header ();
 
 	    /* We rely on the bindings being in the reverse order of
 	       the resulting overload set.  */
@@ -15295,18 +15379,69 @@ module_state::read_cluster (unsigned snum)
 		if (sec.get_overrun ())
 		  break;
 
+		if (!global_p)
+		  {
+		    /* Check if the decl could require GM merging.  */
+		    tree orig = get_originating_module_decl (decl);
+		    tree inner = STRIP_TEMPLATE (orig);
+		    if (!DECL_LANG_SPECIFIC (inner)
+			|| !DECL_MODULE_ATTACH_P (inner))
+		      global_p = true;
+		  }
+
 		if (decls && TREE_CODE (decl) == TYPE_DECL)
 		  {
 		    /* Stat hack.  */
 		    if (type || !DECL_IMPLICIT_TYPEDEF_P (decl))
 		      sec.set_overrun ();
-		    type = decl;
+
+		    if (flags & cbf_using)
+		      {
+			type = build_lang_decl_loc (UNKNOWN_LOCATION,
+						    USING_DECL,
+						    DECL_NAME (decl),
+						    NULL_TREE);
+			USING_DECL_DECLS (type) = decl;
+			USING_DECL_SCOPE (type) = CP_DECL_CONTEXT (decl);
+			DECL_CONTEXT (type) = ns;
+
+			DECL_MODULE_PURVIEW_P (type) = true;
+			if (flags & cbf_export)
+			  DECL_MODULE_EXPORT_P (type) = true;
+		      }
+		    else
+		      type = decl;
 		  }
 		else
 		  {
-		    if (decls
-			|| (flags & (cbf_hidden | cbf_wrapped))
-			|| DECL_FUNCTION_TEMPLATE_P (decl))
+		    if ((flags & cbf_using) &&
+			!DECL_DECLARES_FUNCTION_P (decl))
+		      {
+			/* We should only see a single non-function using-decl
+			   for a binding; more than that would clash.  */
+			if (decls)
+			  sec.set_overrun ();
+
+			/* FIXME: Propagate the location of the using-decl
+			   for use in diagnostics.  */
+			decls = build_lang_decl_loc (UNKNOWN_LOCATION,
+						     USING_DECL,
+						     DECL_NAME (decl),
+						     NULL_TREE);
+			USING_DECL_DECLS (decls) = decl;
+			/* We don't currently record the actual scope of the
+			   using-declaration, but this approximation should
+			   generally be good enough.  */
+			USING_DECL_SCOPE (decls) = CP_DECL_CONTEXT (decl);
+			DECL_CONTEXT (decls) = ns;
+
+			DECL_MODULE_PURVIEW_P (decls) = true;
+			if (flags & cbf_export)
+			  DECL_MODULE_EXPORT_P (decls) = true;
+		      }
+		    else if (decls
+			     || (flags & (cbf_hidden | cbf_using))
+			     || DECL_FUNCTION_TEMPLATE_P (decl))
 		      {
 			decls = ovl_make (decl, decls);
 			if (flags & cbf_using)
@@ -15340,10 +15475,8 @@ module_state::read_cluster (unsigned snum)
 	      break; /* Bail.  */
 
 	    dump () && dump ("Binding of %P", ns, name);
-	    if (!set_module_binding (ns, name, mod,
-				     is_header () ? -1
-				     : is_module () || is_partition () ? 1
-				     : 0,
+	    if (!set_module_binding (ns, name, mod, global_p,
+				     is_module () || is_partition (),
 				     decls, type, visible))
 	      sec.set_overrun ();
 	  }
@@ -19202,6 +19335,7 @@ set_instantiating_module (tree decl)
 	      || TREE_CODE (decl) == TYPE_DECL
 	      || TREE_CODE (decl) == CONCEPT_DECL
 	      || TREE_CODE (decl) == TEMPLATE_DECL
+	      || TREE_CODE (decl) == CONST_DECL
 	      || (TREE_CODE (decl) == NAMESPACE_DECL
 		  && DECL_NAMESPACE_ALIAS (decl)));
 
@@ -19561,7 +19695,7 @@ lazy_load_binding (unsigned mod, tree ns, tree id, binding_slot *mslot)
 {
   int count = errorcount + warningcount;
 
-  timevar_start (TV_MODULE_IMPORT);
+  bool timer_running = timevar_cond_start (TV_MODULE_IMPORT);
 
   /* Make sure lazy loading from a template context behaves as if
      from a non-template context.  */
@@ -19591,7 +19725,7 @@ lazy_load_binding (unsigned mod, tree ns, tree id, binding_slot *mslot)
 
   function_depth--;
 
-  timevar_stop (TV_MODULE_IMPORT);
+  timevar_cond_stop (TV_MODULE_IMPORT, timer_running);
 
   if (!ok)
     fatal_error (input_location,
@@ -19630,7 +19764,7 @@ lazy_load_pendings (tree decl)
 
   int count = errorcount + warningcount;
 
-  timevar_start (TV_MODULE_IMPORT);
+  bool timer_running = timevar_cond_start (TV_MODULE_IMPORT);
   bool ok = !recursive_lazy ();
   if (ok)
     {
@@ -19664,7 +19798,7 @@ lazy_load_pendings (tree decl)
       function_depth--;
     }
 
-  timevar_stop (TV_MODULE_IMPORT);
+  timevar_cond_stop (TV_MODULE_IMPORT, timer_running);
 
   if (!ok)
     fatal_error (input_location, "failed to load pendings for %<%E%s%E%>",
@@ -20713,7 +20847,10 @@ finish_module_processing (cpp_reader *reader)
 
       cookie = new module_processing_cookie (cmi_name, tmp_name, fd, e);
 
-      if (errorcount)
+      if (errorcount
+	  /* Don't write the module if it contains an erroneous template.  */
+	  || (erroneous_templates
+	      && !erroneous_templates->is_empty ()))
 	warning_at (state->loc, 0, "not writing module %qs due to errors",
 		    state->get_flatname ());
       else if (cookie->out.begin ())
