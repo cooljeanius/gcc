@@ -607,7 +607,11 @@ equiv_oracle::register_initial_def (tree ssa)
   if (SSA_NAME_IS_DEFAULT_DEF (ssa))
     return;
   basic_block bb = gimple_bb (SSA_NAME_DEF_STMT (ssa));
-  gcc_checking_assert (bb && !find_equiv_dom (ssa, bb));
+
+  // If defining stmt is not in the IL, simply return.
+  if (!bb)
+    return;
+  gcc_checking_assert (!find_equiv_dom (ssa, bb));
 
   unsigned v = SSA_NAME_VERSION (ssa);
   bitmap_set_bit (m_equiv_set, v);
@@ -978,8 +982,9 @@ relation_chain_head::find_relation (const_bitmap b1, const_bitmap b2) const
 
 // Instantiate a relation oracle.
 
-dom_oracle::dom_oracle ()
+dom_oracle::dom_oracle (bool do_trans_p)
 {
+  m_do_trans_p = do_trans_p;
   m_relations.create (0);
   m_relations.safe_grow_cleared (last_basic_block_for_fn (cfun) + 1);
   m_relation_set = BITMAP_ALLOC (&m_bitmaps);
@@ -1179,6 +1184,9 @@ void
 dom_oracle::register_transitives (basic_block root_bb,
 				  const value_relation &relation)
 {
+  // Only register transitives if they are requested.
+  if (!m_do_trans_p)
+    return;
   basic_block bb;
   // Only apply transitives to certain kinds of operations.
   switch (relation.kind ())

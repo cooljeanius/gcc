@@ -57,6 +57,7 @@ see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
 #define TARGET_APX_PPX (ix86_apx_features & apx_ppx)
 #define TARGET_APX_NF (ix86_apx_features & apx_nf)
 #define TARGET_APX_CCMP (ix86_apx_features & apx_ccmp)
+#define TARGET_APX_ZU (ix86_apx_features & apx_zu)
 
 #include "config/vxworks-dummy.h"
 
@@ -308,8 +309,10 @@ extern unsigned char ix86_tune_features[X86_TUNE_LAST];
 #define TARGET_ZERO_EXTEND_WITH_AND \
 	ix86_tune_features[X86_TUNE_ZERO_EXTEND_WITH_AND]
 #define TARGET_UNROLL_STRLEN	ix86_tune_features[X86_TUNE_UNROLL_STRLEN]
-#define TARGET_BRANCH_PREDICTION_HINTS \
-	ix86_tune_features[X86_TUNE_BRANCH_PREDICTION_HINTS]
+#define TARGET_BRANCH_PREDICTION_HINTS_NOT_TAKEN \
+	ix86_tune_features[X86_TUNE_BRANCH_PREDICTION_HINTS_NOT_TAKEN]
+#define TARGET_BRANCH_PREDICTION_HINTS_TAKEN \
+	ix86_tune_features[X86_TUNE_BRANCH_PREDICTION_HINTS_TAKEN]
 #define TARGET_DOUBLE_WITH_ADD	ix86_tune_features[X86_TUNE_DOUBLE_WITH_ADD]
 #define TARGET_USE_SAHF		ix86_tune_features[X86_TUNE_USE_SAHF]
 #define TARGET_MOVX		ix86_tune_features[X86_TUNE_MOVX]
@@ -677,10 +680,6 @@ extern const char *host_detect_local_cpu (int argc, const char **argv);
 #define LONG_TYPE_SIZE (TARGET_X32 ? 32 : BITS_PER_WORD)
 #define POINTER_SIZE (TARGET_X32 ? 32 : BITS_PER_WORD)
 #define LONG_LONG_TYPE_SIZE 64
-#define FLOAT_TYPE_SIZE 32
-#define DOUBLE_TYPE_SIZE 64
-#define LONG_DOUBLE_TYPE_SIZE \
-  (TARGET_LONG_DOUBLE_64 ? 64 : (TARGET_LONG_DOUBLE_128 ? 128 : 80))
 
 #define WIDEST_HARDWARE_FP_SIZE 80
 
@@ -2262,6 +2261,8 @@ extern int const svr4_debugger_register_map[FIRST_PSEUDO_REGISTER];
 /* Which processor to tune code generation for.  These must be in sync
    with processor_cost_table in i386-options.cc.  */
 
+#define GOT_ALIAS_SET ix86_GOT_alias_set ()
+
 enum processor_type
 {
   PROCESSOR_GENERIC = 0,
@@ -2303,6 +2304,7 @@ enum processor_type
   PROCESSOR_INTEL,
   PROCESSOR_LUJIAZUI,
   PROCESSOR_YONGFENG,
+  PROCESSOR_SHIJIDADAO,
   PROCESSOR_GEODE,
   PROCESSOR_K6,
   PROCESSOR_ATHLON,
@@ -2692,6 +2694,10 @@ struct GTY(()) machine_frame_state
      the frame pointer should be used for offsets <= sp_realigned_fp_last.
      The flags realigned and sp_realigned are mutually exclusive.  */
   BOOL_BITFIELD sp_realigned : 1;
+
+  /* When APX_PPX used in prologue, force epilogue to emit
+  popp instead of move and leave.  */
+  BOOL_BITFIELD apx_ppx_used : 1;
 
   /* If sp_realigned is set, this is the last valid offset from the CFA
      that can be used for access with the frame pointer.  */

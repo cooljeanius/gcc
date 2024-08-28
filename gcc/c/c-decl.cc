@@ -5496,8 +5496,11 @@ c_decl_attributes (tree *node, tree attributes, int flags)
   /* Look up the current declaration with all the attributes merged
      so far so that attributes on the current declaration that's
      about to be pushed that conflict with the former can be detected,
-     diagnosed, and rejected as appropriate.  */
+     diagnosed, and rejected as appropriate.  To match the C++ FE, do
+     not pass an error_mark_node when we found an undeclared variable.  */
   tree last_decl = lookup_last_decl (*node);
+  if (last_decl == error_mark_node)
+    last_decl = NULL_TREE;
   return decl_attributes (node, attributes, flags, last_decl);
 }
 
@@ -7499,12 +7502,18 @@ grokdeclarator (const struct c_declarator *declarator,
 	       modify the shared type, so we gcc_assert (itype)
 	       below.  */
 	      {
+		/* Identify typeless storage as introduced in C2Y
+		   and supported also in earlier language modes.  */
+		bool typeless = (char_type_p (type)
+				 && !(type_quals & TYPE_QUAL_ATOMIC))
+				|| (AGGREGATE_TYPE_P (type)
+				    && TYPE_TYPELESS_STORAGE (type));
+
 		addr_space_t as = DECODE_QUAL_ADDR_SPACE (type_quals);
 		if (!ADDR_SPACE_GENERIC_P (as) && as != TYPE_ADDR_SPACE (type))
 		  type = build_qualified_type (type,
 					       ENCODE_QUAL_ADDR_SPACE (as));
-
-		type = build_array_type (type, itype);
+		type = build_array_type (type, itype, typeless);
 	      }
 
 	    if (type != error_mark_node)
@@ -9367,18 +9376,42 @@ is_flexible_array_member_p (bool is_last_field,
 static void
 c_update_type_canonical (tree t)
 {
-  for (tree x = TYPE_MAIN_VARIANT (t); x; x = TYPE_NEXT_VARIANT (x))
+  gcc_checking_assert (TYPE_MAIN_VARIANT (t) == t && !TYPE_QUALS (t));
+  for (tree x = t, l = NULL_TREE; x; l = x, x = TYPE_NEXT_VARIANT (x))
     {
       if (x != t && TYPE_STRUCTURAL_EQUALITY_P (x))
 	{
-	  if (TYPE_QUALS (x) == TYPE_QUALS (t))
+	  if (!TYPE_QUALS (x))
 	    TYPE_CANONICAL (x) = TYPE_CANONICAL (t);
-	  else if (TYPE_CANONICAL (t) != t
-		   || check_qualified_type (x, t, TYPE_QUALS (x)))
-	    TYPE_CANONICAL (x)
-	      = build_qualified_type (TYPE_CANONICAL (t), TYPE_QUALS (x));
 	  else
-	    TYPE_CANONICAL (x) = x;
+	    {
+	      tree
+		c = build_qualified_type (TYPE_CANONICAL (t), TYPE_QUALS (x));
+	      if (TYPE_STRUCTURAL_EQUALITY_P (c))
+		{
+		  gcc_checking_assert (TYPE_CANONICAL (t) == t);
+		  if (c == x)
+		    TYPE_CANONICAL (x) = x;
+		  else
+		    {
+		      /* build_qualified_type for this function unhelpfully
+			 moved c from some later spot in TYPE_MAIN_VARIANT (t)
+			 chain to right after t (or created it there).  Move
+			 it right before x and process c and then x.  */
+		      gcc_checking_assert (TYPE_NEXT_VARIANT (t) == c);
+		      if (l != t)
+			{
+			  TYPE_NEXT_VARIANT (t) = TYPE_NEXT_VARIANT (c);
+			  TYPE_NEXT_VARIANT (l) = c;
+			  TYPE_NEXT_VARIANT (c) = x;
+			}
+		      TYPE_CANONICAL (c) = c;
+		      x = c;
+		    }
+		}
+	      else
+		TYPE_CANONICAL (x) = TYPE_CANONICAL (c);
+	    }
 	}
       else if (x != t)
 	continue;
@@ -9632,6 +9665,10 @@ finish_struct (location_t loc, tree t, tree fieldlist, tree attributes,
       if (DECL_NAME (x)
 	  || RECORD_OR_UNION_TYPE_P (TREE_TYPE (x)))
 	saw_named_field = true;
+
+      if (AGGREGATE_TYPE_P (TREE_TYPE (x))
+	  && TYPE_TYPELESS_STORAGE (TREE_TYPE (x)))
+	TYPE_TYPELESS_STORAGE (t) = true;
     }
 
   detect_field_duplicates (fieldlist);
@@ -9832,6 +9869,7 @@ finish_struct (location_t loc, tree t, tree fieldlist, tree attributes,
       TYPE_FIELDS (x) = TYPE_FIELDS (t);
       TYPE_LANG_SPECIFIC (x) = TYPE_LANG_SPECIFIC (t);
       TYPE_TRANSPARENT_AGGR (x) = TYPE_TRANSPARENT_AGGR (t);
+      TYPE_TYPELESS_STORAGE (x) = TYPE_TYPELESS_STORAGE (t);
       C_TYPE_FIELDS_READONLY (x) = C_TYPE_FIELDS_READONLY (t);
       C_TYPE_FIELDS_VOLATILE (x) = C_TYPE_FIELDS_VOLATILE (t);
       C_TYPE_FIELDS_NON_CONSTEXPR (x) = C_TYPE_FIELDS_NON_CONSTEXPR (t);
@@ -10277,6 +10315,7 @@ build_enumerator (location_t decl_loc, location_t loc,
 		  struct c_enum_contents *the_enum, tree name, tree value)
 {
   tree decl;
+  tree old_decl;
 
   /* Validate and default VALUE.  */
 
@@ -10335,6 +10374,23 @@ build_enumerator (location_t decl_loc, location_t loc,
 	 have the enum type, both inside and outside the
 	 definition.  */
       value = convert (the_enum->enum_type, value);
+    }
+  else if (flag_isoc23
+	   && (old_decl = lookup_name_in_scope (name, current_scope))
+	   && old_decl != error_mark_node
+	   && TREE_TYPE (old_decl)
+	   && TREE_TYPE (TREE_TYPE (old_decl))
+	   && TREE_CODE (old_decl) == CONST_DECL)
+    {
+      /* Enumeration constants in a redeclaration have the previous type.  */
+      tree previous_type = TREE_TYPE (DECL_INITIAL (old_decl));
+      if (!int_fits_type_p (value, previous_type))
+	{
+	  error_at (loc, "value of redeclared enumerator outside the range "
+			 "of %qT", previous_type);
+	  locate_old_decl (old_decl);
+	}
+      value = convert (previous_type, value);
     }
   else
     {
@@ -10402,9 +10458,14 @@ build_enumerator (location_t decl_loc, location_t loc,
 			     false);
     }
   else
-    the_enum->enum_next_value
-      = build_binary_op (EXPR_LOC_OR_LOC (value, input_location),
-			 PLUS_EXPR, value, integer_one_node, false);
+    {
+      /* In a redeclaration the type can already be the enumeral type.  */
+      if (TREE_CODE (TREE_TYPE (value)) == ENUMERAL_TYPE)
+	value = convert (ENUM_UNDERLYING_TYPE (TREE_TYPE (value)), value);
+      the_enum->enum_next_value
+	= build_binary_op (EXPR_LOC_OR_LOC (value, input_location),
+			   PLUS_EXPR, value, integer_one_node, false);
+    }
   the_enum->enum_overflow = tree_int_cst_lt (the_enum->enum_next_value, value);
   if (the_enum->enum_overflow
       && !ENUM_FIXED_UNDERLYING_TYPE_P (the_enum->enum_type))

@@ -442,6 +442,15 @@ package body Exp_Ch9 is
    --  Determine whether Id is a function or a procedure and is marked as a
    --  private primitive.
 
+   function Make_Unlock_Statement
+     (Prot_Type : E_Protected_Type_Id;
+      Op_Spec   : N_Subprogram_Specification_Id;
+      Loc       : Source_Ptr) return N_Procedure_Call_Statement_Id;
+   --  Build a statement that is suitable to unlock an object of type Prot_Type
+   --  after having performed a protected operation on it. Prot_Type and
+   --  Op_Spec are used to determine which unlocking subprogram to call, and
+   --  whether to serve entries before unlocking.
+
    function Null_Statements (Stats : List_Id) return Boolean;
    --  Used to check DO-END sequence. Checks for equivalent of DO NULL; END.
    --  Allows labels, and pragma Warnings/Unreferenced in the sequence as well
@@ -495,6 +504,18 @@ package body Exp_Ch9 is
    --  rescheduling action is required or not. In FIFO_Within_Priorities, such
    --  a rescheduling is required, so this optimization is not allowed. This
    --  function returns True if the optimization is permitted.
+
+   function Wrap_Unprotected_Call
+     (Call      : Node_Id;
+      Prot_Type : E_Protected_Type_Id;
+      Op_Spec   : N_Subprogram_Specification_Id;
+      Loc       : Source_Ptr) return N_Block_Statement_Id;
+   --  Wrap Call into a block statement with a cleanup procedure set up to
+   --  release the lock on a protected object of type Prot_Type. Call must be
+   --  a statement that represents the inner and unprotected execution of the
+   --  body of a protected operation. Op_Spec must be the spec of that
+   --  protected operation. This is a subsidiary subprogram of
+   --  Build_Protected_Subprogram_Body.
 
    -----------------------------
    -- Actual_Index_Expression --
@@ -1323,6 +1344,9 @@ package body Exp_Ch9 is
       Rec_Ent  : constant Entity_Id :=
                    Make_Defining_Identifier
                      (Loc, New_External_Name (Chars (Ctyp), 'V'));
+      Alist    : List_Id;
+      Asp_Copy : Node_Id;
+      Aspect   : Node_Id;
       Disc     : Entity_Id;
       Dlist    : List_Id;
       New_Disc : Entity_Id;
@@ -1373,6 +1397,37 @@ package body Exp_Ch9 is
          Dlist := No_List;
       end if;
 
+      --  Propagate the aspect First_Controlling_Parameter to the corresponding
+      --  record to reuse the tagged types machinery. This is not needed if
+      --  the concurrent type does not implement interface types, as the
+      --  corresponding record will not be a tagged type in such case.
+
+      Alist := No_List;
+
+      if Present (Parent (Ctyp))
+        and then Present (Interface_List (Parent (Ctyp)))
+        and then Present (Aspect_Specifications (N))
+      then
+         Aspect := First (Aspect_Specifications (N));
+         while Present (Aspect) loop
+            if Chars (Identifier (Aspect))
+              = Name_First_Controlling_Parameter
+            then
+               Alist    := New_List;
+               Asp_Copy := New_Copy_Tree (Aspect);
+
+               --  Force its analysis in the corresponding record to add
+               --  the pragma.
+
+               Set_Analyzed (Asp_Copy, False);
+               Append_To (Alist, Asp_Copy);
+               exit;
+            end if;
+
+            Next (Aspect);
+         end loop;
+      end if;
+
       --  Now we can construct the record type declaration. Note that this
       --  record is "limited tagged". It is "limited" to reflect the underlying
       --  limitedness of the task or protected object that it represents, and
@@ -1384,6 +1439,7 @@ package body Exp_Ch9 is
       return
         Make_Full_Type_Declaration (Loc,
           Defining_Identifier => Rec_Ent,
+          Aspect_Specifications => Alist,
           Discriminant_Specifications => Dlist,
           Type_Definition =>
             Make_Record_Definition (Loc,
@@ -3849,16 +3905,6 @@ package body Exp_Ch9 is
          Lock_Kind := RE_Lock;
       end if;
 
-      --  Wrap call in block that will be covered by an at_end handler
-
-      if Might_Raise then
-         Unprot_Call :=
-           Make_Block_Statement (Loc,
-             Handled_Statement_Sequence =>
-               Make_Handled_Sequence_Of_Statements (Loc,
-                 Statements => New_List (Unprot_Call)));
-      end if;
-
       --  Make the protected subprogram body. This locks the protected
       --  object and calls the unprotected version of the subprogram.
 
@@ -3889,18 +3935,24 @@ package body Exp_Ch9 is
           Name                   => Lock_Name,
           Parameter_Associations => New_List (Object_Parm));
 
-      if Abort_Allowed then
-         Stmts := New_List (
-           Build_Runtime_Call (Loc, RE_Abort_Defer),
-           Lock_Stmt);
-
-      else
-         Stmts := New_List (Lock_Stmt);
-      end if;
+      Stmts := (if Abort_Allowed then
+                  New_List (Build_Runtime_Call (Loc, RE_Abort_Defer))
+                else
+                  New_List);
 
       if Might_Raise then
+         Unprot_Call := Wrap_Unprotected_Call
+           (Unprot_Call, Pid, Op_Spec, Loc);
+
+         Unprot_Call :=
+           Make_Block_Statement (Loc,
+             Handled_Statement_Sequence =>
+               Make_Handled_Sequence_Of_Statements (Loc,
+                 Statements => New_List (Lock_Stmt, Unprot_Call)));
+
          Append (Unprot_Call, Stmts);
       else
+         Append (Lock_Stmt, Stmts);
          if Nkind (Op_Spec) = N_Function_Specification then
             Pre_Stmts := Stmts;
             Stmts     := Empty_List;
@@ -4022,74 +4074,10 @@ package body Exp_Ch9 is
       Loc      : Source_Ptr;
       Stmts    : List_Id)
    is
-      Nam : Node_Id;
-
+      Unlock_Stmt : constant N_Procedure_Call_Statement_Id :=
+        Make_Unlock_Statement (Conc_Typ, Op_Spec, Loc);
    begin
-      --  If the associated protected object has entries, the expanded
-      --  exclusive protected operation has to service entry queues. In
-      --  this case generate:
-
-      --    Service_Entries (_object._object'Access);
-
-      if (Nkind (Op_Spec) = N_Procedure_Specification
-            or else
-          (Nkind (Op_Spec) = N_Function_Specification
-             and then
-           Has_Enabled_Aspect
-             (Conc_Typ, Aspect_Exclusive_Functions)))
-        and then Has_Entries (Conc_Typ)
-      then
-         case Corresponding_Runtime_Package (Conc_Typ) is
-            when System_Tasking_Protected_Objects_Entries =>
-               Nam := New_Occurrence_Of (RTE (RE_Service_Entries), Loc);
-
-            when System_Tasking_Protected_Objects_Single_Entry =>
-               Nam := New_Occurrence_Of (RTE (RE_Service_Entry), Loc);
-
-            when others =>
-               raise Program_Error;
-         end case;
-
-         Append_To (Stmts,
-           Make_Procedure_Call_Statement (Loc,
-             Name                   => Nam,
-             Parameter_Associations => New_List (
-               Make_Attribute_Reference (Loc,
-                 Prefix         =>
-                   Make_Selected_Component (Loc,
-                     Prefix        => Make_Identifier (Loc, Name_uObject),
-                     Selector_Name => Make_Identifier (Loc, Name_uObject)),
-                 Attribute_Name => Name_Unchecked_Access))));
-
-      else
-         --  Generate:
-         --    Unlock (_object._object'Access);
-
-         case Corresponding_Runtime_Package (Conc_Typ) is
-            when System_Tasking_Protected_Objects_Entries =>
-               Nam := New_Occurrence_Of (RTE (RE_Unlock_Entries), Loc);
-
-            when System_Tasking_Protected_Objects_Single_Entry =>
-               Nam := New_Occurrence_Of (RTE (RE_Unlock_Entry), Loc);
-
-            when System_Tasking_Protected_Objects =>
-               Nam := New_Occurrence_Of (RTE (RE_Unlock), Loc);
-
-            when others =>
-               raise Program_Error;
-         end case;
-
-         Append_To (Stmts,
-           Make_Procedure_Call_Statement (Loc,
-             Name                   => Nam,
-             Parameter_Associations => New_List (
-               Make_Attribute_Reference (Loc,
-                 Prefix         =>
-                   Make_Selected_Component (Loc,
-                     Prefix        => Make_Identifier (Loc, Name_uObject),
-                     Selector_Name => Make_Identifier (Loc, Name_uObject)),
-                 Attribute_Name => Name_Unchecked_Access))));
-      end if;
+      Append_To (Stmts, Unlock_Stmt);
 
       --  Generate:
       --    Abort_Undefer;
@@ -8363,6 +8351,11 @@ package body Exp_Ch9 is
       --     <protected-procedure-name>P (Param1 .. ParamN);
       --  end <protected-procedure-name>
 
+      procedure Unanalyze_Use_Clauses (Op_Body : Node_Id);
+      --  Use and Use_Type clauses in the tree rooted at Op_Body
+      --  that have already been analyzed need to be marked as unanalyzed
+      --  because otherwise they will be ineffective in their new context.
+
       ---------------------------------------
       -- Build_Dispatching_Subprogram_Body --
       ---------------------------------------
@@ -8424,6 +8417,31 @@ package body Exp_Ch9 is
                Make_Handled_Sequence_Of_Statements (Loc, Stmts));
       end Build_Dispatching_Subprogram_Body;
 
+      ---------------------------
+      -- Unanalyze_Use_Clauses --
+      ---------------------------
+
+      procedure Unanalyze_Use_Clauses (Op_Body : Node_Id) is
+
+         function Process_One_Node (N : Node_Id) return Traverse_Result;
+         --  If N is a use or use type node then unanalyze it.
+
+         procedure Process_Tree is new Traverse_Proc (Process_One_Node);
+
+         function Process_One_Node (N : Node_Id) return Traverse_Result is
+         begin
+            if Nkind (N) in N_Use_Package_Clause | N_Use_Type_Clause then
+               Set_Analyzed (N, False);
+            end if;
+            return OK; --  return Skip if Is_Analyzed (N) ?
+         end Process_One_Node;
+
+      --  Start of processing for Analyze_Use_Clauses
+
+      begin
+         Process_Tree (Op_Body);
+      end Unanalyze_Use_Clauses;
+
    --  Start of processing for Expand_N_Protected_Body
 
    begin
@@ -8472,6 +8490,17 @@ package body Exp_Ch9 is
                      New_Op_Body :=
                        Build_Unprotected_Subprogram_Body (Op_Body, Pid);
                   end if;
+
+                  --  Ugly.
+                  --  We are going to perform name resolution in analysis of
+                  --  this new body, but any already-analyzed use clauses
+                  --  will be ineffective in this new context unless we take
+                  --  action to "reactivate" them. So that's what we do here.
+                  --  We arguably shouldn't be performing name resolution
+                  --  here (just like we shouldn't perform name resolution in
+                  --  an expanded instance body), but that's a larger issue.
+
+                  Unanalyze_Use_Clauses (New_Op_Body);
 
                   Insert_After (Current_Node, New_Op_Body);
                   Current_Node := New_Op_Body;
@@ -9263,6 +9292,25 @@ package body Exp_Ch9 is
 
       Analyze (Rec_Decl, Suppress => All_Checks);
 
+      --  Analyze aspects of the corresponding record type. They may have been
+      --  propagated to it and its analysis is required to add the pragma (see
+      --  propagation of aspect First_Controlling_Parameter in the subprogram
+      --  Build_Corresponding_Record).
+
+      if Has_Aspects (Rec_Decl) then
+         Analyze_Aspect_Specifications (Rec_Decl, Rec_Id);
+
+      --  Handle aspects that may have been implicitly inherited and must be
+      --  explicitly propagated to the corresponding record type. This applies
+      --  specifically when the First_Controlling_Parameter aspect has been
+      --  implicitly inherited from an implemented interface.
+
+      elsif Present (Interface_List (Parent (Prot_Typ)))
+        and then Has_First_Controlling_Parameter_Aspect (Prot_Typ)
+      then
+         Set_Has_First_Controlling_Parameter_Aspect (Rec_Id);
+      end if;
+
       --  Ada 2005 (AI-345): Construct the primitive entry wrappers before
       --  the corresponding record is frozen. If any wrappers are generated,
       --  Current_Node is updated accordingly.
@@ -9423,8 +9471,7 @@ package body Exp_Ch9 is
             Need_Array : Boolean := False;
 
          begin
-            --  First check if there is any Max_Queue_Length,
-            --  Max_Entry_Queue_Length or Max_Entry_Queue_Depth pragma.
+            --  First check if there is any Max_[Entry_]Queue_Length pragma
 
             Item := First_Entity (Prot_Typ);
             while Present (Item) loop
@@ -12169,6 +12216,25 @@ package body Exp_Ch9 is
 
       Analyze (Rec_Decl);
 
+      --  Analyze aspects of the corresponding record type. They may have been
+      --  propagated to it and its analysis is required to add the pragma (see
+      --  propagation of aspect First_Controlling_Parameter in the subprogram
+      --  Build_Corresponding_Record).
+
+      if Has_Aspects (Rec_Decl) then
+         Analyze_Aspect_Specifications (Rec_Decl, Rec_Ent);
+
+      --  Handle aspects that may have been implicitly inherited and must be
+      --  explicitly propagated to the corresponding record type. This applies
+      --  specifically when the First_Controlling_Parameter aspect has been
+      --  implicitly inherited from an implemented interface.
+
+      elsif Present (Interface_List (Parent (Tasktyp)))
+        and then Has_First_Controlling_Parameter_Aspect (Tasktyp)
+      then
+         Set_Has_First_Controlling_Parameter_Aspect (Rec_Ent);
+      end if;
+
       --  Create the declaration of the task body procedure
 
       Proc_Spec := Build_Task_Proc_Specification (Tasktyp);
@@ -14495,6 +14561,66 @@ package body Exp_Ch9 is
           Parameter_Associations => Args);
    end Make_Task_Create_Call;
 
+   ---------------------------
+   -- Make_Unlock_Statement --
+   ---------------------------
+
+   function Make_Unlock_Statement
+     (Prot_Type : E_Protected_Type_Id;
+      Op_Spec   : N_Subprogram_Specification_Id;
+      Loc       : Source_Ptr) return N_Procedure_Call_Statement_Id
+   is
+      Nam : constant N_Identifier_Id :=
+        --  If the associated protected object has entries, the expanded
+        --  exclusive protected operation has to service entry queues.
+
+        (if (Nkind (Op_Spec) = N_Procedure_Specification
+              or else
+                (Nkind (Op_Spec) = N_Function_Specification
+                  and then
+                 Has_Enabled_Aspect
+                   (Prot_Type, Aspect_Exclusive_Functions)))
+           and then Has_Entries (Prot_Type)
+         then
+           (case Corresponding_Runtime_Package (Prot_Type) is
+               when System_Tasking_Protected_Objects_Entries =>
+                 New_Occurrence_Of (RTE (RE_Service_Entries), Loc),
+
+               when System_Tasking_Protected_Objects_Single_Entry =>
+                 New_Occurrence_Of (RTE (RE_Service_Entry), Loc),
+
+               when others =>
+                 raise Program_Error)
+
+         --  Otherwise, unlocking the protected object is sufficient.
+
+         else
+           (case Corresponding_Runtime_Package (Prot_Type) is
+               when System_Tasking_Protected_Objects_Entries =>
+                 New_Occurrence_Of (RTE (RE_Unlock_Entries), Loc),
+
+               when System_Tasking_Protected_Objects_Single_Entry =>
+                 New_Occurrence_Of (RTE (RE_Unlock_Entry), Loc),
+
+               when System_Tasking_Protected_Objects =>
+                 New_Occurrence_Of (RTE (RE_Unlock), Loc),
+
+               when others =>
+                 raise Program_Error));
+   begin
+      return Make_Procedure_Call_Statement
+        (Loc,
+         Name                   => Nam,
+         Parameter_Associations =>
+           New_List (
+             Make_Attribute_Reference (Loc,
+               Prefix         =>
+                 Make_Selected_Component (Loc,
+                   Prefix        => Make_Identifier (Loc, Name_uObject),
+                   Selector_Name => Make_Identifier (Loc, Name_uObject)),
+               Attribute_Name => Name_Unchecked_Access)));
+   end Make_Unlock_Statement;
+
    ------------------------------
    -- Next_Protected_Operation --
    ------------------------------
@@ -14861,4 +14987,49 @@ package body Exp_Ch9 is
       end case;
    end Trivial_Accept_OK;
 
+   ---------------------------
+   -- Wrap_Unprotected_Call --
+   ---------------------------
+
+   function Wrap_Unprotected_Call
+     (Call      : Node_Id;
+      Prot_Type : E_Protected_Type_Id;
+      Op_Spec   : N_Subprogram_Specification_Id;
+      Loc       : Source_Ptr) return N_Block_Statement_Id
+   is
+      Body_Id : constant N_Defining_Identifier_Id :=
+        Make_Defining_Identifier (Loc, Name_Find ("_unlock"));
+
+      Unlock_Body : constant N_Subprogram_Body_Id :=
+        Make_Subprogram_Body
+          (Loc,
+           Specification =>
+             Make_Procedure_Specification (Loc, Defining_Unit_Name => Body_Id),
+           Handled_Statement_Sequence =>
+             Make_Handled_Sequence_Of_Statements
+               (Loc, Statements => New_List
+                  (Make_Unlock_Statement (Prot_Type, Op_Spec, Loc))));
+
+      Decls : constant List_Id := New_List (Unlock_Body);
+
+      HSS : constant N_Handled_Sequence_Of_Statements_Id :=
+        Make_Handled_Sequence_Of_Statements
+          (Loc, Statements => New_List (Call),
+           At_End_Proc => New_Occurrence_Of (Body_Id, Loc));
+
+      Block_Statement : constant N_Block_Statement_Id :=
+        Make_Block_Statement
+          (Loc, Declarations => Decls,
+           Handled_Statement_Sequence =>
+             HSS);
+
+   begin
+      if Debug_Generated_Code then
+         Set_Debug_Info_Needed (Body_Id);
+      end if;
+
+      Set_Acts_As_Spec (Unlock_Body);
+
+      return Block_Statement;
+   end Wrap_Unprotected_Call;
 end Exp_Ch9;

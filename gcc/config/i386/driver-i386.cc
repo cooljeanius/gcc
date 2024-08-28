@@ -558,10 +558,12 @@ const char *host_detect_local_cpu (int argc, const char **argv)
       switch (family)
 	{
 	case 7:
-	  if (model == 0x3b)
-	    processor = PROCESSOR_LUJIAZUI;
-	  else if (model >= 0x5b)
+	  if (model >= 0x6b)
+	    processor = PROCESSOR_SHIJIDADAO;
+	  else if (model == 0x5b)
 	    processor = PROCESSOR_YONGFENG;
+	  else if (model == 0x3b)
+	    processor = PROCESSOR_LUJIAZUI;
 	  break;
 	default:
 	  break;
@@ -853,6 +855,9 @@ const char *host_detect_local_cpu (int argc, const char **argv)
     case PROCESSOR_YONGFENG:
       cpu = "yongfeng";
       break;
+    case PROCESSOR_SHIJIDADAO:
+      cpu = "shijidadao";
+      break;
 
     default:
       /* Use something reasonable.  */
@@ -895,7 +900,8 @@ const char *host_detect_local_cpu (int argc, const char **argv)
 	    if (has_feature (isa_names_table[i].feature))
 	      {
 		if (codegen_x86_64
-		    || isa_names_table[i].feature != FEATURE_UINTR)
+		    || (isa_names_table[i].feature != FEATURE_UINTR
+			&& isa_names_table[i].feature != FEATURE_APX_F))
 		  options = concat (options, " ",
 				    isa_names_table[i].option, NULL);
 	      }

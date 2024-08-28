@@ -37,6 +37,7 @@ with Freeze;         use Freeze;
 with Itypes;         use Itypes;
 with Lib;            use Lib;
 with Lib.Xref;       use Lib.Xref;
+with Mutably_Tagged; use Mutably_Tagged;
 with Namet;          use Namet;
 with Namet.Sp;       use Namet.Sp;
 with Nmake;          use Nmake;
@@ -49,7 +50,6 @@ with Sem_Aux;        use Sem_Aux;
 with Sem_Case;       use Sem_Case;
 with Sem_Cat;        use Sem_Cat;
 with Sem_Ch3;        use Sem_Ch3;
-with Sem_Ch5;        use Sem_Ch5;
 with Sem_Ch8;        use Sem_Ch8;
 with Sem_Ch13;       use Sem_Ch13;
 with Sem_Dim;        use Sem_Dim;
@@ -102,6 +102,11 @@ package body Sem_Aggr is
    --  simple insertion sort is used since the choices in a case statement will
    --  usually be in near sorted order.
 
+   function Cannot_Compute_High_Bound (Index : Entity_Id) return Boolean;
+   --  Determines if the type of the given array aggregate index is a modular
+   --  type or an enumeration type that will raise CE at runtime when computing
+   --  the high bound of a null aggregate.
+
    procedure Check_Can_Never_Be_Null (Typ : Entity_Id; Expr : Node_Id);
    --  Ada 2005 (AI-231): Check bad usage of null for a component for which
    --  null exclusion (NOT NULL) is specified. Typ can be an E_Array_Type for
@@ -120,6 +125,13 @@ package body Sem_Aggr is
    --  aggregate, function call, or <> notation). Report error for violations.
    --  Expression is also OK in an instance or inlining context, because we
    --  have already preanalyzed and it is known to be type correct.
+
+   procedure Report_Null_Array_Constraint_Error
+     (N         : Node_Id;
+      Index_Typ : Entity_Id);
+   --  N is a null array aggregate indexed by the given enumeration type or
+   --  modular type. Report a warning notifying that CE will be raised at
+   --  runtime. Under SPARK mode an error is reported instead of a warning.
 
    ------------------------------------------------------
    -- Subprograms used for RECORD AGGREGATE Processing --
@@ -456,6 +468,12 @@ package body Sem_Aggr is
       --  corresponding to the same dimension are static and found to differ,
       --  then emit a warning, and mark N as raising Constraint_Error.
 
+      procedure Retrieve_Aggregate_Bounds (This_Range : Node_Id);
+      --  In some cases, an appropriate list of aggregate bounds has been
+      --  created during resolution. Populate Aggr_Range with that list, and
+      --  remove the elements from the list so they can be added to another
+      --  list later.
+
       -------------------------
       -- Collect_Aggr_Bounds --
       -------------------------
@@ -513,30 +531,127 @@ package body Sem_Aggr is
 
          if Dim < Aggr_Dimension then
 
-            --  Process positional components
+            if not Is_Null_Aggregate (N) then
 
-            if Present (Expressions (N)) then
-               Expr := First (Expressions (N));
-               while Present (Expr) loop
-                  Collect_Aggr_Bounds (Expr, Dim + 1);
-                  Next (Expr);
-               end loop;
-            end if;
+               --  Process positional components
 
-            --  Process component associations
+               if Present (Expressions (N)) then
+                  Expr := First (Expressions (N));
+                  while Present (Expr) loop
+                     Collect_Aggr_Bounds (Expr, Dim + 1);
+                     Next (Expr);
+                  end loop;
+               end if;
 
-            if Present (Component_Associations (N)) then
-               Is_Fully_Positional := False;
+               --  Process component associations
 
-               Assoc := First (Component_Associations (N));
-               while Present (Assoc) loop
-                  Expr := Expression (Assoc);
-                  Collect_Aggr_Bounds (Expr, Dim + 1);
-                  Next (Assoc);
-               end loop;
+               if Present (Component_Associations (N)) then
+                  Is_Fully_Positional := False;
+
+                  Assoc := First (Component_Associations (N));
+                  while Present (Assoc) loop
+                     Expr := Expression (Assoc);
+                     Collect_Aggr_Bounds (Expr, Dim + 1);
+
+                     --  Propagate the error; it is not done in other cases to
+                     --  avoid replacing this aggregate by a CE node (required
+                     --  to report complementary warnings when the expression
+                     --  is resolved).
+
+                     if Is_Null_Aggregate (Expr)
+                       and then Raises_Constraint_Error (Expr)
+                     then
+                        Set_Raises_Constraint_Error (N);
+                     end if;
+
+                     Next (Assoc);
+                  end loop;
+               end if;
+
+            --  For null aggregates, build the bounds of their inner dimensions
+            --  since they are required for building the aggregate itype.
+
+            else
+               declare
+                  Loc        : constant Source_Ptr := Sloc (N);
+                  Typ        : constant Entity_Id := Etype (N);
+                  Index      : Node_Id;
+                  Index_Typ  : Entity_Id;
+                  Lo, Hi     : Node_Id;
+                  Null_Range : Node_Id;
+                  Num_Dim    : Pos := 1;
+
+               begin
+                  --  Move the index to the first dimension implicitly included
+                  --  in this null aggregate.
+
+                  Index := First_Index (Typ);
+                  while Num_Dim <= Dim loop
+                     Next_Index (Index);
+                     Num_Dim := Num_Dim + 1;
+                  end loop;
+
+                  while Present (Index) loop
+                     Get_Index_Bounds (Index, L => Lo, H => Hi);
+                     Index_Typ := Etype (Index);
+
+                     if Cannot_Compute_High_Bound (Index) then
+                        --  To avoid reporting spurious errors we use the upper
+                        --  bound as the higger bound of this index; this value
+                        --  will not be used to generate code because this
+                        --  aggregate will be replaced by a raise CE node.
+
+                        Hi := New_Copy_Tree (Lo);
+
+                        if not Raises_Constraint_Error (N) then
+                           Report_Null_Array_Constraint_Error (N, Index_Typ);
+                           Set_Raises_Constraint_Error (N);
+                        end if;
+
+                     else
+                        --  The upper bound is the predecessor of the lower
+                        --  bound.
+
+                        Hi := Make_Attribute_Reference (Loc,
+                                Prefix => New_Occurrence_Of (Index_Typ, Loc),
+                                Attribute_Name => Name_Pred,
+                                Expressions => New_List (New_Copy_Tree (Lo)));
+                     end if;
+
+                     Null_Range := Make_Range (Loc, New_Copy_Tree (Lo), Hi);
+                     Analyze_And_Resolve (Null_Range, Index_Typ);
+
+                     Aggr_Low (Num_Dim)   := Low_Bound (Null_Range);
+                     Aggr_High (Num_Dim)  := High_Bound (Null_Range);
+                     Aggr_Range (Num_Dim) := Null_Range;
+
+                     Num_Dim := Num_Dim + 1;
+                     Next_Index (Index);
+                  end loop;
+
+                  pragma Assert (Num_Dim = Aggr_Dimension + 1);
+               end;
             end if;
          end if;
       end Collect_Aggr_Bounds;
+
+      -------------------------------
+      -- Retrieve_Aggregate_Bounds --
+      -------------------------------
+
+      procedure Retrieve_Aggregate_Bounds (This_Range : Node_Id) is
+         R : Node_Id := This_Range;
+      begin
+         for J in 1 .. Aggr_Dimension loop
+            Aggr_Range (J) := R;
+            Next_Index (R);
+
+            --  Remove bounds from the list, so they can be reattached as
+            --  the First_Index/Next_Index again.
+
+            Remove (Aggr_Range (J));
+         end loop;
+      end Retrieve_Aggregate_Bounds;
 
       --  Array_Aggr_Subtype variables
 
@@ -552,7 +667,7 @@ package body Sem_Aggr is
       --  Make sure that the list of index constraints is properly attached to
       --  the tree, and then collect the aggregate bounds.
 
-      --  If no aggregaate bounds have been set, this is an aggregate with
+      --  If no aggregate bounds have been set, this is an aggregate with
       --  iterator specifications and a dynamic size to be determined by
       --  first pass of expanded code.
 
@@ -562,25 +677,17 @@ package body Sem_Aggr is
 
       Set_Parent (Index_Constraints, N);
 
+      if Is_Rewrite_Substitution (N)
+        and then Present (Component_Associations (Original_Node (N)))
+      then
+         Retrieve_Aggregate_Bounds (First_Index (Etype (Original_Node (N))));
+
       --  When resolving a null aggregate we created a list of aggregate bounds
       --  for the consecutive dimensions. The bounds for the first dimension
       --  are attached as the Aggregate_Bounds of the aggregate node.
 
-      if Is_Null_Aggregate (N) then
-         declare
-            This_Range : Node_Id := Aggregate_Bounds (N);
-         begin
-            for J in 1 .. Aggr_Dimension loop
-               Aggr_Range (J) := This_Range;
-               Next_Index (This_Range);
-
-               --  Remove bounds from the list, so they can be reattached as
-               --  the First_Index/Next_Index again by the code that also
-               --  handles non-null aggregates.
-
-               Remove (Aggr_Range (J));
-            end loop;
-         end;
+      elsif Is_Null_Aggregate (N) then
+         Retrieve_Aggregate_Bounds (Aggregate_Bounds (N));
       else
          Collect_Aggr_Bounds (N, 1);
       end if;
@@ -684,6 +791,41 @@ package body Sem_Aggr is
 
       return Itype;
    end Array_Aggr_Subtype;
+
+   -------------------------------
+   -- Cannot_Compute_High_Bound --
+   -------------------------------
+
+   function Cannot_Compute_High_Bound (Index : Entity_Id) return Boolean is
+      Index_Type : constant Entity_Id := Etype (Index);
+      Lo, Hi     : Node_Id;
+
+   begin
+      if not Is_Modular_Integer_Type (Index_Type)
+        and then not Is_Enumeration_Type (Index_Type)
+      then
+         return False;
+
+      elsif Index_Type = Base_Type (Index_Type) then
+         return True;
+
+      else
+         Get_Index_Bounds (Index, L => Lo, H => Hi);
+
+         if Compile_Time_Known_Value (Lo) then
+            if Is_Enumeration_Type (Index_Type)
+              and then not Is_Character_Type (Index_Type)
+            then
+               return Enumeration_Pos (Entity (Lo))
+                 = Enumeration_Pos (First_Literal (Base_Type (Index_Type)));
+            else
+               return Expr_Value (Lo) = Uint_0;
+            end if;
+         end if;
+      end if;
+
+      return False;
+   end Cannot_Compute_High_Bound;
 
    --------------------------------
    -- Check_Misspelled_Component --
@@ -979,6 +1121,27 @@ package body Sem_Aggr is
       Rewrite (N, New_N);
    end Make_String_Into_Aggregate;
 
+   ----------------------------------------
+   -- Report_Null_Array_Constraint_Error --
+   ----------------------------------------
+
+   procedure Report_Null_Array_Constraint_Error
+     (N         : Node_Id;
+      Index_Typ : Entity_Id) is
+   begin
+      Error_Msg_Warn := SPARK_Mode /= On;
+
+      if Is_Modular_Integer_Type (Index_Typ) then
+         Error_Msg_N
+           ("null array aggregate indexed by a modular type<<", N);
+      else
+         Error_Msg_N
+           ("null array aggregate indexed by an enumeration type<<", N);
+      end if;
+
+      Error_Msg_N ("\Constraint_Error [<<", N);
+   end Report_Null_Array_Constraint_Error;
+
    -----------------------
    -- Resolve_Aggregate --
    -----------------------
@@ -1229,6 +1392,7 @@ package body Sem_Aggr is
            and then Is_OK_Static_Subtype (Component_Type (Typ))
            and then Base_Type (Etype (First_Index (Typ))) =
                       Base_Type (Standard_Integer)
+           and then not Has_Static_Empty_Array_Bounds (Typ)
          then
             declare
                Expr : Node_Id;
@@ -1459,6 +1623,11 @@ package body Sem_Aggr is
       --  cannot statically evaluate From. Otherwise it stores this static
       --  value into Value.
 
+      function Has_Null_Aggregate_Raising_Constraint_Error
+        (Expr : Node_Id) return Boolean;
+      --  Determines if the given expression has some null aggregate that will
+      --  cause raising CE at runtime.
+
       function Resolve_Aggr_Expr
         (Expr        : Node_Id;
          Single_Elmt : Boolean) return Boolean;
@@ -1477,6 +1646,11 @@ package body Sem_Aggr is
         (N         : Node_Id;
          Index_Typ : Entity_Id);
       --  For AI12-061
+
+      function Subtract (Val : Uint; To : Node_Id) return Node_Id;
+      --  Creates a new expression node where Val is subtracted to expression
+      --  To. Tries to constant fold whenever possible. To must be an already
+      --  analyzed expression.
 
       procedure Warn_On_Null_Component_Association (Expr : Node_Id);
       --  Expr is either a conditional expression or a case expression of an
@@ -1747,6 +1921,41 @@ package body Sem_Aggr is
          end if;
       end Get;
 
+      -------------------------------------------------
+      -- Has_Null_Aggregate_Raising_Constraint_Error --
+      -------------------------------------------------
+
+      function Has_Null_Aggregate_Raising_Constraint_Error
+        (Expr : Node_Id) return Boolean
+      is
+         function Process (N : Node_Id) return Traverse_Result;
+         --  Process one node in search for generic formal type
+
+         -------------
+         -- Process --
+         -------------
+
+         function Process (N : Node_Id) return Traverse_Result is
+         begin
+            if Nkind (N) = N_Aggregate
+              and then Is_Null_Aggregate (N)
+              and then Raises_Constraint_Error (N)
+            then
+               return Abandon;
+            end if;
+
+            return OK;
+         end Process;
+
+         function Traverse is new Traverse_Func (Process);
+         --  Traverse tree to look for null aggregates that will raise CE
+
+      --  Start of processing for Has_Null_Aggregate_Raising_Constraint_Error
+
+      begin
+         return Traverse (Expr) = Abandon;
+      end Has_Null_Aggregate_Raising_Constraint_Error;
+
       -----------------------
       -- Resolve_Aggr_Expr --
       -----------------------
@@ -1871,7 +2080,8 @@ package body Sem_Aggr is
          end if;
 
          if Raises_Constraint_Error (Expr)
-           and then Nkind (Parent (Expr)) /= N_Component_Association
+           and then (Nkind (Parent (Expr)) /= N_Component_Association
+                      or else Is_Null_Aggregate (Expr))
          then
             Set_Raises_Constraint_Error (N);
          end if;
@@ -2002,6 +2212,15 @@ package body Sem_Aggr is
 
          if Operating_Mode /= Check_Semantics then
             Remove_References (Expr);
+            declare
+               Loop_Action : Node_Id;
+            begin
+               Loop_Action := First (Loop_Actions (N));
+               while Present (Loop_Action) loop
+                  Remove_References (Loop_Action);
+                  Next (Loop_Action);
+               end loop;
+            end;
          end if;
 
          --  An iterated_component_association may appear in a nested
@@ -2016,6 +2235,108 @@ package body Sem_Aggr is
 
          End_Scope;
       end Resolve_Iterated_Component_Association;
+
+      --------------
+      -- Subtract --
+      --------------
+
+      function Subtract (Val : Uint; To : Node_Id) return Node_Id is
+         Expr_Pos : Node_Id;
+         Expr     : Node_Id;
+         To_Pos   : Node_Id;
+
+      begin
+         if Raises_Constraint_Error (To) then
+            return To;
+         end if;
+
+         --  First test if we can do constant folding
+
+         if Compile_Time_Known_Value (To)
+           or else Nkind (To) = N_Integer_Literal
+         then
+            Expr_Pos := Make_Integer_Literal (Loc, Expr_Value (To) - Val);
+            Set_Is_Static_Expression (Expr_Pos);
+            Set_Etype (Expr_Pos, Etype (To));
+            Set_Analyzed (Expr_Pos, Analyzed (To));
+
+            if not Is_Enumeration_Type (Index_Typ) then
+               Expr := Expr_Pos;
+
+            --  If we are dealing with enumeration return
+            --     Index_Typ'Val (Expr_Pos)
+
+            else
+               Expr :=
+                 Make_Attribute_Reference
+                   (Loc,
+                    Prefix         => New_Occurrence_Of (Index_Typ, Loc),
+                    Attribute_Name => Name_Val,
+                    Expressions    => New_List (Expr_Pos));
+            end if;
+
+            return Expr;
+         end if;
+
+         --  If we are here no constant folding possible
+
+         if not Is_Enumeration_Type (Index_Base) then
+            Expr :=
+              Make_Op_Subtract (Loc,
+                Left_Opnd  => Duplicate_Subexpr (To),
+                Right_Opnd => Make_Integer_Literal (Loc, Val));
+
+         --  If we are dealing with enumeration return
+         --    Index_Typ'Val (Index_Typ'Pos (To) - Val)
+
+         else
+            To_Pos :=
+              Make_Attribute_Reference
+                (Loc,
+                 Prefix         => New_Occurrence_Of (Index_Typ, Loc),
+                 Attribute_Name => Name_Pos,
+                 Expressions    => New_List (Duplicate_Subexpr (To)));
+
+            Expr_Pos :=
+              Make_Op_Subtract (Loc,
+                Left_Opnd  => To_Pos,
+                Right_Opnd => Make_Integer_Literal (Loc, Val));
+
+            Expr :=
+              Make_Attribute_Reference
+                (Loc,
+                 Prefix         => New_Occurrence_Of (Index_Typ, Loc),
+                 Attribute_Name => Name_Val,
+                 Expressions    => New_List (Expr_Pos));
+
+            --  If the index type has a non standard representation, the
+            --  attributes 'Val and 'Pos expand into function calls and the
+            --  resulting expression is considered non-safe for reevaluation
+            --  by the backend. Relocate it into a constant temporary in order
+            --  to make it safe for reevaluation.
+
+            if Has_Non_Standard_Rep (Etype (N)) then
+               declare
+                  Def_Id : Entity_Id;
+
+               begin
+                  Def_Id := Make_Temporary (Loc, 'R', Expr);
+                  Set_Etype (Def_Id, Index_Typ);
+                  Insert_Action (N,
+                    Make_Object_Declaration (Loc,
+                      Defining_Identifier => Def_Id,
+                      Object_Definition   =>
+                        New_Occurrence_Of (Index_Typ, Loc),
+                      Constant_Present    => True,
+                      Expression          => Relocate_Node (Expr)));
+
+                  Expr := New_Occurrence_Of (Def_Id, Loc);
+               end;
+            end if;
+         end if;
+
+         return Expr;
+      end Subtract;
 
       ----------------------------------------
       -- Warn_On_Null_Component_Association --
@@ -2423,15 +2744,9 @@ package body Sem_Aggr is
             -----------------
 
             function Empty_Range (A : Node_Id) return Boolean is
-               R : Node_Id;
+               R : constant Node_Id := First (Choice_List (A));
 
             begin
-               if Nkind (A) = N_Iterated_Component_Association then
-                  R := First (Discrete_Choices (A));
-               else
-                  R := First (Choices (A));
-               end if;
-
                return No (Next (R))
                  and then Nkind (R) = N_Range
                  and then Compile_Time_Compare
@@ -2700,7 +3015,18 @@ package body Sem_Aggr is
                      Full_Analysis := Save_Analysis;
                      Expander_Mode_Restore;
 
-                     if Is_Tagged_Type (Etype (Expr)) then
+                     --  Skip tagged checking for mutably tagged CW equivalent
+                     --  types.
+
+                     if Is_Tagged_Type (Etype (Expr))
+                       and then Is_Class_Wide_Equivalent_Type
+                                  (Component_Type (Etype (N)))
+                     then
+                        null;
+
+                     --  Otherwise perform the dynamic tag check
+
+                     elsif Is_Tagged_Type (Etype (Expr)) then
                         Check_Dynamically_Tagged_Expression
                           (Expr => Expr,
                            Typ  => Component_Type (Etype (N)),
@@ -2713,6 +3039,19 @@ package body Sem_Aggr is
                     (Expr        => Expression (Assoc),
                      Typ         => Component_Type (Etype (N)),
                      Related_Nod => N);
+               end if;
+
+               --  Propagate the attribute Raises_CE when it was reported on a
+               --  null aggregate. This will cause replacing the aggregate by a
+               --  raise CE node; it is not done in other cases to avoid such
+               --  replacement and report complementary warnings when the
+               --  expression is resolved.
+
+               if Present (Expression (Assoc))
+                 and then Has_Null_Aggregate_Raising_Constraint_Error
+                            (Expression (Assoc))
+               then
+                  Set_Raises_Constraint_Error (N);
                end if;
 
                Next (Assoc);
@@ -3197,8 +3536,32 @@ package body Sem_Aggr is
                Aggr_Low := Index_Typ_Low;
             end if;
 
-            Aggr_High := Add (Nb_Elements - 1, To => Aggr_Low);
-            Check_Bound (Index_Base_High, Aggr_High);
+            --  Report a warning when the index type of a null array aggregate
+            --  is a modular type or an enumeration type, and we know that
+            --  we will not be able to compute its high bound at runtime
+            --  (AI22-0100-2).
+
+            if Nb_Elements = Uint_0
+              and then Cannot_Compute_High_Bound (Index_Constr)
+            then
+               --  Use the low bound value for the high-bound value to avoid
+               --  reporting spurious errors; this value will not be used at
+               --  runtime because this aggregate will be replaced by a raise
+               --  CE node.
+
+               Aggr_High := Aggr_Low;
+
+               Report_Null_Array_Constraint_Error (N, Index_Typ);
+               Set_Raises_Constraint_Error (N);
+
+            elsif Nb_Elements = Uint_0 then
+               Aggr_High := Subtract (Uint_1, To => Aggr_Low);
+               Check_Bound (Index_Base_High, Aggr_High);
+
+            else
+               Aggr_High := Add (Nb_Elements - 1, To => Aggr_Low);
+               Check_Bound (Index_Base_High, Aggr_High);
+            end if;
          end if;
       end if;
 
@@ -3250,10 +3613,12 @@ package body Sem_Aggr is
       --  If the aggregate already has bounds attached to it, it means this is
       --  a positional aggregate created as an optimization by
       --  Exp_Aggr.Convert_To_Positional, so we don't want to change those
-      --  bounds.
+      --  bounds, unless they depend on discriminants. If they do, we have to
+      --  perform analysis in the current context.
 
       if Present (Aggregate_Bounds (N))
-        and then not Others_Allowed
+        and then No (Others_N)
+        and then not Depends_On_Discriminant (Aggregate_Bounds (N))
         and then not Comes_From_Source (N)
       then
          Aggr_Low  := Low_Bound  (Aggregate_Bounds (N));
@@ -3381,7 +3746,15 @@ package body Sem_Aggr is
 
             Key_Expr := Key_Expression (Comp);
             if Present (Key_Expr) then
-               Preanalyze_And_Resolve (New_Copy_Tree (Key_Expr), Key_Type);
+               if No (Add_Named_Subp) then
+                  Error_Msg_N
+                    ("iterated_element_association with key_expression only "
+                       & "allowed for container type with Add_Named operation "
+                       & "(RM22 4.3.5(24))",
+                     Comp);
+               else
+                  Preanalyze_And_Resolve (New_Copy_Tree (Key_Expr), Key_Type);
+               end if;
             end if;
             End_Scope;
 
@@ -3414,6 +3787,16 @@ package body Sem_Aggr is
          else
             Choice := First (Discrete_Choices (Comp));
 
+            --  A copy of Choice is made before it's analyzed, to preserve
+            --  prefixed calls in their original form, because otherwise the
+            --  analysis of Choice can transform such calls to normal form,
+            --  and the later analysis of an iterator_specification created
+            --  below in the case of a function-call choice may trigger an
+            --  error on the call (in the case where the function is not
+            --  directly visible).
+
+            Copy := Copy_Separate_Tree (Choice);
+
             --  This is an N_Component_Association with a Defining_Identifier
             --  and Discrete_Choice_List, but the latter can only have a single
             --  choice, as it's a stand-in for a Loop_Parameter_Specification
@@ -3437,16 +3820,13 @@ package body Sem_Aggr is
                     Make_Iterator_Specification (Sloc (N),
                       Defining_Identifier =>
                         Relocate_Node (Defining_Identifier (Comp)),
-                      Name                => New_Copy_Tree (Choice),
-                      Reverse_Present     => False,
+                      Name                => Copy,
+                      Reverse_Present     => Reverse_Present (Comp),
                       Iterator_Filter     => Empty,
                       Subtype_Indication  => Empty);
                begin
                   Set_Iterator_Specification (Comp, I_Spec);
                   Set_Defining_Identifier (Comp, Empty);
-
-                  Analyze_Iterator_Specification
-                    (Iterator_Specification (Comp));
 
                   Resolve_Iterated_Association (Comp, Key_Type, Elmt_Type);
                   --  Recursive call to expand association as iterator_spec
@@ -4700,9 +5080,11 @@ package body Sem_Aggr is
       Loc    : constant Source_Ptr := Sloc (N);
       Typ    : constant Entity_Id := Etype (N);
 
-      Index  : Node_Id;
-      Lo, Hi : Node_Id;
-      Constr : constant List_Id := New_List;
+      Constr       : constant List_Id := New_List;
+      Index        : Node_Id;
+      Index_Typ    : Node_Id;
+      Known_Bounds : Boolean := True;
+      Lo, Hi       : Node_Id;
 
    begin
       --  Attach the list of constraints at the location of the aggregate, so
@@ -4716,14 +5098,31 @@ package body Sem_Aggr is
       Index := First_Index (Typ);
       while Present (Index) loop
          Get_Index_Bounds (Index, L => Lo, H => Hi);
+         Index_Typ := Etype (Index);
 
-         --  The upper bound is the predecessor of the lower bound
+         Known_Bounds := Known_Bounds
+           and Compile_Time_Known_Value (Lo)
+           and Compile_Time_Known_Value (Hi);
 
-         Hi := Make_Attribute_Reference
-            (Loc,
-             Prefix         => New_Occurrence_Of (Etype (Index), Loc),
-             Attribute_Name => Name_Pred,
-             Expressions    => New_List (New_Copy_Tree (Lo)));
+         if Cannot_Compute_High_Bound (Index) then
+            --  The upper bound is the higger bound to avoid reporting
+            --  spurious errors; this value will not be used at runtime
+            --  because this aggregate will be replaced by a raise CE node,
+            --  or the index type is formal of a generic unit.
+
+            Hi := New_Copy_Tree (Lo);
+
+            Report_Null_Array_Constraint_Error (N, Index_Typ);
+            Set_Raises_Constraint_Error (N);
+
+         else
+            --  The upper bound is the predecessor of the lower bound
+
+            Hi := Make_Attribute_Reference (Loc,
+                    Prefix         => New_Occurrence_Of (Etype (Index), Loc),
+                    Attribute_Name => Name_Pred,
+                    Expressions    => New_List (New_Copy_Tree (Lo)));
+         end if;
 
          Append (Make_Range (Loc, New_Copy_Tree (Lo), Hi), Constr);
          Analyze_And_Resolve (Last (Constr), Etype (Index));
@@ -4731,7 +5130,7 @@ package body Sem_Aggr is
          Next_Index (Index);
       end loop;
 
-      Set_Compile_Time_Known_Aggregate (N);
+      Set_Compile_Time_Known_Aggregate (N, Known_Bounds);
       Set_Aggregate_Bounds (N, First (Constr));
 
       return True;
@@ -5330,6 +5729,12 @@ package body Sem_Aggr is
             Relocate := True;
          end if;
 
+         --  Obtain the corresponding mutably tagged types if we are looking
+         --  at a special internally generated class-wide equivalent type.
+
+         Expr_Type :=
+           Get_Corresponding_Mutably_Tagged_Type_If_Present (Expr_Type);
+
          Analyze_And_Resolve (Expr, Expr_Type);
          Check_Expr_OK_In_Limited_Aggregate (Expr);
          Check_Non_Static_Context (Expr);
@@ -5337,7 +5742,9 @@ package body Sem_Aggr is
 
          --  Check wrong use of class-wide types
 
-         if Is_Class_Wide_Type (Etype (Expr)) then
+         if Is_Class_Wide_Type (Etype (Expr))
+           and then not Is_Mutably_Tagged_Type (Expr_Type)
+         then
             Error_Msg_N ("dynamically tagged expression not allowed", Expr);
          end if;
 

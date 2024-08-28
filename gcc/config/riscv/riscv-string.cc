@@ -140,9 +140,7 @@ static void
 emit_strcmp_scalar_compare_byte (rtx result, rtx data1, rtx data2,
 				 rtx final_label)
 {
-  rtx tmp = gen_reg_rtx (Xmode);
-  do_sub3 (tmp, data1, data2);
-  emit_insn (gen_movsi (result, gen_lowpart (SImode, tmp)));
+  do_sub3 (result, data1, data2);
   emit_jump_insn (gen_jump (final_label));
   emit_barrier (); /* No fall-through.  */
 }
@@ -310,8 +308,7 @@ emit_strcmp_scalar_result_calculation_nonul (rtx result, rtx data1, rtx data2)
   rtx tmp = gen_reg_rtx (Xmode);
   emit_insn (gen_slt_3 (LTU, Xmode, Xmode, tmp, data1, data2));
   do_neg2 (tmp, tmp);
-  do_ior3 (tmp, tmp, const1_rtx);
-  emit_insn (gen_movsi (result, gen_lowpart (SImode, tmp)));
+  do_ior3 (result, tmp, const1_rtx);
 }
 
 /* strcmp-result calculation.
@@ -367,9 +364,7 @@ emit_strcmp_scalar_result_calculation (rtx result, rtx data1, rtx data2,
   unsigned int shiftr = (xlen - 1) * BITS_PER_UNIT;
   do_lshr3 (data1, data1, GEN_INT (shiftr));
   do_lshr3 (data2, data2, GEN_INT (shiftr));
-  rtx tmp = gen_reg_rtx (Xmode);
-  do_sub3 (tmp, data1, data2);
-  emit_insn (gen_movsi (result, gen_lowpart (SImode, tmp)));
+  do_sub3 (result, data1, data2);
 }
 
 /* Expand str(n)cmp using Zbb/TheadBb instructions.
@@ -444,7 +439,7 @@ riscv_expand_strcmp_scalar (rtx result, rtx src1, rtx src2,
   /* All compared and everything was equal.  */
   if (ncompare)
     {
-      emit_insn (gen_rtx_SET (result, gen_rtx_CONST_INT (SImode, 0)));
+      emit_insn (gen_rtx_SET (result, CONST0_RTX (GET_MODE (result))));
       emit_jump_insn (gen_jump (final_label));
       emit_barrier (); /* No fall-through.  */
     }
@@ -668,9 +663,7 @@ emit_memcmp_scalar_load_and_compare (rtx result, rtx src1, rtx src2,
       /* Fast-path for a single byte.  */
       if (cmp_bytes == 1)
 	{
-	  rtx tmp = gen_reg_rtx (Xmode);
-	  do_sub3 (tmp, data1, data2);
-	  emit_insn (gen_movsi (result, gen_lowpart (SImode, tmp)));
+	  do_sub3 (result, data1, data2);
 	  emit_jump_insn (gen_jump (final_label));
 	  emit_barrier (); /* No fall-through.  */
 	  return;
@@ -707,12 +700,11 @@ emit_memcmp_scalar_result_calculation (rtx result, rtx data1, rtx data2)
   /* Get bytes in big-endian order and compare as words.  */
   do_bswap2 (data1, data1);
   do_bswap2 (data2, data2);
+
   /* Synthesize (data1 >= data2) ? 1 : -1 in a branchless sequence.  */
-  rtx tmp = gen_reg_rtx (Xmode);
-  emit_insn (gen_slt_3 (LTU, Xmode, Xmode, tmp, data1, data2));
-  do_neg2 (tmp, tmp);
-  do_ior3 (tmp, tmp, const1_rtx);
-  emit_insn (gen_movsi (result, gen_lowpart (SImode, tmp)));
+  emit_insn (gen_slt_3 (LTU, Xmode, Xmode, result, data1, data2));
+  do_neg2 (result, result);
+  do_ior3 (result, result, const1_rtx);
 }
 
 /* Expand memcmp using scalar instructions (incl. Zbb).
@@ -778,7 +770,7 @@ riscv_expand_block_compare_scalar (rtx result, rtx src1, rtx src2, rtx nbytes)
 				       data1, data2,
 				       diff_label, final_label);
 
-  emit_insn (gen_rtx_SET (result, gen_rtx_CONST_INT (SImode, 0)));
+  emit_move_insn (result, CONST0_RTX (GET_MODE (result)));
   emit_jump_insn (gen_jump (final_label));
   emit_barrier (); /* No fall-through.  */
 
@@ -1104,7 +1096,7 @@ expand_block_move (rtx dst_in, rtx src_in, rtx length_in)
 	/* If a single scalar load / store pair can do the job, leave it
 	   to the scalar code to do that.  */
 	/* ??? If fast unaligned access is supported, the scalar code could
-	   use suitably sized scalars irrespective of alignemnt.  If that
+	   use suitably sized scalars irrespective of alignment.  If that
 	   gets fixed, we have to adjust the test here.  */
 
 	if (pow2p_hwi (length) && length <= potential_ew)
@@ -1154,7 +1146,7 @@ expand_block_move (rtx dst_in, rtx src_in, rtx length_in)
 	      if (riscv_vector::get_vector_mode (elem_mode,
 						 nunits).exists (&vmode))
 		break;
-	      /* Since we don't have a mode that exactlty matches the transfer
+	      /* Since we don't have a mode that exactly matches the transfer
 		 size, we'll need to use pred_store, which is not available
 		 for all vector modes, but only iE_RVV_M* modes, hence trying
 		 to find a vector mode for a merely rounded-up size is
@@ -1173,7 +1165,7 @@ expand_block_move (rtx dst_in, rtx src_in, rtx length_in)
 	    }
 
 	  /* The RVVM8?I modes are notionally 8 * BYTES_PER_RISCV_VECTOR bytes
-	     wide.  BYTES_PER_RISCV_VECTOR can't be eavenly divided by
+	     wide.  BYTES_PER_RISCV_VECTOR can't be evenly divided by
 	     the sizes of larger element types; the LMUL factor of 8 can at
 	     the moment be divided by the SEW, with SEW of up to 8 bytes,
 	     but there are reserved encodings so there might be larger
@@ -1342,7 +1334,7 @@ expand_rawmemchr (machine_mode mode, rtx dst, rtx haystack, rtx needle,
   /* Compare needle with haystack and store in a mask.  */
   rtx eq = gen_rtx_EQ (mask_mode, gen_const_vec_duplicate (vmode, needle), vec);
   rtx vmsops[] = {mask, eq, vec, needle};
-  emit_nonvlmax_insn (code_for_pred_eqne_scalar (vmode),
+  emit_nonvlmax_insn (code_for_pred_cmp_scalar (vmode),
 		      riscv_vector::COMPARE_OP, vmsops, cnt);
 
   /* Find the first bit in the mask.  */
@@ -1468,7 +1460,7 @@ expand_strcmp (rtx result, rtx src1, rtx src2, rtx nbytes,
     = gen_rtx_EQ (mask_mode, gen_const_vec_duplicate (vmode, CONST0_RTX (mode)),
 		  vec1);
   rtx vmsops1[] = {mask0, eq0, vec1, CONST0_RTX (mode)};
-  emit_nonvlmax_insn (code_for_pred_eqne_scalar (vmode),
+  emit_nonvlmax_insn (code_for_pred_cmp_scalar (vmode),
 		      riscv_vector::COMPARE_OP, vmsops1, cnt);
 
   /* Look for vec1 != vec2 (includes vec2[i] == 0).  */
@@ -1512,8 +1504,197 @@ expand_strcmp (rtx result, rtx src1, rtx src2, rtx nbytes,
   if (with_length)
     emit_label (done);
 
-  emit_insn (gen_movsi (result, gen_lowpart (SImode, sub)));
+  emit_move_insn (result, sub);
   return true;
 }
 
+/* Check we are permitted to vectorise a memory operation.
+   If so, return true and populate lmul_out.
+   Otherwise, return false and leave lmul_out unchanged.  */
+static bool
+check_vectorise_memory_operation (rtx length_in, HOST_WIDE_INT &lmul_out)
+{
+  /* If we either can't or have been asked not to vectorise, respect this.  */
+  if (!TARGET_VECTOR)
+    return false;
+  if (!(stringop_strategy & STRATEGY_VECTOR))
+    return false;
+
+  /* If we can't reason about the length, don't vectorise.  */
+  if (!CONST_INT_P (length_in))
+    return false;
+
+  HOST_WIDE_INT length = INTVAL (length_in);
+
+  /* If it's tiny, default operation is likely better; maybe worth
+     considering fractional lmul in the future as well.  */
+  if (length < (TARGET_MIN_VLEN / 8))
+    return false;
+
+  /* If we've been asked to use a specific LMUL,
+     check the operation fits and do that.  */
+  if (rvv_max_lmul != RVV_DYNAMIC)
+    {
+      lmul_out = TARGET_MAX_LMUL;
+      return (length <= ((TARGET_MAX_LMUL * TARGET_MIN_VLEN) / 8));
+    }
+
+  /* Find smallest lmul large enough for entire op.  */
+  HOST_WIDE_INT lmul = 1;
+  while ((lmul <= 8) && (length > ((lmul * TARGET_MIN_VLEN) / 8)))
+    {
+      lmul <<= 1;
+    }
+
+  if (lmul > 8)
+    return false;
+
+  lmul_out = lmul;
+  return true;
+}
+
+/* Used by setmemdi in riscv.md.  */
+bool
+expand_vec_setmem (rtx dst_in, rtx length_in, rtx fill_value_in)
+{
+  HOST_WIDE_INT lmul;
+  /* Check we are able and allowed to vectorise this operation;
+     bail if not.  */
+  if (!check_vectorise_memory_operation (length_in, lmul))
+    return false;
+
+  machine_mode vmode
+      = riscv_vector::get_vector_mode (QImode, BYTES_PER_RISCV_VECTOR * lmul)
+	    .require ();
+  rtx dst_addr = copy_addr_to_reg (XEXP (dst_in, 0));
+  rtx dst = change_address (dst_in, vmode, dst_addr);
+
+  rtx fill_value = gen_reg_rtx (vmode);
+  rtx broadcast_ops[] = { fill_value, fill_value_in };
+
+  /* If the length is exactly vlmax for the selected mode, do that.
+     Otherwise, use a predicated store.  */
+  if (known_eq (GET_MODE_SIZE (vmode), INTVAL (length_in)))
+    {
+      emit_vlmax_insn (code_for_pred_broadcast (vmode), UNARY_OP,
+			  broadcast_ops);
+      emit_move_insn (dst, fill_value);
+    }
+  else
+    {
+      if (!satisfies_constraint_K (length_in))
+	      length_in = force_reg (Pmode, length_in);
+      emit_nonvlmax_insn (code_for_pred_broadcast (vmode), UNARY_OP,
+			  broadcast_ops, length_in);
+      machine_mode mask_mode
+	      = riscv_vector::get_vector_mode (BImode, GET_MODE_NUNITS (vmode))
+		      .require ();
+      rtx mask = CONSTM1_RTX (mask_mode);
+      emit_insn (gen_pred_store (vmode, dst, mask, fill_value, length_in,
+			  get_avl_type_rtx (riscv_vector::NONVLMAX)));
+    }
+
+  return true;
+}
+
+/* Used by cmpmemsi in riscv.md.  */
+
+bool
+expand_vec_cmpmem (rtx result_out, rtx blk_a_in, rtx blk_b_in, rtx length_in)
+{
+  HOST_WIDE_INT lmul;
+  /* Check we are able and allowed to vectorise this operation;
+     bail if not.  */
+  if (!check_vectorise_memory_operation (length_in, lmul))
+    return false;
+
+  /* Strategy:
+     load entire blocks at a and b into vector regs
+     generate mask of bytes that differ
+     find first set bit in mask
+     find offset of first set bit in mask, use 0 if none set
+     result is ((char*)a[offset] - (char*)b[offset])
+   */
+
+  machine_mode vmode
+      = riscv_vector::get_vector_mode (QImode, BYTES_PER_RISCV_VECTOR * lmul)
+	      .require ();
+  rtx blk_a_addr = copy_addr_to_reg (XEXP (blk_a_in, 0));
+  rtx blk_a = change_address (blk_a_in, vmode, blk_a_addr);
+  rtx blk_b_addr = copy_addr_to_reg (XEXP (blk_b_in, 0));
+  rtx blk_b = change_address (blk_b_in, vmode, blk_b_addr);
+
+  rtx vec_a = gen_reg_rtx (vmode);
+  rtx vec_b = gen_reg_rtx (vmode);
+
+  machine_mode mask_mode = get_mask_mode (vmode);
+  rtx mask = gen_reg_rtx (mask_mode);
+  rtx mismatch_ofs = gen_reg_rtx (Pmode);
+
+  rtx ne = gen_rtx_NE (mask_mode, vec_a, vec_b);
+  rtx vmsops[] = { mask, ne, vec_a, vec_b };
+  rtx vfops[] = { mismatch_ofs, mask };
+
+  /* If the length is exactly vlmax for the selected mode, do that.
+     Otherwise, use a predicated store.  */
+
+  if (known_eq (GET_MODE_SIZE (vmode), INTVAL (length_in)))
+    {
+      emit_move_insn (vec_a, blk_a);
+      emit_move_insn (vec_b, blk_b);
+      emit_vlmax_insn (code_for_pred_cmp (vmode), riscv_vector::COMPARE_OP,
+		       vmsops);
+
+      emit_vlmax_insn (code_for_pred_ffs (mask_mode, Pmode),
+		       riscv_vector::CPOP_OP, vfops);
+    }
+  else
+    {
+      if (!satisfies_constraint_K (length_in))
+	      length_in = force_reg (Pmode, length_in);
+
+      rtx memmask = CONSTM1_RTX (mask_mode);
+
+      rtx m_ops_a[] = { vec_a, memmask, blk_a };
+      rtx m_ops_b[] = { vec_b, memmask, blk_b };
+
+      emit_nonvlmax_insn (code_for_pred_mov (vmode),
+			  riscv_vector::UNARY_OP_TAMA, m_ops_a, length_in);
+      emit_nonvlmax_insn (code_for_pred_mov (vmode),
+			  riscv_vector::UNARY_OP_TAMA, m_ops_b, length_in);
+
+      emit_nonvlmax_insn (code_for_pred_cmp (vmode), riscv_vector::COMPARE_OP,
+			  vmsops, length_in);
+
+      emit_nonvlmax_insn (code_for_pred_ffs (mask_mode, Pmode),
+			  riscv_vector::CPOP_OP, vfops, length_in);
+    }
+
+  /* Mismatch_ofs is -1 if blocks match, or the offset of
+     the first mismatch otherwise.  */
+  rtx ltz = gen_reg_rtx (Xmode);
+  emit_insn (gen_slt_3 (LT, Xmode, Xmode, ltz, mismatch_ofs, const0_rtx));
+  /* mismatch_ofs += (mismatch_ofs < 0) ? 1 : 0.  */
+  emit_insn (
+      gen_rtx_SET (mismatch_ofs, gen_rtx_PLUS (Pmode, mismatch_ofs, ltz)));
+
+  /* Unconditionally load the bytes at mismatch_ofs and subtract them
+     to get our result.  */
+  emit_insn (gen_rtx_SET (blk_a_addr,
+			  gen_rtx_PLUS (Pmode, mismatch_ofs, blk_a_addr)));
+  emit_insn (gen_rtx_SET (blk_b_addr,
+			  gen_rtx_PLUS (Pmode, mismatch_ofs, blk_b_addr)));
+
+  blk_a = change_address (blk_a, QImode, blk_a_addr);
+  blk_b = change_address (blk_b, QImode, blk_b_addr);
+
+  rtx byte_a = gen_reg_rtx (SImode);
+  rtx byte_b = gen_reg_rtx (SImode);
+  do_zero_extendqi2 (byte_a, blk_a);
+  do_zero_extendqi2 (byte_b, blk_b);
+
+  emit_insn (gen_rtx_SET (result_out, gen_rtx_MINUS (SImode, byte_a, byte_b)));
+
+  return true;
+}
 }

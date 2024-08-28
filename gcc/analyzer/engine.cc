@@ -969,7 +969,7 @@ impl_region_model_context::on_condition (const svalue *lhs,
 			       m_old_state->m_checker_states[sm_idx],
 			       m_new_state->m_checker_states[sm_idx],
 			       m_path_ctxt);
-      sm.on_condition (&sm_ctxt,
+      sm.on_condition (sm_ctxt,
 		       (m_enode_for_diag
 			? m_enode_for_diag->get_supernode ()
 			: NULL),
@@ -996,7 +996,7 @@ impl_region_model_context::on_bounded_ranges (const svalue &sval,
 			       m_old_state->m_checker_states[sm_idx],
 			       m_new_state->m_checker_states[sm_idx],
 			       m_path_ctxt);
-      sm.on_bounded_ranges (&sm_ctxt,
+      sm.on_bounded_ranges (sm_ctxt,
 			    (m_enode_for_diag
 			     ? m_enode_for_diag->get_supernode ()
 			     : NULL),
@@ -1037,7 +1037,7 @@ impl_region_model_context::on_phi (const gphi *phi, tree rhs)
 			       m_old_state->m_checker_states[sm_idx],
 			       m_new_state->m_checker_states[sm_idx],
 			       m_path_ctxt);
-      sm.on_phi (&sm_ctxt, m_enode_for_diag->get_supernode (), phi, rhs);
+      sm.on_phi (sm_ctxt, m_enode_for_diag->get_supernode (), phi, rhs);
     }
 }
 
@@ -1422,7 +1422,7 @@ exploded_node::dump (FILE *fp,
   pretty_printer pp;
   pp_format_decoder (&pp) = default_tree_printer;
   pp_show_color (&pp) = pp_show_color (global_dc->printer);
-  pp.buffer->stream = fp;
+  pp.set_output_stream (fp);
   dump_to_pp (&pp, ext_state);
   pp_flush (&pp);
 }
@@ -1449,10 +1449,9 @@ exploded_node::to_json (const extrinsic_state &ext_state) const
 
   enode_obj->set ("point", get_point ().to_json ());
   enode_obj->set ("state", get_state ().to_json (ext_state));
-  enode_obj->set ("status", new json::string (status_to_str (m_status)));
-  enode_obj->set ("idx", new json::integer_number (m_index));
-  enode_obj->set ("processed_stmts",
-		  new json::integer_number (m_num_processed_stmts));
+  enode_obj->set_string ("status", status_to_str (m_status));
+  enode_obj->set_integer ("idx", m_index);
+  enode_obj->set_integer ("processed_stmts", m_num_processed_stmts);
 
   return enode_obj;
 }
@@ -1559,7 +1558,7 @@ exploded_node::on_stmt (exploded_graph &eg,
 			       unknown_side_effects);
 
       /* Allow the state_machine to handle the stmt.  */
-      if (sm.on_stmt (&sm_ctxt, snode, stmt))
+      if (sm.on_stmt (sm_ctxt, snode, stmt))
 	unknown_side_effects = false;
     }
 
@@ -2298,8 +2297,8 @@ json::object *
 exploded_edge::to_json () const
 {
   json::object *eedge_obj = new json::object ();
-  eedge_obj->set ("src_idx", new json::integer_number (m_src->m_index));
-  eedge_obj->set ("dst_idx", new json::integer_number (m_dest->m_index));
+  eedge_obj->set_integer ("src_idx", m_src->m_index);
+  eedge_obj->set_integer ("dst_idx", m_dest->m_index);
   if (m_sedge)
     eedge_obj->set ("sedge", m_sedge->to_json ());
   if (m_custom_info)
@@ -2307,7 +2306,7 @@ exploded_edge::to_json () const
       pretty_printer pp;
       pp_format_decoder (&pp) = default_tree_printer;
       m_custom_info->print (&pp);
-      eedge_obj->set ("custom", new json::string (pp_formatted_text (&pp)));
+      eedge_obj->set_string ("custom", pp_formatted_text (&pp));
     }
   return eedge_obj;
 }
@@ -4832,7 +4831,7 @@ exploded_path::dump (FILE *fp, const extrinsic_state *ext_state) const
   pretty_printer pp;
   pp_format_decoder (&pp) = default_tree_printer;
   pp_show_color (&pp) = pp_show_color (global_dc->printer);
-  pp.buffer->stream = fp;
+  pp.set_output_stream (fp);
   dump_to_pp (&pp, ext_state);
   pp_flush (&pp);
 }
@@ -4856,7 +4855,7 @@ exploded_path::dump_to_file (const char *filename,
     return;
   pretty_printer pp;
   pp_format_decoder (&pp) = default_tree_printer;
-  pp.buffer->stream = fp;
+  pp.set_output_stream (fp);
   dump_to_pp (&pp, &ext_state);
   pp_flush (&pp);
   fclose (fp);

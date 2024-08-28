@@ -98,9 +98,7 @@ const mstring dtio_procs[] =
 
 /* This is to make sure the backend generates setup code in the correct
    order.  */
-
-static int next_dummy_order = 1;
-
+static int next_decl_order = 1;
 
 gfc_namespace *gfc_current_ns;
 gfc_namespace *gfc_global_ns_list;
@@ -941,15 +939,13 @@ conflict:
 void
 gfc_set_sym_referenced (gfc_symbol *sym)
 {
-
   if (sym->attr.referenced)
     return;
 
   sym->attr.referenced = 1;
 
-  /* Remember which order dummy variables are accessed in.  */
-  if (sym->attr.dummy)
-    sym->dummy_order = next_dummy_order++;
+  /* Remember the declaration order.  */
+  sym->decl_order = next_decl_order++;
 }
 
 
@@ -1311,9 +1307,8 @@ gfc_add_save (symbol_attribute *attr, save_state s, const char *name,
 
   if (s == SAVE_EXPLICIT && gfc_pure (NULL))
     {
-      gfc_error
-	("SAVE attribute at %L cannot be specified in a PURE procedure",
-	 where);
+      gfc_error ("SAVE attribute at %L cannot be specified in a PURE "
+		 "procedure", where);
       return false;
     }
 
@@ -1323,10 +1318,15 @@ gfc_add_save (symbol_attribute *attr, save_state s, const char *name,
   if (s == SAVE_EXPLICIT && attr->save == SAVE_EXPLICIT
       && (flag_automatic || pedantic))
     {
-	if (!gfc_notify_std (GFC_STD_LEGACY,
-			     "Duplicate SAVE attribute specified at %L",
-			     where))
+      if (!where)
+	{
+	  gfc_error ("Duplicate SAVE attribute specified near %C");
 	  return false;
+	}
+
+      if (!gfc_notify_std (GFC_STD_LEGACY, "Duplicate SAVE attribute "
+			   "specified at %L", where))
+	return false;
     }
 
   attr->save = s;
@@ -3599,7 +3599,7 @@ int
 gfc_get_ha_symbol (const char *name, gfc_symbol **result)
 {
   int i;
-  gfc_symtree *st;
+  gfc_symtree *st = NULL;
 
   i = gfc_get_ha_sym_tree (name, &st);
 
@@ -5410,7 +5410,8 @@ gfc_is_associate_pointer (gfc_symbol* sym)
   if (!sym->assoc->variable)
     return false;
 
-  if (sym->attr.dimension && sym->as->type != AS_EXPLICIT)
+  if ((sym->attr.dimension || sym->attr.codimension)
+      && sym->as->type != AS_EXPLICIT)
     return false;
 
   return true;

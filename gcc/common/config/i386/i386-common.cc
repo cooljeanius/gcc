@@ -122,6 +122,11 @@ along with GCC; see the file COPYING3.  If not see
 #define OPTION_MASK_ISA2_AVX10_1_256_SET OPTION_MASK_ISA2_AVX10_1_256
 #define OPTION_MASK_ISA2_AVX10_1_512_SET \
   (OPTION_MASK_ISA2_AVX10_1_256_SET | OPTION_MASK_ISA2_AVX10_1_512)
+#define OPTION_MASK_ISA2_AVX10_2_256_SET \
+  (OPTION_MASK_ISA2_AVX10_1_256_SET | OPTION_MASK_ISA2_AVX10_2_256)
+#define OPTION_MASK_ISA2_AVX10_2_512_SET \
+  (OPTION_MASK_ISA2_AVX10_1_512_SET | OPTION_MASK_ISA2_AVX10_2_256_SET \
+   | OPTION_MASK_ISA2_AVX10_2_512)
 
 /* SSE4 includes both SSE4.1 and SSE4.2. -msse4 should be the same
    as -msse4.2.  */
@@ -307,8 +312,12 @@ along with GCC; see the file COPYING3.  If not see
 #define OPTION_MASK_ISA2_EVEX512_UNSET OPTION_MASK_ISA2_EVEX512
 #define OPTION_MASK_ISA2_USER_MSR_UNSET OPTION_MASK_ISA2_USER_MSR
 #define OPTION_MASK_ISA2_AVX10_1_256_UNSET \
-  (OPTION_MASK_ISA2_AVX10_1_256 | OPTION_MASK_ISA2_AVX10_1_512_UNSET)
-#define OPTION_MASK_ISA2_AVX10_1_512_UNSET OPTION_MASK_ISA2_AVX10_1_512
+  (OPTION_MASK_ISA2_AVX10_1_256 | OPTION_MASK_ISA2_AVX10_1_512_UNSET \
+   | OPTION_MASK_ISA2_AVX10_2_256_UNSET)
+#define OPTION_MASK_ISA2_AVX10_1_512_UNSET \
+  (OPTION_MASK_ISA2_AVX10_1_512 | OPTION_MASK_ISA2_AVX10_2_512_UNSET)
+#define OPTION_MASK_ISA2_AVX10_2_256_UNSET OPTION_MASK_ISA2_AVX10_2_256
+#define OPTION_MASK_ISA2_AVX10_2_512_UNSET OPTION_MASK_ISA2_AVX10_2_512
 
 /* SSE4 includes both SSE4.1 and SSE4.2.  -mno-sse4 should the same
    as -mno-sse4.1. */
@@ -1370,6 +1379,36 @@ ix86_handle_option (struct gcc_options *opts,
 	}
       return true;
 
+    case OPT_mavx10_2_256:
+      if (value)
+	{
+	  opts->x_ix86_isa_flags2 |= OPTION_MASK_ISA2_AVX10_2_256_SET;
+	  opts->x_ix86_isa_flags2_explicit |= OPTION_MASK_ISA2_AVX10_2_256_SET;
+	  opts->x_ix86_isa_flags |= OPTION_MASK_ISA_AVX2_SET;
+	  opts->x_ix86_isa_flags_explicit |= OPTION_MASK_ISA_AVX2_SET;
+	}
+      else
+	{
+	  opts->x_ix86_isa_flags2 &= ~OPTION_MASK_ISA2_AVX10_2_256_UNSET;
+	  opts->x_ix86_isa_flags2_explicit |= OPTION_MASK_ISA2_AVX10_2_256_UNSET;
+	}
+      return true;
+
+    case OPT_mavx10_2_512:
+      if (value)
+	{
+	  opts->x_ix86_isa_flags2 |= OPTION_MASK_ISA2_AVX10_2_512_SET;
+	  opts->x_ix86_isa_flags2_explicit |= OPTION_MASK_ISA2_AVX10_2_512_SET;
+	  opts->x_ix86_isa_flags |= OPTION_MASK_ISA_AVX2_SET;
+	  opts->x_ix86_isa_flags_explicit |= OPTION_MASK_ISA_AVX2_SET;
+	}
+      else
+	{
+	  opts->x_ix86_isa_flags2 &= ~OPTION_MASK_ISA2_AVX10_2_512_UNSET;
+	  opts->x_ix86_isa_flags2_explicit |= OPTION_MASK_ISA2_AVX10_2_512_UNSET;
+	}
+      return true;
+
     case OPT_mfma:
       if (value)
 	{
@@ -2066,6 +2105,7 @@ const char *const processor_names[] =
   "intel",
   "lujiazui",
   "yongfeng",
+  "shijidadao",
   "geode",
   "k6",
   "athlon",
@@ -2271,10 +2311,13 @@ const pta processor_alias_table[] =
       | PTA_SSSE3 | PTA_SSE4_1 | PTA_FXSR, 0, P_NONE},
   {"lujiazui", PROCESSOR_LUJIAZUI, CPU_LUJIAZUI,
 	PTA_LUJIAZUI,
-	M_CPU_SUBTYPE (ZHAOXIN_FAM7H_LUJIAZUI), P_NONE},
+	M_CPU_SUBTYPE (ZHAOXIN_FAM7H_LUJIAZUI), P_PROC_BMI},
   {"yongfeng", PROCESSOR_YONGFENG, CPU_YONGFENG,
 	PTA_YONGFENG,
-	M_CPU_SUBTYPE (ZHAOXIN_FAM7H_YONGFENG), P_NONE},
+	M_CPU_SUBTYPE (ZHAOXIN_FAM7H_YONGFENG), P_PROC_AVX2},
+  {"shijidadao", PROCESSOR_SHIJIDADAO, CPU_YONGFENG,
+	PTA_YONGFENG,
+	M_CPU_SUBTYPE (ZHAOXIN_FAM7H_SHIJIDADAO), P_PROC_AVX2},
   {"k8", PROCESSOR_K8, CPU_K8,
     PTA_64BIT | PTA_MMX | PTA_3DNOW | PTA_3DNOW_A | PTA_SSE
       | PTA_SSE2 | PTA_NO_SAHF | PTA_FXSR, 0, P_NONE},

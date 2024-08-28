@@ -827,7 +827,7 @@ extern tree c_begin_stmt_expr (void);
 extern tree c_finish_stmt_expr (location_t, tree);
 extern tree c_process_expr_stmt (location_t, tree);
 extern tree c_finish_expr_stmt (location_t, tree);
-extern tree c_finish_return (location_t, tree, tree);
+extern tree c_finish_return (location_t, tree, tree, bool = false);
 extern tree c_finish_bc_stmt (location_t, tree, bool);
 extern tree c_finish_goto_label (location_t, tree);
 extern tree c_finish_goto_ptr (location_t, c_expr val);
@@ -904,6 +904,8 @@ extern bool pedwarn_c90 (location_t, int opt, const char *, ...)
 extern bool pedwarn_c99 (location_t, int opt, const char *, ...)
     ATTRIBUTE_GCC_DIAG(3,4);
 extern bool pedwarn_c11 (location_t, int opt, const char *, ...)
+    ATTRIBUTE_GCC_DIAG(3,4);
+extern bool pedwarn_c23 (location_t, int opt, const char *, ...)
     ATTRIBUTE_GCC_DIAG(3,4);
 
 extern void

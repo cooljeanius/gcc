@@ -156,6 +156,10 @@ ix86_target_macros_internal (HOST_WIDE_INT isa_flag,
       def_or_undef (parse_in, "__yongfeng");
       def_or_undef (parse_in, "__yongfeng__");
       break;
+    case PROCESSOR_SHIJIDADAO:
+      def_or_undef (parse_in, "__shijidadao");
+      def_or_undef (parse_in, "__shijidadao__");
+      break;
     case PROCESSOR_PENTIUM4:
       def_or_undef (parse_in, "__pentium4");
       def_or_undef (parse_in, "__pentium4__");
@@ -385,6 +389,9 @@ ix86_target_macros_internal (HOST_WIDE_INT isa_flag,
        break;
     case PROCESSOR_YONGFENG:
       def_or_undef (parse_in, "__tune_yongfeng__");
+       break;
+    case PROCESSOR_SHIJIDADAO:
+      def_or_undef (parse_in, "__tune_shijidadao__");
        break;
     case PROCESSOR_PENTIUM4:
       def_or_undef (parse_in, "__tune_pentium4__");
@@ -730,6 +737,10 @@ ix86_target_macros_internal (HOST_WIDE_INT isa_flag,
     def_or_undef (parse_in, "__APX_F__");
   if (ix86_apx_inline_asm_use_gpr32)
     def_or_undef (parse_in, "__APX_INLINE_ASM_USE_GPR32__");
+  if (isa_flag2 & OPTION_MASK_ISA2_AVX10_2_256)
+    def_or_undef (parse_in, "__AVX10_2_256__");
+  if (isa_flag2 & OPTION_MASK_ISA2_AVX10_2_512)
+    def_or_undef (parse_in, "__AVX10_2_512__");
   if (TARGET_IAMCU)
     {
       def_or_undef (parse_in, "__iamcu");

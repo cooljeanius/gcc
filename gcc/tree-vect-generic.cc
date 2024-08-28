@@ -45,6 +45,8 @@ along with GCC; see the file COPYING3.  If not see
 #include "gimple-match.h"
 #include "recog.h"		/* FIXME: for insn_data */
 #include "optabs-libfuncs.h"
+#include "cfgloop.h"
+#include "tree-vectorizer.h"
 
 
 /* Build a ternary operation and gimplify it.  Emit code before GSI.
@@ -1850,7 +1852,7 @@ expand_vector_conversion (gimple_stmt_iterator *gsi)
   tree arg = gimple_call_arg (stmt, 0);
   tree ret_type = TREE_TYPE (lhs);
   tree arg_type = TREE_TYPE (arg);
-  tree new_rhs, compute_type = TREE_TYPE (arg_type);
+  tree new_rhs, new_lhs, compute_type = TREE_TYPE (arg_type);
   enum tree_code code = NOP_EXPR;
   enum tree_code code1 = ERROR_MARK;
   enum { NARROW, NONE, WIDEN } modifier = NONE;
@@ -1870,14 +1872,29 @@ expand_vector_conversion (gimple_stmt_iterator *gsi)
   else if (ret_elt_bits > arg_elt_bits)
     modifier = WIDEN;
 
+  auto_vec<std::pair<tree, tree_code> > converts;
+  if (supportable_indirect_convert_operation (code,
+					      ret_type, arg_type,
+					      &converts,
+					      arg))
+    {
+      new_rhs = arg;
+      for (unsigned int i = 0; i < converts.length () - 1; i++)
+	{
+	  new_lhs = make_ssa_name (converts[i].first);
+	  g = gimple_build_assign (new_lhs, converts[i].second, new_rhs);
+	  new_rhs = new_lhs;
+	  gsi_insert_before (gsi, g, GSI_SAME_STMT);
+	}
+      g = gimple_build_assign (lhs,
+			       converts[converts.length() - 1].second,
+			       new_rhs);
+      gsi_replace (gsi, g, false);
+      return;
+    }
+
   if (modifier == NONE && (code == FIX_TRUNC_EXPR || code == FLOAT_EXPR))
     {
-      if (supportable_convert_operation (code, ret_type, arg_type, &code1))
-	{
-	  g = gimple_build_assign (lhs, code1, arg);
-	  gsi_replace (gsi, g, false);
-	  return;
-	}
       /* Can't use get_compute_type here, as supportable_convert_operation
 	 doesn't necessarily use an optab and needs two arguments.  */
       tree vec_compute_type
@@ -2189,10 +2206,15 @@ expand_vector_operations_1 (gimple_stmt_iterator *gsi,
 	}
     }
 
+  /* Plain moves do not need lowering.  */
+  if (code == SSA_NAME
+      || code == VIEW_CONVERT_EXPR
+      || code == PAREN_EXPR)
+    return;
+
   if (CONVERT_EXPR_CODE_P (code)
       || code == FLOAT_EXPR
-      || code == FIX_TRUNC_EXPR
-      || code == VIEW_CONVERT_EXPR)
+      || code == FIX_TRUNC_EXPR)
     return;
 
   /* The signedness is determined from input argument.  */

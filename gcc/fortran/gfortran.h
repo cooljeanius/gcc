@@ -1893,9 +1893,8 @@ typedef struct gfc_symbol
      points to C and B's is NULL.  */
   struct gfc_common_head* common_head;
 
-  /* Make sure setup code for dummy arguments is generated in the correct
-     order.  */
-  int dummy_order;
+  /* Make sure initialization code is generated in the correct order.  */
+  int decl_order;
 
   gfc_namelist *namelist, *namelist_tail;
 
@@ -1935,6 +1934,8 @@ typedef struct gfc_symbol
   unsigned forall_index:1;
   /* Set if the symbol is used in a function result specification .  */
   unsigned fn_result_spec:1;
+  /* Set if the symbol spec. depends on an old-style function result.  */
+  unsigned fn_result_dep:1;
   /* Used to avoid multiple resolutions of a single symbol.  */
   /* = 2 if this has already been resolved as an intrinsic,
        in gfc_resolve_intrinsic,
@@ -1952,6 +1953,10 @@ typedef struct gfc_symbol
   /* Set if this should be passed by value, but is not a VALUE argument
      according to the Fortran standard.  */
   unsigned pass_as_value:1;
+  /* Set if an allocatable array variable has been allocated in the current
+     scope. Used in the suppression of uninitialized warnings in reallocation
+     on assignment.  */
+  unsigned allocated_in_scope:1;
 
   /* Reference counter, used for memory management.
 
@@ -2566,6 +2571,7 @@ typedef struct gfc_expr
   gfc_typespec ts;	/* These two refer to the overall expression */
 
   int rank;		/* 0 indicates a scalar, -1 an assumed-rank array.  */
+  int corank;		/* same as rank, but for coarrays.  */
   mpz_t *shape;		/* Can be NULL if shape is unknown at compile time */
 
   /* Nonnull for functions and structure constructors, may also used to hold the
@@ -3156,6 +3162,7 @@ typedef struct
   int flag_init_logical;
   int flag_init_character;
   char flag_init_character_value;
+  int disable_omp_is_initial_device;
 
   int fpe;
   int fpe_summary;
@@ -3795,7 +3802,6 @@ bool gfc_is_class_array_function (gfc_expr *);
 bool gfc_ref_this_image (gfc_ref *ref);
 bool gfc_is_coindexed (gfc_expr *);
 bool gfc_is_coarray (gfc_expr *);
-int gfc_get_corank (gfc_expr *);
 bool gfc_has_ultimate_allocatable (gfc_expr *);
 bool gfc_has_ultimate_pointer (gfc_expr *);
 gfc_expr* gfc_find_team_co (gfc_expr *);
@@ -4044,6 +4050,11 @@ bool gfc_may_be_finalized (gfc_typespec);
 	(sym->ts.type == BT_CLASS \
 	 && CLASS_DATA (sym) \
 	 && CLASS_DATA (sym)->attr.dimension \
+	 && !CLASS_DATA (sym)->attr.class_pointer)
+#define IS_CLASS_COARRAY_OR_ARRAY(sym) \
+	(sym->ts.type == BT_CLASS && CLASS_DATA (sym) \
+	 && (CLASS_DATA (sym)->attr.dimension \
+	     || CLASS_DATA (sym)->attr.codimension) \
 	 && !CLASS_DATA (sym)->attr.class_pointer)
 #define IS_POINTER(sym) \
 	(sym->ts.type == BT_CLASS && sym->attr.class_ok && CLASS_DATA (sym) \

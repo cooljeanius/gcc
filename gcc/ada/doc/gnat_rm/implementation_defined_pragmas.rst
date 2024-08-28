@@ -2208,19 +2208,19 @@ Syntax:
 
 .. code-block:: ada
 
-  pragma Extensions_Allowed (On | Off | All);
+  pragma Extensions_Allowed (On | Off | All_Extensions);
 
 
-This configuration pragma enables (via the "On" or "All" argument) or disables
-(via the "Off" argument) the implementation extension mode; the pragma takes
-precedence over the ``-gnatX`` and ``-gnatX0`` command switches.
+This configuration pragma enables (via the "On" or "All_Extensions" argument)
+or disables (via the "Off" argument) the implementation extension mode; the
+pragma takes precedence over the ``-gnatX`` and ``-gnatX0`` command switches.
 
 If an argument of ``"On"`` is specified, the latest version of the Ada language
 is implemented (currently Ada 2022) and, in addition, a curated set of GNAT
 specific extensions are recognized. (See the list here
 :ref:`here<Curated_Language_Extensions>`)
 
-An argument of ``"All"`` has the same effect except that some extra
+An argument of ``"All_Extensions"`` has the same effect except that some extra
 experimental extensions are enabled (See the list here
 :ref:`here<Experimental_Language_Extensions>`)
 
@@ -3185,6 +3185,19 @@ Overriding the default state of signals used by the Ada runtime may interfere
 with an application's runtime behavior in the cases of the synchronous signals,
 and in the case of the signal used to implement the ``abort`` statement.
 
+Pragma Interrupts_System_By_Default
+===================================
+
+Syntax:
+
+
+::
+
+  pragma Interrupts_System_By_Default;
+
+Default all interrupts to the System state as defined above in pragma
+``Interrupt_State``. This is a configuration pragma.
+
 .. _Pragma-Invariant:
 
 Pragma Invariant
@@ -3910,6 +3923,25 @@ in particular it is not subject to the use of option *-gnatn* or
 *-gnatN*.  It is illegal to specify both pragma ``No_Inline`` and
 pragma ``Inline_Always`` for the same ``NAME``.
 
+.. _Pragma-No_Raise:
+
+Pragma No_Raise
+===============
+
+Syntax:
+
+
+::
+
+  pragma No_Raise (subprogram_LOCAL_NAME {, subprogram_LOCAL_NAME});
+
+
+Each ``subprogram_LOCAL_NAME`` argument must refer to one or more subprogram
+declarations in the current declarative part.  A subprogram to which this
+pragma is applied may not raise an exception that is not caught within it.
+An implementation-defined check named `Raise_Check` is associated with the
+pragma, and `Program_Error` is raised upon its failure (see RM 11.5(19/5)).
+
 Pragma No_Return
 ================
 
@@ -3999,12 +4031,6 @@ When pragmas ``Discard_Names`` and ``No_Tagged_Streams`` are simultaneously
 applied to a tagged type its Expanded_Name and External_Tag are initialized
 with empty strings. This is useful to avoid exposing entity names at binary
 level but has a negative impact on the debuggability of tagged types.
-
-Alternatively, when pragmas ``Discard_Names`` and ``Restrictions (No_Streams)``
-simultanously apply to a tagged type, its Expanded_Name and External_Tag are
-also initialized with empty strings. In particular, both these pragmas can be
-applied as configuration pragmas to avoid exposing entity names at binary
-level for the entire parition.
 
 Pragma Normalize_Scalars
 ========================
@@ -6302,21 +6328,91 @@ activated.  These are additive, so they apply in addition to any previously
 set style check options.  The codes for the options are the same as those
 used in the *-gnaty* switch to *gcc* or *gnatmake*.
 For example the following two methods can be used to enable
-layout checking:
+layout checking and to change the maximum nesting level value:
 
 *
 
-  ::
+  .. code-block:: ada
 
+    --  switch on layout checks
     pragma Style_Checks ("l");
-
+    --  set the number of maximum allowed nesting levels to 15
+    pragma Style_Checks ("L15");
 
 *
 
   ::
 
-    gcc -c -gnatyl ...
+    gcc -c -gnatyl -gnatyL15 ...
 
+
+The string literal values can be cumulatively switched on and off by prefixing
+the value with ``+`` or ``-``, where:
+
+* ``+`` is equivalent to no prefix. It applies the check referenced by the
+  literal value;
+* ``-`` switches the referenced check off.
+
+
+.. code-block:: ada
+  :linenos:
+  :emphasize-lines: 15
+
+  --  allow misaligned block by disabling layout check
+  pragma Style_Checks ("-l");
+  declare
+      msg : constant String := "Hello";
+  begin
+      Put_Line (msg);
+      end;
+
+  --  enable the layout check again
+  pragma Style_Checks ("l");
+  declare
+      msg : constant String := "Hello";
+  begin
+      Put_Line (msg);
+      end;
+
+The code above contains two layout errors, however, only
+the last line is picked up by the compiler.
+
+Similarly, the switches containing a numeric value can be applied in sequence.
+In the example below, the permitted nesting level is reduced in in the middle
+block and the compiler raises a warning on the highlighted line.
+
+.. code-block:: ada
+  :linenos:
+  :emphasize-lines: 15
+
+  -- Permit 3 levels of nesting
+  pragma Style_Checks ("L3");
+
+  procedure Main is
+  begin
+      if True then
+        if True then
+            null;
+        end if;
+      end if;
+      --  Reduce permitted nesting levels to 2.
+      --  Note that "+L2" and "L2" are equivalent.
+      pragma Style_Checks ("+L2");
+      if True then
+        if True then
+            null;
+        end if;
+      end if;
+      --  Disable checking permitted nesting levels.
+      --  Note that the number after "-L" is insignificant,
+      --  "-L", "-L3" and "-Lx" are all equivalent.
+      pragma Style_Checks ("-L3");
+      if True then
+        if True then
+            null;
+        end if;
+      end if;
+  end Main;
 
 The form ``ALL_CHECKS`` activates all standard checks (its use is equivalent
 to the use of the :switch:`gnaty` switch with no options.
@@ -6329,7 +6425,6 @@ options (i.e. equivalent to :switch:`-gnatyg`).
 The forms with ``Off`` and ``On``
 can be used to temporarily disable style checks
 as shown in the following example:
-
 
 .. code-block:: ada
 
@@ -6352,6 +6447,36 @@ for the specified entity, as shown in the following example:
   Rf1 : Integer := ARG;      -- incorrect, wrong case
   pragma Style_Checks (Off, Arg);
   Rf2 : Integer := ARG;      -- OK, no error
+
+Pragma Subprogram_Variant
+=========================
+.. index:: Subprogram_Variant
+
+Syntax:
+
+
+::
+
+  pragma Subprogram_Variant (SUBPROGRAM_VARIANT_LIST);
+
+  SUBPROGRAM_VARIANT_LIST ::=
+    STRUCTURAL_SUBPROGRAM_VARIANT_ITEM
+  | NUMERIC_SUBPROGRAM_VARIANT_ITEMS
+
+  NUMERIC_SUBPROGRAM_VARIANT_ITEMS ::=
+    NUMERIC_SUBPROGRAM_VARIANT_ITEM {, NUMERIC_SUBPROGRAM_VARIANT_ITEM}
+
+  NUMERIC_SUBPROGRAM_VARIANT_ITEM ::=
+    CHANGE_DIRECTION => EXPRESSION
+
+  STRUCTURAL_SUBPROGRAM_VARIANT_ITEM ::=
+    STRUCTURAL => EXPRESSION
+
+  CHANGE_DIRECTION ::= Increases | Decreases
+
+The ``Subprogram_Variant`` pragma is intended to be an exact replacement for
+the implementation-defined ``Subprogram_Variant`` aspect, and shares its
+restrictions and semantics.
 
 
 Pragma Subtitle
