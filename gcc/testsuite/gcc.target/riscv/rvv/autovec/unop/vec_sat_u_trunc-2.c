@@ -3,7 +3,7 @@
 /* { dg-skip-if "" { *-*-* } { "-flto" } } */
 /* { dg-final { check-function-bodies "**" "" } } */
 
-#include "../binop/vec_sat_arith.h"
+#include "../vec_sat_arith.h"
 
 /*
 ** vec_sat_u_trunc_uint8_t_uint32_t_fmt_1:
@@ -18,4 +18,4 @@
 */
 DEF_VEC_SAT_U_TRUNC_FMT_1 (uint8_t, uint32_t)
 
-/* { dg-final { scan-rtl-dump-times ".SAT_TRUNC " 2 "expand" } } */
+/* { dg-final { scan-rtl-dump-times ".SAT_TRUNC " 4 "expand" } } */
