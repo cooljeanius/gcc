@@ -3260,7 +3260,10 @@ omp_runtime_api_procname (const char *name)
       "alloc",
       "calloc",
       "free",
+      "get_interop_int",
+      "get_interop_ptr",
       "get_mapped_ptr",
+      "get_num_interop_properties",
       "realloc",
       "target_alloc",
       "target_associate_ptr",
@@ -3289,6 +3292,10 @@ omp_runtime_api_procname (const char *name)
       "get_device_num",
       "get_dynamic",
       "get_initial_device",
+      "get_interop_name",
+      "get_interop_rc_desc",
+      "get_interop_str",
+      "get_interop_type_desc",
       "get_level",
       "get_max_active_levels",
       "get_max_task_priority",
@@ -3376,6 +3383,35 @@ omp_runtime_api_call (const_tree fndecl)
       || !TREE_PUBLIC (fndecl))
     return false;
   return omp_runtime_api_procname (IDENTIFIER_POINTER (declname));
+}
+
+/* See "Additional Definitions for the OpenMP API Specification" document;
+   associated IDs are 1, 2, ...  */
+static const char* omp_interop_fr_str[] = {"cuda", "cuda_driver", "opencl",
+					   "sycl", "hip", "level_zero", "hsa"};
+
+/* Returns the foreign-runtime ID if found or 0 otherwise.  */
+
+int
+omp_get_fr_id_from_name (const char *str)
+{
+  static_assert (GOMP_INTEROP_IFR_LAST == ARRAY_SIZE (omp_interop_fr_str), "");
+
+  for (unsigned i = 0; i < ARRAY_SIZE (omp_interop_fr_str); ++i)
+    if (!strcmp (str, omp_interop_fr_str[i]))
+      return i + 1;
+  return 0;
+}
+
+/* Returns the string value to a foreign-runtime integer value or NULL if value
+   is not known.  */
+
+const char *
+omp_get_name_from_fr_id (int fr_id)
+{
+  if (fr_id < 1 || fr_id > (int) ARRAY_SIZE (omp_interop_fr_str))
+    return NULL;
+  return omp_interop_fr_str[fr_id-1];
 }
 
 namespace omp_addr_tokenizer {

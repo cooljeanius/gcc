@@ -4319,12 +4319,17 @@ maybe_init_list_as_array (tree elttype, tree init)
   /* Check with a stub expression to weed out special cases, and check whether
      we call the same function for direct-init as copy-list-init.  */
   conversion_obstack_sentinel cos;
+  init_elttype = cp_build_qualified_type (init_elttype, TYPE_QUAL_CONST);
   tree arg = build_stub_object (init_elttype);
   conversion *c = implicit_conversion (elttype, init_elttype, arg, false,
 				       LOOKUP_NORMAL, tf_none);
   if (c && c->kind == ck_rvalue)
     c = next_conversion (c);
   if (!c || c->kind != ck_user)
+    return NULL_TREE;
+  /* Check that we actually can perform the conversion.  */
+  if (convert_like (c, arg, tf_none) == error_mark_node)
+    /* Let the normal code give the error.  */
     return NULL_TREE;
 
   tree first = CONSTRUCTOR_ELT (init, 0)->value;
@@ -4358,7 +4363,6 @@ maybe_init_list_as_array (tree elttype, tree init)
   if (!is_xible (INIT_EXPR, elttype, copy_argtypes))
     return NULL_TREE;
 
-  init_elttype = cp_build_qualified_type (init_elttype, TYPE_QUAL_CONST);
   tree arr = build_array_of_n_type (init_elttype, CONSTRUCTOR_NELTS (init));
   arr = finish_compound_literal (arr, init, tf_none);
   DECL_MERGEABLE (TARGET_EXPR_SLOT (arr)) = true;
@@ -8664,6 +8668,10 @@ convert_like_internal (conversion *convs, tree expr, tree fn, int argnum,
 	/* We don't know here whether EXPR is being used as an lvalue or
 	   rvalue, but we know it's read.  */
 	mark_exp_read (expr);
+
+	/* Give the conversion call the location of EXPR rather than the
+	   location of the context that caused the conversion.  */
+	iloc_sentinel ils (loc);
 
 	/* Pass LOOKUP_NO_CONVERSION so rvalue/base handling knows not to allow
 	   any more UDCs.  */
@@ -13960,7 +13968,9 @@ set_up_extended_ref_temp (tree decl, tree expr, vec<tree, va_gc> **cleanups,
   init = cp_fully_fold (init);
   if (TREE_CONSTANT (init))
     {
-      if (literal_type_p (type) && CP_TYPE_CONST_NON_VOLATILE_P (type))
+      if (literal_type_p (type)
+	  && CP_TYPE_CONST_NON_VOLATILE_P (type)
+	  && !TYPE_HAS_MUTABLE_P (type))
 	{
 	  /* 5.19 says that a constant expression can include an
 	     lvalue-rvalue conversion applied to "a glvalue of literal type
@@ -14243,19 +14253,18 @@ reference_like_class_p (tree ctype)
   return false;
 }
 
-/* Helper for maybe_warn_dangling_reference to find a problematic CALL_EXPR
-   that initializes the LHS (and at least one of its arguments represents
-   a temporary, as outlined in maybe_warn_dangling_reference), or NULL_TREE
+/* Helper for maybe_warn_dangling_reference to find a problematic temporary
+   in EXPR (as outlined in maybe_warn_dangling_reference), or NULL_TREE
    if none found.  For instance:
 
-     const S& s = S().self(); // S::self (&TARGET_EXPR <...>)
-     const int& r = (42, f(1)); // f(1)
-     const int& t = b ? f(1) : f(2); // f(1)
-     const int& u = b ? f(1) : f(g); // f(1)
-     const int& v = b ? f(g) : f(2); // f(2)
+     const S& s = S().self(); // S()
+     const int& r = (42, f(1)); // temporary for passing 1 to f
+     const int& t = b ? f(1) : f(2); // temporary for 1
+     const int& u = b ? f(1) : f(g); // temporary for 1
+     const int& v = b ? f(g) : f(2); // temporary for 2
      const int& w = b ? f(g) : f(g); // NULL_TREE
      const int& y = (f(1), 42); // NULL_TREE
-     const int& z = f(f(1)); // f(f(1))
+     const int& z = f(f(1)); // temporary for 1
 
    EXPR is the initializer.  If ARG_P is true, we're processing an argument
    to a function; the point is to distinguish between, for example,
@@ -14346,14 +14355,16 @@ do_warn_dangling_reference (tree expr, bool arg_p)
 	    if ((arg = do_warn_dangling_reference (arg, /*arg_p=*/true)))
 	      {
 		/* If we know the temporary could not bind to the return type,
-		   don't warn.  This is for scalars only because for classes
-		   we can't be sure we are not returning its sub-object.  */
-		if (SCALAR_TYPE_P (TREE_TYPE (arg))
+		   don't warn.  This is for scalars and empty classes only
+		   because for other classes we can't be sure we are not
+		   returning its sub-object.  */
+		if ((SCALAR_TYPE_P (TREE_TYPE (arg))
+		     || is_empty_class (TREE_TYPE (arg)))
 		    && TYPE_REF_P (rettype)
-		    && !reference_related_p (TREE_TYPE (arg),
-					     TREE_TYPE (rettype)))
+		    && !reference_related_p (TREE_TYPE (rettype),
+					     TREE_TYPE (arg)))
 		  continue;
-		return expr;
+		return arg;
 	      }
 	  /* Don't warn about member functions like:
 	      std::any a(...);
@@ -14426,8 +14437,8 @@ maybe_warn_dangling_reference (const_tree decl, tree init)
       auto_diagnostic_group d;
       if (warning_at (DECL_SOURCE_LOCATION (decl), OPT_Wdangling_reference,
 		      "possibly dangling reference to a temporary"))
-	inform (EXPR_LOCATION (call), "the temporary was destroyed at "
-		"the end of the full expression %qE", call);
+	inform (EXPR_LOCATION (call), "%qT temporary created here",
+		TREE_TYPE (call));
     }
 }
 

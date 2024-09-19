@@ -2044,7 +2044,6 @@ void
 gfc_advance_se_ss_chain (gfc_se * se)
 {
   gfc_se *p;
-  gfc_ss *ss;
 
   gcc_assert (se != NULL && se->ss != NULL && se->ss != gfc_ss_terminator);
 
@@ -2056,15 +2055,7 @@ gfc_advance_se_ss_chain (gfc_se * se)
       gcc_assert (p->parent == NULL || p->parent->ss == p->ss
 		  || p->parent->ss->nested_ss == p->ss);
 
-      /* If we were in a nested loop, the next scalarized expression can be
-	 on the parent ss' next pointer.  Thus we should not take the next
-	 pointer blindly, but rather go up one nest level as long as next
-	 is the end of chain.  */
-      ss = p->ss;
-      while (ss->next == gfc_ss_terminator && ss->parent != NULL)
-	ss = ss->parent;
-
-      p->ss = ss->next;
+      p->ss = p->ss->next;
 
       p = p->parent;
     }
@@ -5835,6 +5826,10 @@ gfc_conv_gfc_desc_to_cfi_desc (gfc_se *parmse, gfc_expr *e, gfc_symbol *fsym)
 	    }
 	  else
 	    gcc_unreachable ();
+
+	case BT_UNSIGNED:
+	  gfc_internal_error ("Unsigned not yet implemented");
+
 	case BT_PROCEDURE:
 	case BT_HOLLERITH:
 	case BT_UNION:
@@ -9650,7 +9645,7 @@ gfc_trans_structure_assign (tree dest, gfc_expr * expr, bool init, bool coarray)
 
       /* Register the component with the caf-lib before it is initialized.
 	 Register only allocatable components, that are not coarray'ed
-	 components (%comp[*]).  Only register when the constructor is not the
+	 components (%comp[*]).  Only register when the constructor is the
 	 null-expression.  */
       if (coarray && !cm->attr.codimension
 	  && (cm->attr.allocatable || cm->attr.pointer)
