@@ -1259,7 +1259,7 @@ const invalidPrefixBits = -1
 // If bits is less than zero or greater than ip.BitLen, Prefix.Bits
 // will return an invalid value -1.
 func PrefixFrom(ip Addr, bits int) Prefix {
-	if bits < 0 || bits > ip.BitLen() {
+	if bits < 0 || bits > ip.BitLen() || bits < math.MinInt16 || bits > math.MaxInt16 {
 		bits = invalidPrefixBits
 	}
 	b16 := int16(bits)
