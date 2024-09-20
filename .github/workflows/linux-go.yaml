@@ -39,7 +39,7 @@ jobs:
           sudo apt-get -qq update
           sudo apt-get -y install gcc-multilib build-essential flex zlib1g-dev \
             gnat gdc expect dejagnu libc-dev libc-devtools texlive findutils \
-            binutils autogen gettext autopoint libasprintf-dev \
+            binutils autogen gettext gettext-doc autopoint libasprintf-dev \
             libgettextpo-dev mailutils mailutils-mh procmail emacs exim4-base \
             msmtp bsd-mailx gccgo gccgo-multilib golang golang-go golang-src \
             golang-ar-dev
@@ -140,10 +140,14 @@ jobs:
         if: success()
         run: |
           cd ../build
-          echo "make info" && (time make info-gotools) && find . -name "*.info" -print
-          echo "make dvi" && (time make dvi-gotools) && find . -name "*.dvi" -print
-          echo "make pdf" && (time make pdf-gotools) && find . -name "*.pdf" -print
-          echo "make html" && (time make html-gotools) && find . -name "*.html" -print
+          echo "make info" && (time (make info-gcc && make info-gotools)) && \
+            find . -name "*.info" -print
+          echo "make dvi" && (time (make dvi-gcc && make dvi-gotools)) && \
+            find . -name "*.dvi" -print
+          echo "make pdf" && (time (make pdf-gcc && make pdf-gotools)) && \
+            find . -name "*.pdf" -print
+          echo "make html" && (time (make html-gcc && make html-gotools)) && \
+            find . -name "*.html" -print
 
       - name: Make install (plus docs)
         if: success()
@@ -166,9 +170,9 @@ jobs:
             ../build/gcc/xgcc --version && sync && ../build/gcc/xgcc -v; \
           fi
           cd ../build
-          if test -e build.log; then make warning.log; fi
+          if test -r build.log; then make warning.log; fi
           time (make -k -j"$(nproc)" check RUNTESTFLAGS="go-dg.exp go-torture.exp go.exp" | tee testsuite_output.log)
-          if test -e warning.log; then \
+          if test -r warning.log; then \
             make mail-report-with-warnings.log; \
           else make mail-report.log; fi
           if test -x "$(which Mail)"; then \
@@ -191,7 +195,7 @@ jobs:
               echo "Nothing to send."; \
             fi; \
           else \
-            echo "Warning: \"Mail\" program is missing, so skipping emailing of testresults!"; \
+            echo "Warning: \"Mail\" program is missing; skipping testresults email!"; \
           fi
           for mydir in "${OLDPWD}" .. build path testsuite ../build ../path ../testsuite "${OLDPWD}"/build "${OLDPWD}"/path "${OLDPWD}"/testsuite; do \
             if test -d "${mydir}" && test -r "${mydir}" && test -w "${mydir}" && test -x "${mydir}"; then \
