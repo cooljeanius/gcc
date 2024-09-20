@@ -1262,6 +1262,9 @@ func PrefixFrom(ip Addr, bits int) Prefix {
 	if bits < 0 || bits > ip.BitLen() || bits < math.MinInt16 || bits > math.MaxInt16 {
 		bits = invalidPrefixBits
 	}
+	if bits < math.MinInt16 || bits > math.MaxInt16 {
+		bits = invalidPrefixBits
+	}
 	b16 := int16(bits)
 	return Prefix{
 		ip:   ip.withoutZone(),
