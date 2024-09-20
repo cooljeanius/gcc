@@ -17,6 +17,7 @@ You should have received a copy of the GNU General Public License
 along with GCC; see the file COPYING3.  If not see
 <http://www.gnu.org/licenses/>.  */
 
+#define INCLUDE_MEMORY
 #define INCLUDE_STRING
 #define IN_TARGET_CODE 1
 
@@ -4907,13 +4908,31 @@ ix86_gimplify_va_arg (tree valist, tree type, gimple_seq *pre_p,
 
       examine_argument (nat_mode, type, 0, &needed_intregs, &needed_sseregs);
 
-      need_temp = (!REG_P (container)
+      bool container_in_reg = false;
+      if (REG_P (container))
+	container_in_reg = true;
+      else if (GET_CODE (container) == PARALLEL
+	       && GET_MODE (container) == BLKmode
+	       && XVECLEN (container, 0) == 1)
+	{
+	  /* Check if it is a PARALLEL BLKmode container of an EXPR_LIST
+	     expression in a TImode register.  In this case, temp isn't
+	     needed.  Otherwise, the TImode variable will be put in the
+	     GPR save area which guarantees only 8-byte alignment.   */
+	  rtx x = XVECEXP (container, 0, 0);
+	  if (GET_CODE (x) == EXPR_LIST
+	      && REG_P (XEXP (x, 0))
+	      && XEXP (x, 1) == const0_rtx)
+	    container_in_reg = true;
+	}
+
+      need_temp = (!container_in_reg
 		   && ((needed_intregs && TYPE_ALIGN (type) > 64)
 		       || TYPE_ALIGN (type) > 128));
 
       /* In case we are passing structure, verify that it is consecutive block
          on the register save area.  If not we need to do moves.  */
-      if (!need_temp && !REG_P (container))
+      if (!need_temp && !container_in_reg)
 	{
 	  /* Verify that all registers are strictly consecutive  */
 	  if (SSE_REGNO_P (REGNO (XEXP (XVECEXP (container, 0, 0), 0))))
@@ -14881,9 +14900,19 @@ ix86_dirflag_mode_needed (rtx_insn *insn)
 static bool
 ix86_check_avx_upper_register (const_rtx exp)
 {
-  return (SSE_REG_P (exp)
-	  && !EXT_REX_SSE_REG_P (exp)
-	  && GET_MODE_BITSIZE (GET_MODE (exp)) > 128);
+  /* construct_container may return a parallel with expr_list
+     which contains the real reg and mode  */
+  subrtx_iterator::array_type array;
+  FOR_EACH_SUBRTX (iter, array, exp, NONCONST)
+    {
+      const_rtx x = *iter;
+      if (SSE_REG_P (x)
+	  && !EXT_REX_SSE_REG_P (x)
+	  && GET_MODE_BITSIZE (GET_MODE (x)) > 128)
+	return true;
+    }
+
+  return false;
 }
 
 /* Check if a 256bit or 512bit AVX register is referenced in stores.   */
@@ -14891,7 +14920,9 @@ ix86_check_avx_upper_register (const_rtx exp)
 static void
 ix86_check_avx_upper_stores (rtx dest, const_rtx, void *data)
 {
-  if (ix86_check_avx_upper_register (dest))
+  if (SSE_REG_P (dest)
+      && !EXT_REX_SSE_REG_P (dest)
+      && GET_MODE_BITSIZE (GET_MODE (dest)) > 128)
     {
       bool *used = (bool *) data;
       *used = true;
@@ -14950,14 +14981,14 @@ ix86_avx_u128_mode_needed (rtx_insn *insn)
       return AVX_U128_CLEAN;
     }
 
-  subrtx_iterator::array_type array;
-
   rtx set = single_set (insn);
   if (set)
     {
       rtx dest = SET_DEST (set);
       rtx src = SET_SRC (set);
-      if (ix86_check_avx_upper_register (dest))
+      if (SSE_REG_P (dest)
+	  && !EXT_REX_SSE_REG_P (dest)
+	  && GET_MODE_BITSIZE (GET_MODE (dest)) > 128)
 	{
 	  /* This is an YMM/ZMM load.  Return AVX_U128_DIRTY if the
 	     source isn't zero.  */
@@ -14968,9 +14999,8 @@ ix86_avx_u128_mode_needed (rtx_insn *insn)
 	}
       else
 	{
-	  FOR_EACH_SUBRTX (iter, array, src, NONCONST)
-	    if (ix86_check_avx_upper_register (*iter))
-	      return AVX_U128_DIRTY;
+	  if (ix86_check_avx_upper_register (src))
+	    return AVX_U128_DIRTY;
 	}
 
       /* This isn't YMM/ZMM load/store.  */
@@ -14981,9 +15011,8 @@ ix86_avx_u128_mode_needed (rtx_insn *insn)
      Hardware changes state only when a 256bit register is written to,
      but we need to prevent the compiler from moving optimal insertion
      point above eventual read from 256bit or 512 bit register.  */
-  FOR_EACH_SUBRTX (iter, array, PATTERN (insn), NONCONST)
-    if (ix86_check_avx_upper_register (*iter))
-      return AVX_U128_DIRTY;
+  if (ix86_check_avx_upper_register (PATTERN (insn)))
+    return AVX_U128_DIRTY;
 
   return AVX_U128_ANY;
 }
@@ -16176,6 +16205,8 @@ ix86_build_const_vector (machine_mode mode, bool vect, rtx value)
     case E_V32BFmode:
     case E_V16BFmode:
     case E_V8BFmode:
+    case E_V4BFmode:
+    case E_V2BFmode:
       n_elt = GET_MODE_NUNITS (mode);
       v = rtvec_alloc (n_elt);
       scalar_mode = GET_MODE_INNER (mode);
@@ -16215,6 +16246,8 @@ ix86_build_signbit_mask (machine_mode mode, bool vect, bool invert)
     case E_V32BFmode:
     case E_V16BFmode:
     case E_V8BFmode:
+    case E_V4BFmode:
+    case E_V2BFmode:
       vec_mode = mode;
       imode = HImode;
       break;
@@ -16623,6 +16656,11 @@ ix86_fp_compare_code_to_integer (enum rtx_code code)
       return LEU;
     case LTGT:
       return NE;
+    case EQ:
+    case NE:
+      if (TARGET_AVX10_2_256)
+	return code;
+      /* FALLTHRU.  */
     default:
       return UNKNOWN;
     }
@@ -24467,13 +24505,17 @@ ix86_reassociation_width (unsigned int op, machine_mode mode)
       if (width == 1)
 	return 1;
 
-      /* Integer vector instructions execute in FP unit
+      /* Znver1-4 Integer vector instructions execute in FP unit
 	 and can execute 3 additions and one multiplication per cycle.  */
       if ((ix86_tune == PROCESSOR_ZNVER1 || ix86_tune == PROCESSOR_ZNVER2
-	   || ix86_tune == PROCESSOR_ZNVER3 || ix86_tune == PROCESSOR_ZNVER4
-	   || ix86_tune == PROCESSOR_ZNVER5)
+	   || ix86_tune == PROCESSOR_ZNVER3 || ix86_tune == PROCESSOR_ZNVER4)
    	  && INTEGRAL_MODE_P (mode) && op != PLUS && op != MINUS)
 	return 1;
+      /* Znver5 can do 2 integer multiplications per cycle with latency
+	 of 3.  */
+      if (ix86_tune == PROCESSOR_ZNVER5
+	  && INTEGRAL_MODE_P (mode) && op != PLUS && op != MINUS)
+	width = 6;
 
       /* Account for targets that splits wide vectors into multiple parts.  */
       if (TARGET_AVX512_SPLIT_REGS && GET_MODE_BITSIZE (mode) > 256)
@@ -24554,6 +24596,14 @@ ix86_preferred_simd_mode (scalar_mode mode)
 	}
       return word_mode;
 
+    case E_BFmode:
+      if (TARGET_AVX512F && TARGET_EVEX512 && !TARGET_PREFER_AVX256)
+	return V32BFmode;
+      else if (TARGET_AVX && !TARGET_PREFER_AVX128)
+	return V16BFmode;
+      else
+	return V8BFmode;
+
     case E_SFmode:
       if (TARGET_AVX512F && TARGET_EVEX512 && !TARGET_PREFER_AVX256)
 	return V16SFmode;
@@ -24632,7 +24682,8 @@ ix86_get_mask_mode (machine_mode data_mode)
       /* AVX512FP16 only supports vector comparison
 	 to kmask for _Float16.  */
       || (TARGET_AVX512VL && TARGET_AVX512FP16
-	  && GET_MODE_INNER (data_mode) == E_HFmode))
+	  && GET_MODE_INNER (data_mode) == E_HFmode)
+      || (TARGET_AVX10_2_256 && GET_MODE_INNER (data_mode) == E_BFmode))
     {
       if (elem_size == 4
 	  || elem_size == 8

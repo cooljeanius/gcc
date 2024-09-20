@@ -89,9 +89,10 @@ build_message_string (const char *msg, ...)
 char *
 file_name_as_prefix (diagnostic_context *context, const char *f)
 {
+  pretty_printer *const pp = context->m_printer;
   const char *locus_cs
-    = colorize_start (pp_show_color (context->printer), "locus");
-  const char *locus_ce = colorize_stop (pp_show_color (context->printer));
+    = colorize_start (pp_show_color (pp), "locus");
+  const char *locus_ce = colorize_stop (pp_show_color (pp));
   return build_message_string ("%s%s:%s ", locus_cs, f, locus_ce);
 }
 
@@ -126,7 +127,7 @@ diagnostic_set_caret_max_width (diagnostic_context *context, int value)
 {
   /* One minus to account for the leading empty space.  */
   value = value ? value - 1 
-    : (isatty (fileno (pp_buffer (context->printer)->stream))
+    : (isatty (fileno (pp_buffer (context->m_printer)->m_stream))
        ? get_terminal_width () - 1: INT_MAX);
   
   if (value <= 0) 
@@ -194,8 +195,8 @@ diagnostic_context::initialize (int n_opts)
 {
   /* Allocate a basic pretty-printer.  Clients will replace this a
      much more elaborated pretty-printer if they wish.  */
-  this->printer = XNEW (pretty_printer);
-  new (this->printer) pretty_printer ();
+  m_printer = XNEW (pretty_printer);
+  new (m_printer) pretty_printer ();
 
   m_file_cache = new file_cache ();
   memset (m_diagnostic_count, 0, sizeof m_diagnostic_count);
@@ -203,7 +204,7 @@ diagnostic_context::initialize (int n_opts)
   m_n_opts = n_opts;
   m_option_classifier.init (n_opts);
   m_source_printing.enabled = false;
-  diagnostic_set_caret_max_width (this, pp_line_cutoff (this->printer));
+  diagnostic_set_caret_max_width (this, pp_line_cutoff (m_printer));
   for (int i = 0; i < rich_location::STATICALLY_ALLOCATED_RANGES; i++)
     m_source_printing.caret_chars[i] = '^';
   m_show_cwe = false;
@@ -225,10 +226,7 @@ diagnostic_context::initialize (int n_opts)
   m_text_callbacks.m_begin_diagnostic = default_diagnostic_starter;
   m_text_callbacks.m_start_span = default_diagnostic_start_span_fn;
   m_text_callbacks.m_end_diagnostic = default_diagnostic_finalizer;
-  m_option_callbacks.m_option_enabled_cb = nullptr;
-  m_option_callbacks.m_option_state = nullptr;
-  m_option_callbacks.m_make_option_name_cb = nullptr;
-  m_option_callbacks.m_make_option_url_cb = nullptr;
+  m_option_mgr = nullptr;
   m_urlifier = nullptr;
   m_last_location = UNKNOWN_LOCATION;
   m_last_module = nullptr;
@@ -302,7 +300,7 @@ diagnostic_context::color_init (int value)
       else
 	value = DIAGNOSTICS_COLOR_DEFAULT;
     }
-  pp_show_color (this->printer)
+  pp_show_color (m_printer)
     = colorize_init ((diagnostic_color_rule_t) value);
 }
 
@@ -330,7 +328,7 @@ diagnostic_context::urls_init (int value)
 	value = DIAGNOSTICS_URLS_DEFAULT;
     }
 
-  this->printer->set_url_format
+  m_printer->set_url_format
     (determine_url_format ((diagnostic_url_rule_t) value));
 }
 
@@ -373,9 +371,9 @@ diagnostic_context::finish ()
 
   /* diagnostic_context::initialize allocates this->printer using XNEW
      and placement-new.  */
-  this->printer->~pretty_printer ();
-  XDELETE (this->printer);
-  this->printer = nullptr;
+  m_printer->~pretty_printer ();
+  XDELETE (m_printer);
+  m_printer = nullptr;
 
   if (m_edit_context_ptr)
     {
@@ -445,18 +443,12 @@ diagnostic_context::set_original_argv (unique_argv original_argv)
 }
 
 void
-diagnostic_context::
-set_option_hooks (diagnostic_option_enabled_cb option_enabled_cb,
-		  void *option_state,
-		  diagnostic_make_option_name_cb make_option_name_cb,
-		  diagnostic_make_option_url_cb make_option_url_cb,
-		  unsigned lang_mask)
+diagnostic_context::set_option_manager (diagnostic_option_manager *mgr,
+					unsigned lang_mask)
 {
-  m_option_callbacks.m_option_enabled_cb = option_enabled_cb;
-  m_option_callbacks.m_option_state = option_state;
-  m_option_callbacks.m_make_option_name_cb = make_option_name_cb;
-  m_option_callbacks.m_make_option_url_cb = make_option_url_cb;
-  m_option_callbacks.m_lang_mask = lang_mask;
+  delete m_option_mgr;
+  m_option_mgr = mgr;
+  m_lang_mask = lang_mask;
 }
 
 void
@@ -490,7 +482,7 @@ diagnostic_set_info_translated (diagnostic_info *diagnostic, const char *msg,
   diagnostic->richloc = richloc;
   diagnostic->metadata = NULL;
   diagnostic->kind = kind;
-  diagnostic->option_index = 0;
+  diagnostic->option_id = 0;
 }
 
 /* Initialize DIAGNOSTIC, where the message GMSGID has not yet been
@@ -589,7 +581,7 @@ maybe_line_and_column (int line, int col)
 label_text
 diagnostic_context::get_location_text (const expanded_location &s) const
 {
-  pretty_printer *pp = this->printer;
+  pretty_printer *pp = m_printer;
   const char *locus_cs = colorize_start (pp_show_color (pp), "locus");
   const char *locus_ce = colorize_stop (pp_show_color (pp));
   const char *file = s.file ? s.file : progname;
@@ -633,7 +625,7 @@ diagnostic_build_prefix (diagnostic_context *context,
 
   const char *text = _(diagnostic_kind_text[diagnostic->kind]);
   const char *text_cs = "", *text_ce = "";
-  pretty_printer *pp = context->printer;
+  pretty_printer *pp = context->m_printer;
 
   if (diagnostic_kind_color[diagnostic->kind])
     {
@@ -873,12 +865,13 @@ diagnostic_context::includes_seen_p (const line_map_ordinary *map)
 void
 diagnostic_context::report_current_module (location_t where)
 {
+  pretty_printer *pp = m_printer;
   const line_map_ordinary *map = NULL;
 
-  if (pp_needs_newline (this->printer))
+  if (pp_needs_newline (m_printer))
     {
-      pp_newline (this->printer);
-      pp_needs_newline (this->printer) = false;
+      pp_newline (pp);
+      pp_needs_newline (pp) = false;
     }
 
   if (where <= BUILTINS_LOCATION)
@@ -924,15 +917,15 @@ diagnostic_context::report_current_module (location_t where)
 	      unsigned index = (was_module ? 6 : is_module ? 4
 				: need_inc ? 2 : 0) + !first;
 
-	      pp_verbatim (this->printer, "%s%s %r%s%s%R",
+	      pp_verbatim (pp, "%s%s %r%s%s%R",
 			   first ? "" : was_module ? ", " : ",\n",
 			   _(msgs[index]),
 			   "locus", s.file, line_col);
 	      first = false, need_inc = was_module, was_module = is_module;
 	    }
 	  while (!includes_seen_p (map));
-	  pp_verbatim (this->printer, ":");
-	  pp_newline (this->printer);
+	  pp_verbatim (pp, ":");
+	  pp_newline (pp);
 	}
     }
 }
@@ -981,8 +974,8 @@ default_diagnostic_starter (diagnostic_context *context,
 			    const diagnostic_info *diagnostic)
 {
   diagnostic_report_current_module (context, diagnostic_location (diagnostic));
-  pp_set_prefix (context->printer, diagnostic_build_prefix (context,
-							    diagnostic));
+  pretty_printer *const pp = context->m_printer;
+  pp_set_prefix (pp, diagnostic_build_prefix (context, diagnostic));
 }
 
 void
@@ -990,8 +983,9 @@ default_diagnostic_start_span_fn (diagnostic_context *context,
 				  expanded_location exploc)
 {
   label_text text = context->get_location_text (exploc);
-  pp_string (context->printer, text.get ());
-  pp_newline (context->printer);
+  pretty_printer *pp = context->m_printer;
+  pp_string (pp, text.get ());
+  pp_newline (pp);
 }
 
 void
@@ -999,33 +993,34 @@ default_diagnostic_finalizer (diagnostic_context *context,
 			      const diagnostic_info *diagnostic,
 			      diagnostic_t)
 {
-  char *saved_prefix = pp_take_prefix (context->printer);
-  pp_set_prefix (context->printer, NULL);
-  pp_newline (context->printer);
-  diagnostic_show_locus (context, diagnostic->richloc, diagnostic->kind);
-  pp_set_prefix (context->printer, saved_prefix);
-  pp_flush (context->printer);
+  pretty_printer *const pp = context->m_printer;
+  char *saved_prefix = pp_take_prefix (pp);
+  pp_set_prefix (pp, NULL);
+  pp_newline (pp);
+  diagnostic_show_locus (context, diagnostic->richloc, diagnostic->kind, pp);
+  pp_set_prefix (pp, saved_prefix);
+  pp_flush (pp);
 }
 
 /* Interface to specify diagnostic kind overrides.  Returns the
    previous setting, or DK_UNSPECIFIED if the parameters are out of
-   range.  If OPTION_INDEX is zero, the new setting is for all the
+   range.  If OPTION_ID is zero, the new setting is for all the
    diagnostics.  */
 diagnostic_t
 diagnostic_option_classifier::
 classify_diagnostic (const diagnostic_context *context,
-		     int option_index,
+		     diagnostic_option_id option_id,
 		     diagnostic_t new_kind,
 		     location_t where)
 {
   diagnostic_t old_kind;
 
-  if (option_index < 0
-      || option_index >= m_n_opts
+  if (option_id.m_idx < 0
+      || option_id.m_idx >= m_n_opts
       || new_kind >= DK_LAST_DIAGNOSTIC_KIND)
     return DK_UNSPECIFIED;
 
-  old_kind = m_classify_diagnostic[option_index];
+  old_kind = m_classify_diagnostic[option_id.m_idx];
 
   /* Handle pragmas separately, since we need to keep track of *where*
      the pragmas were.  */
@@ -1036,13 +1031,13 @@ classify_diagnostic (const diagnostic_context *context,
       /* Record the command-line status, so we can reset it back on DK_POP. */
       if (old_kind == DK_UNSPECIFIED)
 	{
-	  old_kind = !context->option_enabled_p (option_index)
+	  old_kind = !context->option_enabled_p (option_id)
 	    ? DK_IGNORED : DK_ANY;
-	  m_classify_diagnostic[option_index] = old_kind;
+	  m_classify_diagnostic[option_id.m_idx] = old_kind;
 	}
 
       for (i = m_n_classification_history - 1; i >= 0; i --)
-	if (m_classification_history[i].option == option_index)
+	if (m_classification_history[i].option == option_id.m_idx)
 	  {
 	    old_kind = m_classification_history[i].kind;
 	    break;
@@ -1053,12 +1048,12 @@ classify_diagnostic (const diagnostic_context *context,
 	(diagnostic_classification_change_t *) xrealloc (m_classification_history, (i + 1)
 							 * sizeof (diagnostic_classification_change_t));
       m_classification_history[i].location = where;
-      m_classification_history[i].option = option_index;
+      m_classification_history[i].option = option_id.m_idx;
       m_classification_history[i].kind = new_kind;
       m_n_classification_history ++;
     }
   else
-    m_classify_diagnostic[option_index] = new_kind;
+    m_classify_diagnostic[option_id.m_idx] = new_kind;
 
   return old_kind;
 }
@@ -1210,9 +1205,9 @@ update_effective_level_from_pragmas (diagnostic_info *diagnostic) const
 	      continue;
 	    }
 
-	  int option = hist.option;
+	  diagnostic_option_id option = hist.option;
 	  /* The option 0 is for all the diagnostics.  */
-	  if (option == 0 || option == diagnostic->option_index)
+	  if (option == 0 || option == diagnostic->option_id)
 	    {
 	      diagnostic_t kind = hist.kind;
 	      if (kind != DK_UNSPECIFIED)
@@ -1244,13 +1239,13 @@ diagnostic_context::diagnostic_enabled (diagnostic_info *diagnostic)
   get_any_inlining_info (diagnostic);
 
   /* Diagnostics with no option or -fpermissive are always enabled.  */
-  if (!diagnostic->option_index
-      || diagnostic->option_index == m_opt_permissive)
+  if (!diagnostic->option_id.m_idx
+      || diagnostic->option_id == m_opt_permissive)
     return true;
 
   /* This tests if the user provided the appropriate -Wfoo or
      -Wno-foo option.  */
-  if (!option_enabled_p (diagnostic->option_index))
+  if (!option_enabled_p (diagnostic->option_id))
     return false;
 
   /* This tests for #pragma diagnostic changes.  */
@@ -1260,10 +1255,10 @@ diagnostic_context::diagnostic_enabled (diagnostic_info *diagnostic)
   /* This tests if the user provided the appropriate -Werror=foo
      option.  */
   if (diag_class == DK_UNSPECIFIED
-      && !option_unspecified_p (diagnostic->option_index))
+      && !option_unspecified_p (diagnostic->option_id))
     {
       const diagnostic_t new_kind
-	= m_option_classifier.get_current_override (diagnostic->option_index);
+	= m_option_classifier.get_current_override (diagnostic->option_id);
       if (new_kind != DK_ANY)
 	/* DK_ANY means the diagnostic is not to be ignored, but we don't want
 	   to change it specifically to DK_ERROR or DK_WARNING; we want to
@@ -1279,17 +1274,18 @@ diagnostic_context::diagnostic_enabled (diagnostic_info *diagnostic)
   return true;
 }
 
-/* Returns whether warning OPT is enabled at LOC.  */
+/* Returns whether warning OPTION_ID is enabled at LOC.  */
 
 bool
-diagnostic_context::warning_enabled_at (location_t loc, int opt)
+diagnostic_context::warning_enabled_at (location_t loc,
+					diagnostic_option_id option_id)
 {
   if (!diagnostic_report_warnings_p (this, loc))
     return false;
 
   rich_location richloc (line_table, loc);
   diagnostic_info diagnostic = {};
-  diagnostic.option_index = opt;
+  diagnostic.option_id = option_id;
   diagnostic.richloc = &richloc;
   diagnostic.message.m_richloc = &richloc;
   diagnostic.kind = DK_WARNING;
@@ -1342,7 +1338,7 @@ diagnostic_context::report_diagnostic (diagnostic_info *diagnostic)
 	 through.  Don't do this more than once.  */
       if ((diagnostic->kind == DK_ICE || diagnostic->kind == DK_ICE_NOBT)
 	  && m_lock == 1)
-	pp_newline_and_flush (this->printer);
+	pp_newline_and_flush (m_printer);
       else
 	error_recursion ();
     }
@@ -1407,7 +1403,7 @@ diagnostic_context::report_diagnostic (diagnostic_info *diagnostic)
     m_output_format->on_begin_group ();
   m_diagnostic_groups.m_emission_count++;
 
-  pp_format (this->printer, &diagnostic->message, m_urlifier);
+  pp_format (m_printer, &diagnostic->message);
   /* Call vfunc in the output format.  This is responsible for
      phase 3 of formatting, and for printing the result.  */
   m_output_format->on_report_diagnostic (*diagnostic, orig_diag_kind);
@@ -1418,17 +1414,17 @@ diagnostic_context::report_diagnostic (diagnostic_info *diagnostic)
       break;
     case EXTRA_DIAGNOSTIC_OUTPUT_fixits_v1:
       print_parseable_fixits (get_file_cache (),
-			      this->printer, diagnostic->richloc,
+			      m_printer, diagnostic->richloc,
 			      DIAGNOSTICS_COLUMN_UNIT_BYTE,
 			      m_tabstop);
-      pp_flush (this->printer);
+      pp_flush (m_printer);
       break;
     case EXTRA_DIAGNOSTIC_OUTPUT_fixits_v2:
       print_parseable_fixits (get_file_cache (),
-			      this->printer, diagnostic->richloc,
+			      m_printer, diagnostic->richloc,
 			      DIAGNOSTICS_COLUMN_UNIT_DISPLAY,
 			      m_tabstop);
-      pp_flush (this->printer);
+      pp_flush (m_printer);
       break;
     }
   diagnostic_action_after_output (this, diagnostic->kind);
@@ -1513,15 +1509,16 @@ diagnostic_append_note (diagnostic_context *context,
       va_end (ap);
       return;
     }
-  char *saved_prefix = pp_take_prefix (context->printer);
-  pp_set_prefix (context->printer,
+  pretty_printer *pp = context->m_printer;
+  char *saved_prefix = pp_take_prefix (pp);
+  pp_set_prefix (pp,
                  diagnostic_build_prefix (context, &diagnostic));
-  pp_format (context->printer, &diagnostic.message);
-  pp_output_formatted_text (context->printer);
-  pp_destroy_prefix (context->printer);
-  pp_set_prefix (context->printer, saved_prefix);
-  pp_newline (context->printer);
-  diagnostic_show_locus (context, &richloc, DK_NOTE);
+  pp_format (pp, &diagnostic.message);
+  pp_output_formatted_text (pp);
+  pp_destroy_prefix (pp);
+  pp_set_prefix (pp, saved_prefix);
+  pp_newline (pp);
+  diagnostic_show_locus (context, &richloc, DK_NOTE, pp);
   va_end (ap);
 }
 
@@ -1531,7 +1528,8 @@ diagnostic_append_note (diagnostic_context *context,
 bool
 diagnostic_context::diagnostic_impl (rich_location *richloc,
 				     const diagnostic_metadata *metadata,
-				     int opt, const char *gmsgid,
+				     diagnostic_option_id option_id,
+				     const char *gmsgid,
 				     va_list *ap, diagnostic_t kind)
 {
   diagnostic_info diagnostic;
@@ -1539,13 +1537,13 @@ diagnostic_context::diagnostic_impl (rich_location *richloc,
     {
       diagnostic_set_info (&diagnostic, gmsgid, ap, richloc,
 			   m_permissive ? DK_WARNING : DK_ERROR);
-      diagnostic.option_index = (opt != -1 ? opt : m_opt_permissive);
+      diagnostic.option_id = (option_id.m_idx != -1 ? option_id : m_opt_permissive);
     }
   else
     {
       diagnostic_set_info (&diagnostic, gmsgid, ap, richloc, kind);
       if (kind == DK_WARNING || kind == DK_PEDWARN)
-	diagnostic.option_index = opt;
+	diagnostic.option_id = option_id;
     }
   diagnostic.metadata = metadata;
   return report_diagnostic (&diagnostic);
@@ -1556,7 +1554,8 @@ diagnostic_context::diagnostic_impl (rich_location *richloc,
 bool
 diagnostic_context::diagnostic_n_impl (rich_location *richloc,
 				       const diagnostic_metadata *metadata,
-				       int opt, unsigned HOST_WIDE_INT n,
+				       diagnostic_option_id option_id,
+				       unsigned HOST_WIDE_INT n,
 				       const char *singular_gmsgid,
 				       const char *plural_gmsgid,
 				       va_list *ap, diagnostic_t kind)
@@ -1575,7 +1574,7 @@ diagnostic_context::diagnostic_n_impl (rich_location *richloc,
   const char *text = ngettext (singular_gmsgid, plural_gmsgid, gtn);
   diagnostic_set_info_translated (&diagnostic, text, ap, richloc, kind);
   if (kind == DK_WARNING)
-    diagnostic.option_index = opt;
+    diagnostic.option_id = option_id;
   diagnostic.metadata = metadata;
   return report_diagnostic (&diagnostic);
 }
@@ -1602,7 +1601,7 @@ void
 diagnostic_context::error_recursion ()
 {
   if (m_lock < 3)
-    pp_newline_and_flush (this->printer);
+    pp_newline_and_flush (m_printer);
 
   fnotice (stderr,
 	   "internal compiler error: error reporting routines re-entered.\n");
@@ -1632,7 +1631,7 @@ fancy_abort (const char *file, int line, const char *function)
      initialized yet, or might be in use by another thread).
      Handle such cases as gracefully as possible by falling back to a
      minimal abort handler that only relies on i18n.  */
-  if (global_dc->printer == NULL)
+  if (global_dc->m_printer == nullptr)
     {
       /* Print the error message.  */
       fnotice (stderr, diagnostic_kind_text[DK_ICE]);

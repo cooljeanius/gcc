@@ -19,6 +19,7 @@ along with GCC; see the file COPYING3.  If not see
 <http://www.gnu.org/licenses/>.  */
 
 #include "config.h"
+#define INCLUDE_MEMORY
 #include "system.h"
 #include "coretypes.h"
 #include "backend.h"
@@ -4496,6 +4497,8 @@ extern bool gimple_unsigned_integer_sat_add (tree, tree*, tree (*)(tree));
 extern bool gimple_unsigned_integer_sat_sub (tree, tree*, tree (*)(tree));
 extern bool gimple_unsigned_integer_sat_trunc (tree, tree*, tree (*)(tree));
 
+extern bool gimple_signed_integer_sat_add (tree, tree*, tree (*)(tree));
+
 static gimple *
 vect_recog_build_binary_gimple_stmt (vec_info *vinfo, stmt_vec_info stmt_info,
 				     internal_fn fn, tree *type_out,
@@ -4556,8 +4559,12 @@ vect_recog_sat_add_pattern (vec_info *vinfo, stmt_vec_info stmt_vinfo,
   tree ops[2];
   tree lhs = gimple_assign_lhs (last_stmt);
 
-  if (gimple_unsigned_integer_sat_add (lhs, ops, NULL))
+  if (gimple_unsigned_integer_sat_add (lhs, ops, NULL)
+      || gimple_signed_integer_sat_add (lhs, ops, NULL))
     {
+      if (TREE_CODE (ops[1]) == INTEGER_CST)
+	ops[1] = fold_convert (TREE_TYPE (ops[0]), ops[1]);
+
       gimple *stmt = vect_recog_build_binary_gimple_stmt (vinfo, stmt_vinfo,
 							  IFN_SAT_ADD, type_out,
 							  lhs, ops[0], ops[1]);
@@ -6666,13 +6673,24 @@ vect_recog_cond_store_pattern (vec_info *vinfo,
   if (TREE_CODE (st_rhs) != SSA_NAME)
     return NULL;
 
-  gassign *cond_stmt = dyn_cast<gassign *> (SSA_NAME_DEF_STMT (st_rhs));
+  auto cond_vinfo = vinfo->lookup_def (st_rhs);
+
+  /* If the condition isn't part of the loop then bool recog wouldn't have seen
+     it and so this transformation may not be valid.  */
+  if (!cond_vinfo)
+    return NULL;
+
+  cond_vinfo = vect_stmt_to_vectorize (cond_vinfo);
+  gassign *cond_stmt = dyn_cast<gassign *> (STMT_VINFO_STMT (cond_vinfo));
   if (!cond_stmt || gimple_assign_rhs_code (cond_stmt) != COND_EXPR)
     return NULL;
 
   /* Check if the else value matches the original loaded one.  */
   bool invert = false;
   tree cmp_ls = gimple_arg (cond_stmt, 0);
+  if (TREE_CODE (cmp_ls) != SSA_NAME)
+    return NULL;
+
   tree cond_arg1 = gimple_arg (cond_stmt, 1);
   tree cond_arg2 = gimple_arg (cond_stmt, 2);
 

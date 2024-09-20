@@ -22,6 +22,7 @@
 
 #define INCLUDE_STRING
 #define INCLUDE_ALGORITHM
+#define INCLUDE_MEMORY
 #define INCLUDE_VECTOR
 #include "config.h"
 #include "system.h"
@@ -593,14 +594,10 @@ aarch64_lookup_shared_state_flags (tree attrs, const char *state_name)
 {
   for (tree attr = attrs; attr; attr = TREE_CHAIN (attr))
     {
-      if (!cxx11_attribute_p (attr))
+      if (!is_attribute_namespace_p ("arm", attr))
 	continue;
 
-      auto ns = IDENTIFIER_POINTER (TREE_PURPOSE (TREE_PURPOSE (attr)));
-      if (strcmp (ns, "arm") != 0)
-	continue;
-
-      auto attr_name = IDENTIFIER_POINTER (TREE_VALUE (TREE_PURPOSE (attr)));
+      auto attr_name = IDENTIFIER_POINTER (get_attribute_name (attr));
       auto flags = aarch64_attribute_shared_state_flags (attr_name);
       if (!flags)
 	continue;
@@ -16819,7 +16816,8 @@ aarch64_detect_vector_stmt_subtype (vec_info *vinfo, vect_cost_for_stmt kind,
       && STMT_VINFO_MEMORY_ACCESS_TYPE (stmt_info) == VMAT_GATHER_SCATTER)
     {
       unsigned int nunits = vect_nunits_for_cost (vectype);
-      if (GET_MODE_UNIT_BITSIZE (TYPE_MODE (vectype)) == 64)
+      /* Test for VNx2 modes, which have 64-bit containers.  */
+      if (known_eq (GET_MODE_NUNITS (TYPE_MODE (vectype)), aarch64_sve_vg))
 	return { sve_costs->gather_load_x64_cost, nunits };
       return { sve_costs->gather_load_x32_cost, nunits };
     }
@@ -17309,7 +17307,9 @@ aarch64_vector_costs::add_stmt_cost (int count, vect_cost_for_stmt kind,
 	  const sve_vec_cost *sve_costs = aarch64_tune_params.vec_costs->sve;
 	  if (sve_costs)
 	    {
-	      if (GET_MODE_UNIT_BITSIZE (TYPE_MODE (vectype)) == 64)
+	      /* Test for VNx2 modes, which have 64-bit containers.  */
+	      if (known_eq (GET_MODE_NUNITS (TYPE_MODE (vectype)),
+			    aarch64_sve_vg))
 		m_sve_gather_scatter_init_cost
 		  += sve_costs->gather_load_x64_init_cost;
 	      else
@@ -19000,9 +19000,9 @@ static char *
 aarch64_offload_options (void)
 {
   if (TARGET_ILP32)
-    return xstrdup ("-foffload-abi=ilp32");
+    return xstrdup ("-foffload-abi=ilp32 -foffload-abi-host-opts=-mabi=ilp32");
   else
-    return xstrdup ("-foffload-abi=lp64");
+    return xstrdup ("-foffload-abi=lp64 -foffload-abi-host-opts=-mabi=lp64");
 }
 
 static struct machine_function *
@@ -22987,7 +22987,8 @@ aarch64_simd_valid_immediate (rtx op, simd_immediate_info *info,
   if (CONST_VECTOR_P (op)
       && CONST_VECTOR_DUPLICATE_P (op))
     n_elts = CONST_VECTOR_NPATTERNS (op);
-  else if ((vec_flags & VEC_SVE_DATA)
+  else if (which == AARCH64_CHECK_MOV
+	   && TARGET_SVE
 	   && const_vec_series_p (op, &base, &step))
     {
       gcc_assert (GET_MODE_CLASS (mode) == MODE_VECTOR_INT);
@@ -25245,6 +25246,16 @@ aarch64_output_simd_mov_immediate (rtx const_vector, unsigned width,
 
   if (which == AARCH64_CHECK_MOV)
     {
+      if (info.insn == simd_immediate_info::INDEX)
+	{
+	  gcc_assert (TARGET_SVE);
+	  snprintf (templ, sizeof (templ), "index\t%%Z0.%c, #"
+		    HOST_WIDE_INT_PRINT_DEC ", #" HOST_WIDE_INT_PRINT_DEC,
+		    element_char, INTVAL (info.u.index.base),
+		    INTVAL (info.u.index.step));
+	  return templ;
+	}
+
       mnemonic = info.insn == simd_immediate_info::MVN ? "mvni" : "movi";
       shift_op = (info.u.mov.modifier == simd_immediate_info::MSL
 		  ? "msl" : "lsl");

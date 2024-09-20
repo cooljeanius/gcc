@@ -118,6 +118,36 @@ sat_u_add_imm_type_check##_##T##_fmt_2 (T x)                    \
 #define RUN_SAT_U_ADD_IMM_FMT_4(T, x, IMM, expect) \
   if (sat_u_add_imm##IMM##_##T##_fmt_4(x) != expect) __builtin_abort ()
 
+#define DEF_SAT_S_ADD_FMT_1(T, UT, MIN, MAX) \
+T __attribute__((noinline))                  \
+sat_s_add_##T##_fmt_1 (T x, T y)             \
+{                                            \
+  T sum = (UT)x + (UT)y;                     \
+  return (x ^ y) < 0                         \
+    ? sum                                    \
+    : (sum ^ x) >= 0                         \
+      ? sum                                  \
+      : x < 0 ? MIN : MAX;                   \
+}
+#define DEF_SAT_S_ADD_FMT_1_WRAP(T, UT, MIN, MAX) \
+  DEF_SAT_S_ADD_FMT_1(T, UT, MIN, MAX)
+
+#define DEF_SAT_S_ADD_FMT_2(T, UT, MIN, MAX) \
+T __attribute__((noinline))                  \
+sat_s_add_##T##_fmt_2 (T x, T y)             \
+{                                            \
+  T sum = (UT)x + (UT)y;                     \
+  if ((x ^ y) < 0 || (sum ^ x) >= 0)         \
+    return sum;                              \
+  return x < 0 ? MIN : MAX;                  \
+}
+
+#define RUN_SAT_S_ADD_FMT_1(T, x, y) sat_s_add_##T##_fmt_1(x, y)
+#define RUN_SAT_S_ADD_FMT_1_WRAP(T, x, y) RUN_SAT_S_ADD_FMT_1(T, x, y)
+
+#define RUN_SAT_S_ADD_FMT_2(T, x, y) sat_s_add_##T##_fmt_2(x, y)
+#define RUN_SAT_S_ADD_FMT_2_WRAP(T, x, y) RUN_SAT_S_ADD_FMT_2(T, x, y)
+
 /******************************************************************************/
 /* Saturation Sub (Unsigned and Signed)                                       */
 /******************************************************************************/
@@ -266,6 +296,34 @@ sat_u_sub_imm##IMM##_##T##_fmt_4 (T x)  \
   if (sat_u_sub_imm##IMM##_##T##_fmt_3(y) != expect) __builtin_abort ()
 #define RUN_SAT_U_SUB_IMM_FMT_4(T, x, IMM, expect) \
   if (sat_u_sub_imm##IMM##_##T##_fmt_4(x) != expect) __builtin_abort ()
+
+#define DEF_SAT_U_SUB_IMM_TYPE_CHECK_FMT_1(INDEX, T, IMM) \
+T __attribute__((noinline))                               \
+sat_u_sub_imm_type_check##_##INDEX##_##T##_fmt_1 (T y)    \
+{                                                         \
+  return IMM >= y ? IMM - y : 0;                          \
+}
+
+#define DEF_SAT_U_SUB_IMM_TYPE_CHECK_FMT_2(INDEX, T, IMM) \
+T __attribute__((noinline))                               \
+sat_u_sub_imm_type_check##_##INDEX##_##T##_fmt_2 (T y)    \
+{                                                         \
+  return IMM > y ? IMM - y : 0;                           \
+}
+
+#define DEF_SAT_U_SUB_IMM_TYPE_CHECK_FMT_3(INDEX, T, IMM) \
+T __attribute__((noinline))                               \
+sat_u_sub_imm_type_check##_##INDEX##_##T##_fmt_3 (T x)    \
+{                                                         \
+  return x >= IMM ? x - IMM : 0;                          \
+}
+
+#define DEF_SAT_U_SUB_IMM_TYPE_CHECK_FMT_4(INDEX, T, IMM) \
+T __attribute__((noinline))                               \
+sat_u_sub_imm_type_check##_##INDEX##_##T##_fmt_4 (T x)    \
+{                                                         \
+  return x > IMM ? x - IMM : 0;                           \
+}
 
 /******************************************************************************/
 /* Saturation Truncate (unsigned and signed)                                  */
