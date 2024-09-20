@@ -202,6 +202,10 @@ func Symbol(w http.ResponseWriter, r *http.Request) {
 		}
 		pc, _ := strconv.ParseUint(string(word), 0, 64)
 		if pc != 0 {
+			if pc > ^uint64(0)>>1 {
+				fmt.Fprintf(&buf, "address out of range: %v\n", pc)
+				continue
+			}
 			f := runtime.FuncForPC(uintptr(pc))
 			if f != nil {
 				fmt.Fprintf(&buf, "%#x %s\n", pc, f.Name())
