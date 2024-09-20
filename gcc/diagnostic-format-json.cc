@@ -229,7 +229,8 @@ void
 json_output_format::on_report_diagnostic (const diagnostic_info &diagnostic,
 					  diagnostic_t orig_diag_kind)
 {
-  pp_output_formatted_text (m_context.printer, m_context.get_urlifier ());
+  pretty_printer *const pp = get_printer ();
+  pp_output_formatted_text (pp, m_context.get_urlifier ());
 
   json::object *diag_obj = new json::object ();
 
@@ -248,10 +249,10 @@ json_output_format::on_report_diagnostic (const diagnostic_info &diagnostic,
   }
 
   // FIXME: encoding of the message (json::string requires UTF-8)
-  diag_obj->set_string ("message", pp_formatted_text (m_context.printer));
-  pp_clear_output_area (m_context.printer);
+  diag_obj->set_string ("message", pp_formatted_text (pp));
+  pp_clear_output_area (pp);
 
-  if (char *option_text = m_context.make_option_name (diagnostic.option_index,
+  if (char *option_text = m_context.make_option_name (diagnostic.option_id,
 						      orig_diag_kind,
 						      diagnostic.kind))
     {
@@ -259,7 +260,7 @@ json_output_format::on_report_diagnostic (const diagnostic_info &diagnostic,
       free (option_text);
     }
 
-  if (char *option_url = m_context.make_option_url (diagnostic.option_index))
+  if (char *option_url = m_context.make_option_url (diagnostic.option_id))
     {
       diag_obj->set_string ("option_url", option_url);
       free (option_url);
@@ -394,7 +395,7 @@ diagnostic_output_format_init_json (diagnostic_context &context)
   context.set_path_format (DPF_NONE);
 
   /* Don't colorize the text.  */
-  pp_show_color (context.printer) = false;
+  pp_show_color (context.m_printer) = false;
   context.set_show_highlight_colors (false);
 }
 

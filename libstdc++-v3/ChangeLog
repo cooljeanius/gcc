@@ -1,3 +1,284 @@
+2024-09-18  Jason Merrill  <jason@redhat.com>
+
+	* include/bits/basic_ios.h: Add braces.
+
+2024-09-16  Jonathan Wakely  <jwakely@redhat.com>
+
+	* .editorconfig: New file.
+	* include/std/.editorconfig: New file.
+
+2024-09-16  Gerald Pfeifer  <gerald@pfeifer.com>
+
+	* doc/xml/manual/intro.xml: Update link to installation docs.
+	* doc/html/manual/make.html: Regenerate.
+
+2024-09-15  Jonathan Wakely  <jwakely@redhat.com>
+
+	* include/std/span (span::__iter_tag): Declare nested type.
+	(span::iterator): Use __iter_tag as second template argument.
+	* include/std/stacktrace (basic_stacktrace::iterator): Use _Impl
+	as second template argument.
+
+2024-09-15  Jonathan Wakely  <jwakely@redhat.com>
+
+	* doc/xml/manual/using.xml (_GLIBCXX_NO_FREESTANDING_CHRONO):
+	Document macro.
+	* doc/html/*: Regenerate.
+	* include/bits/chrono.h [_GLIBCXX_NO_FREESTANDING_CHRONO]:
+	Only include <bits/require_hosted.h> when this macro is defined.
+	[_GLIBCXX_HOSTED]: Only define clocks for hosted.
+	* include/bits/version.def (chrono_udls): Remove hosted=yes.
+	* include/bits/version.h: Regenerate.
+	* include/std/chrono [_GLIBCXX_HOSTED]: Only define clocks and
+	time zone utilities for hosted.
+	* testsuite/std/time/freestanding.cc: New test.
+
+2024-09-15  Jonathan Wakely  <jwakely@redhat.com>
+
+	* include/bits/locale_classes.h (__is_facet): New helper.
+	* include/bits/locale_classes.tcc (locale::combine): Check that
+	_Facet type is valid.
+
+2024-09-15  Jonathan Wakely  <jwakely@redhat.com>
+
+	PR libstdc++/110512
+	* include/pstl/execution_impl.h (__are_random_access_iterators):
+	Recognize C++20 random access iterators, and use more efficient
+	implementations.
+	* testsuite/25_algorithms/pstl/110512.cc: New test.
+
+2024-09-14  Jonathan Wakely  <jwakely@redhat.com>
+
+	* include/std/format (__formatter_fp::_M_localize): Add comments
+	and micro-optimize string copy.
+
+2024-09-14  Jonathan Wakely  <jwakely@redhat.com>
+
+	* include/bits/semaphore_base.h (__platform_semaphore): Refactor
+	loops to all use similar forms.
+	(__platform_semaphore::_M_try_acquire_until): Use chrono::ceil
+	to explicitly convert to __clock_t::time_point.
+	* testsuite/30_threads/semaphore/try_acquire_for.cc: Check that
+	using a very high resolution timeout compiles.
+	* testsuite/30_threads/semaphore/platform_try_acquire_for.cc:
+	New test.
+
+2024-09-13  Giuseppe D'Angelo  <giuseppe.dangelo@kdab.com>
+
+	PR libstdc++/108846
+	PR libstdc++/116471
+	* include/bits/ranges_algobase.h (__assign_one): New helper
+	function.
+	(__copy_or_move): Remove a spurious static_assert; use
+	__assign_one for memcpyable ranges of length 1.
+	(__copy_or_move_backward): Likewise.
+	* testsuite/25_algorithms/copy/108846.cc: Extend to range-based
+	algorithms, and cover both memcpyable and non-memcpyable
+	cases.
+	* testsuite/25_algorithms/copy_backward/108846.cc: Likewise.
+	* testsuite/25_algorithms/copy_n/108846.cc: Likewise.
+	* testsuite/25_algorithms/move/108846.cc: Likewise.
+	* testsuite/25_algorithms/move_backward/108846.cc: Likewise.
+
+2024-09-12  Jonathan Wakely  <jwakely@redhat.com>
+
+	* include/std/optional (__is_bool): Remove.
+
+2024-09-12  Jonathan Wakely  <jwakely@redhat.com>
+
+	* libsupc++/new (launder): Add static_assert and remove deleted
+	overloads.
+	* testsuite/18_support/launder/requirements_neg.cc: Adjust
+	expected diagnostics.
+
+2024-09-11  Alex Coplan  <alex.coplan@arm.com>
+
+	PR libstdc++/116140
+	* include/bits/stl_algobase.h (std::__find_if): Add #pragma to
+	request GCC to unroll the loop.
+
+2024-09-10  Jonathan Wakely  <jwakely@redhat.com>
+
+	PR libstdc++/116159
+	* include/std/iostream (ios_base_library_init): Only define for
+	ELF targets.
+	* src/c++98/ios_init.cc (ios_base_library_init): Likewise.
+
+2024-09-10  Jonathan Wakely  <jwakely@redhat.com>
+
+	PR libstdc++/116641
+	* include/bits/basic_string.h (operator=(basic_string&&)): Call
+	_M_assign instead of assign.
+	* testsuite/21_strings/basic_string/allocator/116641.cc: New
+	test.
+
+2024-09-10  Jonathan Wakely  <jwakely@redhat.com>
+
+	* testsuite/18_support/new_nothrow.cc (THROW_BAD_ALLOC): Define
+	macro to add exception specifications for C++98 mode.
+	(NOEXCEPT): Expand to throw() for C++98 mode.
+	* testsuite/26_numerics/headers/numeric/synopsis.cc (gcd, lcm):
+	Add noexcept.
+
+2024-09-06  Jonathan Wakely  <jwakely@redhat.com>
+
+	* include/bits/chrono_io.h (from_stream): Fix conversions in
+	overloads for gps_time and tai_time.
+	* testsuite/std/time/clock/file/io.cc: Test round tripping using
+	chrono::parse. Add additional std::format tests.
+	* testsuite/std/time/clock/gps/io.cc: Likewise.
+	* testsuite/std/time/clock/local/io.cc: Likewise.
+	* testsuite/std/time/clock/tai/io.cc: Likewise.
+	* testsuite/std/time/clock/utc/io.cc: Likewise.
+
+2024-09-06  Jason Merrill  <jason@redhat.com>
+
+	* include/bits/regex_constants.h: Add __ to attribute.
+
+2024-09-06  Jason Merrill  <jason@redhat.com>
+
+	* include/bits/c++config: Avoid redefining __GLIBCXX__.
+
+2024-09-06  Jason Merrill  <jason@redhat.com>
+
+	PR c++/46457
+	PR c++/81665
+	* include/bits/regex_constants.h: Use flag_enum.
+
+2024-09-06  Jason Merrill  <jason@redhat.com>
+
+	* include/bits/ios_base.h (_GLIBCXX_NOREPLACE_UNUSED): New.
+	(_Ios_Openmode): Add unused attributes.
+	* testsuite/27_io/ios_base/types/openmode/case_label.cc: Handle
+	noreplace.
+
+2024-09-03  Jonathan Wakely  <jwakely@redhat.com>
+
+	* src/c++17/fs_ops.cc (auto_win_file_handle): Add error_code&
+	member and set it if CreateFileW or GetFileInformationByHandle
+	fails.
+	(fs::equiv_files) [_GLIBCXX_FILESYSTEM_IS_WINDOWS]: Simplify
+	control flow.
+	(fs::hard_link_count) [_GLIBCXX_FILESYSTEM_IS_WINDOWS]: Clear ec
+	on success.
+	* testsuite/27_io/filesystem/operations/hard_link_count.cc:
+	Check error handling.
+
+2024-09-03  Jonathan Wakely  <jwakely@redhat.com>
+
+	PR libstdc++/116549
+	* include/bits/stl_iterator.h (disable_sized_sentinel_for):
+	Define specialization for two move_iterator types, as per LWG
+	3736.
+	* testsuite/24_iterators/move_iterator/lwg3736.cc: New test.
+
+2024-09-03  Jonathan Wakely  <jwakely@redhat.com>
+
+	* include/experimental/any (experimental::any::_Storage): Use
+	array of unsigned char instead of deprecated
+	std::aligned_storage.
+	* include/std/any (any::_Storage): Likewise.
+	* testsuite/20_util/any/layout.cc: New test.
+
+2024-09-03  Dhruv Chawla  <dhruvc@nvidia.com>
+
+	* include/std/deque: Define macro
+	__glibcxx_want_allocator_traits_is_always_equal.
+	* include/std/forward_list: Likewise.
+	* include/std/list: Likewise.
+	* include/std/map: Likewise.
+	* include/std/scoped_allocator: Likewise.
+	* include/std/set: Likewise.
+	* include/std/string: Likewise.
+	* include/std/unordered_map: Likewise.
+	* include/std/unordered_set: Likewise.
+	* include/std/vector: Likewise.
+	* testsuite/20_util/headers/memory/version.cc: New test.
+	* testsuite/20_util/scoped_allocator/version.cc: Likewise.
+	* testsuite/21_strings/headers/string/version.cc: Likewise.
+	* testsuite/23_containers/deque/version.cc: Likewise.
+	* testsuite/23_containers/forward_list/version.cc: Likewise.
+	* testsuite/23_containers/list/version.cc: Likewise.
+	* testsuite/23_containers/map/version.cc: Likewise.
+	* testsuite/23_containers/set/version.cc: Likewise.
+	* testsuite/23_containers/unordered_map/version.cc: Likewise.
+	* testsuite/23_containers/unordered_set/version.cc: Likewise.
+	* testsuite/23_containers/vector/version.cc: Likewise.
+
+2024-09-02  Alexandre Oliva  <oliva@adacore.com>
+
+	* testsuite/30_threads/future/members/poll.cc: Factor out
+	calibration, and run it unconditionally.  Lower its
+	strictness.  Bump wait_until_*'s slowness factor.
+
+2024-09-02  Alexandre Oliva  <oliva@adacore.com>
+
+	PR libstdc++/91486
+	* testsuite/30_threads/async/async.cc
+	(test_pr91486_wait_for): Mark status as unused.
+	(test_pr91486_wait_until): Likewise.  Initialize epoch later.
+
+2024-09-02  Andreas Schwab  <schwab@suse.de>
+
+	PR libstdc++/116513
+	* libsupc++/compare (_S_fp_bits) [__fmt == _M68k_80bit]: Shift
+	padding out of exponent word.
+
+2024-08-28  Jonathan Wakely  <jwakely@redhat.com>
+
+	* configure.ac: Fix check for O_NONBLOCK.
+	* config.h.in: Regenerate.
+	* configure: Regenerate.
+
+2024-08-28  Jonathan Wakely  <jwakely@redhat.com>
+
+	* include/experimental/io_context: Remove name of unused
+	parameter.
+	* include/experimental/socket: Add [[maybe_unused]] attribute.
+
+2024-08-28  Jonathan Wakely  <jwakely@redhat.com>
+
+	* include/std/format (format_parse_context::check_dynamic_spec):
+	Add [[maybe_unused]] attribute and comment.
+
+2024-08-28  Jonathan Wakely  <jwakely@redhat.com>
+
+	* include/std/ranges (to): Remove unused typedef.
+
+2024-08-28  Kim Gräsman  <kim.grasman@gmail.com>
+
+	* config/cpu/aarch64/opt/ext/opt_random.h: Improve doxygen file
+	docs.
+	* config/cpu/i486/opt/ext/opt_random.h: Likewise.
+
+2024-08-28  Kim Gräsman  <kim.grasman@gmail.com>
+
+	* include/bits/cpp_type_traits.h: Improve doxygen file docs.
+
+2024-08-28  Jason Merrill  <jason@redhat.com>
+
+	* include/std/istream: Add cast to avoid -Wsign-compare.
+	* include/std/stacktrace: Likewise.
+
+2024-08-28  Jason Merrill  <jason@redhat.com>
+
+	* testsuite/20_util/default_delete/void_neg.cc: Fix regexp quoting.
+
+2024-08-28  Jason Merrill  <jason@redhat.com>
+
+	* include/std/coroutine (coroutine_handle): Use nullptr instead of
+	0 as initializer for _M_fr_ptr.
+
+2024-08-28  Jason Merrill  <jason@redhat.com>
+
+	* include/bits/stl_uninitialized.h (__uninitialized_move_copy): Add
+	missing return.
+
+2024-08-28  Jason Merrill  <jason@redhat.com>
+
+	* include/decimal/decimal.h (_DEFINE_DECIMAL_BINARY_OP_WITH_INT):
+	Remove redundant semicolons.
+
 2024-08-27  Jonathan Wakely  <jwakely@redhat.com>
 
 	PR libstdc++/115098
