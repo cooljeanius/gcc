@@ -182,6 +182,9 @@ func (m *mutator) mutateUInt(v, maxValue uint64) uint64 {
 			if max > uint64(math.MaxInt) {
 				max = uint64(math.MaxInt)
 			}
+			if max > uint64(math.MaxInt) {
+				max = uint64(math.MaxInt)
+			}
 			v += uint64(1 + m.rand(int(max)))
 			return v
 		case 1:
@@ -195,6 +198,9 @@ func (m *mutator) mutateUInt(v, maxValue uint64) uint64 {
 			}
 			if max > math.MaxInt32 {
 				max = math.MaxInt32
+			}
+			if max > uint64(math.MaxInt) {
+				max = uint64(math.MaxInt)
 			}
 			if max > uint64(math.MaxInt) {
 				max = uint64(math.MaxInt)
