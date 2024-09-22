@@ -7,6 +7,7 @@ package norm
 import (
 	"fmt"
 	"unicode/utf8"
+	"math"
 )
 
 // MaxSegmentSize is the maximum size of a byte buffer needed to consider any
@@ -78,9 +79,12 @@ func (i *Iter) Seek(offset int64, whence int) (int64, error) {
 	if abs < 0 {
 		return 0, fmt.Errorf("norm: negative position")
 	}
-	if int(abs) >= i.rb.nsrc {
+	if abs >= int64(i.rb.nsrc) {
 		i.setDone()
 		return int64(i.p), nil
+	}
+	if abs > math.MaxInt {
+		return 0, fmt.Errorf("norm: position exceeds maximum int value")
 	}
 	i.p = int(abs)
 	i.multiSeg = nil
