@@ -776,7 +776,7 @@ func Unzip(dir string, m module.Version, zipFile string) (err error) {
 	}
 	for _, zf := range z.File {
 		name := zf.Name[len(prefix):]
-		if name == "" || strings.HasSuffix(name, "/") {
+		if name == "" || strings.HasSuffix(name, "/") || strings.Contains(name, "..") {
 			continue
 		}
 		dst := filepath.Join(dir, name)
