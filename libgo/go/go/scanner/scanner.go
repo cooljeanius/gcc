@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"unicode"
 	"unicode/utf8"
+	"math"
 )
 
 // An ErrorHandler may be provided to Scanner.Init. If a syntax error is
@@ -296,8 +297,11 @@ func trailingDigits(text []byte) (int, int, bool) {
 		return 0, 0, false // no ":"
 	}
 	// i >= 0
-	n, err := strconv.ParseUint(string(text[i+1:]), 10, 0)
-	return i + 1, int(n), err == nil
+	n, err := strconv.ParseUint(string(text[i+1:]), 10, 32)
+	if err != nil || n > math.MaxInt32 {
+		return 0, 0, false
+	}
+	return i + 1, int(n), true
 }
 
 func (s *Scanner) findLineEnd() bool {
