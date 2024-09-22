@@ -319,7 +319,13 @@ func parseInt(val, typ string) (any, error) {
 		// fit in a regular int. (The test case is still “interesting”, even if the
 		// specific values of its inputs are platform-dependent.)
 		i, err := strconv.ParseInt(val, 0, 64)
-		return int(i), err
+		if err != nil {
+			return 0, err
+		}
+		if i < math.MinInt || i > math.MaxInt {
+			return 0, fmt.Errorf("value %d overflows int", i)
+		}
+		return int(i), nil
 	case "int8":
 		i, err := strconv.ParseInt(val, 0, 8)
 		return int8(i), err
