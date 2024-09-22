@@ -996,6 +996,7 @@ func (s *ss) scanOne(verb rune, arg any) {
 		i := s.scanUint(verb, uintptrBits)
 		if i > math.MaxUintptr {
 			s.errorString("unsigned integer overflow on token " + strconv.FormatUint(i, 10))
+			return
 		}
 		*v = uintptr(i)
 	// Floats are tricky because you want to scan in the precision of the result, not
