@@ -1003,6 +1003,10 @@ func (s *ss) scanOne(verb rune, arg any) {
 			val := s.scanUint(verb, uintptrBits)
 			if (uintptrBits == 32 && val > math.MaxUint32) || (uintptrBits == 64 && val > math.MaxUint64) {
 				s.errorString("unsigned integer overflow on token " + strconv.FormatUint(val, 10))
+			} else if uintptrBits == 32 && val > math.MaxUint32 {
+				s.errorString("unsigned integer overflow on token " + strconv.FormatUint(val, 10))
+			} else if uintptrBits == 64 && val > math.MaxUint64 {
+				s.errorString("unsigned integer overflow on token " + strconv.FormatUint(val, 10))
 			}
 			*v = uintptr(val)
 		}
