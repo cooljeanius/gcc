@@ -983,7 +983,13 @@ func (s *ss) scanOne(verb rune, arg any) {
 	case *int64:
 		*v = s.scanInt(verb, 64)
 	case *uint:
-		*v = uint(s.scanUint(verb, intBits))
+		{
+			val := s.scanUint(verb, intBits)
+			if val > math.MaxUint {
+				s.errorString("unsigned integer overflow on token " + strconv.FormatUint(val, 10))
+			}
+			*v = uint(val)
+		}
 	case *uint8:
 		{
 			val := s.scanUint(verb, 8)
