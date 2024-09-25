@@ -117,8 +117,13 @@ jobs:
           if test -x "$(which nproc)"; then \
             echo "nproc says that we can use $(nproc) build jobs"; \
           else echo "error: missing nproc!" >&2 && exit 1; fi
-          time (make -j"$(nproc)" | tee build.log)
-          if test -e build.log; then stat build.log && wc -l build.log; fi
+          time (make -S -j"$(nproc)" | tee build.log) || (echo "error: failure!" >&2 && exit 1)
+          if test -r build.log && test -s build.log; then \
+            sync && stat build.log && wc -l build.log && du build.log; \
+          elif test -e build.log; then \
+            stat build.log || wc -l build.log || du build.log; \
+          else (ls ./*.log >&2 || (echo "error: no logfiles found!" && exit 1)); fi
+          sync && echo "Done with main build step." && sync
 
       - name: Debug failure
         if: failure()
