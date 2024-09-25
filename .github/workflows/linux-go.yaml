@@ -117,10 +117,11 @@ jobs:
           if test -x "$(which nproc)"; then \
             echo "nproc says that we can use $(nproc) build jobs"; \
           else echo "error: missing nproc!" >&2 && exit 1; fi
-          time (make -S --warn-undefined-variables -j"$(nproc)" | tee build.log) || exit 1
+          time (make -S -j"$(nproc)" | tee build.log) || exit 1
           if test -r build.log && test -s build.log; then \
             sync && stat build.log && wc -l build.log && du build.log; \
           else ls ./*.log >&2; fi
+          sync && echo "Done with main build step." && sync
 
       - name: Debug failure
         if: failure()
