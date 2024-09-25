@@ -1029,7 +1029,11 @@ func (s *ss) scanOne(verb rune, arg any) {
 	case *uint64:
 		*v = s.scanUint(verb, 64)
 	case *uintptr:
-		*v = uintptr(s.scanUint(verb, uintptrBits))
+		val := s.scanUint(verb, uintptrBits)
+		if val > (1<<uintptrBits - 1) {
+			s.errorString("unsigned integer overflow on token " + strconv.FormatUint(val, 10))
+		}
+		*v = uintptr(val)
 	// Floats are tricky because you want to scan in the precision of the result, not
 	// scan in high precision and convert, in order to preserve the correct error condition.
 	case *float32:
