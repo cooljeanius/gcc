@@ -1711,11 +1711,11 @@ vect_truncate_gather_scatter_offset (stmt_vec_info stmt_info,
     count = max_iters.to_shwi ();
 
   /* Try scales of 1 and the element size.  */
-  int scales[] = { 1, vect_get_scalar_dr_size (dr_info) };
+  unsigned int scales[] = { 1, vect_get_scalar_dr_size (dr_info) };
   wi::overflow_type overflow = wi::OVF_NONE;
   for (int i = 0; i < 2; ++i)
     {
-      int scale = scales[i];
+      unsigned int scale = scales[i];
       widest_int factor;
       if (!wi::multiple_of_p (wi::to_widest (step), scale, SIGNED, &factor))
 	continue;
@@ -2190,11 +2190,23 @@ get_group_load_store_type (vec_info *vinfo, stmt_vec_info stmt_info,
 	      && single_element_p
 	      && maybe_gt (group_size, TYPE_VECTOR_SUBPARTS (vectype)))
 	    {
-	      if (dump_enabled_p ())
-		dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location,
-				 "single-element interleaving not supported "
-				 "for not adjacent vector loads\n");
-	      return false;
+	      if (SLP_TREE_LANES (slp_node) == 1)
+		{
+		  *memory_access_type = VMAT_ELEMENTWISE;
+		  if (dump_enabled_p ())
+		    dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location,
+				     "single-element interleaving not supported "
+				     "for not adjacent vector loads, using "
+				     "elementwise access\n");
+		}
+	      else
+		{
+		  if (dump_enabled_p ())
+		    dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location,
+				     "single-element interleaving not supported "
+				     "for not adjacent vector loads\n");
+		  return false;
+		}
 	    }
 	}
     }
@@ -6527,7 +6539,8 @@ vectorizable_operation (vec_info *vinfo,
   poly_uint64 nunits_in;
   poly_uint64 nunits_out;
   tree vectype_out;
-  int ncopies, vec_num;
+  unsigned int ncopies;
+  int vec_num;
   int i;
   vec<tree> vec_oprnds0 = vNULL;
   vec<tree> vec_oprnds1 = vNULL;
@@ -10039,7 +10052,23 @@ vectorizable_load (vec_info *vinfo,
   else
     group_size = 1;
 
-  if (slp && SLP_TREE_LOAD_PERMUTATION (slp_node).exists ())
+  vect_memory_access_type memory_access_type;
+  enum dr_alignment_support alignment_support_scheme;
+  int misalignment;
+  poly_int64 poffset;
+  internal_fn lanes_ifn;
+  if (!get_load_store_type (vinfo, stmt_info, vectype, slp_node, mask, VLS_LOAD,
+			    ncopies, &memory_access_type, &poffset,
+			    &alignment_support_scheme, &misalignment, &gs_info,
+			    &lanes_ifn))
+    return false;
+
+  /* ???  The following checks should really be part of
+     get_group_load_store_type.  */
+  if (slp
+      && SLP_TREE_LOAD_PERMUTATION (slp_node).exists ()
+      && !(memory_access_type == VMAT_ELEMENTWISE
+	   && SLP_TREE_LANES (slp_node) == 1))
     {
       slp_perm = true;
 
@@ -10078,17 +10107,6 @@ vectorizable_load (vec_info *vinfo,
 	  return false;
 	}
     }
-
-  vect_memory_access_type memory_access_type;
-  enum dr_alignment_support alignment_support_scheme;
-  int misalignment;
-  poly_int64 poffset;
-  internal_fn lanes_ifn;
-  if (!get_load_store_type (vinfo, stmt_info, vectype, slp_node, mask, VLS_LOAD,
-			    ncopies, &memory_access_type, &poffset,
-			    &alignment_support_scheme, &misalignment, &gs_info,
-			    &lanes_ifn))
-    return false;
 
   if (slp_node
       && slp_node->ldst_lanes
@@ -10292,7 +10310,8 @@ vectorizable_load (vec_info *vinfo,
 	  first_dr_info = dr_info;
 	}
 
-      if (slp && grouped_load)
+      if (slp && grouped_load
+	  && memory_access_type == VMAT_STRIDED_SLP)
 	{
 	  group_size = DR_GROUP_SIZE (first_stmt_info);
 	  ref_type = get_group_alias_ptr_type (first_stmt_info);
@@ -12729,11 +12748,7 @@ vectorizable_comparison_1 (vec_info *vinfo, tree vectype,
   /* Invariant comparison.  */
   if (!vectype)
     {
-      if (VECT_SCALAR_BOOLEAN_TYPE_P (TREE_TYPE (rhs1)))
-	vectype = mask_type;
-      else
-	vectype = get_vectype_for_scalar_type (vinfo, TREE_TYPE (rhs1),
-					       slp_node);
+      vectype = get_vectype_for_scalar_type (vinfo, TREE_TYPE (rhs1), slp_node);
       if (!vectype || maybe_ne (TYPE_VECTOR_SUBPARTS (vectype), nunits))
 	return false;
     }
@@ -13280,6 +13295,12 @@ vect_analyze_stmt (vec_info *vinfo,
           if (dump_enabled_p ())
             dump_printf_loc (MSG_NOTE, vect_location, "irrelevant.\n");
 
+	  if (node)
+	    return opt_result::failure_at (stmt_info->stmt,
+					   "not vectorized:"
+					   " irrelevant stmt as SLP node %p "
+					   "representative.\n",
+					   (void *)node);
           return opt_result::success ();
         }
     }
