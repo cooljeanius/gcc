@@ -658,11 +658,20 @@ func (s *ss) scanInt(verb rune, bitSize int) int64 {
 	if err != nil {
 		s.error(err)
 	}
-	if bitSize == 32 {
+	switch bitSize {
+	case 8:
+		if i < math.MinInt8 || i > math.MaxInt8 {
+			s.errorString("integer overflow on token " + tok)
+		}
+	case 16:
+		if i < math.MinInt16 || i > math.MaxInt16 {
+			s.errorString("integer overflow on token " + tok)
+		}
+	case 32:
 		if i < math.MinInt32 || i > math.MaxInt32 {
 			s.errorString("integer overflow on token " + tok)
 		}
-	} else {
+	default:
 		n := uint(bitSize)
 		x := (i << (64 - n)) >> (64 - n)
 		if x != i {
@@ -694,11 +703,20 @@ func (s *ss) scanUint(verb rune, bitSize int) uint64 {
 	if err != nil {
 		s.error(err)
 	}
-	if bitSize == 32 {
+	switch bitSize {
+	case 8:
+		if i > math.MaxUint8 {
+			s.errorString("unsigned integer overflow on token " + tok)
+		}
+	case 16:
+		if i > math.MaxUint16 {
+			s.errorString("unsigned integer overflow on token " + tok)
+		}
+	case 32:
 		if i > math.MaxUint32 {
 			s.errorString("unsigned integer overflow on token " + tok)
 		}
-	} else {
+	default:
 		n := uint(bitSize)
 		x := (i << (64 - n)) >> (64 - n)
 		if x != i {
