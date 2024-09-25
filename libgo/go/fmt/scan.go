@@ -698,6 +698,10 @@ func (s *ss) scanUint(verb rune, bitSize int) uint64 {
 		if i > math.MaxUint32 {
 			s.errorString("unsigned integer overflow on token " + tok)
 		}
+	} else if bitSize == uintptrBits {
+		if i > (1<<uintptrBits - 1) {
+			s.errorString("unsigned integer overflow on token " + tok)
+		}
 	} else {
 		n := uint(bitSize)
 		x := (i << (64 - n)) >> (64 - n)
