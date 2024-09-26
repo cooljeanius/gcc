@@ -120,6 +120,7 @@ jobs:
           time (make -S -j"$(nproc)" | tee build.log) || (echo "error: failure!" >&2 && exit 1)
           if test -r build.log && test -s build.log; then \
             sync && stat build.log && wc -l build.log && du build.log; \
+            test -z "$(grep "error:" build.log)" || (echo "error: error found in build.log!" >&2 && exit 1)
           elif test -e build.log; then \
             stat build.log || wc -l build.log || du build.log; \
           else (ls ./*.log >&2 || (echo "error: no logfiles found!" && exit 1)); fi
