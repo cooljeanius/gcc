@@ -120,7 +120,7 @@ jobs:
           time (make -S -j"$(nproc)" | tee build.log) || (echo "error: failure!" >&2 && exit 1)
           if test -r build.log && test -s build.log; then \
             sync && stat build.log && wc -l build.log && du build.log; \
-            if test -z "$(grep "error:" build.log)"; then \
+            if test -z "$(grep -i "error:" build.log)" && test -z "$(grep "Error [12]" build.log); then \
               sync && echo "no errors found in build.log; ok"; \
             else \
               echo "error: error found in build.log!" >&2 && exit 1; \
