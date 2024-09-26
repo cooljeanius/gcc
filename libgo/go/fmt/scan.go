@@ -658,10 +658,25 @@ func (s *ss) scanInt(verb rune, bitSize int) int64 {
 	if err != nil {
 		s.error(err)
 	}
-	n := uint(bitSize)
-	x := (i << (64 - n)) >> (64 - n)
-	if x != i {
-		s.errorString("integer overflow on token " + tok)
+	switch bitSize {
+	case 8:
+		if i < math.MinInt8 || i > math.MaxInt8 {
+			s.errorString("integer overflow on token " + tok)
+		}
+	case 16:
+		if i < math.MinInt16 || i > math.MaxInt16 {
+			s.errorString("integer overflow on token " + tok)
+		}
+	case 32:
+		if i < math.MinInt32 || i > math.MaxInt32 {
+			s.errorString("integer overflow on token " + tok)
+		}
+	default:
+		n := uint(bitSize)
+		x := (i << (64 - n)) >> (64 - n)
+		if x != i {
+			s.errorString("integer overflow on token " + tok)
+		}
 	}
 	return i
 }
@@ -688,10 +703,25 @@ func (s *ss) scanUint(verb rune, bitSize int) uint64 {
 	if err != nil {
 		s.error(err)
 	}
-	n := uint(bitSize)
-	x := (i << (64 - n)) >> (64 - n)
-	if x != i {
-		s.errorString("unsigned integer overflow on token " + tok)
+	switch bitSize {
+	case 8:
+		if i > math.MaxUint8 {
+			s.errorString("unsigned integer overflow on token " + tok)
+		}
+	case 16:
+		if i > math.MaxUint16 {
+			s.errorString("unsigned integer overflow on token " + tok)
+		}
+	case 32:
+		if i > math.MaxUint32 {
+			s.errorString("unsigned integer overflow on token " + tok)
+		}
+	default:
+		n := uint(bitSize)
+		x := (i << (64 - n)) >> (64 - n)
+		if x != i {
+			s.errorString("unsigned integer overflow on token " + tok)
+		}
 	}
 	return i
 }
@@ -983,13 +1013,37 @@ func (s *ss) scanOne(verb rune, arg any) {
 	case *int64:
 		*v = s.scanInt(verb, 64)
 	case *uint:
-		*v = uint(s.scanUint(verb, intBits))
+		{
+			val := s.scanUint(verb, intBits)
+			if val > math.MaxUint {
+				s.errorString("unsigned integer overflow on token " + strconv.FormatUint(val, 10))
+			}
+			*v = uint(val)
+		}
 	case *uint8:
-		*v = uint8(s.scanUint(verb, 8))
+		{
+			val := s.scanUint(verb, 8)
+			if val > math.MaxUint8 {
+				s.errorString("unsigned integer overflow on token " + strconv.FormatUint(val, 10))
+			}
+			*v = uint8(val)
+		}
 	case *uint16:
-		*v = uint16(s.scanUint(verb, 16))
+		{
+			val := s.scanUint(verb, 16)
+			if val > math.MaxUint16 {
+				s.errorString("unsigned integer overflow on token " + strconv.FormatUint(val, 10))
+			}
+			*v = uint16(val)
+		}
 	case *uint32:
-		*v = uint32(s.scanUint(verb, 32))
+		{
+			val := s.scanUint(verb, 32)
+			if val > math.MaxUint32 {
+				s.errorString("unsigned integer overflow on token " + strconv.FormatUint(val, 10))
+			}
+			*v = uint32(val)
+		}
 	case *uint64:
 		*v = s.scanUint(verb, 64)
 	case *uintptr:

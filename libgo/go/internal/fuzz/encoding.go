@@ -319,7 +319,13 @@ func parseInt(val, typ string) (any, error) {
 		// fit in a regular int. (The test case is still “interesting”, even if the
 		// specific values of its inputs are platform-dependent.)
 		i, err := strconv.ParseInt(val, 0, 64)
-		return int(i), err
+		if err != nil {
+			return 0, err
+		}
+		if i < math.MinInt || i > math.MaxInt {
+			return 0, fmt.Errorf("value %d overflows int", i)
+		}
+		return int(i), nil
 	case "int8":
 		i, err := strconv.ParseInt(val, 0, 8)
 		return int8(i), err
@@ -341,16 +347,40 @@ func parseUint(val, typ string) (any, error) {
 	switch typ {
 	case "uint":
 		i, err := strconv.ParseUint(val, 0, 64)
-		return uint(i), err
+		if err != nil {
+			return 0, err
+		}
+		if i > math.MaxUint {
+			return 0, fmt.Errorf("value %d overflows uint", i)
+		}
+		return uint(i), nil
 	case "uint8", "byte":
 		i, err := strconv.ParseUint(val, 0, 8)
-		return uint8(i), err
+		if err != nil {
+			return 0, err
+		}
+		if i > math.MaxUint8 {
+			return 0, fmt.Errorf("value %d overflows uint8", i)
+		}
+		return uint8(i), nil
 	case "uint16":
 		i, err := strconv.ParseUint(val, 0, 16)
-		return uint16(i), err
+		if err != nil {
+			return 0, err
+		}
+		if i > math.MaxUint16 {
+			return 0, fmt.Errorf("value %d overflows uint16", i)
+		}
+		return uint16(i), nil
 	case "uint32":
 		i, err := strconv.ParseUint(val, 0, 32)
-		return uint32(i), err
+		if err != nil {
+			return 0, err
+		}
+		if i > math.MaxUint32 {
+			return 0, fmt.Errorf("value %d overflows uint32", i)
+		}
+		return uint32(i), nil
 	case "uint64":
 		return strconv.ParseUint(val, 0, 64)
 	default:

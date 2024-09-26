@@ -1,5 +1,5 @@
 ---
-name: Linux
+name: Linux (go)
 on:
   push:
     branches:
@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   build:
-    name: ${{ matrix.name }}-build
+    name: ${{ matrix.name }}-build-go
     runs-on: ubuntu-latest
     timeout-minutes: 720
     strategy:
@@ -39,9 +39,10 @@ jobs:
           sudo apt-get -qq update
           sudo apt-get -y install gcc-multilib build-essential flex zlib1g-dev \
             gnat gdc expect dejagnu libc-dev libc-devtools texlive findutils \
-            binutils autogen gettext autopoint libasprintf-dev \
+            binutils autogen gettext gettext-doc autopoint libasprintf-dev \
             libgettextpo-dev mailutils mailutils-mh procmail emacs exim4-base \
-            msmtp bsd-mailx
+            msmtp bsd-mailx gccgo gccgo-multilib golang golang-go golang-src \
+            golang-ar-dev
 
       - name: Install dependencies for aarch64
         if: success() && contains(matrix.target, 'aarch64')
@@ -88,7 +89,7 @@ jobs:
           if test ! -d build; then mkdir build; fi
           cd build
           ../gcc/configure \
-                --enable-languages=c,c++,lto,objc,obj-c++ \
+                --enable-languages=go \
                 --prefix=/usr \
                 --with-gcc-major-version-only \
                 --program-prefix=x86_64-linux-gnu- \
@@ -116,8 +117,21 @@ jobs:
           if test -x "$(which nproc)"; then \
             echo "nproc says that we can use $(nproc) build jobs"; \
           else echo "error: missing nproc!" >&2 && exit 1; fi
-          time (make -j"$(nproc)" | tee build.log)
-          if test -e build.log; then stat build.log && wc -l build.log; fi
+          time (make -S -j"$(nproc)" | tee build.log) || (echo "error: failure!" >&2 && exit 1)
+          if test -r build.log && test -s build.log; then \
+            sync && stat build.log && wc -l build.log && du build.log; \
+            if test -z "$(grep -i "error:" build.log)" && test -z "$(grep "Error [12]" build.log); then \
+              sync && echo "no errors found in build.log; ok"; \
+            else \
+              echo "error: error found in build.log!" >&2 && exit 1; \
+            fi; \
+          elif test -e build.log; then \
+            echo "warning: build.log present, but there might be something wrong with it..." >&2; \
+            stat build.log || wc -l build.log || du build.log; \
+          else \
+            ls ./*.log >&2 || (echo "error: no logfiles found!" >&2 && exit 1); \
+          fi
+          sync && echo "Done with main build step." && sync
 
       - name: Debug failure
         if: failure()
@@ -139,20 +153,24 @@ jobs:
         if: success()
         run: |
           cd ../build
-          echo "make info" && (time make info) && find . -name "*.info" -print
-          echo "make dvi" && (time make dvi) && find . -name "*.dvi" -print
-          echo "make pdf" && (time make pdf) && find . -name "*.pdf" -print
-          echo "make html" && (time make html) && find . -name "*.html" -print
+          echo "make info" && (time (make info-gcc && make info-gotools)) && \
+            find . -name "*.info" -print
+          echo "make dvi" && (time (make dvi-gcc && make dvi-gotools)) && \
+            find . -name "*.dvi" -print
+          echo "make pdf" && (time (make pdf-gcc && make pdf-gotools)) && \
+            find . -name "*.pdf" -print
+          echo "make html" && (time (make html-gcc && make html-gotools)) && \
+            find . -name "*.html" -print
 
       - name: Make install (plus docs)
         if: success()
         run: |
           cd ../build
           sudo make install
-          sudo make install-info
-          sudo make install-dvi
-          sudo make install-pdf
-          sudo make install-html
+          sudo make install-info-gotools
+          sudo make install-dvi-gotools
+          sudo make install-pdf-gotools
+          sudo make install-html-gotools
           sudo make dir.info
 
       - name: Tests
@@ -165,9 +183,9 @@ jobs:
             ../build/gcc/xgcc --version && sync && ../build/gcc/xgcc -v; \
           fi
           cd ../build
-          if test -e build.log; then make warning.log; fi
-          time (make -k -j"$(nproc)" check RUNTESTFLAGS="compile.exp dg-torture.exp execute.exp old-deja.exp" | tee testsuite_output.log)
-          if test -e warning.log; then \
+          if test -r build.log; then make warning.log; fi
+          time (make -k -j"$(nproc)" check RUNTESTFLAGS="go-dg.exp go-torture.exp go.exp" | tee testsuite_output.log)
+          if test -r warning.log; then \
             make mail-report-with-warnings.log; \
           else make mail-report.log; fi
           if test -x "$(which Mail)"; then \
@@ -190,7 +208,7 @@ jobs:
               echo "Nothing to send."; \
             fi; \
           else \
-            echo "Warning: \"Mail\" program is missing, so skipping emailing of testresults!"; \
+            echo "Warning: \"Mail\" program is missing; skipping testresults email!"; \
           fi
           for mydir in "${OLDPWD}" .. build path testsuite ../build ../path ../testsuite "${OLDPWD}"/build "${OLDPWD}"/path "${OLDPWD}"/testsuite; do \
             if test -d "${mydir}" && test -r "${mydir}" && test -w "${mydir}" && test -x "${mydir}"; then \

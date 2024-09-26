@@ -798,12 +798,12 @@ func ParseHTTPVersion(vers string) (major, minor int, ok bool) {
 	if vers[6] != '.' {
 		return 0, 0, false
 	}
-	maj, err := strconv.ParseUint(vers[5:6], 10, 0)
-	if err != nil {
+	maj, err := strconv.ParseUint(vers[5:6], 10, 4)
+	if err != nil || maj > 9 {
 		return 0, 0, false
 	}
-	min, err := strconv.ParseUint(vers[7:8], 10, 0)
-	if err != nil {
+	min, err := strconv.ParseUint(vers[7:8], 10, 4)
+	if err != nil || min > 9 {
 		return 0, 0, false
 	}
 	return int(maj), int(min), true
