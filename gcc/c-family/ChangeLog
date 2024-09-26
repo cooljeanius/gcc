@@ -1,3 +1,50 @@
+2024-09-25  Mikael Morin  <mikael@gcc.gnu.org>
+
+	PR other/116801
+	* c.opt.urls: Regenerate.
+
+2024-09-25  Marek Polacek  <polacek@redhat.com>
+
+	* c-pretty-print.cc (c_pretty_printer::primary_expression): Use
+	TARGET_EXPR accessors.
+	(c_pretty_printer::expression): Likewise.
+
+2024-09-24  Jakub Jelinek  <jakub@redhat.com>
+
+	* c.opt.urls: Regenerate.
+
+2024-09-24  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c++/107637
+	* c.opt (frange-for-ext-temps): New option.
+	* c-opts.cc (c_common_post_options): Set flag_range_for_ext_temps
+	for C++23 or later or for C++11 or later in !flag_iso mode if
+	the option wasn't set by user.
+	* c-cppbuiltin.cc (c_cpp_builtins): Change __cpp_range_based_for
+	value for flag_range_for_ext_temps from 201603L to 202212L in C++17
+	or later.
+	* c-omp.cc (c_find_nested_loop_xform_r): Handle CLEANUP_POINT_EXPR
+	like TRY_FINALLY_EXPR.
+
+2024-09-20  David Malcolm  <dmalcolm@redhat.com>
+
+	PR other/116613
+	* c-opts.cc: Include "diagnostic-format-text.h".
+	(c_diagnostic_finalizer): Rename to...
+	(c_diagnostic_text_finalizer): ...this.  Convert first param
+	from diagnostic_context * to diagnostic_text_output_format & and
+	update accordingly.
+	(c_common_diagnostics_set_defaults): Update for renamings.
+
+2024-09-19  Marek Polacek  <polacek@redhat.com>
+
+	* c.opt.urls: Regenerate.
+
+2024-09-19  Marek Polacek  <polacek@redhat.com>
+
+	PR c++/116162
+	* c.opt (Wdefaulted-function-deleted): New.
+
 2024-09-12  Jason Merrill  <jason@redhat.com>
 
 	* c.opt: Add CppReason for Wc++{14,17,20,23}-extensions.

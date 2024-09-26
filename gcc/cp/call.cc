@@ -12808,27 +12808,6 @@ class_of_implicit_object (z_candidate *cand)
   return BINFO_TYPE (cand->conversion_path);
 }
 
-/* True if candidates C1 and C2 have corresponding object parameters per
-   [basic.scope.scope].  */
-
-static bool
-object_parms_correspond (z_candidate *c1, tree fn1, z_candidate *c2, tree fn2)
-{
-  tree context = class_of_implicit_object (c1);
-  tree ctx2 = class_of_implicit_object (c2);
-  if (!ctx2)
-    /* Leave context as is. */;
-  else if (!context)
-    context = ctx2;
-  else if (context != ctx2)
-    /* This can't happen for normal function calls, since it means finding
-       functions in multiple bases which would fail with an ambiguous lookup,
-       but it can occur with reversed operators.  */
-    return false;
-
-  return object_parms_correspond (fn1, fn2, context);
-}
-
 /* Return whether the first parameter of C1 matches the second parameter
    of C2.  */
 
@@ -12886,23 +12865,26 @@ cand_parms_match (z_candidate *c1, z_candidate *c2, pmatch match_kind)
 	}
     }
 
-  else if (reversed)
-    return (reversed_match (c1, c2)
-	    && reversed_match (c2, c1));
-
   tree parms1 = TYPE_ARG_TYPES (TREE_TYPE (fn1));
   tree parms2 = TYPE_ARG_TYPES (TREE_TYPE (fn2));
 
-  if (!(DECL_FUNCTION_MEMBER_P (fn1)
-	&& DECL_FUNCTION_MEMBER_P (fn2)))
-    /* Early escape.  */;
-
-  /* CWG2789 is not adequate, it should specify corresponding object
-     parameters, not same typed object parameters.  */
-  else if (!object_parms_correspond (c1, fn1, c2, fn2))
-    return false;
-  else
+  if (DECL_FUNCTION_MEMBER_P (fn1)
+      && DECL_FUNCTION_MEMBER_P (fn2))
     {
+      tree base1 = DECL_CONTEXT (strip_inheriting_ctors (fn1));
+      tree base2 = DECL_CONTEXT (strip_inheriting_ctors (fn2));
+      if (base1 != base2)
+	return false;
+
+      if (reversed)
+	return (reversed_match (c1, c2)
+		&& reversed_match (c2, c1));
+
+      /* Use object_parms_correspond to simplify comparing iobj/xobj/static
+	 member functions.  */
+      if (!object_parms_correspond (fn1, fn2, base1))
+	return false;
+
       /* We just compared the object parameters, if they don't correspond
 	 we already returned false.  */
       auto skip_parms = [] (tree fn, tree parms)
@@ -12915,6 +12897,9 @@ cand_parms_match (z_candidate *c1, z_candidate *c2, pmatch match_kind)
       parms1 = skip_parms (fn1, parms1);
       parms2 = skip_parms (fn2, parms2);
     }
+  else if (reversed)
+    return (reversed_match (c1, c2)
+	    && reversed_match (c2, c1));
   return compparms (parms1, parms2);
 }
 
@@ -13269,10 +13254,14 @@ joust (struct z_candidate *cand1, struct z_candidate *cand2, bool warn,
 	return winner;
     }
 
-  /* Concepts: F1 and F2 are non-template functions with the same
-     parameter-type-lists, and F1 is more constrained than F2 according to the
-     partial ordering of constraints described in 13.5.4.  */
-
+  /* F1 and F2 are non-template functions and
+     - they have the same non-object-parameter-type-lists ([dcl.fct]), and
+     - if they are member functions, both are direct members of the same
+       class, and
+     - if both are non-static member functions, they have the same types for
+       their object parameters, and
+     - F1 is more constrained than F2 according to the partial ordering of
+       constraints described in [temp.constr.order].  */
   if (flag_concepts && DECL_P (cand1->fn) && DECL_P (cand2->fn)
       && !cand1->template_decl && !cand2->template_decl
       && cand_parms_match (cand1, cand2, pmatch::current))
@@ -13350,13 +13339,10 @@ joust (struct z_candidate *cand1, struct z_candidate *cand2, bool warn,
 	}
     }
 
-  /* F1 is a member of a class D, F2 is a member of a base class B of D, and
-     for all arguments the corresponding parameters of F1 and F2 have the same
-     type (CWG 2273/2277). */
-  if (DECL_P (cand1->fn) && DECL_CLASS_SCOPE_P (cand1->fn)
-      && !DECL_CONV_FN_P (cand1->fn)
-      && DECL_P (cand2->fn) && DECL_CLASS_SCOPE_P (cand2->fn)
-      && !DECL_CONV_FN_P (cand2->fn))
+  /* F1 is a constructor for a class D, F2 is a constructor for a base class B
+     of D, and for all arguments the corresponding parameters of F1 and F2 have
+     the same type (CWG 2273/2277).  */
+  if (DECL_INHERITED_CTOR (cand1->fn) || DECL_INHERITED_CTOR (cand2->fn))
     {
       tree base1 = DECL_CONTEXT (strip_inheriting_ctors (cand1->fn));
       tree base2 = DECL_CONTEXT (strip_inheriting_ctors (cand2->fn));
@@ -14576,6 +14562,12 @@ extend_ref_init_temps (tree decl, tree init, vec<tree, va_gc> **cleanups,
 {
   tree type = TREE_TYPE (init);
   if (processing_template_decl)
+    return init;
+
+  /* P2718R0 - ignore temporaries in C++23 for-range-initializer, those
+     have all extended lifetime.  */
+  if (DECL_NAME (decl) == for_range__identifier
+      && flag_range_for_ext_temps)
     return init;
 
   maybe_warn_dangling_reference (decl, init);
