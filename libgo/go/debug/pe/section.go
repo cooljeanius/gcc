@@ -32,9 +32,12 @@ func (sh *SectionHeader32) fullName(st StringTable) (string, error) {
 	if sh.Name[0] != '/' {
 		return cstring(sh.Name[:]), nil
 	}
-	i, err := strconv.Atoi(cstring(sh.Name[1:]))
+	i, err := strconv.ParseInt(cstring(sh.Name[1:]), 10, 32)
 	if err != nil {
 		return "", err
+	}
+	if i < 0 || i > math.MaxUint32 {
+		return "", fmt.Errorf("value out of range for uint32: %d", i)
 	}
 	return st.String(uint32(i))
 }
