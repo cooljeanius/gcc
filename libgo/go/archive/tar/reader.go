@@ -370,19 +370,13 @@ func (tr *Reader) readHeader() (*Header, *block, error) {
 	hdr.Linkname = p.parseString(v7.linkName())
 	hdr.Size = p.parseNumeric(v7.size())
 	hdr.Mode = p.parseNumeric(v7.mode())
-	uid := p.parseNumeric(v7.uid())
-	if uid < math.MinInt || uid > math.MaxInt {
-		return nil, nil, ErrHeader // or handle the error appropriately
-	}
-	if uid > int64(math.MaxInt) {
+	uid, err := strconv.ParseInt(p.parseString(v7.uid()), 10, 32)
+	if err != nil || uid < math.MinInt32 || uid > math.MaxInt32 {
 		return nil, nil, ErrHeader // or handle the error appropriately
 	}
 	hdr.Uid = int(uid)
-	gid := p.parseNumeric(v7.gid())
-	if gid < math.MinInt || gid > math.MaxInt {
-		return nil, nil, ErrHeader // or handle the error appropriately
-	}
-	if gid > int64(math.MaxInt) {
+	gid, err := strconv.ParseInt(p.parseString(v7.gid()), 10, 32)
+	if err != nil || gid < math.MinInt32 || gid > math.MaxInt32 {
 		return nil, nil, ErrHeader // or handle the error appropriately
 	}
 	hdr.Gid = int(gid)
