@@ -374,9 +374,15 @@ func (tr *Reader) readHeader() (*Header, *block, error) {
 	if uid < math.MinInt || uid > math.MaxInt {
 		return nil, nil, ErrHeader // or handle the error appropriately
 	}
+	if uid > int64(math.MaxInt) {
+		return nil, nil, ErrHeader // or handle the error appropriately
+	}
 	hdr.Uid = int(uid)
 	gid := p.parseNumeric(v7.gid())
 	if gid < math.MinInt || gid > math.MaxInt {
+		return nil, nil, ErrHeader // or handle the error appropriately
+	}
+	if gid > int64(math.MaxInt) {
 		return nil, nil, ErrHeader // or handle the error appropriately
 	}
 	hdr.Gid = int(gid)
