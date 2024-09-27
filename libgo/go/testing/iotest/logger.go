@@ -17,9 +17,9 @@ type writeLogger struct {
 func (l *writeLogger) Write(p []byte) (n int, err error) {
 	n, err = l.w.Write(p)
 	if err != nil {
-		log.Printf("%s %x: error occurred", l.prefix, p[0:n])
+		log.Printf("%s: error occurred", l.prefix)
 	} else {
-		log.Printf("%s %x", l.prefix, p[0:n])
+		log.Printf("%s: write successful", l.prefix)
 	}
 	return
 }
@@ -39,9 +39,9 @@ type readLogger struct {
 func (l *readLogger) Read(p []byte) (n int, err error) {
 	n, err = l.r.Read(p)
 	if err != nil {
-		log.Printf("%s %x: error occurred", l.prefix, p[0:n])
+		log.Printf("%s: error occurred", l.prefix)
 	} else {
-		log.Printf("%s %x", l.prefix, p[0:n])
+		log.Printf("%s: read successful", l.prefix)
 	}
 	return
 }
