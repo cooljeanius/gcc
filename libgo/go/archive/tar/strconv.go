@@ -175,6 +175,10 @@ func (p *parser) parseOctal(b []byte) int64 {
 		p.err = ErrHeader
 		return 0
 	}
+	if x > uint64(math.MaxInt32) {
+		p.err = ErrHeader
+		return 0
+	}
 	return int64(x)
 }
 
