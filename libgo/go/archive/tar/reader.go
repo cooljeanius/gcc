@@ -262,14 +262,14 @@ func mergePAX(hdr *Header, paxHdrs map[string]string) (err error) {
 		case paxGname:
 			hdr.Gname = v
 		case paxUid:
-			id64, err = strconv.ParseInt(v, 10, 64)
-			if id64 < int64(math.MinInt) || id64 > int64(math.MaxInt) {
+			id64, err = strconv.ParseInt(v, 10, 32)
+			if id64 < int64(math.MinInt32) || id64 > int64(math.MaxInt32) {
 				return ErrHeader // Handle overflow error
 			}
 			hdr.Uid = int(id64)
 		case paxGid:
-			id64, err = strconv.ParseInt(v, 10, 64)
-			if id64 < int64(math.MinInt) || id64 > int64(math.MaxInt) {
+			id64, err = strconv.ParseInt(v, 10, 32)
+			if id64 < int64(math.MinInt32) || id64 > int64(math.MaxInt32) {
 				return ErrHeader // Handle overflow error
 			}
 			hdr.Gid = int(id64)
