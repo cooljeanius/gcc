@@ -56,10 +56,20 @@ type File struct {
 // and all a.File[i].Name is non-empty.
 func Format(a *Archive) []byte {
 	var buf bytes.Buffer
-	buf.Write(fixNL(a.Comment))
+	comment, err := fixNL(a.Comment)
+	if err != nil {
+		// Handle error appropriately, e.g., log it or return it
+		return nil
+	}
+	buf.Write(comment)
 	for _, f := range a.Files {
 		fmt.Fprintf(&buf, "-- %s --\n", f.Name)
-		buf.Write(fixNL(f.Data))
+		data, err := fixNL(f.Data)
+		if err != nil {
+			// Handle error appropriately, e.g., log it or return it
+			return nil
+		}
+		buf.Write(data)
 	}
 	return buf.Bytes()
 }
@@ -129,12 +139,15 @@ func isMarker(data []byte) (name string, after []byte) {
 
 // If data is empty or ends in \n, fixNL returns data.
 // Otherwise fixNL returns a new slice consisting of data with a final \n added.
-func fixNL(data []byte) []byte {
+func fixNL(data []byte) ([]byte, error) {
 	if len(data) == 0 || data[len(data)-1] == '\n' {
-		return data
+		return data, nil
+	}
+	if len(data) > (1<<31 - 2) { // Ensure len(data) + 1 does not overflow
+		return nil, fmt.Errorf("data too large")
 	}
 	d := make([]byte, len(data)+1)
 	copy(d, data)
 	d[len(data)] = '\n'
-	return d
+	return d, nil
 }
