@@ -70,7 +70,7 @@ func (f *fmt) writePadding(n int) {
 	newLen := oldLen + n
 	// Make enough room for padding.
 	if newLen > cap(buf) {
-		if n > (cap(buf)*2 - oldLen) || n > (1<<31-1) || newLen < oldLen {
+		if n > (cap(buf)*2 - oldLen) || n > (1<<31-1) || newLen < oldLen || newLen > (1<<31-1) {
 			// Handle the error appropriately, e.g., log an error or return early.
 			return
 		}
