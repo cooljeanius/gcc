@@ -6600,39 +6600,6 @@
 ;; - FMINNM
 ;; -------------------------------------------------------------------------
 
-;; Unpredicated fmax/fmin (the libm functions).  The optabs for the
-;; smax/smin rtx codes are handled in the generic section above.
-(define_expand "<fmaxmin><mode>3"
-  [(set (match_operand:SVE_FULL_F 0 "register_operand")
-	(unspec:SVE_FULL_F
-	  [(match_dup 3)
-	   (const_int SVE_RELAXED_GP)
-	   (match_operand:SVE_FULL_F 1 "register_operand")
-	   (match_operand:SVE_FULL_F 2 "aarch64_sve_float_maxmin_operand")]
-	  SVE_COND_FP_MAXMIN_PUBLIC))]
-  "TARGET_SVE"
-  {
-    operands[3] = aarch64_ptrue_reg (<VPRED>mode);
-  }
-)
-
-;; Predicated fmax/fmin (the libm functions).  The optabs for the
-;; smax/smin rtx codes are handled in the generic section above.
-(define_expand "cond_<fmaxmin><mode>"
-  [(set (match_operand:SVE_FULL_F 0 "register_operand")
-	(unspec:SVE_FULL_F
-	  [(match_operand:<VPRED> 1 "register_operand")
-	   (unspec:SVE_FULL_F
-	     [(match_dup 1)
-	      (const_int SVE_RELAXED_GP)
-	      (match_operand:SVE_FULL_F 2 "register_operand")
-	      (match_operand:SVE_FULL_F 3 "aarch64_sve_float_maxmin_operand")]
-	     SVE_COND_FP_MAXMIN_PUBLIC)
-	   (match_operand:SVE_FULL_F 4 "aarch64_simd_reg_or_zero")]
-	  UNSPEC_SEL))]
-  "TARGET_SVE"
-)
-
 ;; Predicated floating-point maximum/minimum.
 (define_insn "@aarch64_pred_<optab><mode>"
   [(set (match_operand:SVE_FULL_F 0 "register_operand")
@@ -7209,7 +7176,7 @@
 ;; -------------------------------------------------------------------------
 
 ;; Four-element integer dot-product with accumulation.
-(define_insn "<sur>dot_prod<vsi2qi>"
+(define_insn "<sur>dot_prod<mode><vsi2qi>"
   [(set (match_operand:SVE_FULL_SDI 0 "register_operand")
 	(plus:SVE_FULL_SDI
 	  (unspec:SVE_FULL_SDI
@@ -7247,7 +7214,7 @@
   }
 )
 
-(define_insn "@<sur>dot_prod<vsi2qi>"
+(define_insn "@<sur>dot_prod<mode><vsi2qi>"
   [(set (match_operand:VNx4SI_ONLY 0 "register_operand")
         (plus:VNx4SI_ONLY
 	  (unspec:VNx4SI_ONLY
@@ -7305,7 +7272,8 @@
     rtx ones = force_reg (<VSI2QI>mode, CONST1_RTX (<VSI2QI>mode));
     rtx diff = gen_reg_rtx (<VSI2QI>mode);
     emit_insn (gen_<su>abd<vsi2qi>3 (diff, operands[1], operands[2]));
-    emit_insn (gen_udot_prod<vsi2qi> (operands[0], diff, ones, operands[3]));
+    emit_insn (gen_udot_prod<mode><vsi2qi> (operands[0], diff, ones,
+					    operands[3]));
     DONE;
   }
 )

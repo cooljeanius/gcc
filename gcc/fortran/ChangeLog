@@ -1,3 +1,45 @@
+2024-10-01  Thomas Koenig  <tkoenig@gcc.gnu.org>
+
+	* check.cc (int_or_real_or_char_or_unsigned_check_f2003): New function.
+	(gfc_check_minval_maxval): Use it.
+	* trans-intrinsic.cc (gfc_conv_intrinsic_minmaxval): Handle
+	initial values for UNSIGNED.
+	* gfortran.texi: Document MINVAL and MAXVAL for unsigned.
+
+2024-09-30  David Malcolm  <dmalcolm@redhat.com>
+
+	PR other/116613
+	* error.cc (gfc_diagnostic_build_locus_prefix): Convert first
+	param from diagnostic_context * to
+	const diagnostic_location_print_policy &.  Add colorize param.
+	Likewise for the "two expanded_locations" overload.
+	(gfc_diagnostic_text_starter): Update for above changes.
+	(gfc_diagnostic_start_span): Update for change to callback type.
+
+2024-09-30  Andre Vehreschild  <vehre@gcc.gnu.org>
+
+	PR fortran/81265
+	* trans-expr.cc (gfc_conv_procedure_call): Ensure coarrays use a
+	descriptor when passed.
+
+2024-09-28  Thomas Koenig  <tkoenig@gcc.gnu.org>
+
+	* check.cc (intrinsic_type_check): Handle unsigned.
+	(gfc_check_findloc): Likewise.
+	* gfortran.texi: Include FINDLOC in unsigned documentation.
+	* iresolve.cc (gfc_resolve_findloc): Use INTEGER version
+	for UNSIGNED.
+
+2024-09-28  Thomas Koenig  <tkoenig@gcc.gnu.org>
+
+	* check.cc (gfc_check_eoshift): Handle BT_UNSIGNED.
+	* simplify.cc (gfc_simplify_eoshift): Likewise.
+	* gfortran.texi: Document CSHIFT and EOSHIFT for UNSIGNED.
+
+2024-09-26  Mikael Morin  <mikael@gcc.gnu.org>
+
+	* invoke.texi (-M): Remove index reference to removed documentation.
+
 2024-09-25  Mikael Morin  <mikael@gcc.gnu.org>
 
 	PR other/116801

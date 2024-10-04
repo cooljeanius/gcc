@@ -1,3 +1,39 @@
+2024-10-03  Jason Merrill  <jason@redhat.com>
+
+	* c-opts.cc (c_common_post_options): Explicit -Wdeprecated enables
+	deprecations from later standards.
+
+2024-10-03  Jason Merrill  <jason@redhat.com>
+
+	* c.opt: Add -Wdeprecated-literal-operator.
+	* c-opts.cc (c_common_post_options): Default on in C++23.
+	* c.opt.urls: Regenerate.
+
+2024-10-02  Jakub Jelinek  <jakub@redhat.com>
+
+	PR preprocessor/96842
+	* c.opt (Wheader-guard): New option.
+	* c.opt.urls: Regenerated.
+	* c-ppoutput.cc (init_pp_output): Initialize also cb->get_suggestion.
+
+2024-10-01  Jason Merrill  <jason@redhat.com>
+
+	* c-cppbuiltin.cc (c_cpp_builtins): Don't define __cpp_concepts
+	before C++17.
+
+2024-09-30  David Malcolm  <dmalcolm@redhat.com>
+
+	PR other/116613
+	* c-format.cc (selftest::test_type_mismatch_range_labels):
+	Explicitly pass in dc.m_printer to diagnostic_show_locus.
+
+2024-09-27  Jakub Jelinek  <jakub@redhat.com>
+
+	PR libstdc++/116847
+	* c-pch.cc: Include diagnostic.h.
+	(c_common_write_pch): Call global_dc->pch_save.
+	(c_common_read_pch): Call global_dc->pch_restore.
+
 2024-09-25  Mikael Morin  <mikael@gcc.gnu.org>
 
 	PR other/116801

@@ -1,3 +1,231 @@
+2024-10-03  Jonathan Wakely  <jwakely@redhat.com>
+
+	* include/bits/unicode.h (__unicode::__is_incb_linker): Use
+	_GLIBCXX_STD_A namespace for std::find.
+
+2024-10-03  Jonathan Wakely  <jwakely@redhat.com>
+
+	PR libstdc++/116944
+	* include/parallel/base.h: Move diagnostic pragmas earlier.
+
+2024-10-03  Jonathan Wakely  <jwakely@redhat.com>
+
+	* include/bits/locale_facets_nonio.tcc (money_put::__do_get):
+	Ignore -Wformat warning for __ibm128 arguments.
+	* include/tr1/tuple (ignore): Ignore -Wunused warning.
+
+2024-10-03  François Dumont  <fdumont@gcc.gnu.org>
+
+	* include/bits/hashtable_policy.h (_NodeBuilder<>::_S_build): Remove
+	const qualification on _NodeGenerator instance.
+	(_ReuseOrAllocNode<>::operator()(_Args&&...)): Remove const qualification.
+	(_ReuseOrAllocNode<>::_M_nodes): Remove mutable.
+	(_Insert_base<>::_M_insert_range): Remove _NodeGetter const qualification.
+	(_Hash_code_base<>::_M_bucket_index(const _Hash_node_value<>&, size_t)):
+	Simplify noexcept declaration, we already static_assert that _RangeHash functor
+	is noexcept.
+	* include/bits/hashtable.h: Rework comments. Remove const qualifier on
+	_NodeGenerator& arguments.
+
+2024-10-02  Jonathan Wakely  <jwakely@redhat.com>
+
+	* config/locale/dragonfly/time_members.cc
+	(__timepunct<char>::_M_initialize_timepunc)
+	(__timepunct<wchar_t>::_M_initialize_timepunc): Set
+	_M_date_time_format for C locale. Set %Ex formats to the same
+	values as the %x formats.
+	* config/locale/generic/time_members.cc: Likewise.
+	* config/locale/gnu/time_members.cc: Likewise.
+	* testsuite/22_locale/time_get/get/char/5.cc: New test.
+	* testsuite/22_locale/time_get/get/wchar_t/5.cc: New test.
+
+2024-10-02  Jonathan Wakely  <jwakely@redhat.com>
+
+	* include/bits/chrono_io.h (__detail::__use_floor): New
+	function.
+	(__detail::__round): New function.
+	(from_stream): Use __detail::__round.
+	* testsuite/std/time/clock/file/io.cc: Check for expected
+	rounding in parse.
+	* testsuite/std/time/clock/gps/io.cc: Likewise.
+
+2024-10-02  Jonathan Wakely  <jwakely@redhat.com>
+
+	* include/bits/postypes.h: Fix -Wlong-long warning.
+
+2024-10-01  Hans-Peter Nilsson  <hp@axis.com>
+
+	PR libstdc++/116895
+	* config/os/newlib/ctype_base.h: Avoid signed-overflow warnings by
+	explicitly casting initializer expressions to mask.
+
+2024-09-27  Jonathan Wakely  <jwakely@redhat.com>
+
+	* include/bits/istream.tcc: Add diagnostic pragmas around uses
+	of long long and extern template.
+	* include/bits/locale_facets.h: Likewise.
+	* include/bits/locale_facets.tcc: Likewise.
+	* include/bits/locale_facets_nonio.tcc: Likewise.
+	* include/bits/ostream.tcc: Likewise.
+	* include/bits/stl_algobase.h: Likewise.
+	* include/c_global/cstdlib: Likewise.
+	* include/ext/pb_ds/detail/resize_policy/hash_prime_size_policy_imp.hpp:
+	Likewise.
+	* include/ext/pointer.h: Likewise.
+	* include/ext/stdio_sync_filebuf.h: Likewise.
+	* include/std/istream: Likewise.
+	* include/std/ostream: Likewise.
+	* include/tr1/cmath: Likewise.
+	* include/tr1/type_traits: Likewise.
+	* include/tr1/functional_hash.h: Likewise. Remove semi-colons
+	at namespace scope that aren't needed after macro expansion.
+	* include/tr1/tuple: Remove semi-colon at namespace scope.
+	* include/bits/vector.tcc: Change LL suffix to just L.
+
+2024-09-27  Jonathan Wakely  <jwakely@redhat.com>
+
+	* include/experimental/bits/fs_path.h (path::_Cvt): Refactor to
+	use if-constexpr.
+	(path::string(const Allocator&)): Likewise.
+
+2024-09-27  Jonathan Wakely  <jwakely@redhat.com>
+
+	* include/bits/basic_string.tcc (resize_for_overwrite): Fix
+	-Wsign-compare warning.
+	* include/bits/cow_string.h (resize_for_overwrite): Likewise.
+
+2024-09-27  Jonathan Wakely  <jwakely@redhat.com>
+
+	* testsuite/20_util/bind/dangling_ref.cc: Add an additional
+	dg-warning for -Wreturn-local-addr warning.
+	* testsuite/30_threads/packaged_task/cons/dangling_ref.cc:
+	Likewise.
+
+2024-09-27  Jonathan Wakely  <jwakely@redhat.com>
+
+	* include/bits/atomic_base.h (__atomic_base<T*>::_M_type_size):
+	Replace overloaded functions with static _S_type_size.
+	* include/std/atomic (atomic<T*>): Use is_object_v instead of
+	is_object.
+	* testsuite/29_atomics/atomic/operators/pointer_partial_void.cc:
+	Add dg-warning for -Wpointer-arith warning.
+
+2024-09-26  Jonathan Wakely  <jwakely@redhat.com>
+
+	* include/bits/cow_string.h (__resize_for_overwrite): Add
+	inline keyword to function with always_inline attribute.
+
+2024-09-26  Nathaniel Shead  <nathanieloshead@gmail.com>
+
+	PR libstdc++/115126
+	* include/bits/shared_ptr.h (std::__is_shared_ptr): Remove
+	unnecessary 'static'.
+	* include/bits/unique_ptr.h (std::__is_unique_ptr): Likewise.
+	* include/std/future (std::__create_task_state): Likewise.
+	* include/std/shared_mutex (_GLIBCXX_GTRHW): Likewise.
+	(__glibcxx_rwlock_init): Likewise.
+	(__glibcxx_rwlock_timedrdlock): Likewise.
+	(__glibcxx_rwlock_timedwrlock): Likewise.
+	(__glibcxx_rwlock_rdlock): Likewise.
+	(__glibcxx_rwlock_tryrdlock): Likewise.
+	(__glibcxx_rwlock_wrlock): Likewise.
+	(__glibcxx_rwlock_trywrlock): Likewise.
+	(__glibcxx_rwlock_unlock): Likewise.
+	(__glibcxx_rwlock_destroy): Likewise.
+	(__glibcxx_rwlock_init): Likewise.
+	* include/pstl/algorithm_impl.h
+	(__pstl::__internal::__set_algo_cut_off): Mark inline.
+	* include/pstl/unseq_backend_simd.h
+	(__pstl::__unseq_backend::__lane_size): Mark inline.
+
+2024-09-26  Jakub Jelinek  <jakub@redhat.com>
+
+	PR libstdc++/116859
+	* config/os/bsd/freebsd/os_defines.h
+	(_GLIBCXX_USE_C99_LONG_LONG_DYNAMIC,
+	_GLIBCXX_USE_C99_FLOAT_TRANSCENDENTALS_DYNAMIC): Avoid
+	-Wexpansion-to-defined warnings.
+	* config/os/bsd/dragonfly/os_defines.h
+	(_GLIBCXX_USE_C99_LONG_LONG_DYNAMIC): Likewise.
+
+2024-09-26  Jonathan Wakely  <jwakely@redhat.com>
+	    Andrew Waterman  <andrew@sifive.com>
+
+	PR libstdc++/113578
+	* include/std/ostream (_S_cast_flt): New static member function
+	to restore signbit after casting to double or long double.
+	(operator<<(float), operator<<(_Float16), operator<<(_Float32))
+	(operator<<(_Float64), operator(_Float128))
+	(operator<<(__bfloat16_t)): Use _S_cast_flt.
+	testsuite/27_io/basic_ostream/inserters_arithmetic/lwg4101.cc:
+	New test.
+	* testsuite/27_io/basic_ostream/inserters_arithmetic/lwg4101.cc: New file.
+
+2024-09-26  Jonathan Wakely  <jwakely@redhat.com>
+
+	* testsuite/27_io/basic_istringstream/cons/2020.cc: Fix comment
+	referring to basic_filebuf.
+	* testsuite/27_io/basic_istringstream/requirements/base_classes.cc:
+	Likewise.
+	* testsuite/27_io/basic_ostringstream/cons/2020.cc: Likewise.
+	* testsuite/27_io/basic_ostringstream/requirements/base_classes.cc:
+	Likewise.
+	* testsuite/27_io/basic_stringbuf/cons/2020.cc: Likewise.
+	* testsuite/27_io/basic_stringbuf/requirements/explicit_instantiation/2.cc:
+	Likewise.
+	* testsuite/27_io/basic_stringbuf/requirements/explicit_instantiation/4.cc:
+	Likewise.
+	* testsuite/27_io/basic_stringstream/cons/2020.cc: Likewise.
+	* testsuite/27_io/basic_stringstream/requirements/base_classes.cc:
+	Likewise.
+
+2024-09-26  Jonathan Wakely  <jwakely@redhat.com>
+
+	* include/bits/basic_ios.h (basic_ios::operator bool()):
+	Add [[nodiscard]] attribute.
+	(basic_ios::operator!(), basic_ios::rdstate())
+	(basic_ios::good(), basic_ios::eof(), basic_ios::fail())
+	(basic_ios::bad(), basic_ios::exceptions(), basic_ios::tie())
+	(basic_ios::rdbuf(), basic_ios::fill()): Likewise.
+	* include/bits/ios_base.h (ios_base::flags()): Likewise.
+	(ios_base::precision(), ios_base::width(), ios_base::getloc()):
+	Likewise.
+	* include/std/fstream (basic_filebuf::is_open)
+	(basic_ifstream::rdbuf(), basic_ifstream::is_open)
+	(basic_ofstream::rdbuf(), basic_ofstream::is_open)
+	(basic_fstream::rdbuf(), basic_fstream::is_open): Likewise.
+	* include/std/spanstream (basic_spanbuf::span())
+	(basic_ispanstream::span(), basic_ispanstream::rdbuf())
+	(basic_ospanstream::span(), basic_ospanstream::rdbuf())
+	(basic_spanstream::span(), basic_spanstream::rdbuf()):
+	Likewise.
+	* include/std/sstream (basic_stringbuf::str())
+	(basic_istringstream::rdbuf(), basic_istringstream::str())
+	(basic_ostringstream::rdbuf(), basic_ostringstream::str())
+	(basic_stringstream::rdbuf(), basic_stringstream::str()):
+	Likewise.
+	* testsuite/27_io/basic_istream/extractors_arithmetic/char/01.cc:
+	Suppress -Wunused-result warnings.
+	* testsuite/27_io/basic_istream/extractors_arithmetic/wchar_t/01.cc:
+	Likewise.
+
+2024-09-26  Iain Sandoe  <iain@sandoe.co.uk>
+
+	PR libstdc++/116853
+	* include/bits/basic_string.h: Ignore suggest-attribute=format
+	warning when using posix vsnprintf in to_string() implementations.
+
+2024-09-26  Jonathan Wakely  <jwakely@redhat.com>
+
+	* include/std/stacktrace (basic_stacktrace::_Impl::_M_allocate):
+	Do not assume allocators only throw std::bad_alloc.
+
+2024-09-26  Jonathan Wakely  <jwakely@redhat.com>
+
+	PR libstdc++/116857
+	* libsupc++/guard.cc (__cxa_guard_acquire): Remove
+	_GLIBCXX_NOTHROW to match declaration in <cxxabi.h>.
+
 2024-09-25  Sam James  <sam@gentoo.org>
 
 	PR libstdc++/101831

@@ -1,3 +1,566 @@
+2024-10-03  Eric Botcazou  <ebotcazou@adacore.com>
+
+	* gnat.dg/specs/size_clause6.ads: New test.
+
+2024-10-03  Jason Merrill  <jason@redhat.com>
+
+	* g++.dg/cpp0x/udlit-string-literal.h
+	* g++.dg/cpp0x/Wliteral-suffix2.C
+	* g++.dg/cpp0x/constexpr-55708.C
+	* g++.dg/cpp0x/gnu_fext-numeric-literals.C
+	* g++.dg/cpp0x/gnu_fno-ext-numeric-literals.C
+	* g++.dg/cpp0x/pr51420.C
+	* g++.dg/cpp0x/pr60209-neg.C
+	* g++.dg/cpp0x/pr60209.C
+	* g++.dg/cpp0x/pr61038.C
+	* g++.dg/cpp0x/std_fext-numeric-literals.C
+	* g++.dg/cpp0x/std_fno-ext-numeric-literals.C
+	* g++.dg/cpp0x/udlit-addr.C
+	* g++.dg/cpp0x/udlit-args-neg.C
+	* g++.dg/cpp0x/udlit-args.C
+	* g++.dg/cpp0x/udlit-args2.C
+	* g++.dg/cpp0x/udlit-clink-neg.C
+	* g++.dg/cpp0x/udlit-concat-neg.C
+	* g++.dg/cpp0x/udlit-concat.C
+	* g++.dg/cpp0x/udlit-constexpr.C
+	* g++.dg/cpp0x/udlit-cpp98-neg.C
+	* g++.dg/cpp0x/udlit-declare-neg.C
+	* g++.dg/cpp0x/udlit-embed-quote.C
+	* g++.dg/cpp0x/udlit-extended-id-1.C
+	* g++.dg/cpp0x/udlit-extended-id-3.C
+	* g++.dg/cpp0x/udlit-extern-c.C
+	* g++.dg/cpp0x/udlit-friend.C
+	* g++.dg/cpp0x/udlit-general.C
+	* g++.dg/cpp0x/udlit-implicit-conv-neg-char8_t.C
+	* g++.dg/cpp0x/udlit-implicit-conv-neg.C
+	* g++.dg/cpp0x/udlit-inline.C
+	* g++.dg/cpp0x/udlit-mangle.C
+	* g++.dg/cpp0x/udlit-member-neg.C
+	* g++.dg/cpp0x/udlit-namespace.C
+	* g++.dg/cpp0x/udlit-nofunc-neg.C
+	* g++.dg/cpp0x/udlit-nonempty-str-neg.C
+	* g++.dg/cpp0x/udlit-nosuffix-neg.C
+	* g++.dg/cpp0x/udlit-nounder-neg.C
+	* g++.dg/cpp0x/udlit-operator-neg.C
+	* g++.dg/cpp0x/udlit-overflow-neg.C
+	* g++.dg/cpp0x/udlit-overflow.C
+	* g++.dg/cpp0x/udlit-preproc-neg.C
+	* g++.dg/cpp0x/udlit-raw-length.C
+	* g++.dg/cpp0x/udlit-raw-op-string-neg.C
+	* g++.dg/cpp0x/udlit-raw-op.C
+	* g++.dg/cpp0x/udlit-raw-str.C
+	* g++.dg/cpp0x/udlit-resolve-char8_t.C
+	* g++.dg/cpp0x/udlit-resolve.C
+	* g++.dg/cpp0x/udlit-shadow-neg.C
+	* g++.dg/cpp0x/udlit-string-length.C
+	* g++.dg/cpp0x/udlit-suffix-neg.C
+	* g++.dg/cpp0x/udlit-template.C
+	* g++.dg/cpp0x/udlit-tmpl-arg-neg.C
+	* g++.dg/cpp0x/udlit-tmpl-arg-neg2.C
+	* g++.dg/cpp0x/udlit-tmpl-arg.C
+	* g++.dg/cpp0x/udlit-tmpl-parms-neg.C
+	* g++.dg/cpp0x/udlit-tmpl-parms.C
+	* g++.dg/cpp1y/pr57640.C
+	* g++.dg/cpp1y/pr88872.C
+	* g++.dg/cpp26/unevalstr1.C
+	* g++.dg/cpp2a/concepts-pr60391.C
+	* g++.dg/cpp2a/consteval-prop21.C
+	* g++.dg/cpp2a/nontype-class6.C
+	* g++.dg/cpp2a/udlit-class-nttp-ctad-neg.C
+	* g++.dg/cpp2a/udlit-class-nttp-ctad-neg2.C
+	* g++.dg/cpp2a/udlit-class-nttp-ctad.C
+	* g++.dg/cpp2a/udlit-class-nttp-neg.C
+	* g++.dg/cpp2a/udlit-class-nttp-neg2.C
+	* g++.dg/cpp2a/udlit-class-nttp.C
+	* g++.dg/ext/is_convertible2.C
+	* g++.dg/lookup/pr87269.C
+	* g++.dg/cpp0x/udlit_system_header: Adjust for C++23 deprecated
+	operator "" _suffix.
+	* g++.dg/DRs/dr2521.C: New test.
+
+2024-10-03  Georg-Johann Lay  <avr@gjlay.de>
+
+	* gcc.dg/c23-stdarg-9.c (struct S) [AVR]: Only use int a[500].
+
+2024-10-03  Andrew Pinski  <quic_apinski@quicinc.com>
+
+	PR target/116927
+	* g++.dg/torture/pr116927-1.C: New test.
+
+2024-10-03  David Malcolm  <dmalcolm@redhat.com>
+
+	PR other/116301
+	* gcc.dg/plugin/crash-test-ice-in-header-sarif-2.1.c: New test.
+	* gcc.dg/plugin/crash-test-ice-in-header-sarif-2.2.c: New test.
+	* gcc.dg/plugin/crash-test-ice-in-header-sarif-2_1.py: Support
+	script for new test.
+	* gcc.dg/plugin/crash-test-ice-in-header-sarif-2_2.py: Likewise.
+	* gcc.dg/plugin/crash-test-ice-in-header.h: New header.
+	* gcc.dg/plugin/plugin.exp: Add the new tests.
+	* lib/sarif-schema-2.2-prerelease-2024-08-08.json: New schema
+	file.
+	* lib/scansarif.exp (verify-sarif-file): Add optional argument for
+	specifying which version of the schema to validate against,
+	supporting "2.1" and "2.2", defaulting to the former.
+	Update the test name to capture the version of the schema tested
+	against.
+
+2024-10-02  Andrew Pinski  <quic_apinski@quicinc.com>
+
+	PR tree-optimization/116098
+	* c-c++-common/torture/pr116098-2.c: New test.
+	* g++.dg/torture/pr116098-1.C: New test.
+
+2024-10-02  Georg-Johann Lay  <avr@gjlay.de>
+
+	PR testsuite/52641
+	* gcc.dg/strict-flex-array-3.c (expect) [AVR]: Use custom
+	version due to AVR-LibC limitations.
+	(stuff): Use __SIZEOF_INT__ instead of hard-coded values.
+
+2024-10-02  Georg-Johann Lay  <avr@gjlay.de>
+
+	* gcc.dg/pr113596.c: Require less memory so it works on AVR.
+
+2024-10-02  Georg-Johann Lay  <avr@gjlay.de>
+
+	PR testsuite/52641
+	* gcc.dg/pr93820-2.c: Add dg-require-effective-target int32.
+
+2024-10-02  Georg-Johann Lay  <avr@gjlay.de>
+
+	PR testsuite/52641
+	* gcc.dg/signbit-6.c (main): Initialize a[0] and b[0]
+	with INT32_MIN (instead of with INT_MIN).
+
+2024-10-02  Victor Do Nascimento  <victor.donascimento@arm.com>
+
+	* gcc.dg/vect/vect-fncall-mask.c: New.
+
+2024-10-02  Andre Vieira  <andre.simoesdiasvieira@arm.com>
+
+	* gcc.target/arm/mve/dlstp-loop-form.c: New test.
+
+2024-10-02  Filip Kastl  <fkastl@suse.cz>
+
+	PR tree-optimization/116616
+	* gcc.target/i386/switch-exp-transform-1.c: Don't test for
+	presence of the POPCOUNT internal fn call.
+
+2024-10-02  Richard Biener  <rguenther@suse.de>
+
+	* gcc.dg/vect/slp-12a.c: Adjust.
+
+2024-10-02  Richard Biener  <rguenther@suse.de>
+
+	* gcc.dg/vect/slp-19c.c: Adjust expectation.
+
+2024-10-02  Richard Biener  <rguenther@suse.de>
+
+	* gcc.dg/vect/vect-double-reduc-5.c: Un-XFAIL everywhere.
+
+2024-10-02  Richard Biener  <rguenther@suse.de>
+
+	PR testsuite/116596
+	* gcc.dg/vect/slp-11a.c: Fix.
+
+2024-10-02  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/113197
+	* gcc.dg/lto/pr113197_0.c: New testcase.
+	* gcc.dg/lto/pr113197_1.c: Likewise.
+
+2024-10-02  Richard Biener  <rguenther@suse.de>
+
+	PR testsuite/116660
+	* gcc.dg/vect/no-scevccp-outer-12.c: Add vect_pack_trunc.
+	* gcc.dg/vect/vect-multitypes-6.c: Add vect_char_add, remove
+	explicit 32bit sparc XFAIL.
+
+2024-10-02  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/116566
+	* gcc.dg/tree-ssa/reassoc-46.c: When using partial vectors
+	the dump-scan doesn't look for the required .COND_ADD so
+	skip for partial vectors.
+
+2024-10-02  Jakub Jelinek  <jakub@redhat.com>
+
+	PR preprocessor/96842
+	* c-c++-common/cpp/Wheader-guard-1.c: New test.
+	* c-c++-common/cpp/Wheader-guard-1-1.h: New test.
+	* c-c++-common/cpp/Wheader-guard-1-2.h: New test.
+	* c-c++-common/cpp/Wheader-guard-1-3.h: New test.
+	* c-c++-common/cpp/Wheader-guard-1-4.h: New test.
+	* c-c++-common/cpp/Wheader-guard-1-5.h: New test.
+	* c-c++-common/cpp/Wheader-guard-1-6.h: New test.
+	* c-c++-common/cpp/Wheader-guard-1-7.h: New test.
+	* c-c++-common/cpp/Wheader-guard-1-8.h: New test.
+	* c-c++-common/cpp/Wheader-guard-1-9.h: New test.
+	* c-c++-common/cpp/Wheader-guard-1-10.h: New test.
+	* c-c++-common/cpp/Wheader-guard-1-11.h: New test.
+	* c-c++-common/cpp/Wheader-guard-1-12.h: New test.
+	* c-c++-common/cpp/Wheader-guard-2.c: New test.
+	* c-c++-common/cpp/Wheader-guard-2.h: New test.
+	* c-c++-common/cpp/Wheader-guard-3.c: New test.
+	* c-c++-common/cpp/Wheader-guard-3.h: New test.
+
+2024-10-02  Andrew Pinski  <quic_apinski@quicinc.com>
+
+	PR tree-optimization/116922
+	* gcc.dg/torture/pr116922.c: New test.
+
+2024-10-02  Richard Biener  <rguenther@suse.de>
+
+	* gcc.dg/pr116905.c: Add float16 options.
+
+2024-10-02  Richard Biener  <rguenther@suse.de>
+
+	PR testsuite/116654
+	* gcc.target/powerpc/p9-vec-length-full-8.c: Adjust.
+
+2024-10-02  Richard Biener  <rguenther@suse.de>
+
+	PR testsuite/116654
+	* gcc.dg/vect/costmodel/ppc/costmodel-slp-12.c: Adjust.
+
+2024-10-02  Pan Li  <pan2.li@intel.com>
+
+	* gcc.target/riscv/sat_arith.h: Add test helper macros.
+	* gcc.target/riscv/sat_s_sub-2-i16.c: New test.
+	* gcc.target/riscv/sat_s_sub-2-i32.c: New test.
+	* gcc.target/riscv/sat_s_sub-2-i64.c: New test.
+	* gcc.target/riscv/sat_s_sub-2-i8.c: New test.
+	* gcc.target/riscv/sat_s_sub-run-2-i16.c: New test.
+	* gcc.target/riscv/sat_s_sub-run-2-i32.c: New test.
+	* gcc.target/riscv/sat_s_sub-run-2-i64.c: New test.
+	* gcc.target/riscv/sat_s_sub-run-2-i8.c: New test.
+
+2024-10-01  Thomas Koenig  <tkoenig@gcc.gnu.org>
+
+	* gfortran.dg/unsigned_34.f90: New test.
+
+2024-10-01  Eric Botcazou  <ebotcazou@adacore.com>
+
+	* gnat.dg/lto28.adb: New test.
+	* gnat.dg/lto28_pkg1.ads: New helper.
+	* gnat.dg/lto28_pkg2.ads: Likewise.
+	* gnat.dg/lto28_pkg2.adb: Likewise.
+	* gnat.dg/lto28_pkg3.ads: Likewise.
+
+2024-10-01  Giuseppe D'Angelo  <giuseppe.dangelo@kdab.com>
+
+	* g++.dg/ext/is_virtual_base_of.C: New test.
+	* g++.dg/ext/is_virtual_base_of_diagnostic.C: New test.
+
+2024-10-01  Andrew Pinski  <quic_apinski@quicinc.com>
+
+	PR tree-optimization/116890
+	* gcc.dg/tree-ssa/phi-opt-7.c: Update testcase for no ifs left.
+	* gcc.dg/tree-ssa/phi-opt-42.c: New test.
+	* gcc.dg/tree-ssa/phi-opt-43.c: New test.
+
+2024-10-01  Claudio Bantaloukas  <Claudio.Bantaloukas@arm.com>
+
+	* g++.target/aarch64/fp8_mangling.C: New tests exercising mangling.
+	* g++.target/aarch64/fp8_scalar_typecheck_2.C: New tests in C++.
+	* gcc.target/aarch64/fp8_scalar_1.c: New tests in C.
+	* gcc.target/aarch64/fp8_scalar_typecheck_1.c: Likewise.
+
+2024-10-01  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/116902
+	PR tree-optimization/116842
+	* g++.dg/torture/pr116902.C: New testcase.
+
+2024-10-01  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/116905
+	* gcc.dg/pr116905.c: New testcase.
+
+2024-10-01  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/116906
+	* gcc.dg/pr116906-1.c: New testcase.
+	* gcc.dg/pr116906-2.c: Likewise.
+
+2024-10-01  Jakub Jelinek  <jakub@redhat.com>
+
+	PR middle-end/116899
+	* gcc.dg/bitint-111.c: New test.
+
+2024-10-01  Jakub Jelinek  <jakub@redhat.com>
+
+	PR middle-end/116898
+	* gcc.dg/bitint-110.c: New test.
+
+2024-09-30  Kugan Vivekanandarajah  <kvivekananda@nvidia.com>
+
+	* gcc.dg/tree-ssa/absfloat16.c: Fix testcase.
+
+2024-09-30  Marek Polacek  <polacek@redhat.com>
+
+	PR c++/109859
+	* g++.dg/cpp2a/concepts-defarg3.C: New test.
+	* g++.dg/cpp2a/lambda-targ8.C: New test.
+
+2024-09-30  Eric Botcazou  <ebotcazou@adacore.com>
+
+	* gnat.dg/lto27.adb: New test.
+
+2024-09-30  David Malcolm  <dmalcolm@redhat.com>
+
+	PR other/116613
+	* gcc.dg/plugin/expensive_selftests_plugin.c (test_richloc):
+	Explicitly pass in dc.m_printer to diagnostic_show_locus.
+
+2024-09-30  David Malcolm  <dmalcolm@redhat.com>
+
+	PR other/116613
+	* gcc.dg/plugin/diagnostic_group_plugin.c
+	(test_diagnostic_start_span_fn): Update for change to callback
+	type.
+
+2024-09-30  David Malcolm  <dmalcolm@redhat.com>
+
+	PR other/116613
+	* gcc.dg/plugin/diagnostic_group_plugin.c
+	(test_output_format::on_begin_group): Use get_printer () rather
+	than accessing m_context.m_printer.
+	(test_output_format::on_end_group): Likewise.
+	* gcc.dg/plugin/diagnostic_plugin_xhtml_format.c
+	(xhtml_builder::m_printer): New field.
+	(xhtml_builder::xhtml_builder): Add "pp" param and use it to
+	initialize m_printer.
+	(xhtml_builder::on_report_diagnostic): Drop "context" param.
+	(xhtml_builder::make_element_for_diagnostic): Likewise.  Use
+	this->m_printer rather than the context's m_printer.  Pass
+	m_printer to call to diagnostic_show_locus.
+	(xhtml_builder::emit_diagram): Drop "context" param.
+	(xhtml_output_format::on_report_diagnostic): Drop context param
+	from call to m_builder.
+	(xhtml_output_format::on_diagram): Likewise.
+	(xhtml_output_format::xhtml_output_format): Pass result of
+	get_printer as printer for builder.
+	(diagnostic_output_format_init_xhtml): Use the fmt's printer
+	rather than the context's.
+
+2024-09-30  David Malcolm  <dmalcolm@redhat.com>
+
+	PR other/116613
+	* c-c++-common/analyzer/escaping-1.c: Update expected results to
+	remove type information from C++ results.  Previously we were
+	using %qD with default_tree_printer, which used
+	lang_hooks.decl_printable_name, whereas now we're using %qD with
+	a clone of the cxx_pretty_printer.
+
+2024-09-30  David Malcolm  <dmalcolm@redhat.com>
+
+	PR other/116792
+	* gcc.dg/plugin/diagnostic_plugin_xhtml_format.c: Fix stray
+	reference to JSON.
+
+2024-09-30  Victor Do Nascimento  <victor.donascimento@arm.com>
+
+	* lib/target-supports.exp (check_effective_target_vect_dotprod_hisi):
+	New.
+	* gcc.dg/vect/vect-dotprod-conv-optab.c: Likewise.
+	* gcc.target/aarch64/vect-dotprod-twoway-hisi.c: Likewise.
+
+2024-09-30  Victor Do Nascimento  <victor.donascimento@arm.com>
+
+	* gcc.target/aarch64/sme/vect-dotprod-twoway.c (udot2): New.
+
+2024-09-30  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/116879
+	* gcc.dg/pr116879.c: New testcase.
+
+2024-09-30  Tamar Christina  <tamar.christina@arm.com>
+
+	PR tree-optimization/116817
+	* g++.dg/vect/pr116817.cc: New test.
+
+2024-09-30  Andre Vehreschild  <vehre@gcc.gnu.org>
+
+	* gfortran.dg/coarray/pr81265.f90: New test.
+
+2024-09-30  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/116842
+	* g++.dg/torture/pr116842.C: New testcase.
+
+2024-09-30  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/116850
+	* gcc.dg/pr116850.c: New testcase.
+
+2024-09-29  Pan Li  <pan2.li@intel.com>
+
+	* gcc.target/riscv/sat_arith.h: Add test helper macros.
+	* gcc.target/riscv/sat_arith_data.h: Add test data for SAT_SUB.
+	* gcc.target/riscv/sat_s_sub-1-i16.c: New test.
+	* gcc.target/riscv/sat_s_sub-1-i32.c: New test.
+	* gcc.target/riscv/sat_s_sub-1-i64.c: New test.
+	* gcc.target/riscv/sat_s_sub-1-i8.c: New test.
+	* gcc.target/riscv/sat_s_sub-run-1-i16.c: New test.
+	* gcc.target/riscv/sat_s_sub-run-1-i32.c: New test.
+	* gcc.target/riscv/sat_s_sub-run-1-i64.c: New test.
+	* gcc.target/riscv/sat_s_sub-run-1-i8.c: New test.
+
+2024-09-29  Sam James  <sam@gentoo.org>
+
+	PR fortran/116858
+	* gfortran.dg/initialization_25.f90: Fix dg-error arguments.
+
+2024-09-29  Mikael Pettersson  <mikpelinux@gmail.com>
+
+	PR testsuite/116806
+	* gcc.dg/cpp/charconst-3.c: Perform arithmetic in unsigned
+	type to avoid integer overflow.
+
+2024-09-29  Jovan Vukic  <Jovan.Vukic@rt-rk.com>
+
+	PR target/108038
+	* gcc.target/riscv/slt-1.c: New test.
+
+2024-09-28  Thomas Koenig  <tkoenig@gcc.gnu.org>
+
+	* gfortran.dg/unsigned_33.f90: New test.
+
+2024-09-28  Thomas Koenig  <tkoenig@gcc.gnu.org>
+
+	* gfortran.dg/unsigned_31.f90: New test.
+	* gfortran.dg/unsigned_32.f90: New test.
+
+2024-09-27  Nathaniel Shead  <nathanieloshead@gmail.com>
+
+	PR c++/116160
+	* g++.dg/cpp0x/using-enum-3.C: No longer expect an error.
+	* g++.dg/lookup/using53.C: Remove XFAIL.
+	* g++.dg/cpp2a/using-enum-11.C: New test.
+
+2024-09-27  Nathaniel Shead  <nathanieloshead@gmail.com>
+
+	PR c++/116748
+	* g++.dg/lookup/using59.C: Update location.
+	* g++.dg/lookup/using69.C: New test.
+
+2024-09-27  Nathaniel Shead  <nathanieloshead@gmail.com>
+
+	PR c++/116803
+	* g++.dg/modules/merge-18_a.H: New test.
+	* g++.dg/modules/merge-18_b.H: New test.
+	* g++.dg/modules/merge-18_c.C: New test.
+
+2024-09-27  Marek Polacek  <polacek@redhat.com>
+
+	PR c++/102594
+	* g++.dg/cpp1z/decomp61.C: New test.
+
+2024-09-27  Jakub Jelinek  <jakub@redhat.com>
+
+	PR libstdc++/116847
+	* g++.dg/pch/pr116847.C: New test.
+	* g++.dg/pch/pr116847.Hs: New test.
+
+2024-09-27  Pan Li  <pan2.li@intel.com>
+
+	PR middle-end/116861
+	* gcc.dg/torture/pr116861-1.c: New test.
+
+2024-09-27  Arsen Arsenović  <arsen@aarsen.me>
+
+	PR c++/116793
+	* g++.dg/coroutines/pr116793-1.C: New test.
+
+2024-09-27  Arsen Arsenović  <arsen@aarsen.me>
+
+	* g++.dg/coroutines/nodiscard-1.C: New test.
+
+2024-09-27  Arsen Arsenović  <arsen@aarsen.me>
+
+	PR c++/116502
+	* g++.dg/coroutines/maybe-unused-1.C: New test.
+	* g++.dg/coroutines/pr116502.C: New test.
+
+2024-09-27  Nathaniel Shead  <nathanieloshead@gmail.com>
+
+	* g++.dg/modules/cexpr-5_a.C: New test.
+	* g++.dg/modules/cexpr-5_b.C: New test.
+
+2024-09-27  Nathaniel Shead  <nathanieloshead@gmail.com>
+
+	* g++.dg/modules/using-10.C: Add tests for no-linkage, fix
+	expected linkage of aliases.
+	* g++.dg/modules/using-12.C: Likewise.
+	* g++.dg/modules/using-27.C: New test.
+	* g++.dg/modules/using-28_a.C: New test.
+	* g++.dg/modules/using-28_b.C: New test.
+	* g++.dg/modules/using-29.H: New test.
+
+2024-09-27  Nathaniel Shead  <nathanieloshead@gmail.com>
+
+	* g++.dg/modules/mod-sym-4.C: Update test to account for
+	non-static internal-linkage variables new mangling.
+
+2024-09-27  Hans-Peter Nilsson  <hp@axis.com>
+
+	* gfortran.dg/open_errors_2.f90: Remove now-redundant file deletion.
+
+2024-09-26  Marek Polacek  <polacek@redhat.com>
+
+	PR c++/116731
+	* g++.dg/warn/Wrange-loop-construct3.C: New test.
+
+2024-09-26  Sam James  <sam@gentoo.org>
+
+	PR fortran/35779
+	PR fortran/116858
+	* gfortran.dg/initialization_25.f90: Mark as XFAIL.
+
+2024-09-26  Sam James  <sam@gentoo.org>
+
+	* g++.dg/modules/reparent-1_c.C: Fix whitespace around '-' in dg directive.
+	* gfortran.dg/initialization_25.f90: Ditto.
+
+2024-09-26  Sam James  <sam@gentoo.org>
+
+	* gfortran.dg/coarray/caf.exp: Fix 'dg-do-run' typo.
+	* lib/gfortran-dg.exp: Ditto.
+	* lib/gm2-dg.exp: Ditto.
+	* lib/go-dg.exp: Ditto.
+
+2024-09-26  Kugan Vivekanandarajah  <kvivekananda@nvidia.com>
+
+	* g++.dg/absvect.C: New test.
+	* gcc.dg/tree-ssa/absfloat16.c: New test.
+
+2024-09-26  Levy Hsu  <admin@levyhsu.com>
+
+	* gcc.target/i386/part-vect-popcount-1.c: New test.
+
+2024-09-26  liuhongt  <hongtao.liu@intel.com>
+
+	* gcc.dg/rtl/x86_64/vector_eq.c: New test.
+
+2024-09-26  Nathaniel Shead  <nathanieloshead@gmail.com>
+
+	PR c++/116846
+	* g++.dg/modules/indirect-1_b.C: Fix testcase.
+
+2024-09-26  Pan Li  <pan2.li@intel.com>
+
+	* gcc.target/riscv/rvv/autovec/vec_sat_arith.h: Add test helper macros.
+	* gcc.target/riscv/rvv/autovec/binop/vec_sat_s_add-10.c: New test.
+	* gcc.target/riscv/rvv/autovec/binop/vec_sat_s_add-11.c: New test.
+	* gcc.target/riscv/rvv/autovec/binop/vec_sat_s_add-12.c: New test.
+	* gcc.target/riscv/rvv/autovec/binop/vec_sat_s_add-9.c: New test.
+	* gcc.target/riscv/rvv/autovec/binop/vec_sat_s_add-run-10.c: New test.
+	* gcc.target/riscv/rvv/autovec/binop/vec_sat_s_add-run-11.c: New test.
+	* gcc.target/riscv/rvv/autovec/binop/vec_sat_s_add-run-12.c: New test.
+	* gcc.target/riscv/rvv/autovec/binop/vec_sat_s_add-run-9.c: New test.
+
 2024-09-25  Hans-Peter Nilsson  <hp@axis.com>
 
 	PR testsuite/116701

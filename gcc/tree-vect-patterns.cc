@@ -262,6 +262,35 @@ vect_supportable_direct_optab_p (vec_info *vinfo, tree otype, tree_code code,
   return true;
 }
 
+/* Return true if the target supports a vector version of CODE,
+   where CODE is known to map to a conversion optab with the given SUBTYPE.
+   ITYPE specifies the type of (some of) the scalar inputs and OTYPE
+   specifies the type of the scalar result.
+
+   When returning true, set *VECOTYPE_OUT to the vector version of OTYPE.
+   Also set *VECITYPE_OUT to the vector version of ITYPE if VECITYPE_OUT
+   is nonnull.  */
+
+static bool
+vect_supportable_conv_optab_p (vec_info *vinfo, tree otype, tree_code code,
+				 tree itype, tree *vecotype_out,
+				 tree *vecitype_out = NULL,
+				 enum optab_subtype subtype = optab_default)
+{
+  tree vecitype = get_vectype_for_scalar_type (vinfo, itype);
+  tree vecotype = get_vectype_for_scalar_type (vinfo, otype);
+  if (!vecitype || !vecotype)
+    return false;
+
+  if (!directly_supported_p (code, vecotype, vecitype, subtype))
+    return false;
+
+  *vecotype_out = vecotype;
+  if (vecitype_out)
+    *vecitype_out = vecitype;
+  return true;
+}
+
 /* Round bit precision PRECISION up to a full element.  */
 
 static unsigned int
@@ -1282,13 +1311,13 @@ vect_recog_dot_prod_pattern (vec_info *vinfo,
     half_type = signed_type_for (half_type);
 
   tree half_vectype;
-  if (!vect_supportable_direct_optab_p (vinfo, type, DOT_PROD_EXPR, half_type,
+  if (!vect_supportable_conv_optab_p (vinfo, type, DOT_PROD_EXPR, half_type,
 					type_out, &half_vectype, subtype))
     {
       /* We can emulate a mixed-sign dot-product using a sequence of
 	 signed dot-products; see vect_emulate_mixed_dot_prod for details.  */
       if (subtype != optab_vector_mixed_sign
-	  || !vect_supportable_direct_optab_p (vinfo, signed_type_for (type),
+	  || !vect_supportable_conv_optab_p (vinfo, signed_type_for (type),
 					       DOT_PROD_EXPR, half_type,
 					       type_out, &half_vectype,
 					       optab_vector))
@@ -6062,12 +6091,15 @@ vect_recog_bool_pattern (vec_info *vinfo,
       if (get_vectype_for_scalar_type (vinfo, type) == NULL_TREE)
 	return NULL;
 
+      enum vect_def_type dt;
       if (check_bool_pattern (var, vinfo, bool_stmts))
 	var = adjust_bool_stmts (vinfo, bool_stmts, type, stmt_vinfo);
       else if (integer_type_for_mask (var, vinfo))
 	return NULL;
       else if (TREE_CODE (TREE_TYPE (var)) == BOOLEAN_TYPE
-	       && !vect_get_internal_def (vinfo, var))
+	       && vect_is_simple_use (var, vinfo, &dt)
+	       && (dt == vect_external_def
+		   || dt == vect_constant_def))
 	{
 	  /* If the condition is already a boolean then manually convert it to a
 	     mask of the given integer type but don't set a vectype.  */

@@ -96,6 +96,8 @@
 
 #define LONG_LONG_TYPE_SIZE	64
 
+#define WIDEST_HARDWARE_FP_SIZE	64
+
 /* This value is the amount of bytes a caller is allowed to drop the stack
    before probing has to be done for stack clash protection.  */
 #define STACK_CLASH_CALLER_GUARD 1024
@@ -1460,6 +1462,11 @@ extern const char *aarch64_rewrite_mcpu (int argc, const char **argv);
   { "asm_cpu_spec",		ASM_CPU_SPEC }
 
 #define ASM_OUTPUT_POOL_EPILOGUE  aarch64_asm_output_pool_epilogue
+
+/* This type is the user-visible __mfp8, and a pointer to that type.  We
+   need it in many places in the backend.  Defined in aarch64-builtins.cc.  */
+extern GTY(()) tree aarch64_mfp8_type_node;
+extern GTY(()) tree aarch64_mfp8_ptr_type_node;
 
 /* This type is the user-visible __fp16, and a pointer to that type.  We
    need it in many places in the backend.  Defined in aarch64-builtins.cc.  */

@@ -23,6 +23,7 @@ along with GCC; see the file COPYING3.  If not see
    message module.  */
 
 #include "config.h"
+#define INCLUDE_MEMORY
 #define INCLUDE_VECTOR
 #include "system.h"
 #include "coretypes.h"
@@ -38,6 +39,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "diagnostic-client-data-hooks.h"
 #include "diagnostic-diagram.h"
 #include "diagnostic-format.h"
+#include "diagnostic-format-sarif.h"
 #include "diagnostic-format-text.h"
 #include "edit-context.h"
 #include "selftest.h"
@@ -143,8 +145,8 @@ diagnostic_option_classifier::init (int n_opts)
   m_classify_diagnostic = XNEWVEC (diagnostic_t, n_opts);
   for (int i = 0; i < n_opts; i++)
     m_classify_diagnostic[i] = DK_UNSPECIFIED;
-  m_push_list = nullptr;
-  m_n_push = 0;
+  m_push_list = vNULL;
+  m_classification_history = vNULL;
 }
 
 void
@@ -152,8 +154,48 @@ diagnostic_option_classifier::fini ()
 {
   XDELETEVEC (m_classify_diagnostic);
   m_classify_diagnostic = nullptr;
-  free (m_push_list);
-  m_n_push = 0;
+  m_classification_history.release ();
+  m_push_list.release ();
+}
+
+/* Save the diagnostic_option_classifier state to F for PCH
+   output.  Returns 0 on success, -1 on error.  */
+
+int
+diagnostic_option_classifier::pch_save (FILE *f)
+{
+  unsigned int lengths[2] = { m_classification_history.length (),
+			      m_push_list.length () };
+  if (fwrite (lengths, sizeof (lengths), 1, f) != 1
+      || fwrite (m_classification_history.address (),
+		 sizeof (diagnostic_classification_change_t),
+		 lengths[0], f) != lengths[0]
+      || fwrite (m_push_list.address (), sizeof (int),
+		 lengths[1], f) != lengths[1])
+    return -1;
+  return 0;
+}
+
+/* Read the diagnostic_option_classifier state from F for PCH
+   read.  Returns 0 on success, -1 on error.  */
+
+int
+diagnostic_option_classifier::pch_restore (FILE *f)
+{
+  unsigned int lengths[2];
+  if (fread (lengths, sizeof (lengths), 1, f) != 1)
+    return -1;
+  gcc_checking_assert (m_classification_history.is_empty ());
+  gcc_checking_assert (m_push_list.is_empty ());
+  m_classification_history.safe_grow (lengths[0]);
+  m_push_list.safe_grow (lengths[1]);
+  if (fread (m_classification_history.address (),
+	     sizeof (diagnostic_classification_change_t),
+	     lengths[0], f) != lengths[0]
+      || fread (m_push_list.address (), sizeof (int),
+		lengths[1], f) != lengths[1])
+    return -1;
+  return 0;
 }
 
 /* Save all diagnostic classifications in a stack.  */
@@ -161,8 +203,7 @@ diagnostic_option_classifier::fini ()
 void
 diagnostic_option_classifier::push ()
 {
-  m_push_list = (int *) xrealloc (m_push_list, (m_n_push + 1) * sizeof (int));
-  m_push_list[m_n_push ++] = m_n_classification_history;
+  m_push_list.safe_push (m_classification_history.length ());
 }
 
 /* Restore the topmost classification set off the stack.  If the stack
@@ -173,19 +214,13 @@ diagnostic_option_classifier::pop (location_t where)
 {
   int jump_to;
 
-  if (m_n_push)
-    jump_to = m_push_list [-- m_n_push];
+  if (!m_push_list.is_empty ())
+    jump_to = m_push_list.pop ();
   else
     jump_to = 0;
 
-  const int i = m_n_classification_history;
-  m_classification_history =
-    (diagnostic_classification_change_t *) xrealloc (m_classification_history, (i + 1)
-						     * sizeof (diagnostic_classification_change_t));
-  m_classification_history[i].location = where;
-  m_classification_history[i].option = jump_to;
-  m_classification_history[i].kind = DK_POP;
-  m_n_classification_history ++;
+  diagnostic_classification_change_t v = { where, jump_to, DK_POP };
+  m_classification_history.safe_push (v);
 }
 
 /* Initialize the diagnostic message outputting machinery.  */
@@ -533,13 +568,22 @@ convert_column_unit (file_cache &fc,
     }
 }
 
+diagnostic_column_policy::
+diagnostic_column_policy (const diagnostic_context &dc)
+: m_file_cache (dc.get_file_cache ()),
+  m_column_unit (dc.m_column_unit),
+  m_column_origin (dc.m_column_origin),
+  m_tabstop (dc.m_tabstop)
+{
+}
+
 /* Given an expanded_location, convert the column (which is in 1-based bytes)
    to the requested units and origin.  Return -1 if the column is
    invalid (<= 0).  */
 int
-diagnostic_context::converted_column (expanded_location s) const
+diagnostic_column_policy::converted_column (expanded_location s) const
 {
-  int one_based_col = convert_column_unit (get_file_cache (),
+  int one_based_col = convert_column_unit (m_file_cache,
 					   m_column_unit, m_tabstop, s);
   if (one_based_col <= 0)
     return -1;
@@ -549,8 +593,9 @@ diagnostic_context::converted_column (expanded_location s) const
 /* Return a string describing a location e.g. "foo.c:42:10".  */
 
 label_text
-diagnostic_context::get_location_text (const expanded_location &s,
-				       bool colorize) const
+diagnostic_column_policy::get_location_text (const expanded_location &s,
+					     bool show_column,
+					     bool colorize) const
 {
   const char *locus_cs = colorize_start (colorize, "locus");
   const char *locus_ce = colorize_stop (colorize);
@@ -560,13 +605,28 @@ diagnostic_context::get_location_text (const expanded_location &s,
   if (strcmp (file, special_fname_builtin ()))
     {
       line = s.line;
-      if (m_show_column)
-	col = this->converted_column (s);
+      if (show_column)
+	col = converted_column (s);
     }
 
   const char *line_col = maybe_line_and_column (line, col);
   return label_text::take (build_message_string ("%s%s%s:%s", locus_cs, file,
 						 line_col, locus_ce));
+}
+
+diagnostic_location_print_policy::
+diagnostic_location_print_policy (const diagnostic_context &dc)
+: m_column_policy (dc),
+  m_show_column (dc.m_show_column)
+{
+}
+
+diagnostic_location_print_policy::
+diagnostic_location_print_policy (const diagnostic_text_output_format &text_output)
+:
+  m_column_policy (text_output.get_context ()),
+  m_show_column (text_output.get_context ().m_show_column)
+{
 }
 
 static const char *const diagnostic_kind_text[] = {
@@ -847,11 +907,16 @@ logical_location::function_p () const
 }
 
 void
-default_diagnostic_start_span_fn (diagnostic_context *context,
+default_diagnostic_start_span_fn (const diagnostic_location_print_policy &loc_policy,
+				  pretty_printer *pp,
 				  expanded_location exploc)
 {
-  pretty_printer *pp = context->m_printer;
-  label_text text = context->get_location_text (exploc, pp_show_color (pp));
+  const diagnostic_column_policy &column_policy
+    = loc_policy.get_column_policy ();
+  label_text text
+    = column_policy.get_location_text (exploc,
+				       loc_policy.show_column_p (),
+				       pp_show_color (pp));
   pp_string (pp, text.get ());
   pp_newline (pp);
 }
@@ -880,31 +945,27 @@ classify_diagnostic (const diagnostic_context *context,
      the pragmas were.  */
   if (where != UNKNOWN_LOCATION)
     {
-      int i;
+      unsigned i;
 
       /* Record the command-line status, so we can reset it back on DK_POP. */
       if (old_kind == DK_UNSPECIFIED)
 	{
-	  old_kind = !context->option_enabled_p (option_id)
-	    ? DK_IGNORED : DK_ANY;
+	  old_kind = (!context->option_enabled_p (option_id)
+		      ? DK_IGNORED : DK_ANY);
 	  m_classify_diagnostic[option_id.m_idx] = old_kind;
 	}
 
-      for (i = m_n_classification_history - 1; i >= 0; i --)
-	if (m_classification_history[i].option == option_id.m_idx)
+      diagnostic_classification_change_t *p;
+      FOR_EACH_VEC_ELT_REVERSE (m_classification_history, i, p)
+	if (p->option == option_id.m_idx)
 	  {
-	    old_kind = m_classification_history[i].kind;
+	    old_kind = p->kind;
 	    break;
 	  }
 
-      i = m_n_classification_history;
-      m_classification_history =
-	(diagnostic_classification_change_t *) xrealloc (m_classification_history, (i + 1)
-							 * sizeof (diagnostic_classification_change_t));
-      m_classification_history[i].location = where;
-      m_classification_history[i].option = option_id.m_idx;
-      m_classification_history[i].kind = new_kind;
-      m_n_classification_history ++;
+      diagnostic_classification_change_t v
+	= { where, option_id.m_idx, new_kind };
+      m_classification_history.safe_push (v);
     }
   else
     m_classify_diagnostic[option_id.m_idx] = new_kind;
@@ -1033,7 +1094,7 @@ diagnostic_t
 diagnostic_option_classifier::
 update_effective_level_from_pragmas (diagnostic_info *diagnostic) const
 {
-  if (m_n_classification_history <= 0)
+  if (m_classification_history.is_empty ())
     return DK_UNSPECIFIED;
 
   /* Iterate over the locations, checking the diagnostic disposition
@@ -1043,27 +1104,26 @@ update_effective_level_from_pragmas (diagnostic_info *diagnostic) const
   for (location_t loc: diagnostic->m_iinfo.m_ilocs)
     {
       /* FIXME: Stupid search.  Optimize later. */
-      for (int i = m_n_classification_history - 1; i >= 0; i --)
+      unsigned int i;
+      diagnostic_classification_change_t *p;
+      FOR_EACH_VEC_ELT_REVERSE (m_classification_history, i, p)
 	{
-	  const diagnostic_classification_change_t &hist
-	    = m_classification_history[i];
-
-	  location_t pragloc = hist.location;
+	  location_t pragloc = p->location;
 	  if (!linemap_location_before_p (line_table, pragloc, loc))
 	    continue;
 
-	  if (hist.kind == (int) DK_POP)
+	  if (p->kind == (int) DK_POP)
 	    {
 	      /* Move on to the next region.  */
-	      i = hist.option;
+	      i = p->option;
 	      continue;
 	    }
 
-	  diagnostic_option_id option = hist.option;
+	  diagnostic_option_id option = p->option;
 	  /* The option 0 is for all the diagnostics.  */
 	  if (option == 0 || option == diagnostic->option_id)
 	    {
-	      diagnostic_t kind = hist.kind;
+	      diagnostic_t kind = p->kind;
 	      if (kind != DK_UNSPECIFIED)
 		diagnostic->kind = kind;
 	      return kind;
@@ -1567,7 +1627,8 @@ diagnostic_output_format_init (diagnostic_context &context,
       diagnostic_output_format_init_sarif_stderr (context,
 						  line_table,
 						  main_input_filename_,
-						  json_formatting);
+						  json_formatting,
+						  sarif_version::v2_1_0);
       break;
 
     case DIAGNOSTICS_OUTPUT_FORMAT_SARIF_FILE:
@@ -1575,7 +1636,17 @@ diagnostic_output_format_init (diagnostic_context &context,
 						line_table,
 						main_input_filename_,
 						json_formatting,
+						sarif_version::v2_1_0,
 						base_file_name);
+      break;
+    case DIAGNOSTICS_OUTPUT_FORMAT_SARIF_FILE_2_2_PRERELEASE:
+      diagnostic_output_format_init_sarif_file
+	(context,
+	 line_table,
+	 main_input_filename_,
+	 json_formatting,
+	 sarif_version::v2_2_prerelease_2024_08_08,
+	 base_file_name);
       break;
     }
 }
@@ -1814,7 +1885,7 @@ test_print_parseable_fixits_bytes_vs_display_columns ()
 }
 
 /* Verify that
-     diagnostic_get_location_text (..., SHOW_COLUMN)
+     diagnostic_column_policy::get_location_text (..., SHOW_COLUMN, ...)
    generates EXPECTED_LOC_TEXT, given FILENAME, LINE, COLUMN, with
    colorization disabled.  */
 
@@ -1827,7 +1898,6 @@ assert_location_text (const char *expected_loc_text,
 			= DIAGNOSTICS_COLUMN_UNIT_BYTE)
 {
   test_diagnostic_context dc;
-  dc.m_show_column = show_column;
   dc.m_column_unit = column_unit;
   dc.m_column_origin = origin;
 
@@ -1838,14 +1908,16 @@ assert_location_text (const char *expected_loc_text,
   xloc.data = NULL;
   xloc.sysp = false;
 
-  label_text actual_loc_text = dc.get_location_text (xloc, false);
+  diagnostic_column_policy column_policy (dc);
+  label_text actual_loc_text
+    = column_policy.get_location_text (xloc, show_column, false);
   ASSERT_STREQ (expected_loc_text, actual_loc_text.get ());
 }
 
-/* Verify that diagnostic_get_location_text works as expected.  */
+/* Verify that get_location_text works as expected.  */
 
 static void
-test_diagnostic_get_location_text ()
+test_get_location_text ()
 {
   const char *old_progname = progname;
   progname = "PROGNAME";
@@ -1938,7 +2010,7 @@ c_diagnostic_cc_tests ()
   test_print_parseable_fixits_remove ();
   test_print_parseable_fixits_replace ();
   test_print_parseable_fixits_bytes_vs_display_columns ();
-  test_diagnostic_get_location_text ();
+  test_get_location_text ();
   test_num_digits ();
 
 }

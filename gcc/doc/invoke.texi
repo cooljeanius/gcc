@@ -372,7 +372,7 @@ Objective-C and Objective-C++ Dialects}.
 -Wformat-security  -Wformat-signedness  -Wformat-truncation=@var{n}
 -Wformat-y2k  -Wframe-address
 -Wframe-larger-than=@var{byte-size}  -Wno-free-nonheap-object
--Wno-if-not-aligned  -Wno-ignored-attributes
+-Wheader-guard  -Wno-if-not-aligned  -Wno-ignored-attributes
 -Wignored-qualifiers  -Wno-incompatible-pointer-types  -Whardened
 -Wimplicit  -Wimplicit-fallthrough  -Wimplicit-fallthrough=@var{n}
 -Wno-implicit-function-declaration  -Wno-implicit-int
@@ -3864,8 +3864,10 @@ for code that is not valid in C++23 but used to be valid but deprecated
 in C++20 with a pedantic warning that can be disabled with
 @option{-Wno-comma-subscript}.
 
-Enabled by default with @option{-std=c++20} unless @option{-Wno-deprecated},
-and with @option{-std=c++23} regardless of @option{-Wno-deprecated}.
+Enabled by default with @option{-std=c++20} unless
+@option{-Wno-deprecated}, and after @option{-std=c++23} regardless of
+@option{-Wno-deprecated}.  Before @option{-std=c++20}, enabled with
+explicit @option{-Wdeprecated}.
 
 This warning is upgraded to an error by @option{-pedantic-errors} in
 C++23 mode or later.
@@ -4012,7 +4014,7 @@ int k = f - e;
 
 @option{-Wdeprecated-enum-enum-conversion} is enabled by default with
 @option{-std=c++20}.  In pre-C++20 dialects, this warning can be enabled
-by @option{-Wenum-conversion}.
+by @option{-Wenum-conversion} or @option{-Wdeprecated}.
 
 @opindex Wdeprecated-enum-float-conversion
 @opindex Wno-deprecated-enum-float-conversion
@@ -4030,7 +4032,19 @@ bool b = e <= 3.7;
 
 @option{-Wdeprecated-enum-float-conversion} is enabled by default with
 @option{-std=c++20}.  In pre-C++20 dialects, this warning can be enabled
-by @option{-Wenum-conversion}.
+by @option{-Wenum-conversion} or @option{-Wdeprecated}.
+
+@opindex Wdeprecated-literal-operator
+@opindex Wno-deprecated-literal-operator
+@item -Wdeprecated-literal-operator @r{(C++ and Objective-C++ only)}
+Warn that the declaration of a user-defined literal operator with a
+space before the suffix is deprecated.  This warning is enabled by
+default in C++23, or with explicit @option{-Wdeprecated}.
+
+@smallexample
+string operator "" _i18n(const char*, std::size_t); // deprecated
+string operator ""_i18n(const char*, std::size_t); // preferred
+@end smallexample
 
 @opindex Welaborated-enum-base
 @opindex Wno-elaborated-enum-base
@@ -4728,7 +4742,8 @@ non-class type, @code{volatile}-qualified function return type,
 @code{volatile}-qualified parameter type, and structured bindings of a
 @code{volatile}-qualified type.  This usage was deprecated in C++20.
 
-Enabled by default with @option{-std=c++20}.
+Enabled by default with @option{-std=c++20}.  Before
+@option{-std=c++20}, enabled with explicit @option{-Wdeprecated}.
 
 @opindex Wzero-as-null-pointer-constant
 @opindex Wno-zero-as-null-pointer-constant
@@ -10115,6 +10130,19 @@ Do not warn if certain built-in macros are redefined.  This suppresses
 warnings for redefinition of @code{__TIMESTAMP__}, @code{__TIME__},
 @code{__DATE__}, @code{__FILE__}, and @code{__BASE_FILE__}.
 
+@opindex Wheader-guard
+@item -Wheader-guard
+Warn if a valid preprocessor header multiple inclusion guard has
+a @code{#define} directive right after @code{#ifndef} or @code{#if !defined}
+directive for the multiple inclusion guard, which defines a different macro
+from the guard macro with a similar name, the actual multiple inclusion guard
+macro isn't defined at the corresponding @code{#ifndef} directive at the end
+of the header, and the @code{#define} directive defines an object-like macro
+with empty definition.  In such case, it often is just a misspelled guard
+name, either in the @code{#ifndef} or @code{#if !defined} directive or in the
+subsequent @code{#define} directive.  This warning is enabled
+by @option{-Wall}.
+
 @opindex Wstrict-prototypes
 @opindex Wno-strict-prototypes
 @item -Wstrict-prototypes @r{(C and Objective-C only)}
@@ -10363,6 +10391,13 @@ disable the error when compiled with @option{-Werror} flag.
 @opindex Wdeprecated
 @item -Wno-deprecated
 Do not warn about usage of deprecated features.  @xref{Deprecated Features}.
+
+In C++, explicitly specifying @option{-Wdeprecated} also enables
+warnings about some features that are deprecated in later language
+standards, specifically @option{-Wcomma-subscript},
+@option{-Wvolatile}, @option{-Wdeprecated-enum-float-conversion},
+@option{-Wdeprecated-enum-enum-conversion}, and
+@option{-Wdeprecated-literal-operator}.
 
 @opindex Wno-deprecated-declarations
 @opindex Wdeprecated-declarations
@@ -17143,6 +17178,9 @@ in the outgoing range calculator.
 
 @item relation-block-limit
 Maximum number of relations the oracle will register in a basic block.
+
+@item transitive-relations-work-bound
+Work bound when discovering transitive relations from existing relations.
 
 @item min-pagesize
 Minimum page size for warning purposes.
