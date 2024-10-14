@@ -1,3 +1,24 @@
+2024-10-12  Jakub Jelinek  <jakub@redhat.com>
+
+	* c-lex.cc (c_common_has_attribute,
+	c_common_lex_availability_macro): Fix up -Wformat-diag warnings.
+
+2024-10-09  Jason Merrill  <jason@redhat.com>
+
+	* c-ppoutput.cc (preprocess_file): Set directives_only flag.
+
+2024-10-09  Ken Matsui  <kmatsui@gcc.gnu.org>
+
+	PR preprocessor/89808
+	* c.opt (Wpragma_once_outside_header): Define new option.
+	* c.opt.urls: Regenerate.
+
+2024-10-07  Jason Merrill  <jason@redhat.com>
+
+	* c-ppoutput.cc (preprocess_file): For modules,
+	use directives-only scan even with flag_no_output.
+	(directives_only_cb): Respect flag_no_output.
+
 2024-10-03  Jason Merrill  <jason@redhat.com>
 
 	* c-opts.cc (c_common_post_options): Explicit -Wdeprecated enables

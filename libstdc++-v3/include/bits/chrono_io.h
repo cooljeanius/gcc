@@ -150,7 +150,9 @@ namespace __detail
       __s.flags(__os.flags());
       __s.imbue(__os.getloc());
       __s.precision(__os.precision());
-      __s << __d.count();
+      // _GLIBCXX_RESOLVE_LIB_DEFECTS
+      // 4118. How should duration formatters format custom rep types?
+      __s << +__d.count();
       __detail::__fmt_units_suffix<period, _CharT>(_Out(__s));
       __os << std::move(__s).str();
       return __os;
@@ -635,8 +637,10 @@ namespace __format
 		case 'Q':
 		  // %Q The duration's numeric value.
 		  if constexpr (chrono::__is_duration_v<_Tp>)
+		    // _GLIBCXX_RESOLVE_LIB_DEFECTS
+		    // 4118. How should duration formatters format custom rep?
 		    __out = std::format_to(__print_sign(), _S_empty_spec,
-					   __t.count());
+					   +__t.count());
 		  else
 		    __throw_format_error("chrono format error: argument is "
 					 "not a duration");
@@ -889,17 +893,19 @@ namespace __format
 	  // %c  Locale's date and time representation.
 	  // %Ec Locale's alternate date and time representation.
 
+	  basic_string<_CharT> __fmt;
 	  auto __t = _S_floor_seconds(__tt);
 	  locale __loc = _M_locale(__ctx);
 	  const auto& __tp = use_facet<__timepunct<_CharT>>(__loc);
 	  const _CharT* __formats[2];
 	  __tp._M_date_time_formats(__formats);
-	  const _CharT* __rep = __formats[__mod];
-	  if (!*__rep)
-	    __rep = _GLIBCXX_WIDEN("%a %b %e %H:%M:%S %Y");
-	  basic_string<_CharT> __fmt(_S_empty_spec);
-	  __fmt.insert(1u, 1u, _S_colon);
-	  __fmt.insert(2u, __rep);
+	  if (*__formats[__mod]) [[likely]]
+	    {
+	      __fmt = _GLIBCXX_WIDEN("{:L}");
+	      __fmt.insert(3u, __formats[__mod]);
+	    }
+	  else
+	    __fmt = _GLIBCXX_WIDEN("{:L%a %b %e %T %Y}");
 	  return std::vformat_to(std::move(__out), __loc, __fmt,
 				 std::make_format_args<_FormatContext>(__t));
 	}
@@ -1703,6 +1709,7 @@ namespace __format
 /// @endcond
 
   template<typename _Rep, typename _Period, typename _CharT>
+    requires __format::__formattable_impl<_Rep, _CharT>
     struct formatter<chrono::duration<_Rep, _Period>, _CharT>
     {
       constexpr typename basic_format_parse_context<_CharT>::iterator

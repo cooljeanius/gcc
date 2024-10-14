@@ -344,6 +344,7 @@ Richard Ball                    ricbal02        <richard.ball@arm.com>
 Scott Bambrough                 -               <scottb@netwinder.org>
 Wolfgang Bangerth               -               <bangerth@dealii.org>
 Gergö Barany                    -               <gergo@codesourcery.com>
+Thiago Jung Bauermann           -               <thiago.bauermann@linaro.org>
 Charles Baylis                  cbaylis         <charles.baylis@linaro.org>
 Tejas Belagod                   belagod         <tejas.belagod@arm.com>
 Andrey Belevantsev              abel            <abel@ispras.ru>
@@ -656,6 +657,7 @@ Bryce McKinlay                  bryce           <mckinlay@redhat.com>
 Adam Megacz                     -               <adam@xwt.org>
 Bingfeng Mei                    meibf           <bmei@broadcom.com>
 Michael Meissner                meissner        <gnu@the-meissners.org>
+Josef Melcr                     -               <melcrjos@fit.cvut.cz>
 Jason Merrill                   jason           <jason@redhat.com>
 Jim Meyering                    -               <jim@meyering.net>
 Martin Michlmayr                tbm             <tbm@cyrius.com>
@@ -757,6 +759,7 @@ Ankur Saini                     arsenic         <arsenic@sourceware.org>
 Hariharan Sandanagobalane       hariharans      <hariharan.gcc@gmail.com>
 Richard Sandiford               rsandifo        <rdsandiford@googlemail.com>
 Iain Sandoe                     iains           <iain@sandoe.co.uk>
+Feng Xue                        fxue            <fxue@os.amperecomputing.com>
 Duncan Sands                    baldrick        <baldrick@gcc.gnu.org>
 Sujoy Saraswati                 ssaraswati      <sujoy.saraswati@hpe.com>
 Trevor Saunders                 tbsaunde        <tbsaunde+gcc@tbsaunde.org>

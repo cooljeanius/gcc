@@ -87,18 +87,6 @@ build_message_string (const char *msg, ...)
   return str;
 }
 
-/* Same as build_prefix, but only the source FILE is given.  */
-char *
-diagnostic_text_output_format::file_name_as_prefix (const char *f) const
-{
-  pretty_printer *const pp = get_printer ();
-  const char *locus_cs
-    = colorize_start (pp_show_color (pp), "locus");
-  const char *locus_ce = colorize_stop (pp_show_color (pp));
-  return build_message_string ("%s%s:%s ", locus_cs, f, locus_ce);
-}
-
-
 
 /* Return the value of the getenv("COLUMNS") as an integer. If the
    value is not set to a positive integer, use ioctl to get the
@@ -167,11 +155,13 @@ diagnostic_option_classifier::pch_save (FILE *f)
   unsigned int lengths[2] = { m_classification_history.length (),
 			      m_push_list.length () };
   if (fwrite (lengths, sizeof (lengths), 1, f) != 1
-      || fwrite (m_classification_history.address (),
-		 sizeof (diagnostic_classification_change_t),
-		 lengths[0], f) != lengths[0]
-      || fwrite (m_push_list.address (), sizeof (int),
-		 lengths[1], f) != lengths[1])
+      || (lengths[0]
+	  && fwrite (m_classification_history.address (),
+		     sizeof (diagnostic_classification_change_t),
+		     lengths[0], f) != lengths[0])
+      || (lengths[1]
+	  && fwrite (m_push_list.address (), sizeof (int),
+		     lengths[1], f) != lengths[1]))
     return -1;
   return 0;
 }
@@ -189,11 +179,13 @@ diagnostic_option_classifier::pch_restore (FILE *f)
   gcc_checking_assert (m_push_list.is_empty ());
   m_classification_history.safe_grow (lengths[0]);
   m_push_list.safe_grow (lengths[1]);
-  if (fread (m_classification_history.address (),
-	     sizeof (diagnostic_classification_change_t),
-	     lengths[0], f) != lengths[0]
-      || fread (m_push_list.address (), sizeof (int),
-		lengths[1], f) != lengths[1])
+  if ((lengths[0]
+       && fread (m_classification_history.address (),
+		 sizeof (diagnostic_classification_change_t),
+		 lengths[0], f) != lengths[0])
+      || (lengths[1]
+	  && fread (m_push_list.address (), sizeof (int),
+		    lengths[1], f) != lengths[1]))
     return -1;
   return 0;
 }
@@ -644,34 +636,6 @@ get_diagnostic_kind_text (diagnostic_t kind)
   return diagnostic_kind_text[kind];
 }
 
-/* Return a malloc'd string describing a location and the severity of the
-   diagnostic, e.g. "foo.c:42:10: error: ".  The caller is responsible for
-   freeing the memory.  */
-char *
-diagnostic_text_output_format::
-build_prefix (const diagnostic_info &diagnostic) const
-{
-  gcc_assert (diagnostic.kind < DK_LAST_DIAGNOSTIC_KIND);
-
-  const char *text = _(diagnostic_kind_text[diagnostic.kind]);
-  const char *text_cs = "", *text_ce = "";
-  pretty_printer *pp = get_printer ();
-
-  if (diagnostic_kind_color[diagnostic.kind])
-    {
-      text_cs = colorize_start (pp_show_color (pp),
-				diagnostic_kind_color[diagnostic.kind]);
-      text_ce = colorize_stop (pp_show_color (pp));
-    }
-
-  const expanded_location s = diagnostic_expand_location (&diagnostic);
-  label_text location_text = get_location_text (s);
-
-  char *result = build_message_string ("%s %s%s%s", location_text.get (),
-				       text_cs, text, text_ce);
-  return result;
-}
-
 /* Functions at which to stop the backtrace print.  It's not
    particularly helpful to print the callers of these functions.  */
 
@@ -865,19 +829,6 @@ diagnostic_context::action_after_output (diagnostic_t diag_kind)
     default:
       gcc_unreachable ();
     }
-}
-
-/* If DIAGNOSTIC has a diagnostic_path and this context supports
-   printing paths, print the path.  */
-
-void
-diagnostic_text_output_format::show_any_path (const diagnostic_info &diagnostic)
-{
-  const diagnostic_path *path = diagnostic.richloc->get_path ();
-  if (!path)
-    return;
-
-  print_path (*path);
 }
 
 /* class logical_location.  */
@@ -1206,6 +1157,47 @@ diagnostic_context::warning_enabled_at (location_t loc,
   return diagnostic_enabled (&diagnostic);
 }
 
+/* Emit a diagnostic within a diagnostic group on this context.  */
+
+bool
+diagnostic_context::emit_diagnostic (diagnostic_t kind,
+				     rich_location &richloc,
+				     const diagnostic_metadata *metadata,
+				     diagnostic_option_id option_id,
+				     const char *gmsgid, ...)
+{
+  begin_group ();
+
+  va_list ap;
+  va_start (ap, gmsgid);
+  bool ret = emit_diagnostic_va (kind, richloc, metadata, option_id,
+				 gmsgid, &ap);
+  va_end (ap);
+
+  end_group ();
+
+  return ret;
+}
+
+/* As above, but taking a va_list *.  */
+
+bool
+diagnostic_context::emit_diagnostic_va (diagnostic_t kind,
+					rich_location &richloc,
+					const diagnostic_metadata *metadata,
+					diagnostic_option_id option_id,
+					const char *gmsgid, va_list *ap)
+{
+  begin_group ();
+
+  bool ret = diagnostic_impl (&richloc, metadata, option_id,
+			      gmsgid, ap, kind);
+
+  end_group ();
+
+  return ret;
+}
+
 /* Report a diagnostic message (an error or a warning) as specified by
    this diagnostic_context.
    front-end independent format specifiers are exactly those described
@@ -1404,37 +1396,6 @@ trim_filename (const char *name)
     p--;
 
   return p;
-}
-
-/* Add a purely textual note with text GMSGID and with LOCATION.  */
-
-void
-diagnostic_text_output_format::append_note (location_t location,
-					    const char * gmsgid, ...)
-{
-  diagnostic_context *context = &get_context ();
-
-  diagnostic_info diagnostic;
-  va_list ap;
-  rich_location richloc (line_table, location);
-
-  va_start (ap, gmsgid);
-  diagnostic_set_info (&diagnostic, gmsgid, &ap, &richloc, DK_NOTE);
-  if (context->m_inhibit_notes_p)
-    {
-      va_end (ap);
-      return;
-    }
-  pretty_printer *pp = get_printer ();
-  char *saved_prefix = pp_take_prefix (pp);
-  pp_set_prefix (pp, build_prefix (diagnostic));
-  pp_format (pp, &diagnostic.message);
-  pp_output_formatted_text (pp);
-  pp_destroy_prefix (pp);
-  pp_set_prefix (pp, saved_prefix);
-  pp_newline (pp);
-  diagnostic_show_locus (context, &richloc, DK_NOTE, pp);
-  va_end (ap);
 }
 
 /* Implement emit_diagnostic, inform, warning, warning_at, pedwarn,

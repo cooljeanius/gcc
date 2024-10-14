@@ -41,8 +41,8 @@ static void read_original_directory (cpp_reader *);
 static void post_options (cpp_reader *);
 
 /* If we have designated initializers (GCC >2.7) these tables can be
-   initialized, constant data.  Otherwise, they have to be filled in at
-   runtime.  */
+   initialized, constant data.  Similarly for C++14 and later.
+   Otherwise, they have to be filled in at runtime.  */
 #if HAVE_DESIGNATED_INITIALIZERS
 
 #define init_trigraph_map()  /* Nothing.  */
@@ -51,6 +51,15 @@ __extension__ const uchar _cpp_trigraph_map[UCHAR_MAX + 1] = {
 
 #define END };
 #define s(p, v) [p] = v,
+
+#elif __cpp_constexpr >= 201304L
+
+#define init_trigraph_map()  /* Nothing.  */
+#define TRIGRAPH_MAP \
+constexpr _cpp_trigraph_map_s::_cpp_trigraph_map_s () : map {} {
+#define END } \
+constexpr _cpp_trigraph_map_s _cpp_trigraph_map_d;
+#define s(p, v) map[p] = v;
 
 #else
 
@@ -654,7 +663,7 @@ static void sanity_checks (cpp_reader *pfile)
      type precisions made by cpplib.  */
   test--;
   if (test < 1)
-    cpp_error (pfile, CPP_DL_ICE, "cppchar_t must be an unsigned type");
+    cpp_error (pfile, CPP_DL_ICE, "%<cppchar_t%> must be an unsigned type");
 
   if (CPP_OPTION (pfile, precision) > max_precision)
     cpp_error (pfile, CPP_DL_ICE,
@@ -665,18 +674,19 @@ static void sanity_checks (cpp_reader *pfile)
 
   if (CPP_OPTION (pfile, precision) < CPP_OPTION (pfile, int_precision))
     cpp_error (pfile, CPP_DL_ICE,
-	       "CPP arithmetic must be at least as precise as a target int");
+	       "CPP arithmetic must be at least as precise as a target "
+	       "%<int%>");
 
   if (CPP_OPTION (pfile, char_precision) < 8)
-    cpp_error (pfile, CPP_DL_ICE, "target char is less than 8 bits wide");
+    cpp_error (pfile, CPP_DL_ICE, "target %<char%> is less than 8 bits wide");
 
   if (CPP_OPTION (pfile, wchar_precision) < CPP_OPTION (pfile, char_precision))
     cpp_error (pfile, CPP_DL_ICE,
-	       "target wchar_t is narrower than target char");
+	       "target %<wchar_t%> is narrower than target %<char%>");
 
   if (CPP_OPTION (pfile, int_precision) < CPP_OPTION (pfile, char_precision))
     cpp_error (pfile, CPP_DL_ICE,
-	       "target int is narrower than target char");
+	       "target %<int%> is narrower than target %<char%>");
 
   /* This is assumed in eval_token() and could be fixed if necessary.  */
   if (sizeof (cppchar_t) > sizeof (cpp_num_part))

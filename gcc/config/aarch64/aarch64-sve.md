@@ -3088,6 +3088,23 @@
 ;; - NOT
 ;; -------------------------------------------------------------------------
 
+(define_expand "ctz<mode>2"
+  [(set (match_operand:SVE_I 0 "register_operand")
+	(unspec:SVE_I
+	  [(match_dup 2)
+	   (ctz:SVE_I
+	     (match_operand:SVE_I 1 "register_operand"))]
+	  UNSPEC_PRED_X))]
+  "TARGET_SVE"
+  {
+     rtx pred = aarch64_ptrue_reg (<VPRED>mode);
+     rtx temp = gen_reg_rtx (<MODE>mode);
+     emit_insn (gen_aarch64_pred_rbit<mode> (temp, pred, operands[1]));
+     emit_insn (gen_aarch64_pred_clz<mode> (operands[0], pred, temp));
+     DONE;
+  }
+)
+
 ;; Unpredicated integer unary arithmetic.
 (define_expand "<optab><mode>2"
   [(set (match_operand:SVE_I 0 "register_operand")
@@ -6455,10 +6472,10 @@
 ;; by providing this, but we need to use UNSPECs since rtx logical ops
 ;; aren't defined for floating-point modes.
 (define_insn "*<optab><mode>3"
-  [(set (match_operand:SVE_FULL_F 0 "register_operand" "=w")
-	(unspec:SVE_FULL_F
-	  [(match_operand:SVE_FULL_F 1 "register_operand" "w")
-	   (match_operand:SVE_FULL_F 2 "register_operand" "w")]
+  [(set (match_operand:SVE_F 0 "register_operand" "=w")
+	(unspec:SVE_F
+	  [(match_operand:SVE_F 1 "register_operand" "w")
+	   (match_operand:SVE_F 2 "register_operand" "w")]
 	  LOGICALF))]
   "TARGET_SVE"
   "<logicalf_op>\t%0.d, %1.d, %2.d"

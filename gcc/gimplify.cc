@@ -1396,6 +1396,7 @@ gimplify_bind_expr (tree *expr_p, gimple_seq *pre_p)
 
 	  if (flag_openmp
 	      && !is_global_var (t)
+	      && !TREE_STATIC (t)
 	      && DECL_CONTEXT (t) == current_function_decl
 	      && TREE_USED (t)
 	      && (attr = lookup_attribute ("omp allocate", DECL_ATTRIBUTES (t)))
@@ -1427,11 +1428,17 @@ gimplify_bind_expr (tree *expr_p, gimple_seq *pre_p)
 			  "%<allocate%> directive for %qD inside a target "
 			  "region must specify an %<allocator%> clause", t);
 	      /* Skip for omp_default_mem_alloc (= 1),
-		 unless align is present. */
+		 unless align is present.  For C/C++, there should be always a
+		 statement list following if TREE_USED, except for, e.g., using
+		 this decl in a static_assert; in that case, only a single
+		 DECL_EXPR remains, which can be skipped here.  */
 	      else if (!errorcount
 		       && (align != NULL_TREE
 			   || alloc == NULL_TREE
-			   || !integer_onep (alloc)))
+			   || !integer_onep (alloc))
+		       && (lang_GNU_Fortran ()
+			   || (TREE_CODE (BIND_EXPR_BODY (bind_expr))
+			       != DECL_EXPR)))
 		{
 		  /* Fortran might already use a pointer type internally;
 		     use that pointer except for type(C_ptr) and type(C_funptr);
@@ -1993,17 +2000,14 @@ gimple_add_init_for_auto_var (tree decl,
 {
   gcc_assert (auto_var_p (decl));
   gcc_assert (init_type > AUTO_INIT_UNINITIALIZED);
-  location_t loc = EXPR_LOCATION (decl);
+
+  const location_t loc = DECL_SOURCE_LOCATION (decl);
   tree decl_size = TYPE_SIZE_UNIT (TREE_TYPE (decl));
+  tree init_type_node = build_int_cst (integer_type_node, (int) init_type);
+  tree decl_name;
 
-  tree init_type_node
-    = build_int_cst (integer_type_node, (int) init_type);
-
-  tree decl_name = NULL_TREE;
   if (DECL_NAME (decl))
-
     decl_name = build_string_literal (DECL_NAME (decl));
-
   else
     {
       char decl_name_anonymous[3 + (HOST_BITS_PER_INT + 2) / 3];
@@ -2019,7 +2023,7 @@ gimple_add_init_for_auto_var (tree decl,
   gimplify_assign (decl, call, seq_p);
 }
 
-/* Generate padding initialization for automatic vairable DECL.
+/* Generate padding initialization for automatic variable DECL.
    C guarantees that brace-init with fewer initializers than members
    aggregate will initialize the rest of the aggregate as-if it were
    static initialization.  In turn static initialization guarantees
@@ -13329,6 +13333,17 @@ gimplify_scan_omp_clauses (tree *list_p, gimple_seq *pre_p,
 	  break;
 
 	case OMP_CLAUSE_ALLOCATE:
+	  decl = OMP_CLAUSE_ALLOCATE_ALLOCATOR (c);
+	  if (decl
+	      && TREE_CODE (decl) == INTEGER_CST
+	      && wi::eq_p (wi::to_widest (decl), GOMP_OMP_PREDEF_ALLOC_THREADS)
+	      && (code == OMP_TARGET || code == OMP_TASK || code == OMP_TASKLOOP))
+	    warning_at (OMP_CLAUSE_LOCATION (c), OPT_Wopenmp,
+			"allocator with access trait set to %<thread%> "
+			"results in undfined behavior for %qs directive",
+			code == OMP_TARGET ? "target"
+					   : (code == OMP_TASK
+					      ? "task" : "taskloop"));
 	  decl = OMP_CLAUSE_DECL (c);
 	  if (error_operand_p (decl))
 	    {
