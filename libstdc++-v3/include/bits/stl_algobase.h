@@ -937,6 +937,8 @@ _GLIBCXX_END_NAMESPACE_CONTAINER
     __fill_a1(_ForwardIterator __first, _ForwardIterator __last,
 	      const _Tp& __value)
     {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wlong-long"
       // We can optimize this loop by moving the load from __value outside
       // the loop, but only if we know that making that copy is trivial,
       // and the assignment in the loop is also trivial (so that the identity
@@ -951,6 +953,7 @@ _GLIBCXX_END_NAMESPACE_CONTAINER
 	    && __is_same(_Tp, __typeof__(*__first))
 #endif
 	    && sizeof(_Tp) <= sizeof(long long);
+#pragma GCC diagnostic pop
 
       // When the condition is true, we use a copy of __value,
       // otherwise we just use another reference.
@@ -964,23 +967,27 @@ _GLIBCXX_END_NAMESPACE_CONTAINER
 #pragma GCC diagnostic pop
 
   // Specialization: for char types we can use memset.
-  template<typename _Tp>
+  template<typename _Up, typename _Tp>
     _GLIBCXX20_CONSTEXPR
     inline typename
-    __gnu_cxx::__enable_if<__is_byte<_Tp>::__value, void>::__type
-    __fill_a1(_Tp* __first, _Tp* __last, const _Tp& __c)
+    __gnu_cxx::__enable_if<__is_byte<_Up>::__value
+			     && (__are_same<_Up, _Tp>::__value // for std::byte
+				   || __memcpyable_integer<_Tp>::__value),
+			   void>::__type
+    __fill_a1(_Up* __first, _Up* __last, const _Tp& __x)
     {
-      const _Tp __tmp = __c;
+      // This hoists the load out of the loop and also ensures that we don't
+      // use memset for cases where the assignment would be ill-formed.
+      const _Up __val = __x;
 #if __cpp_lib_is_constant_evaluated
       if (std::is_constant_evaluated())
 	{
 	  for (; __first != __last; ++__first)
-	    *__first = __tmp;
-	  return;
+	    *__first = __val;
 	}
 #endif
       if (const size_t __len = __last - __first)
-	__builtin_memset(__first, static_cast<unsigned char>(__tmp), __len);
+	__builtin_memset(__first, static_cast<unsigned char>(__val), __len);
     }
 
   template<typename _Ite, typename _Cont, typename _Tp>
@@ -1040,6 +1047,8 @@ _GLIBCXX_END_NAMESPACE_CONTAINER
       std::__fill_a(__first, __last, __value);
     }
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wlong-long"
   // Used by fill_n, generate_n, etc. to convert _Size to an integral type:
   inline _GLIBCXX_CONSTEXPR int
   __size_to_integer(int __n) { return __n; }
@@ -1089,9 +1098,11 @@ _GLIBCXX_END_NAMESPACE_CONTAINER
   __extension__ inline _GLIBCXX_CONSTEXPR long long
   __size_to_integer(__float128 __n) { return (long long)__n; }
 #endif
+#pragma GCC diagnostic pop
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wc++17-extensions"
+#pragma GCC diagnostic ignored "-Wlong-long"
   template<typename _OutputIterator, typename _Size, typename _Tp>
     _GLIBCXX20_CONSTEXPR
     inline _OutputIterator
@@ -1574,6 +1585,8 @@ _GLIBCXX_END_NAMESPACE_CONTAINER
 #if __cplusplus >= 201402L
       return std::__bit_width(make_unsigned_t<_Tp>(__n)) - 1;
 #else
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wlong-long"
       // Use +__n so it promotes to at least int.
       return (sizeof(+__n) * __CHAR_BIT__ - 1)
 	       - (sizeof(+__n) == sizeof(long long)
@@ -1581,6 +1594,7 @@ _GLIBCXX_END_NAMESPACE_CONTAINER
 		    : (sizeof(+__n) == sizeof(long)
 			 ? __builtin_clzl(+__n)
 			 : __builtin_clz(+__n)));
+#pragma GCC diagnostic pop
 #endif
     }
 

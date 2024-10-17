@@ -418,12 +418,13 @@ namespace ranges
 		{
 		  using _ValueTypeI = iter_value_t<_Iter>;
 		  auto __num = __last - __first;
+		  __result -= __num;
 		  if (__num > 1) [[likely]]
-		    __builtin_memmove(__result - __num, __first,
+		    __builtin_memmove(__result, __first,
 				      sizeof(_ValueTypeI) * __num);
 		  else if (__num == 1)
 		    ranges::__assign_one<_IsMove>(__first, __result);
-		  return {__first + __num, __result - __num};
+		  return {__first + __num, __result};
 		}
 	    }
 
@@ -591,7 +592,7 @@ namespace ranges
 	if constexpr (sized_sentinel_for<_Sent, _Out>)
 	  {
 	    const auto __len = __last - __first;
-	    return ranges::fill_n(__first, __len, __value);
+	    return ranges::fill_n(std::move(__first), __len, __value);
 	  }
 	else if constexpr (is_scalar_v<_Tp>)
 	  {

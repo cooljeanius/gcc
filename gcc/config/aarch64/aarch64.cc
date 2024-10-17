@@ -1933,6 +1933,46 @@ aarch64_sve_int_mode (machine_mode mode)
   return aarch64_sve_data_mode (int_mode, GET_MODE_NUNITS (mode)).require ();
 }
 
+/* Look for a vector mode with the same classification as VEC_MODE,
+   but with each group of FACTOR elements coalesced into a single element.
+   In other words, look for a mode in which the elements are FACTOR times
+   larger and in which the number of elements is FACTOR times smaller.
+
+   Return the mode found, if one exists.  */
+
+static opt_machine_mode
+aarch64_coalesce_units (machine_mode vec_mode, unsigned int factor)
+{
+  auto elt_bits = vector_element_size (GET_MODE_BITSIZE (vec_mode),
+				       GET_MODE_NUNITS (vec_mode));
+  auto vec_flags = aarch64_classify_vector_mode (vec_mode);
+  if (vec_flags & VEC_SVE_PRED)
+    {
+      if (known_eq (GET_MODE_SIZE (vec_mode), BYTES_PER_SVE_PRED))
+	return aarch64_sve_pred_mode (elt_bits * factor);
+      return {};
+    }
+
+  scalar_mode new_elt_mode;
+  if (!int_mode_for_size (elt_bits * factor, false).exists (&new_elt_mode))
+    return {};
+
+  if (vec_flags == VEC_ADVSIMD)
+    {
+      auto mode = aarch64_simd_container_mode (new_elt_mode,
+					       GET_MODE_BITSIZE (vec_mode));
+      if (mode != word_mode)
+	return mode;
+    }
+  else if (vec_flags & VEC_SVE_DATA)
+    {
+      poly_uint64 new_nunits;
+      if (multiple_p (GET_MODE_NUNITS (vec_mode), factor, &new_nunits))
+	return aarch64_sve_data_mode (new_elt_mode, new_nunits);
+    }
+  return {};
+}
+
 /* Implement TARGET_VECTORIZE_RELATED_MODE.  */
 
 static opt_machine_mode
@@ -16238,7 +16278,7 @@ public:
 private:
   void record_potential_advsimd_unrolling (loop_vec_info);
   void analyze_loop_vinfo (loop_vec_info);
-  void count_ops (unsigned int, vect_cost_for_stmt, stmt_vec_info,
+  void count_ops (unsigned int, vect_cost_for_stmt, stmt_vec_info, slp_tree,
 		  aarch64_vec_op_count *);
   fractional_cost adjust_body_cost_sve (const aarch64_vec_op_count *,
 					fractional_cost, unsigned int,
@@ -16555,11 +16595,13 @@ aarch64_builtin_vectorization_cost (enum vect_cost_for_stmt type_of_cost,
     }
 }
 
-/* Return true if an access of kind KIND for STMT_INFO represents one
-   vector of an LD[234] or ST[234] operation.  Return the total number of
-   vectors (2, 3 or 4) if so, otherwise return a value outside that range.  */
+/* Return true if an access of kind KIND for STMT_INFO (or NODE if SLP)
+   represents one vector of an LD[234] or ST[234] operation.  Return the total
+   number of vectors (2, 3 or 4) if so, otherwise return a value outside that
+   range.  */
 static int
-aarch64_ld234_st234_vectors (vect_cost_for_stmt kind, stmt_vec_info stmt_info)
+aarch64_ld234_st234_vectors (vect_cost_for_stmt kind, stmt_vec_info stmt_info,
+			     slp_tree node)
 {
   if ((kind == vector_load
        || kind == unaligned_load
@@ -16569,7 +16611,7 @@ aarch64_ld234_st234_vectors (vect_cost_for_stmt kind, stmt_vec_info stmt_info)
     {
       stmt_info = DR_GROUP_FIRST_ELEMENT (stmt_info);
       if (stmt_info
-	  && STMT_VINFO_MEMORY_ACCESS_TYPE (stmt_info) == VMAT_LOAD_STORE_LANES)
+	  && vect_mem_access_type (stmt_info, node) == VMAT_LOAD_STORE_LANES)
 	return DR_GROUP_SIZE (stmt_info);
     }
   return 0;
@@ -16807,14 +16849,15 @@ aarch64_detect_scalar_stmt_subtype (vec_info *vinfo, vect_cost_for_stmt kind,
 }
 
 /* STMT_COST is the cost calculated by aarch64_builtin_vectorization_cost
-   for the vectorized form of STMT_INFO, which has cost kind KIND and which
-   when vectorized would operate on vector type VECTYPE.  Try to subdivide
-   the target-independent categorization provided by KIND to get a more
-   accurate cost.  WHERE specifies where the cost associated with KIND
-   occurs.  */
+   for the vectorized form of STMT_INFO possibly using SLP node NODE, which has
+   cost kind KIND and which when vectorized would operate on vector type
+   VECTYPE.  Try to subdivide the target-independent categorization provided by
+   KIND to get a more accurate cost.  WHERE specifies where the cost associated
+   with KIND occurs.  */
 static fractional_cost
 aarch64_detect_vector_stmt_subtype (vec_info *vinfo, vect_cost_for_stmt kind,
-				    stmt_vec_info stmt_info, tree vectype,
+				    stmt_vec_info stmt_info, slp_tree node,
+				    tree vectype,
 				    enum vect_cost_model_location where,
 				    fractional_cost stmt_cost)
 {
@@ -16840,7 +16883,7 @@ aarch64_detect_vector_stmt_subtype (vec_info *vinfo, vect_cost_for_stmt kind,
      cost by the number of elements in the vector.  */
   if (kind == scalar_load
       && sve_costs
-      && STMT_VINFO_MEMORY_ACCESS_TYPE (stmt_info) == VMAT_GATHER_SCATTER)
+      && vect_mem_access_type (stmt_info, node) == VMAT_GATHER_SCATTER)
     {
       unsigned int nunits = vect_nunits_for_cost (vectype);
       /* Test for VNx2 modes, which have 64-bit containers.  */
@@ -16853,7 +16896,7 @@ aarch64_detect_vector_stmt_subtype (vec_info *vinfo, vect_cost_for_stmt kind,
      in a scatter operation.  */
   if (kind == scalar_store
       && sve_costs
-      && STMT_VINFO_MEMORY_ACCESS_TYPE (stmt_info) == VMAT_GATHER_SCATTER)
+      && vect_mem_access_type (stmt_info, node) == VMAT_GATHER_SCATTER)
     return sve_costs->scatter_store_elt_cost;
 
   /* Detect cases in which vec_to_scalar represents an in-loop reduction.  */
@@ -16977,7 +17020,7 @@ aarch64_sve_adjust_stmt_cost (class vec_info *vinfo, vect_cost_for_stmt kind,
    cost of any embedded operations.  */
 static fractional_cost
 aarch64_adjust_stmt_cost (vec_info *vinfo, vect_cost_for_stmt kind,
-			  stmt_vec_info stmt_info, tree vectype,
+			  stmt_vec_info stmt_info, slp_tree node, tree vectype,
 			  unsigned vec_flags, fractional_cost stmt_cost)
 {
   if (vectype)
@@ -16986,7 +17029,7 @@ aarch64_adjust_stmt_cost (vec_info *vinfo, vect_cost_for_stmt kind,
 
       /* Detect cases in which a vector load or store represents an
 	 LD[234] or ST[234] instruction.  */
-      switch (aarch64_ld234_st234_vectors (kind, stmt_info))
+      switch (aarch64_ld234_st234_vectors (kind, stmt_info, node))
 	{
 	case 2:
 	  stmt_cost += simd_costs->ld2_st2_permute_cost;
@@ -17058,7 +17101,7 @@ aarch64_force_single_cycle (vec_info *vinfo, stmt_vec_info stmt_info)
    information relating to the vector operation in OPS.  */
 void
 aarch64_vector_costs::count_ops (unsigned int count, vect_cost_for_stmt kind,
-				 stmt_vec_info stmt_info,
+				 stmt_vec_info stmt_info, slp_tree node,
 				 aarch64_vec_op_count *ops)
 {
   const aarch64_base_vec_issue_info *base_issue = ops->base_issue_info ();
@@ -17156,7 +17199,7 @@ aarch64_vector_costs::count_ops (unsigned int count, vect_cost_for_stmt kind,
 
   /* Add any extra overhead associated with LD[234] and ST[234] operations.  */
   if (simd_issue)
-    switch (aarch64_ld234_st234_vectors (kind, stmt_info))
+    switch (aarch64_ld234_st234_vectors (kind, stmt_info, node))
       {
       case 2:
 	ops->general_ops += simd_issue->ld2_st2_general_ops * count;
@@ -17174,7 +17217,7 @@ aarch64_vector_costs::count_ops (unsigned int count, vect_cost_for_stmt kind,
   /* Add any overhead associated with gather loads and scatter stores.  */
   if (sve_issue
       && (kind == scalar_load || kind == scalar_store)
-      && STMT_VINFO_MEMORY_ACCESS_TYPE (stmt_info) == VMAT_GATHER_SCATTER)
+      && vect_mem_access_type (stmt_info, node) == VMAT_GATHER_SCATTER)
     {
       unsigned int pairs = CEIL (count, 2);
       ops->pred_ops += sve_issue->gather_scatter_pair_pred_ops * pairs;
@@ -17279,7 +17322,7 @@ aarch64_stp_sequence_cost (unsigned int count, vect_cost_for_stmt kind,
 
 unsigned
 aarch64_vector_costs::add_stmt_cost (int count, vect_cost_for_stmt kind,
-				     stmt_vec_info stmt_info, slp_tree,
+				     stmt_vec_info stmt_info, slp_tree node,
 				     tree vectype, int misalign,
 				     vect_cost_model_location where)
 {
@@ -17323,13 +17366,14 @@ aarch64_vector_costs::add_stmt_cost (int count, vect_cost_for_stmt kind,
 
       if (vectype && m_vec_flags)
 	stmt_cost = aarch64_detect_vector_stmt_subtype (m_vinfo, kind,
-							stmt_info, vectype,
-							where, stmt_cost);
+							stmt_info, node,
+							vectype, where,
+							stmt_cost);
 
       /* Check if we've seen an SVE gather/scatter operation and which size.  */
       if (kind == scalar_load
 	  && aarch64_sve_mode_p (TYPE_MODE (vectype))
-	  && STMT_VINFO_MEMORY_ACCESS_TYPE (stmt_info) == VMAT_GATHER_SCATTER)
+	  && vect_mem_access_type (stmt_info, node) == VMAT_GATHER_SCATTER)
 	{
 	  const sve_vec_cost *sve_costs = aarch64_tune_params.vec_costs->sve;
 	  if (sve_costs)
@@ -17378,7 +17422,7 @@ aarch64_vector_costs::add_stmt_cost (int count, vect_cost_for_stmt kind,
     {
       /* Account for any extra "embedded" costs that apply additively
 	 to the base cost calculated above.  */
-      stmt_cost = aarch64_adjust_stmt_cost (m_vinfo, kind, stmt_info,
+      stmt_cost = aarch64_adjust_stmt_cost (m_vinfo, kind, stmt_info, node,
 					    vectype, m_vec_flags, stmt_cost);
 
       /* If we're recording a nonzero vector loop body cost for the
@@ -17389,7 +17433,7 @@ aarch64_vector_costs::add_stmt_cost (int count, vect_cost_for_stmt kind,
 	  && (!LOOP_VINFO_LOOP (loop_vinfo)->inner || in_inner_loop_p)
 	  && stmt_cost != 0)
 	for (auto &ops : m_ops)
-	  count_ops (count, kind, stmt_info, &ops);
+	  count_ops (count, kind, stmt_info, node, &ops);
 
       /* If we're applying the SVE vs. Advanced SIMD unrolling heuristic,
 	 estimate the number of statements in the unrolled Advanced SIMD
@@ -22507,6 +22551,10 @@ aarch64_mangle_type (const_tree type)
 	return "Dh";
     }
 
+  /* Modal 8 bit floating point types.  */
+  if (TYPE_MAIN_VARIANT (type) == aarch64_mfp8_type_node)
+    return "u6__mfp8";
+
   /* Mangle AArch64-specific internal types.  TYPE_NAME is non-NULL_TREE for
      builtin types.  */
   if (TYPE_NAME (type) != NULL)
@@ -22518,6 +22566,29 @@ aarch64_mangle_type (const_tree type)
     }
 
   /* Use the default mangling.  */
+  return NULL;
+}
+
+/* Implement TARGET_INVALID_CONVERSION.  */
+
+static const char *
+aarch64_invalid_conversion (const_tree fromtype, const_tree totype)
+{
+  /* Do not allow conversions to/from FP8. But do allow conversions between
+     volatile and const variants of __mfp8. */
+  bool fromtype_is_fp8
+      = (TYPE_MAIN_VARIANT (fromtype) == aarch64_mfp8_type_node);
+  bool totype_is_fp8 = (TYPE_MAIN_VARIANT (totype) == aarch64_mfp8_type_node);
+
+  if (fromtype_is_fp8 && totype_is_fp8)
+    return NULL;
+
+  if (fromtype_is_fp8)
+    return N_ ("invalid conversion from type %<mfloat8_t%>");
+  if (totype_is_fp8)
+    return N_ ("invalid conversion to type %<mfloat8_t%>");
+
+  /* Conversion allowed.  */
   return NULL;
 }
 
@@ -25704,26 +25775,23 @@ aarch64_evpc_reencode (struct expand_vec_perm_d *d)
 {
   expand_vec_perm_d newd;
 
-  if (d->vec_flags != VEC_ADVSIMD)
+  /* The subregs that we'd create are not supported for big-endian SVE;
+     see aarch64_modes_compatible_p for details.  */
+  if (BYTES_BIG_ENDIAN && (d->vec_flags & VEC_ANY_SVE))
     return false;
 
   /* Get the new mode.  Always twice the size of the inner
      and half the elements.  */
-  poly_uint64 vec_bits = GET_MODE_BITSIZE (d->vmode);
-  unsigned int new_elt_bits = GET_MODE_UNIT_BITSIZE (d->vmode) * 2;
-  auto new_elt_mode = int_mode_for_size (new_elt_bits, false).require ();
-  machine_mode new_mode = aarch64_simd_container_mode (new_elt_mode, vec_bits);
-
-  if (new_mode == word_mode)
+  machine_mode new_mode;
+  if (!aarch64_coalesce_units (d->vmode, 2).exists (&new_mode))
     return false;
 
   vec_perm_indices newpermindices;
-
   if (!newpermindices.new_shrunk_vector (d->perm, 2))
     return false;
 
   newd.vmode = new_mode;
-  newd.vec_flags = VEC_ADVSIMD;
+  newd.vec_flags = d->vec_flags;
   newd.op_mode = newd.vmode;
   newd.op_vec_flags = newd.vec_flags;
   newd.target = d->target ? gen_lowpart (new_mode, d->target) : NULL;
@@ -29071,8 +29139,20 @@ aarch64_stack_protect_guard (void)
   return NULL_TREE;
 }
 
-/* Return the diagnostic message string if the binary operation OP is
-   not permitted on TYPE1 and TYPE2, NULL otherwise.  */
+/* Implement TARGET_INVALID_UNARY_OP.  */
+
+static const char *
+aarch64_invalid_unary_op (int op, const_tree type)
+{
+  /* Reject all single-operand operations on __mfp8 except for &.  */
+  if (TYPE_MAIN_VARIANT (type) == aarch64_mfp8_type_node && op != ADDR_EXPR)
+    return N_ ("operation not permitted on type %<mfloat8_t%>");
+
+  /* Operation allowed.  */
+  return NULL;
+}
+
+/* Implement TARGET_INVALID_BINARY_OP.  */
 
 static const char *
 aarch64_invalid_binary_op (int op ATTRIBUTE_UNUSED, const_tree type1,
@@ -29085,6 +29165,11 @@ aarch64_invalid_binary_op (int op ATTRIBUTE_UNUSED, const_tree type1,
       && (aarch64_sve::builtin_type_p (type1)
 	  != aarch64_sve::builtin_type_p (type2)))
     return N_("cannot combine GNU and SVE vectors in a binary operation");
+
+  /* Reject all 2-operand operations on __mfp8.  */
+  if (TYPE_MAIN_VARIANT (type1) == aarch64_mfp8_type_node
+      || TYPE_MAIN_VARIANT (type2) == aarch64_mfp8_type_node)
+    return N_ ("operation not permitted on type %<mfloat8_t%>");
 
   /* Operation allowed.  */
   return NULL;
@@ -30802,6 +30887,12 @@ aarch64_libgcc_floating_mode_supported_p
 
 #undef TARGET_MANGLE_TYPE
 #define TARGET_MANGLE_TYPE aarch64_mangle_type
+
+#undef TARGET_INVALID_CONVERSION
+#define TARGET_INVALID_CONVERSION aarch64_invalid_conversion
+
+#undef TARGET_INVALID_UNARY_OP
+#define TARGET_INVALID_UNARY_OP aarch64_invalid_unary_op
 
 #undef TARGET_INVALID_BINARY_OP
 #define TARGET_INVALID_BINARY_OP aarch64_invalid_binary_op

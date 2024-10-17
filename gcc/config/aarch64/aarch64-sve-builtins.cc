@@ -1283,7 +1283,7 @@ function_builder::function_builder (handle_pragma_index pragma_index,
 				    bool function_nulls)
 {
   m_overload_type = build_function_type (void_type_node, void_list_node);
-  m_direct_overloads = lang_GNU_CXX ();
+  m_direct_overloads = lang_GNU_CXX () || in_lto_p;
 
   if (initial_indexes[pragma_index] == 0)
     {
@@ -3688,6 +3688,21 @@ function_expander::direct_optab_handler_for_sign (optab signed_op,
     mode = vector_mode (suffix_i);
   optab op = type_suffix (suffix_i).unsigned_p ? unsigned_op : signed_op;
   return ::direct_optab_handler (op, mode);
+}
+
+/* Choose between signed and unsigned convert optabs SIGNED_OP and
+   UNSIGNED_OP based on the signedness of type suffix SUFFIX_I, then
+   pick the appropriate optab handler for "converting" from FROM_MODE
+   to TO_MODE.  */
+insn_code
+function_expander::convert_optab_handler_for_sign (optab signed_op,
+						   optab unsigned_op,
+						   unsigned int suffix_i,
+						   machine_mode to_mode,
+						   machine_mode from_mode)
+{
+  optab op = type_suffix (suffix_i).unsigned_p ? unsigned_op : signed_op;
+  return ::convert_optab_handler (op, to_mode, from_mode);
 }
 
 /* Return true if X overlaps any input.  */
