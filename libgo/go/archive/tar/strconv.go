@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"math"
 )
 
 // hasNUL reports whether the NUL character exists within s.
@@ -169,6 +170,10 @@ func (p *parser) parseOctal(b []byte) int64 {
 	x, perr := strconv.ParseUint(p.parseString(b), 8, 64)
 	if perr != nil {
 		p.err = ErrHeader
+	}
+	if x > math.MaxInt64 {
+		p.err = ErrHeader
+		return 0
 	}
 	return int64(x)
 }

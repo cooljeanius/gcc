@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"math"
 )
 
 // Reader provides sequential access to the contents of a tar archive.
@@ -261,11 +262,17 @@ func mergePAX(hdr *Header, paxHdrs map[string]string) (err error) {
 		case paxGname:
 			hdr.Gname = v
 		case paxUid:
-			id64, err = strconv.ParseInt(v, 10, 64)
-			hdr.Uid = int(id64) // Integer overflow possible
+			id64, err = strconv.ParseInt(v, 10, 32)
+			if id64 < int64(math.MinInt32) || id64 > int64(math.MaxInt32) {
+				return ErrHeader // Handle overflow error
+			}
+			hdr.Uid = int(id64)
 		case paxGid:
-			id64, err = strconv.ParseInt(v, 10, 64)
-			hdr.Gid = int(id64) // Integer overflow possible
+			id64, err = strconv.ParseInt(v, 10, 32)
+			if id64 < int64(math.MinInt32) || id64 > int64(math.MaxInt32) {
+				return ErrHeader // Handle overflow error
+			}
+			hdr.Gid = int(id64)
 		case paxAtime:
 			hdr.AccessTime, err = parsePAXTime(v)
 		case paxMtime:

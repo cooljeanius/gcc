@@ -70,7 +70,17 @@ func (f *fmt) writePadding(n int) {
 	newLen := oldLen + n
 	// Make enough room for padding.
 	if newLen > cap(buf) {
-		buf = make(buffer, cap(buf)*2+n)
+		maxSize := (1 << 31) - 1
+		if n > (cap(buf)*2 - oldLen) || n > maxSize || newLen < oldLen || newLen > maxSize {
+			// Handle the error appropriately, e.g., log an error or return early.
+			return
+		}
+		newCap := cap(buf)*2 + n
+		if newCap > maxSize {
+			// Handle the error appropriately, e.g., log an error or return early.
+			return
+		}
+		buf = make(buffer, newCap)
 		copy(buf, *f.buf)
 	}
 	// Decide which byte the padding should be filled with.
