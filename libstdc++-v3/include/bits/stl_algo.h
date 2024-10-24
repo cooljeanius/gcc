@@ -665,25 +665,6 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       return __result;
     }
 
-  template<typename _InputIterator, typename _Size, typename _OutputIterator>
-    _GLIBCXX20_CONSTEXPR
-    _OutputIterator
-    __copy_n(_InputIterator __first, _Size __n,
-	     _OutputIterator __result, input_iterator_tag)
-    {
-      return std::__niter_wrap(__result,
-			       __copy_n_a(__first, __n,
-					  std::__niter_base(__result), true));
-    }
-
-  template<typename _RandomAccessIterator, typename _Size,
-	   typename _OutputIterator>
-    _GLIBCXX20_CONSTEXPR
-    inline _OutputIterator
-    __copy_n(_RandomAccessIterator __first, _Size __n,
-	     _OutputIterator __result, random_access_iterator_tag)
-    { return std::copy(__first, __first + __n, __result); }
-
   /**
    *  @brief Copies the range [first,first+n) into [result,result+n).
    *  @ingroup mutating_algorithms
@@ -714,8 +695,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       __glibcxx_requires_can_increment(__first, __n2);
       __glibcxx_requires_can_increment(__result, __n2);
 
-      return std::__copy_n(__first, __n2, __result,
-			   std::__iterator_category(__first));
+      auto __res = std::__copy_n_a(std::__niter_base(__first), __n2,
+				   std::__niter_base(__result), true);
+      return std::__niter_wrap(__result, std::move(__res));
     }
 
   /**
@@ -3838,7 +3820,7 @@ _GLIBCXX_BEGIN_NAMESPACE_ALGO
    *  such that @c *i == @p __val, or @p __last if no such iterator exists.
   */
   template<typename _InputIterator, typename _Tp>
-    _GLIBCXX20_CONSTEXPR
+    _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
     inline _InputIterator
     find(_InputIterator __first, _InputIterator __last, const _Tp& __val)
     {
@@ -3852,7 +3834,7 @@ _GLIBCXX_BEGIN_NAMESPACE_ALGO
       using _ValT = typename iterator_traits<_InputIterator>::value_type;
       if constexpr (__can_use_memchr_for_find<_ValT, _Tp>)
 	if constexpr (is_pointer_v<decltype(std::__niter_base(__first))>
-#if __cpp_lib_concepts
+#if __glibcxx_concepts && __glibcxx_to_address
 			|| contiguous_iterator<_InputIterator>
 #endif
 		     )
@@ -3865,11 +3847,17 @@ _GLIBCXX_BEGIN_NAMESPACE_ALGO
 	      return __last;
 	    else if (!__is_constant_evaluated())
 	      {
-		const void* __p0 = std::__to_address(__first);
 		const int __ival = static_cast<int>(__val);
-		if (auto __n = std::distance(__first, __last); __n > 0)
-		  if (auto __p1 = __builtin_memchr(__p0, __ival, __n))
-		    return __first + ((const char*)__p1 - (const char*)__p0);
+		if (auto __n = __last - __first; __n > 0)
+		  {
+#if __glibcxx_concepts && __glibcxx_to_address
+		    const void* __p0 = std::to_address(__first);
+#else
+		    const void* __p0 = std::__niter_base(__first);
+#endif
+		    if (auto __p1 = __builtin_memchr(__p0, __ival, __n))
+		      return __first + ((const char*)__p1 - (const char*)__p0);
+		  }
 		return __last;
 	      }
 	  }

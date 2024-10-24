@@ -6558,7 +6558,9 @@ c_parser_initval (c_parser *parser, struct c_expr *after,
 	   (as guaranteed for CPP_EMBED).  */
 	if (tok->type == CPP_CLOSE_BRACE && len != INT_MAX)
 	  len = i;
-	else if (tok->type != CPP_COMMA)
+	else if (tok->type != CPP_COMMA
+		 || (c_parser_peek_nth_token_raw (parser, 2 + 2 * i)->type
+		     != CPP_NUMBER))
 	  {
 	    vals_to_ignore = i;
 	    return;
@@ -6601,7 +6603,10 @@ c_parser_initval (c_parser *parser, struct c_expr *after,
 	       for CPP_EMBED is normally guaranteed after it.  Include
 	       that byte in the RAW_DATA_OWNER though, so it can be optimized
 	       later.  */
-	    if (tok2->type == CPP_CLOSE_BRACE && orig_len == INT_MAX)
+	    if (orig_len == INT_MAX
+		&& (tok2->type == CPP_CLOSE_BRACE
+		    || (c_parser_peek_nth_token (parser, 4)->type
+			!= CPP_NUMBER)))
 	      {
 		last = 1;
 		break;

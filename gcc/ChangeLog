@@ -1,3 +1,1981 @@
+2024-10-23  Andrew Pinski  <quic_apinski@quicinc.com>
+
+	* config/aarch64/aarch64.cc (aarch64_ptrue_reg): Fix type
+	of induction variable i.
+
+2024-10-23  Andrew Pinski  <quic_apinski@quicinc.com>
+
+	PR tree-optimization/117260
+	* gimple-match-exports.cc (maybe_push_res_to_seq): Reject non-const
+	internal functions.
+
+2024-10-23  Jonathan Wakely  <jwakely@redhat.com>
+
+	* ginclude/stdalign.h (__alignas_is_defined): Define for C++.
+	(__alignof_is_defined): Likewise.
+
+2024-10-23  David Malcolm  <dmalcolm@redhat.com>
+
+	PR jit/117275
+	* toplev.cc (toplev::finalize): Call varasm_cc_finalize.
+	* varasm.cc (varasm_cc_finalize): New.
+	* varasm.h (varasm_cc_finalize): New decl.
+
+2024-10-23  Pengxuan Zheng  <quic_pzheng@quicinc.com>
+
+	PR target/113860
+	* config/aarch64/aarch64-protos.h (aarch64_ptrue_reg): New function.
+	* config/aarch64/aarch64-simd.md (popcount<mode>2): Update pattern to
+	also support V1DI mode.
+	* config/aarch64/aarch64.cc (aarch64_ptrue_reg): New function.
+	* config/aarch64/aarch64.md (popcount<mode>2): Add TARGET_SVE support.
+	* config/aarch64/iterators.md (VDQHSD_V1DI): New mode iterator.
+	(SVE_VDQ_I): Add V1DI.
+	(bitsize): Likewise.
+	(VPRED): Likewise.
+	(VEC_POP_MODE): New mode attribute.
+	(vec_pop_mode): Likewise.
+
+2024-10-23  Andrew MacLeod  <amacleod@redhat.com>
+
+	PR tree-optimization/117222
+	* range-op-ptr.cc (operator_pointer_diff::fold_range): New.
+	(operator_pointer_diff::op1_op2_relation_effect): Remove irange
+	variant.
+	(operator_pointer_diff::update_bitmask): Likewise.
+
+2024-10-23  David Malcolm  <dmalcolm@redhat.com>
+
+	PR fortran/105916
+	* diagnostic-buffer.h: New file.
+	* diagnostic-format-json.cc: Define INCLUDE_VECTOR.  Include
+	"diagnostic-buffer.h".
+	(class diagnostic_json_format_buffer): New subclass.
+	(class json_output_format): Add friend class
+	diagnostic_json_format_buffer.
+	(json_output_format::make_per_format_buffer): New vfunc
+	implementation.
+	(json_output_format::set_buffer): New vfunc implementation.
+	(json_output_format::json_output_format): Initialize m_buffer.
+	(json_output_format::m_buffer): New field.
+	(diagnostic_json_format_buffer::dump): New.
+	(diagnostic_json_format_buffer::empty_p): New.
+	(diagnostic_json_format_buffer::move_to): New.
+	(diagnostic_json_format_buffer::clear): New.
+	(diagnostic_json_format_buffer::flush): New.
+	(json_output_format::on_report_diagnostic): Implement optional
+	buffering.
+	* diagnostic-format-sarif.cc: Include "diagnostic-buffer.h".
+	(class diagnostic_sarif_format_buffer): New subclass.
+	(class sarif_builder): Add friend
+	class diagnostic_sarif_format_buffer.
+	(sarif_builder::num_results): New accessor.
+	(sarif_builder::get_result): New accessor.
+	(sarif_builder::on_report_diagnostic): Add param "buffer"; use it
+	to implement optional buffering.
+	(diagnostic_sarif_format_buffer::dump): New.
+	(diagnostic_sarif_format_buffer::empty_p): New.
+	(diagnostic_sarif_format_buffer::move_to): New.
+	(diagnostic_sarif_format_buffer::clear): New.
+	(diagnostic_sarif_format_buffer::flush): New.
+	(sarif_output_format::make_per_format_buffer): New vfunc
+	implementation.
+	(sarif_output_format::set_buffer): New vfunc implementation.
+	(sarif_output_format::on_report_diagnostic): Pass m_buffer to
+	sarif_builder::on_report_diagnostic.
+	(sarif_output_format::num_results): New accessor.
+	(sarif_output_format::get_result): New accessor.
+	(diagnostic_output_format::diagnostic_output_format): Initialize
+	m_buffer.
+	(diagnostic_output_format::m_buffer): New field.
+	(diagnostic_output_format::num_results): Get accessor.
+	(diagnostic_output_format::get_result): Get accessor.
+	(selftest::get_message_from_result): New.
+	(selftest::test_buffering): New.
+	(selftest::diagnostic_format_sarif_cc_tests): Call it.
+	* diagnostic-format-text.cc: Include
+	"diagnostic-client-data-hooks.h".
+	(class diagnostic_text_format_buffer): New subclass.
+	(diagnostic_text_format_buffer::diagnostic_text_format_buffer):
+	New.
+	(diagnostic_text_format_buffer::dump): New.
+	(diagnostic_text_format_buffer::empty_p): New.
+	(diagnostic_text_format_buffer::move_to): New.
+	(diagnostic_text_format_buffer::clear): New.
+	(diagnostic_text_format_buffer::flush): New.
+	(diagnostic_text_output_format::dump): Dump m_saved_output_buffer.
+	(diagnostic_text_output_format::set_buffer): New.
+	(diagnostic_text_output_format::make_per_format_buffer): New.
+	* diagnostic-format-text.h
+	(diagnostic_text_output_format::diagnostic_text_output_format):
+	Initialize m_saved_output_buffer.
+	(diagnostic_text_output_format::set_buffer): New decl.
+	(diagnostic_text_output_format::make_per_format_buffer): New decl.
+	(diagnostic_text_output_format::m_saved_output_buffer): New field.
+	* diagnostic-format.h (class diagnostic_per_format_buffer): New
+	forward decl.
+	(diagnostic_output_format::make_per_format_buffer): New vfunc.
+	(diagnostic_output_format::set_buffer): New vfunc.
+	* diagnostic.cc: Include "diagnostic-buffer.h".
+	(diagnostic_context::initialize): Replace memset with call to
+	"clear" on m_diagnostic_counters.  Initializer
+	m_diagnostic_buffer.
+	(diagnostic_context::finish): Call set_diagnostic_buffer with
+	nullptr.
+	(diagnostic_context::dump): Update for encapsulation of counts
+	into m_diagnostic_counters.  Dump m_diagnostic_buffer.
+	(diagnostic_context::execution_failed_p): Update for encapsulation of
+	counts into m_diagnostic_counters.
+	(diagnostic_context::check_max_errors): Likewise.
+	(diagnostic_context::report_diagnostic): Likewise.  Eliminate
+	diagnostic_check_max_errors in favor of check_max_errors.
+	Update increment of counter to support buffering.  Eliminate
+	diagnostic_action_after_output in favor of action_after_output.
+	Only add fixits to m_edit_context_ptr if buffering is disabled.
+	Only call diagnostic_output_format::after_diagnostic if buffering
+	is disabled.
+	(diagnostic_context::error_recursion):  Eliminate
+	diagnostic_action_after_output in favor of action_after_output.
+	(diagnostic_context::set_diagnostic_buffer): New.
+	(diagnostic_context::clear_diagnostic_buffer): New.
+	(diagnostic_context::flush_diagnostic_buffer): New.
+	(diagnostic_counters::diagnostic_counters): New.
+	(diagnostic_counters::dump): New.
+	(diagnostic_counters::move_to): New.
+	(diagnostic_counters::clear): New.
+	(diagnostic_buffer::diagnostic_buffer): New.
+	(diagnostic_buffer::~diagnostic_buffer): New.
+	(diagnostic_buffer::dump): New.
+	(diagnostic_buffer::empty_p): New.
+	(diagnostic_buffer::move_to): New.
+	(diagnostic_buffer::ensure_per_format_buffer): New.
+	(c_diagnostic_cc_tests): Remove stray newline.
+	* diagnostic.h (class diagnostic_buffer): New forward decl.
+	(struct diagnostic_counters): New.
+	(diagnostic_context::check_max_errors): Make private.
+	(diagnostic_context::action_after_output): Make private.
+	(diagnostic_context::get_output_format): Make non-const.
+	(diagnostic_context::diagnostic_count): Update for change
+	to m_diagnostic_counters.
+	(diagnostic_context::set_diagnostic_buffer): New decl.
+	(diagnostic_context::get_diagnostic_buffer): New decl.
+	(diagnostic_context::clear_diagnostic_buffer): New decl.
+	(diagnostic_context::flush_diagnostic_buffer): New decl.
+	(diagnostic_context::m_diagnostic_count): Replace array with...
+	(diagnostic_context::m_diagnostic_counters): ...this.
+	(diagnostic_context::m_diagnostic_buffer): New field.
+	(diagnostic_action_after_output): Delete.
+	(diagnostic_check_max_errors): Delete.
+
+2024-10-23  Wilco Dijkstra  <wilco.dijkstra@arm.com>
+
+	* config/aarch64/aarch64-simd.md (aarch64_simd_mov<VQMOV:mode>):
+	Remove redundant mode check.
+
+2024-10-23  Wilco Dijkstra  <wilco.dijkstra@arm.com>
+
+	* config/aarch64/aarch64.md (copysign<GPF:mode>3): Widen immediate to
+	vector.
+	(copysign<GPF:mode>3_insn): Use VQ_INT_EQUIV in operand 3.
+	* config/aarch64/iterators.md (VQ_INT_EQUIV): New iterator.
+	(vq_int_equiv): Likewise.
+
+2024-10-23  Jason Merrill  <jason@redhat.com>
+
+	* doc/extend.texi (Deprecated Features): Remove text about some
+	no-longer-deprecated features.
+
+2024-10-23  Wilco Dijkstra  <wilco.dijkstra@arm.com>
+
+	* config/aarch64/aarch64.cc (enum simd_immediate_check): Add
+	AARCH64_CHECK_XOR.
+	(aarch64_simd_valid_xor_imm): New function.
+	(aarch64_output_simd_imm): Add AARCH64_CHECK_XOR support.
+	(aarch64_output_simd_xor_imm): New function.
+	* config/aarch64/aarch64-protos.h (aarch64_output_simd_xor_imm): New
+	prototype.
+	(aarch64_simd_valid_xor_imm): New prototype.
+	* config/aarch64/aarch64-simd.md (xor<mode>3<vczle><vczbe>):
+	Use aarch64_reg_or_xor_imm predicate and add an immediate alternative.
+	* config/aarch64/predicates.md (aarch64_reg_or_xor_imm): Add new
+	predicate.
+
+2024-10-23  Wilco Dijkstra  <wilco.dijkstra@arm.com>
+
+	* config/aarch64/aarch64-simd.md (ior<mode>3<vczle><vczbe>):
+	Use aarch64_reg_or_orr_imm predicate.  Combine SVE/AdvSIMD immediates
+	and use aarch64_output_simd_orr_imm.
+	* config/aarch64/aarch64.cc (struct simd_immediate_info): Add SVE_MOV.
+	(aarch64_sve_valid_immediate): Use SVE_MOV for SVE move immediates.
+	(aarch64_simd_valid_imm): Enable SVE SIMD immediates when possible.
+	(aarch64_output_simd_imm): Support emitting SVE SIMD immediates.
+	* config/aarch64/predicates.md (aarch64_orr_imm_sve_advsimd): Remove.
+
+2024-10-23  Wilco Dijkstra  <wilco.dijkstra@arm.com>
+
+	* config/aarch64/aarch64-protos.h (enum simd_immediate_check): Move to aarch64.cc.
+	(aarch64_output_simd_mov_immediate): Remove.
+	(aarch64_output_simd_mov_imm): New prototype.
+	(aarch64_output_simd_orr_imm): Likewise.
+	(aarch64_output_simd_and_imm): Likewise.
+	(aarch64_simd_valid_immediate): Remove.
+	(aarch64_simd_valid_and_imm): New prototype.
+	(aarch64_simd_valid_mov_imm): Likewise.
+	(aarch64_simd_valid_orr_imm): Likewise.
+	* config/aarch64/aarch64-simd.md: Use aarch64_output_simd_mov_imm.
+	* config/aarch64/aarch64.cc (enum simd_immediate_check): Moved from aarch64-protos.h.
+	Use AARCH64_CHECK_AND rather than AARCH64_CHECk_BIC.
+	(aarch64_expand_sve_const_vector): Use aarch64_simd_valid_mov_imm.
+	(aarch64_expand_mov_immediate): Likewise.
+	(aarch64_can_const_movi_rtx_p): Likewise.
+	(aarch64_secondary_reload): Likewise.
+	(aarch64_legitimate_constant_p): Likewise.
+	(aarch64_advsimd_valid_immediate): Simplify checks on 'which' param.
+	(aarch64_sve_valid_immediate): Add extra param for move vs logical.
+	(aarch64_simd_valid_immediate): Rename to aarch64_simd_valid_imm.
+	(aarch64_simd_valid_mov_imm): New function.
+	(aarch64_simd_valid_orr_imm): Likewise.
+	(aarch64_simd_valid_and_imm): Likewise.
+	(aarch64_mov_operand_p): Use aarch64_simd_valid_mov_imm.
+	(aarch64_simd_scalar_immediate_valid_for_move): Likewise.
+	(aarch64_simd_make_constant): Likewise.
+	(aarch64_expand_vector_init_fallback): Likewise.
+	(aarch64_output_simd_mov_immediate): Rename to aarch64_output_simd_imm.
+	(aarch64_output_simd_orr_imm): New function.
+	(aarch64_output_simd_and_imm): Likewise.
+	(aarch64_output_simd_mov_imm): Likewise.
+	(aarch64_output_scalar_simd_mov_immediate): Use aarch64_output_simd_mov_imm.
+	(aarch64_output_sve_mov_immediate): Use aarch64_simd_valid_imm.
+	(aarch64_output_sve_ptrues): Likewise.
+	* config/aarch64/constraints.md (Do): Use aarch64_simd_valid_orr_imm.
+	(Db): Use aarch64_simd_valid_and_imm.
+	* config/aarch64/predicates.md (aarch64_reg_or_bic_imm): Use aarch64_simd_valid_orr_imm.
+	(aarch64_reg_or_and_imm): Use aarch64_simd_valid_and_imm.
+
+2024-10-23  liuhongt  <hongtao.liu@intel.com>
+
+	PR target/117240
+	* config/i386/i386-builtin.def: Add avx/avx512f to vaes
+	ymm/zmm builtins.
+
+2024-10-23  Martin Jambor  <mjambor@suse.cz>
+
+	PR tree-optimization/117142
+	* tree-sra.cc (build_access_from_call_arg): Disqualify any
+	candidate passed to a function returning twice.
+
+2024-10-23  Jakub Jelinek  <jakub@redhat.com>
+
+	* doc/invoke.texi (Wleading-whitespace=): Document.
+
+2024-10-23  liuhongt  <hongtao.liu@intel.com>
+
+	PR target/117232
+	* config/i386/sse.md (*kortest_cmp<SWI1248_AVX512BWDQ_64:mode>_movqicc):
+	New define_insn_and_split.
+	(*kortest_cmp<SWI1248_AVX512BWDQ_64:mode>_mov<SWI248:mode>cc):
+	Ditto.
+
+2024-10-22  Jakub Jelinek  <jakub@redhat.com>
+
+	PR middle-end/117199
+	* varasm.cc (compare_constant): Handle RAW_DATA_CST.  Formatting fix
+	in the STRING_CST case.
+
+2024-10-22  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c/117190
+	* varasm.cc (array_size_for_constructor): For RAW_DATA_CST,
+	use bitsize_int rather than size_int.
+
+2024-10-22  Tobias Burnus  <tburnus@baylibre.com>
+
+	* config/gcn/gcn-devices.def: Add generic version/flag as additional
+	value and architecture family entry; update; add gfx-10-3-generic
+	and gfx11-generic.
+	* config/gcn/gcn-hsa.h (ABI_VERSION_SPEC): Remove
+	(ASM_SPEC): Use generated ABI_VERSION_OPT instead.
+	* config/gcn/gcn-tables.opt: Regenerate
+	* config/gcn/gcn.h (gcn_device_def): Add generic_version and
+	arch_family members.
+	(TARGET_CPU_CPP_BUILTINS): Fix allocation bug, handle '-' in the
+	name and add additional macro defines.
+	* config/gcn/gcn.cc (gcn_devices): Handle it.
+	* config/gcn/gen-gcn-device-macros.awk: Likewise; use ELF name
+	for the macro name; generate ABI_VERSION_OPT.
+	* config/gcn/mkoffload.cc (ELFABIVERSION_AMDGPU_HSA_V6,
+	EF_AMDGPU_GENERIC_VERSION_V, EF_AMDGPU_GENERIC_VERSION_OFFSET,
+	GET_GENERIC_VERSION, SET_GENERIC_VERSION): Define.
+	(get_arch): Call SET_GENERIC_VERSION flag on elf_flags.
+	(copy_early_debug_info): If the arch sets the generic version,
+	use ELFABIVERSION_AMDGPU_HSA_V6.
+
+2024-10-22  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/117254
+	* gimple-ssa-warn-access.cc (maybe_warn_nonstring_arg):
+	Check the array domain max is constant before using it.
+
+2024-10-22  Andrew Stubbs  <ams@baylibre.com>
+	    Tobias Burnus  <tburnus@baylibre.com>
+
+	* config.gcc (amdgcn): Add gcn-device-macros.h to tm_file.
+	Add gcn-tables.opt to extra_options.
+	* config/gcn/gcn-hsa.h (NO_XNACK): Delete.
+	(NO_SRAM_ECC): Delete.
+	(SRAMOPT): Move definition to generated file gcn-device-macros.h.
+	(XNACKOPT): Likewise.
+	(ASM_SPEC): Redefine using generated values from gcn-device-macros.h.
+	* config/gcn/gcn-opts.h
+	(enum processor_type): Generate from gcn-devices.def.
+	(TARGET_VEGA10): Delete.
+	(TARGET_VEGA20): Delete.
+	(TARGET_GFX908): Delete.
+	(TARGET_GFX90a): Delete.
+	(TARGET_GFX90c): Delete.
+	(TARGET_GFX1030): Delete.
+	(TARGET_GFX1036): Delete.
+	(TARGET_GFX1100): Delete.
+	(TARGET_GFX1103): Delete.
+	(TARGET_XNACK): Redefine to allow for HSACO_ATTR_UNSUPPORTED.
+	(enum hsaco_attr_type): Add HSACO_ATTR_UNSUPPORTED.
+	(TARGET_TGSPLIT): New define.
+	* config/gcn/gcn.cc (gcn_devices): New constant table.
+	(gcn_option_override): Rework to use gcn_devices table.
+	(gcn_omp_device_kind_arch_isa): Likewise.
+	(output_file_start): Likewise.
+	(gcn_hsa_declare_function_name): Rework using TARGET_* macros.
+	* config/gcn/gcn.h (gcn_devices): Declare struct and table.
+	(TARGET_CPU_CPP_BUILTINS): Rework using gcn_devices.
+	* config/gcn/gcn.opt: Move enum data to generated file gcn-tables.opt.
+	Use new names for the default values.
+	* config/gcn/mkoffload.cc (EF_AMDGPU_MACH_AMDGCN_GFX900): Delete.
+	(EF_AMDGPU_MACH_AMDGCN_GFX906): Delete.
+	(EF_AMDGPU_MACH_AMDGCN_GFX908): Delete.
+	(EF_AMDGPU_MACH_AMDGCN_GFX90a): Delete.
+	(EF_AMDGPU_MACH_AMDGCN_GFX90c): Delete.
+	(EF_AMDGPU_MACH_AMDGCN_GFX1030): Delete.
+	(EF_AMDGPU_MACH_AMDGCN_GFX1036): Delete.
+	(EF_AMDGPU_MACH_AMDGCN_GFX1100): Delete.
+	(EF_AMDGPU_MACH_AMDGCN_GFX1103): Delete.
+	(enum elf_arch_code): Define using gcn-devices.def.
+	(get_arch): Rework using gcn-devices.def.
+	(main): Rework using gcn-devices.def
+	* config/gcn/t-gcn-hsa (gcn-tables.opt): Generate file.
+	(gcn-device-macros.h): Generate file.
+	* config/gcn/t-omp-device: Generate isa list from gcn-devices.def.
+	* config/gcn/gcn-devices.def: New file.
+	* config/gcn/gcn-tables.opt: New file.
+	* config/gcn/gcn-tables.opt.urls: New file.
+	* config/gcn/gen-gcn-device-macros.awk: New file.
+	* config/gcn/gen-opt-tables.awk: New file.
+
+2024-10-22  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/117123
+	* tree-ssa-sccvn.cc (visit_phi): First process a non-constant
+	argument edge to handle more equivalences.  Remove the
+	two-arg special case.
+
+2024-10-22  xuli  <xuli1@eswincomputing.com>
+
+	* match.pd: Support IMM=1.
+
+2024-10-22  xuli  <xuli1@eswincomputing.com>
+
+	* match.pd: Support IMM=max-1.
+
+2024-10-21  Jeff Law  <jlaw@ventanamicro.com>
+
+	PR rtl-optimization/116488
+	PR rtl-optimization/116579
+	PR rtl-optimization/116915
+	PR rtl-optimization/117226
+	* ext-dce.cc (carry_backpropagate): Properly handle SIGN_EXTEND, add
+	ZERO_EXTEND handling as well.
+	(ext_dce_process_uses): Call carry_backpropagate before the optimization
+	step.
+
+2024-10-21  Pan Li  <pan2.li@intel.com>
+
+	* config/riscv/autovec.md (sstrunc<mode><v_double_trunc>2): Add
+	new pattern sstrunc for double trunc.
+	(sstrunc<mode><v_quad_trunc>2): Ditto but for quad trunc.
+	(sstrunc<mode><v_oct_trunc>2): Ditto but for oct trunc.
+	* config/riscv/riscv-protos.h (expand_vec_double_sstrunc): Add
+	new func decl to expand double trunc.
+	(expand_vec_quad_sstrunc): Ditto but for quad trunc.
+	(expand_vec_oct_sstrunc): Ditto but for oct trunc.
+	* config/riscv/riscv-v.cc (expand_vec_double_sstrunc): Add new
+	func to expand double trunc.
+	(expand_vec_quad_sstrunc): Ditto but for quad trunc.
+	(expand_vec_oct_sstrunc): Ditto but for oct trunc.
+
+2024-10-21  Pan Li  <pan2.li@intel.com>
+
+	* tree-vect-patterns.cc (gimple_signed_integer_sat_trunc): Add
+	new func decl for signed SAT_TRUNC.
+	(vect_recog_sat_trunc_pattern): Try signed match pattern for
+	the SAT_TRUNC.
+
+2024-10-21  Pan Li  <pan2.li@intel.com>
+
+	* match.pd: Refine matching for vector signed SAT_TRUNC form 1.
+
+2024-10-21  Andrew Carlotti  <andrew.carlotti@arm.com>
+
+	* config/aarch64/aarch64.cc (aarch64_register_move_cost):
+	Increase costs involving MOVEABLE_SYSREGS.
+
+2024-10-21  Andrew Stubbs  <ams@baylibre.com>
+
+	* config/gcn/gcn.h (SGPR_REGNO_P): Silence warning.
+
+2024-10-21  Alex Coplan  <alex.coplan@arm.com>
+
+	PR rtl-optimization/116783
+	* pair-fusion.cc (def_walker::cand_addr_uses): New.
+	(def_walker::def_walker): Add parameter for candidate address
+	uses.
+	(def_walker::alias_conflict_p): Declare.
+	(def_walker::addr_reg_conflict_p): New.
+	(def_walker::conflict_p): New.
+	(store_walker::store_walker): Add parameter for candidate
+	address uses and pass to base ctor.
+	(store_walker::conflict_p): Rename to ...
+	(store_walker::alias_conflict_p): ... this.
+	(load_walker::load_walker): Add parameter for candidate
+	address uses and pass to base ctor.
+	(load_walker::conflict_p): Rename to ...
+	(load_walker::alias_conflict_p): ... this.
+	(pair_fusion_bb_info::try_fuse_pair): Collect address register
+	uses for candidate insns and pass down to alias walkers.
+
+2024-10-21  Jeevitha  <jeevitha@linux.ibm.com>
+
+	* config/rs6000/amo.h (enum _AMO_LD): Correct the function code for
+	_AMO_LD_DEC_BOUNDED.
+
+2024-10-21  Haochen Jiang  <haochen.jiang@intel.com>
+
+	* common/config/i386/cpuinfo.h (get_intel_cpu): Refactor the
+	function for future expansion on different family.
+
+2024-10-21  liuhongt  <hongtao.liu@intel.com>
+
+	PR target/117159
+	* config/i386/sse.md
+	(*<avx512>_cmp<V48H_AVX512VL:mode>3_zero_extend<SWI248x:mode>):
+	Change from define_insn_and_split to define_insn.
+	(*<avx512>_cmp<VI12_AVX512VL:mode>3_zero_extend<SWI248x:mode>):
+	Ditto.
+	(*<avx512>_ucmp<VI12_AVX512VL:mode>3_zero_extend<SWI248x:mode>):
+	Ditto.
+	(*<avx512>_ucmp<VI48_AVX512VL:mode>3_zero_extend<SWI248x:mode>):
+	Ditto.
+	(*<avx512>_cmp<V48H_AVX512VL:mode>3_zero_extend<SWI248x:mode>_2):
+	Split to the zero_extend pattern.
+	(*<avx512>_cmp<VI12_AVX512VL:mode>3_zero_extend<SWI248x:mode>_2):
+	Ditto.
+	(*<avx512>_ucmp<VI12_AVX512VL:mode>3_zero_extend<SWI248x:mode>_2):
+	Ditto.
+	(*<avx512>_ucmp<VI48_AVX512VL:mode>3_zero_extend<SWI248x:mode>_2):
+	Ditto.
+
+2024-10-20  Jeff Law  <jlaw@ventanamicro.com>
+
+	Revert:
+	2024-10-19  Craig Blackmore  <craig.blackmore@embecosm.com>
+
+	* config/riscv/riscv.cc (riscv_use_by_pieces_infrastructure_p):
+	New function.
+	(TARGET_USE_BY_PIECES_INFRASTRUCTURE_P): Define.
+
+2024-10-19  Andrew Pinski  <quic_apinski@quicinc.com>
+
+	PR tree-optimization/112418
+	* tree-ssa-phiopt.cc (is_factor_profitable): New function.
+	(factor_out_conditional_operation): Add merge argument. Remove
+	arg0/arg1 arguments. Return bool instead of the new phi.
+	Early return for virtual ops. Call is_factor_profitable to
+	check if the factoring would be profitable.
+	(pass_phiopt::execute): Call factor_out_conditional_operation
+	on all phis instead of just singleton phi.
+	* doc/invoke.texi (--param phiopt-factor-max-stmts-live=): Document.
+	* params.opt (--param=phiopt-factor-max-stmts-live=): New opt.
+
+2024-10-19  Greg McGary  <gkm@rivosinc.com>
+
+	* config/riscv/autovec.md (vec_mask_len_load_lanes, vec_mask_len_store_lanes):
+	Predicate with TARGET_VECTOR_AUTOVEC_SEGMENT
+	* config/riscv/riscv-opts.h (TARGET_VECTOR_AUTOVEC_SEGMENT): New macro.
+	* config/riscv/riscv.opt (-m(no-)autovec-segment): New option.
+
+2024-10-19  Craig Blackmore  <craig.blackmore@embecosm.com>
+
+	* config/riscv/riscv.cc (riscv_use_by_pieces_infrastructure_p):
+	New function.
+	(TARGET_USE_BY_PIECES_INFRASTRUCTURE_P): Define.
+
+2024-10-19  Craig Blackmore  <craig.blackmore@embecosm.com>
+
+	* config/riscv/riscv-string.cc (struct stringop_info): New.
+	(expand_block_move): Move decision making code to...
+	(use_vector_stringop_p): ...here.
+
+2024-10-19  Craig Blackmore  <craig.blackmore@embecosm.com>
+
+	* config/riscv/riscv-protos.h (get_lmul_mode): New prototype.
+	(expand_block_move): Add bool parameter for movmem_p.
+	* config/riscv/riscv-string.cc (riscv_expand_block_move_scalar):
+	Pass movmem_p as false to riscv_vector::expand_block_move.
+	(expand_block_move): Add movmem_p parameter.  Return false if
+	loop needed and movmem_p is true.  Respect TARGET_MAX_LMUL.
+	* config/riscv/riscv-v.cc (get_lmul_mode): New function.
+	* config/riscv/riscv.md (movmem<mode>): Move checking for
+	whether to generate inline vector code to
+	riscv_vector::expand_block_move by passing movmem_p as true.
+
+2024-10-19  David Malcolm  <dmalcolm@redhat.com>
+
+	* diagnostic.h (json::value): Remove forward decl.
+
+2024-10-19  David Malcolm  <dmalcolm@redhat.com>
+
+	* diagnostic-format-json.cc (json_output_format::dump): New.
+	* diagnostic-format-sarif.cc (sarif_output_format::dump): New.
+	(sarif_file_output_format::dump): New.
+	* diagnostic-format-text.cc (diagnostic_text_output_format::dump):
+	New.
+	* diagnostic-format-text.h (diagnostic_text_output_format::dump):
+	New decl.
+	* diagnostic-format.h (diagnostic_output_format::dump): New decls.
+	* diagnostic.cc (diagnostic_context::dump): New.
+	(diagnostic_output_format::dump): New.
+	* diagnostic.h (diagnostic_context::dump): New decls.
+	* pretty-print-format-impl.h (pp_formatted_chunks::dump): Add
+	"indent" param.
+	* pretty-print.cc (bytes_per_hexdump_line): New constant.
+	(print_hexdump_line): New.
+	(print_hexdump): New.
+	(output_buffer::dump): Add "indent" param and use it.  Add
+	hexdump of current object in m_formatted_obstack and
+	m_chunk_obstack.
+	(pp_formatted_chunks::dump): Add "indent" param and use it.
+	(pretty_printer::dump): Likewise.  Add dumping of m_show_color
+	and m_url_format.
+	* pretty-print.h (output_buffer::dump): Add "indent" param.
+	(pretty_printer::dump): Likewise.
+
+2024-10-18  Alejandro Colomar  <alx@kernel.org>
+
+	* tree.h (array_type_nelts_top)
+	* tree.cc (array_type_nelts_top):
+	Define function (moved from gcc/cp/).
+
+2024-10-18  Alejandro Colomar  <alx@kernel.org>
+
+	* tree.cc (array_type_nelts, array_type_nelts_minus_one)
+	* tree.h (array_type_nelts, array_type_nelts_minus_one)
+	* expr.cc (count_type_elements)
+	* config/aarch64/aarch64.cc
+	(pure_scalable_type_info::analyze_array)
+	* config/i386/i386.cc (ix86_canonical_va_list_type):
+	Rename array_type_nelts => array_type_nelts_minus_one
+	The old name was misleading.
+
+2024-10-18  John David Anglin  <danglin@gcc.gnu.org>
+
+	* config/pa/pa.opt.urls: Fix for -mlra.
+
+2024-10-18  John David Anglin  <danglin@gcc.gnu.org>
+
+	PR target/113933
+	* config/pa/pa.cc (pa_use_lra_p): Declare.
+	(TARGET_LRA_P): Change define to pa_use_lra_p.
+	(pa_use_lra_p): New function.
+	(legitimize_pic_address): Also check lra_in_progress.
+	(pa_emit_move_sequence): Likewise.
+	(pa_legitimate_constant_p): Likewise.
+	(pa_legitimate_address_p): Likewise.
+	(pa_secondary_reload): For floating-point loads and stores,
+	return NO_REGS for REG and SUBREG operands.  Return
+	GENERAL_REGS for some shift register spills.
+	* config/pa/pa.opt: Add mlra option.
+	* config/pa/predicates.md (integer_store_memory_operand):
+	Also check lra_in_progress.
+	(floating_point_store_memory_operand): Likewise.
+	(reg_before_reload_operand): Likewise.
+
+2024-10-18  Craig Blackmore  <craig.blackmore@embecosm.com>
+
+	* config/riscv/riscv-string.cc (expand_block_move): Fix
+	condition for using smaller LMUL.  Break outer loop if a
+	suitable vmode has been found.
+
+2024-10-18  Craig Blackmore  <craig.blackmore@embecosm.com>
+
+	* config/riscv/riscv-string.cc (expand_block_move): Replace
+	`end` with `length_rtx` in gen_rtx_NE.
+
+2024-10-18  Craig Blackmore  <craig.blackmore@embecosm.com>
+
+	* config/riscv/riscv-string.cc (expand_block_move): Fix
+	indentation.
+
+2024-10-18  Uros Bizjak  <ubizjak@gmail.com>
+
+	PR target/117192
+	* config/i386/mmx.md (andn<MMXMODEI:mode>3): Swap operand
+	indexes 1 and 2 to comply with andn specification.
+
+2024-10-18  Jennifer Schmitz  <jschmitz@nvidia.com>
+
+	* config/aarch64/aarch64-sve-builtins-base.cc (svdiv_impl::fold):
+	Refactor using fold_active_lanes_to and fold to dividend, is the
+	divisor is all ones.
+	(svmul_impl::fold): Refactor using fold_active_lanes_to and fold
+	to the other operand, if one of the operands is all ones.
+	* config/aarch64/aarch64-sve-builtins.h: Declare
+	gimple_folder::fold_active_lanes_to (tree).
+	* config/aarch64/aarch64-sve-builtins.cc
+	(gimple_folder::fold_actives_lanes_to): Add new method to fold
+	actives lanes to given argument and setting inactives lanes
+	according to the predication.
+
+2024-10-18  Richard Biener  <rguenther@suse.de>
+
+	* tree-vect-slp.cc (vect_build_slp_tree_2): Only expect
+	IFN_MASK_LOAD for masked loads that are not
+	STMT_VINFO_GATHER_SCATTER_P.
+
+2024-10-18  Tamar Christina  <tamar.christina@arm.com>
+
+	PR tree-optimization/117140
+	* tree-vect-slp.cc (vectorize_slp_instance_root_stmt): Use gsi from
+	original statement.
+
+2024-10-18  Tamar Christina  <tamar.christina@arm.com>
+
+	* tree-vect-generic.cc (lower_vec_perm): Use output vector size instead
+	of input vector when determining output nunits.
+
+2024-10-18  Tamar Christina  <tamar.christina@arm.com>
+
+	* config/aarch64/aarch64.cc (aarch64_output_sve_mov_immediate): Use
+	fmov for SVE zeros.
+
+2024-10-18  Tamar Christina  <tamar.christina@arm.com>
+
+	* config/aarch64/aarch64.cc (aarch64_sve_valid_immediate,
+	aarch64_simd_valid_immediate): Refactor accepting modes and values.
+	(aarch64_float_const_representable_p): Refactor and extract FP checks
+	into ...
+	(aarch64_real_float_const_representable_p): ...This and fix fail
+	fallback from real_to_integer.
+	(aarch64_advsimd_valid_immediate): Use it.
+
+2024-10-18  Christophe Lyon  <christophe.lyon@linaro.org>
+
+	* config/arm/arm-mve-builtins-shapes.cc (long_type_suffix): New.
+	(half_type_suffix): New.
+	(struct binary_move_narrow_def): Use new helper.
+	(struct binary_move_narrow_unsigned_def): Likewise.
+	(struct binary_rshift_narrow_def): Likewise.
+	(struct binary_rshift_narrow_unsigned_def): Likewise.
+	(struct binary_widen_def): Likewise.
+	(struct binary_widen_n_def): Likewise.
+	(struct binary_widen_opt_n_def): Likewise.
+	(struct unary_widen_def): Likewise.
+
+2024-10-18  Christophe Lyon  <christophe.lyon@linaro.org>
+
+	* config/arm/arm-mve-builtins-base.cc (class vadc_vsbc_impl): Add
+	support for vsbciq and vsbcq.
+	(vadciq, vadcq): Add new parameter.
+	(vsbciq): New.
+	(vsbcq): New.
+	* config/arm/arm-mve-builtins-base.def (vsbciq): New.
+	(vsbcq): New.
+	* config/arm/arm-mve-builtins-base.h (vsbciq): New.
+	(vsbcq): New.
+	* config/arm/arm_mve.h (vsbciq): Delete.
+	(vsbciq_m): Delete.
+	(vsbcq): Delete.
+	(vsbcq_m): Delete.
+	(vsbciq_s32): Delete.
+	(vsbciq_u32): Delete.
+	(vsbciq_m_s32): Delete.
+	(vsbciq_m_u32): Delete.
+	(vsbcq_s32): Delete.
+	(vsbcq_u32): Delete.
+	(vsbcq_m_s32): Delete.
+	(vsbcq_m_u32): Delete.
+	(__arm_vsbciq_s32): Delete.
+	(__arm_vsbciq_u32): Delete.
+	(__arm_vsbciq_m_s32): Delete.
+	(__arm_vsbciq_m_u32): Delete.
+	(__arm_vsbcq_s32): Delete.
+	(__arm_vsbcq_u32): Delete.
+	(__arm_vsbcq_m_s32): Delete.
+	(__arm_vsbcq_m_u32): Delete.
+	(__arm_vsbciq): Delete.
+	(__arm_vsbciq_m): Delete.
+	(__arm_vsbcq): Delete.
+	(__arm_vsbcq_m): Delete.
+
+2024-10-18  Christophe Lyon  <christophe.lyon@linaro.org>
+
+	* config/arm/arm-mve-builtins-base.cc (vadcq_vsbc): Add support
+	for vadcq.
+	* config/arm/arm-mve-builtins-base.def (vadcq): New.
+	* config/arm/arm-mve-builtins-base.h (vadcq): New.
+	* config/arm/arm_mve.h (vadcq): Delete.
+	(vadcq_m): Delete.
+	(vadcq_s32): Delete.
+	(vadcq_u32): Delete.
+	(vadcq_m_s32): Delete.
+	(vadcq_m_u32): Delete.
+	(__arm_vadcq_s32): Delete.
+	(__arm_vadcq_u32): Delete.
+	(__arm_vadcq_m_s32): Delete.
+	(__arm_vadcq_m_u32): Delete.
+	(__arm_vadcq): Delete.
+	(__arm_vadcq_m): Delete.
+
+2024-10-18  Christophe Lyon  <christophe.lyon@linaro.org>
+
+	* config/arm/arm-mve-builtins-base.cc (class vadc_vsbc_impl): New.
+	(vadciq): New.
+	* config/arm/arm-mve-builtins-base.def (vadciq): New.
+	* config/arm/arm-mve-builtins-base.h (vadciq): New.
+	* config/arm/arm_mve.h (vadciq): Delete.
+	(vadciq_m): Delete.
+	(vadciq_s32): Delete.
+	(vadciq_u32): Delete.
+	(vadciq_m_s32): Delete.
+	(vadciq_m_u32): Delete.
+	(__arm_vadciq_s32): Delete.
+	(__arm_vadciq_u32): Delete.
+	(__arm_vadciq_m_s32): Delete.
+	(__arm_vadciq_m_u32): Delete.
+	(__arm_vadciq): Delete.
+	(__arm_vadciq_m): Delete.
+
+2024-10-18  Christophe Lyon  <christophe.lyon@linaro.org>
+
+	* config/arm/iterators.md (mve_insn): Add VADCIQ_M_S, VADCIQ_M_U,
+	VADCIQ_U, VADCIQ_S, VADCQ_M_S, VADCQ_M_U, VADCQ_S, VADCQ_U,
+	VSBCIQ_M_S, VSBCIQ_M_U, VSBCIQ_S, VSBCIQ_U, VSBCQ_M_S, VSBCQ_M_U,
+	VSBCQ_S, VSBCQ_U.
+	(VADCIQ, VSBCIQ): Merge into ...
+	(VxCIQ): ... this.
+	(VADCIQ_M, VSBCIQ_M): Merge into ...
+	(VxCIQ_M): ... this.
+	(VSBCQ, VADCQ): Merge into ...
+	(VxCQ): ... this.
+	(VSBCQ_M, VADCQ_M): Merge into ...
+	(VxCQ_M): ... this.
+	* config/arm/mve.md
+	(mve_vadciq_<supf>v4si, mve_vsbciq_<supf>v4si): Merge into ...
+	(@mve_<mve_insn>q_<supf>v4si): ... this.
+	(mve_vadciq_m_<supf>v4si, mve_vsbciq_m_<supf>v4si): Merge into ...
+	(@mve_<mve_insn>q_m_<supf>v4si): ... this.
+	(mve_vadcq_<supf>v4si, mve_vsbcq_<supf>v4si): Merge into ...
+	(@mve_<mve_insn>q_<supf>v4si): ... this.
+	(mve_vadcq_m_<supf>v4si, mve_vsbcq_m_<supf>v4si): Merge into ...
+	(@mve_<mve_insn>q_m_<supf>v4si): ... this.
+
+2024-10-18  Christophe Lyon  <chrirstophe.lyon@linaro.org>
+
+	* config/arm/arm-mve-builtins-shapes.cc (vadc_vsbc): New.
+	* config/arm/arm-mve-builtins-shapes.h (vadc_vsbc): New.
+
+2024-10-18  Christophe Lyon  <christophe.lyon@linaro.org>
+
+	* config/arm/arm-builtins.cc
+	(arm_ternop_unone_none_unone_imm_qualifiers)
+	(-arm_ternop_none_none_unone_imm_qualifiers): Delete.
+	* config/arm/arm_mve_builtins.def (vshlcq_m_vec_s)
+	(vshlcq_m_carry_s, vshlcq_m_vec_u, vshlcq_m_carry_u): Delete.
+	* config/arm/mve.md (mve_vshlcq_vec_<supf><mode>): Delete.
+	(mve_vshlcq_carry_<supf><mode>): Delete.
+	(mve_vshlcq_m_vec_<supf><mode>): Delete.
+	(mve_vshlcq_m_carry_<supf><mode>): Delete.
+
+2024-10-18  Christophe Lyon  <christophe.lyon@linaro.org>
+
+	* config/arm/arm-mve-builtins-base.cc (class vshlc_impl): New.
+	(vshlc): New.
+	* config/arm/arm-mve-builtins-base.def (vshlcq): New.
+	* config/arm/arm-mve-builtins-base.h (vshlcq): New.
+	* config/arm/arm-mve-builtins.cc
+	(function_instance::has_inactive_argument): Handle vshlc.
+	* config/arm/arm_mve.h (vshlcq): Delete.
+	(vshlcq_m): Delete.
+	(vshlcq_s8): Delete.
+	(vshlcq_u8): Delete.
+	(vshlcq_s16): Delete.
+	(vshlcq_u16): Delete.
+	(vshlcq_s32): Delete.
+	(vshlcq_u32): Delete.
+	(vshlcq_m_s8): Delete.
+	(vshlcq_m_u8): Delete.
+	(vshlcq_m_s16): Delete.
+	(vshlcq_m_u16): Delete.
+	(vshlcq_m_s32): Delete.
+	(vshlcq_m_u32): Delete.
+	(__arm_vshlcq_s8): Delete.
+	(__arm_vshlcq_u8): Delete.
+	(__arm_vshlcq_s16): Delete.
+	(__arm_vshlcq_u16): Delete.
+	(__arm_vshlcq_s32): Delete.
+	(__arm_vshlcq_u32): Delete.
+	(__arm_vshlcq_m_s8): Delete.
+	(__arm_vshlcq_m_u8): Delete.
+	(__arm_vshlcq_m_s16): Delete.
+	(__arm_vshlcq_m_u16): Delete.
+	(__arm_vshlcq_m_s32): Delete.
+	(__arm_vshlcq_m_u32): Delete.
+	(__arm_vshlcq): Delete.
+	(__arm_vshlcq_m): Delete.
+	* config/arm/mve.md (mve_vshlcq_<supf><mode>): Add '@' prefix.
+	(mve_vshlcq_m_<supf><mode>): Likewise.
+
+2024-10-18  Christophe Lyon  <chrirstophe.lyon@linaro.org>
+
+	* config/arm/arm-mve-builtins-shapes.cc (vshlc): New.
+	* config/arm/arm-mve-builtins-shapes.h (vshlc): New.
+
+2024-10-18  Christophe Lyon  <christophe.lyon@linaro.org>
+
+	* config/arm/arm-builtins.cc
+	(arm_quinop_unone_unone_unone_unone_imm_pred_qualifiers): Delete.
+	* config/arm/arm_mve_builtins.def (viwdupq_wb_u, vdwdupq_wb_u)
+	(viwdupq_m_wb_u, vdwdupq_m_wb_u, viwdupq_m_n_u, vdwdupq_m_n_u)
+	(vdwdupq_n_u, viwdupq_n_u): Delete.
+	* config/arm/mve.md (mve_vdwdupq_n_u<mode>): Delete.
+	(mve_vdwdupq_wb_u<mode>): Delete.
+	(mve_vdwdupq_m_n_u<mode>): Delete.
+	(mve_vdwdupq_m_wb_u<mode>): Delete.
+
+2024-10-18  Christophe Lyon  <christophe.lyon@linaro.org>
+
+	* config/arm/arm-mve-builtins-base.cc (viddup_impl): Add support
+	for wrapping versions.
+	(vdwdupq): New.
+	(viwdupq): New.
+	* config/arm/arm-mve-builtins-base.def (vdwdupq): New.
+	(viwdupq): New.
+	* config/arm/arm-mve-builtins-base.h (vdwdupq): New.
+	(viwdupq): New.
+	* config/arm/arm_mve.h (vdwdupq_m): Delete.
+	(vdwdupq_u8): Delete.
+	(vdwdupq_u32): Delete.
+	(vdwdupq_u16): Delete.
+	(viwdupq_m): Delete.
+	(viwdupq_u8): Delete.
+	(viwdupq_u32): Delete.
+	(viwdupq_u16): Delete.
+	(vdwdupq_x_u8): Delete.
+	(vdwdupq_x_u16): Delete.
+	(vdwdupq_x_u32): Delete.
+	(viwdupq_x_u8): Delete.
+	(viwdupq_x_u16): Delete.
+	(viwdupq_x_u32): Delete.
+	(vdwdupq_m_n_u8): Delete.
+	(vdwdupq_m_n_u32): Delete.
+	(vdwdupq_m_n_u16): Delete.
+	(vdwdupq_m_wb_u8): Delete.
+	(vdwdupq_m_wb_u32): Delete.
+	(vdwdupq_m_wb_u16): Delete.
+	(vdwdupq_n_u8): Delete.
+	(vdwdupq_n_u32): Delete.
+	(vdwdupq_n_u16): Delete.
+	(vdwdupq_wb_u8): Delete.
+	(vdwdupq_wb_u32): Delete.
+	(vdwdupq_wb_u16): Delete.
+	(viwdupq_m_n_u8): Delete.
+	(viwdupq_m_n_u32): Delete.
+	(viwdupq_m_n_u16): Delete.
+	(viwdupq_m_wb_u8): Delete.
+	(viwdupq_m_wb_u32): Delete.
+	(viwdupq_m_wb_u16): Delete.
+	(viwdupq_n_u8): Delete.
+	(viwdupq_n_u32): Delete.
+	(viwdupq_n_u16): Delete.
+	(viwdupq_wb_u8): Delete.
+	(viwdupq_wb_u32): Delete.
+	(viwdupq_wb_u16): Delete.
+	(vdwdupq_x_n_u8): Delete.
+	(vdwdupq_x_n_u16): Delete.
+	(vdwdupq_x_n_u32): Delete.
+	(vdwdupq_x_wb_u8): Delete.
+	(vdwdupq_x_wb_u16): Delete.
+	(vdwdupq_x_wb_u32): Delete.
+	(viwdupq_x_n_u8): Delete.
+	(viwdupq_x_n_u16): Delete.
+	(viwdupq_x_n_u32): Delete.
+	(viwdupq_x_wb_u8): Delete.
+	(viwdupq_x_wb_u16): Delete.
+	(viwdupq_x_wb_u32): Delete.
+	(__arm_vdwdupq_m_n_u8): Delete.
+	(__arm_vdwdupq_m_n_u32): Delete.
+	(__arm_vdwdupq_m_n_u16): Delete.
+	(__arm_vdwdupq_m_wb_u8): Delete.
+	(__arm_vdwdupq_m_wb_u32): Delete.
+	(__arm_vdwdupq_m_wb_u16): Delete.
+	(__arm_vdwdupq_n_u8): Delete.
+	(__arm_vdwdupq_n_u32): Delete.
+	(__arm_vdwdupq_n_u16): Delete.
+	(__arm_vdwdupq_wb_u8): Delete.
+	(__arm_vdwdupq_wb_u32): Delete.
+	(__arm_vdwdupq_wb_u16): Delete.
+	(__arm_viwdupq_m_n_u8): Delete.
+	(__arm_viwdupq_m_n_u32): Delete.
+	(__arm_viwdupq_m_n_u16): Delete.
+	(__arm_viwdupq_m_wb_u8): Delete.
+	(__arm_viwdupq_m_wb_u32): Delete.
+	(__arm_viwdupq_m_wb_u16): Delete.
+	(__arm_viwdupq_n_u8): Delete.
+	(__arm_viwdupq_n_u32): Delete.
+	(__arm_viwdupq_n_u16): Delete.
+	(__arm_viwdupq_wb_u8): Delete.
+	(__arm_viwdupq_wb_u32): Delete.
+	(__arm_viwdupq_wb_u16): Delete.
+	(__arm_vdwdupq_x_n_u8): Delete.
+	(__arm_vdwdupq_x_n_u16): Delete.
+	(__arm_vdwdupq_x_n_u32): Delete.
+	(__arm_vdwdupq_x_wb_u8): Delete.
+	(__arm_vdwdupq_x_wb_u16): Delete.
+	(__arm_vdwdupq_x_wb_u32): Delete.
+	(__arm_viwdupq_x_n_u8): Delete.
+	(__arm_viwdupq_x_n_u16): Delete.
+	(__arm_viwdupq_x_n_u32): Delete.
+	(__arm_viwdupq_x_wb_u8): Delete.
+	(__arm_viwdupq_x_wb_u16): Delete.
+	(__arm_viwdupq_x_wb_u32): Delete.
+	(__arm_vdwdupq_m): Delete.
+	(__arm_vdwdupq_u8): Delete.
+	(__arm_vdwdupq_u32): Delete.
+	(__arm_vdwdupq_u16): Delete.
+	(__arm_viwdupq_m): Delete.
+	(__arm_viwdupq_u8): Delete.
+	(__arm_viwdupq_u32): Delete.
+	(__arm_viwdupq_u16): Delete.
+	(__arm_vdwdupq_x_u8): Delete.
+	(__arm_vdwdupq_x_u16): Delete.
+	(__arm_vdwdupq_x_u32): Delete.
+	(__arm_viwdupq_x_u8): Delete.
+	(__arm_viwdupq_x_u16): Delete.
+	(__arm_viwdupq_x_u32): Delete.
+	* config/arm/mve.md (@mve_<mve_insn>q_m_wb_u<mode>_insn): Swap
+	operands 1 and 2.
+
+2024-10-18  Christophe Lyon  <christophe.lyon@linaro.org>
+
+	* config/arm/arm-mve-builtins-shapes.cc (vidwdup): New.
+	* config/arm/arm-mve-builtins-shapes.h (vidwdup): New.
+
+2024-10-18  Christophe Lyon  <christophe.lyon@linaro.org>
+
+	* config/arm/iterators.md (mve_insn): Add VIWDUPQ, VDWDUPQ,
+	VIWDUPQ_M, VDWDUPQ_M.
+	(VIDWDUPQ): New iterator.
+	(VIDWDUPQ_M): New iterator.
+	* config/arm/mve.md (mve_vdwdupq_wb_u<mode>_insn)
+	(mve_viwdupq_wb_u<mode>_insn): Merge into ...
+	(@mve_<mve_insn>q_wb_u<mode>_insn): ... this. Add missing
+	mve_unpredicated_insn and mve_move attributes.
+	(mve_vdwdupq_m_wb_u<mode>_insn, mve_viwdupq_m_wb_u<mode>_insn):
+	Merge into ...
+	(@mve_<mve_insn>q_m_wb_u<mode>_insn): ... this.
+
+2024-10-18  Christophe Lyon  <christophe.lyon@linaro.org>
+
+	* config/arm/arm-mve-builtins-shapes.cc (binary_acca_int32): Fix
+	check of scalar argument.
+	(binary_acca_int64): Likewise.
+	(binary_lshift_unsigned): Likewise.
+	(binary_rshift_narrow): Likewise.
+	(binary_rshift_narrow_unsigned): Likewise.
+	(ternary_lshift): Likewise.
+	(ternary_rshift): Likewise.
+	(unary_int32_acc): Likewise.
+
+2024-10-18  Christophe Lyon  <christophe.lyon@linaro.org>
+
+	* config/arm/arm_mve_builtins.def (vddupq_n_u, vidupq_n_u)
+	(vddupq_m_n_u, vidupq_m_n_u): Delete.
+	* config/arm/mve.md (mve_vidupq_n_u<mode>, mve_vidupq_m_n_u<mode>)
+	(mve_vddupq_n_u<mode>, mve_vddupq_m_n_u<mode>): Delete.
+
+2024-10-18  Christophe Lyon  <christophe.lyon@linaro.org>
+
+	* config/arm/arm-mve-builtins-base.cc (class viddup_impl): New.
+	(vddup): New.
+	(vidup): New.
+	* config/arm/arm-mve-builtins-base.def (vddupq): New.
+	(vidupq): New.
+	* config/arm/arm-mve-builtins-base.h (vddupq): New.
+	(vidupq): New.
+	* config/arm/arm_mve.h (vddupq_m): Delete.
+	(vddupq_u8): Delete.
+	(vddupq_u32): Delete.
+	(vddupq_u16): Delete.
+	(vidupq_m): Delete.
+	(vidupq_u8): Delete.
+	(vidupq_u32): Delete.
+	(vidupq_u16): Delete.
+	(vddupq_x_u8): Delete.
+	(vddupq_x_u16): Delete.
+	(vddupq_x_u32): Delete.
+	(vidupq_x_u8): Delete.
+	(vidupq_x_u16): Delete.
+	(vidupq_x_u32): Delete.
+	(vddupq_m_n_u8): Delete.
+	(vddupq_m_n_u32): Delete.
+	(vddupq_m_n_u16): Delete.
+	(vddupq_m_wb_u8): Delete.
+	(vddupq_m_wb_u16): Delete.
+	(vddupq_m_wb_u32): Delete.
+	(vddupq_n_u8): Delete.
+	(vddupq_n_u32): Delete.
+	(vddupq_n_u16): Delete.
+	(vddupq_wb_u8): Delete.
+	(vddupq_wb_u16): Delete.
+	(vddupq_wb_u32): Delete.
+	(vidupq_m_n_u8): Delete.
+	(vidupq_m_n_u32): Delete.
+	(vidupq_m_n_u16): Delete.
+	(vidupq_m_wb_u8): Delete.
+	(vidupq_m_wb_u16): Delete.
+	(vidupq_m_wb_u32): Delete.
+	(vidupq_n_u8): Delete.
+	(vidupq_n_u32): Delete.
+	(vidupq_n_u16): Delete.
+	(vidupq_wb_u8): Delete.
+	(vidupq_wb_u16): Delete.
+	(vidupq_wb_u32): Delete.
+	(vddupq_x_n_u8): Delete.
+	(vddupq_x_n_u16): Delete.
+	(vddupq_x_n_u32): Delete.
+	(vddupq_x_wb_u8): Delete.
+	(vddupq_x_wb_u16): Delete.
+	(vddupq_x_wb_u32): Delete.
+	(vidupq_x_n_u8): Delete.
+	(vidupq_x_n_u16): Delete.
+	(vidupq_x_n_u32): Delete.
+	(vidupq_x_wb_u8): Delete.
+	(vidupq_x_wb_u16): Delete.
+	(vidupq_x_wb_u32): Delete.
+	(__arm_vddupq_m_n_u8): Delete.
+	(__arm_vddupq_m_n_u32): Delete.
+	(__arm_vddupq_m_n_u16): Delete.
+	(__arm_vddupq_m_wb_u8): Delete.
+	(__arm_vddupq_m_wb_u16): Delete.
+	(__arm_vddupq_m_wb_u32): Delete.
+	(__arm_vddupq_n_u8): Delete.
+	(__arm_vddupq_n_u32): Delete.
+	(__arm_vddupq_n_u16): Delete.
+	(__arm_vidupq_m_n_u8): Delete.
+	(__arm_vidupq_m_n_u32): Delete.
+	(__arm_vidupq_m_n_u16): Delete.
+	(__arm_vidupq_n_u8): Delete.
+	(__arm_vidupq_m_wb_u8): Delete.
+	(__arm_vidupq_m_wb_u16): Delete.
+	(__arm_vidupq_m_wb_u32): Delete.
+	(__arm_vidupq_n_u32): Delete.
+	(__arm_vidupq_n_u16): Delete.
+	(__arm_vidupq_wb_u8): Delete.
+	(__arm_vidupq_wb_u16): Delete.
+	(__arm_vidupq_wb_u32): Delete.
+	(__arm_vddupq_wb_u8): Delete.
+	(__arm_vddupq_wb_u16): Delete.
+	(__arm_vddupq_wb_u32): Delete.
+	(__arm_vddupq_x_n_u8): Delete.
+	(__arm_vddupq_x_n_u16): Delete.
+	(__arm_vddupq_x_n_u32): Delete.
+	(__arm_vddupq_x_wb_u8): Delete.
+	(__arm_vddupq_x_wb_u16): Delete.
+	(__arm_vddupq_x_wb_u32): Delete.
+	(__arm_vidupq_x_n_u8): Delete.
+	(__arm_vidupq_x_n_u16): Delete.
+	(__arm_vidupq_x_n_u32): Delete.
+	(__arm_vidupq_x_wb_u8): Delete.
+	(__arm_vidupq_x_wb_u16): Delete.
+	(__arm_vidupq_x_wb_u32): Delete.
+	(__arm_vddupq_m): Delete.
+	(__arm_vddupq_u8): Delete.
+	(__arm_vddupq_u32): Delete.
+	(__arm_vddupq_u16): Delete.
+	(__arm_vidupq_m): Delete.
+	(__arm_vidupq_u8): Delete.
+	(__arm_vidupq_u32): Delete.
+	(__arm_vidupq_u16): Delete.
+	(__arm_vddupq_x_u8): Delete.
+	(__arm_vddupq_x_u16): Delete.
+	(__arm_vddupq_x_u32): Delete.
+	(__arm_vidupq_x_u8): Delete.
+	(__arm_vidupq_x_u16): Delete.
+	(__arm_vidupq_x_u32): Delete.
+
+2024-10-18  Christophe Lyon  <christophe.lyon@linaro.org>
+
+	* config/arm/arm-mve-builtins-shapes.cc (viddup): New.
+	* config/arm/arm-mve-builtins-shapes.h (viddup): New.
+	* config/arm/arm-mve-builtins.cc (report_not_one_of): New.
+	(function_checker::require_immediate_one_of): New.
+	* config/arm/arm-mve-builtins.def (wb): New mode.
+	* config/arm/arm-mve-builtins.h (function_checker) Add
+	require_immediate_one_of.
+
+2024-10-18  Christophe Lyon  <christophe.lyon@linaro.org>
+
+	* config/arm/iterators.md (mve_insn): Add VIDUPQ, VDDUPQ,
+	VIDUPQ_M, VDDUPQ_M.
+	(viddupq_op): New.
+	(viddupq_m_op): New.
+	(VIDDUPQ): New.
+	(VIDDUPQ_M): New.
+	* config/arm/mve.md (mve_vddupq_u<mode>_insn)
+	(mve_vidupq_u<mode>_insn): Merge into ...
+	(mve_<mve_insn>q_u<mode>_insn): ... this.
+	(mve_vddupq_m_wb_u<mode>_insn, mve_vidupq_m_wb_u<mode>_insn):
+	Merge into ...
+	(mve_<mve_insn>q_m_wb_u<mode>_insn): ... this.
+
+2024-10-18  Christophe Lyon  <christophe.lyon@linaro.org>
+
+	* config/arm/arm-mve-builtins-base.cc (class vctpq_impl): New.
+	(vctp16q): New.
+	(vctp32q): New.
+	(vctp64q): New.
+	(vctp8q): New.
+	* config/arm/arm-mve-builtins-base.def (vctp16q): New.
+	(vctp32q): New.
+	(vctp64q): New.
+	(vctp8q): New.
+	* config/arm/arm-mve-builtins-base.h (vctp16q): New.
+	(vctp32q): New.
+	(vctp64q): New.
+	(vctp8q): New.
+	* config/arm/arm-mve-builtins-shapes.cc (vctp): New.
+	* config/arm/arm-mve-builtins-shapes.h (vctp): New.
+	* config/arm/arm-mve-builtins.cc
+	(function_instance::has_inactive_argument): Add support for vctp.
+	* config/arm/arm_mve.h (vctp16q): Delete.
+	(vctp32q): Delete.
+	(vctp64q): Delete.
+	(vctp8q): Delete.
+	(vctp8q_m): Delete.
+	(vctp64q_m): Delete.
+	(vctp32q_m): Delete.
+	(vctp16q_m): Delete.
+	(__arm_vctp16q): Delete.
+	(__arm_vctp32q): Delete.
+	(__arm_vctp64q): Delete.
+	(__arm_vctp8q): Delete.
+	(__arm_vctp8q_m): Delete.
+	(__arm_vctp64q_m): Delete.
+	(__arm_vctp32q_m): Delete.
+	(__arm_vctp16q_m): Delete.
+	* config/arm/mve.md (mve_vctp<MVE_vctp>q<MVE_vpred>): Add '@'
+	prefix.
+	(mve_vctp<MVE_vctp>q_m<MVE_vpred>): Likewise.
+
+2024-10-18  Christophe Lyon  <christophe.lyon@linaro.org>
+
+	* config/arm/arm-mve-builtins-base.cc (vornq): New.
+	* config/arm/arm-mve-builtins-base.def (vornq): New.
+	* config/arm/arm-mve-builtins-base.h (vornq): New.
+	* config/arm/arm-mve-builtins-functions.h (class
+	unspec_based_mve_function_exact_insn_vorn): New.
+	* config/arm/arm_mve.h (vornq): Delete.
+	(vornq_m): Delete.
+	(vornq_x): Delete.
+	(vornq_u8): Delete.
+	(vornq_s8): Delete.
+	(vornq_u16): Delete.
+	(vornq_s16): Delete.
+	(vornq_u32): Delete.
+	(vornq_s32): Delete.
+	(vornq_f16): Delete.
+	(vornq_f32): Delete.
+	(vornq_m_s8): Delete.
+	(vornq_m_s32): Delete.
+	(vornq_m_s16): Delete.
+	(vornq_m_u8): Delete.
+	(vornq_m_u32): Delete.
+	(vornq_m_u16): Delete.
+	(vornq_m_f32): Delete.
+	(vornq_m_f16): Delete.
+	(vornq_x_s8): Delete.
+	(vornq_x_s16): Delete.
+	(vornq_x_s32): Delete.
+	(vornq_x_u8): Delete.
+	(vornq_x_u16): Delete.
+	(vornq_x_u32): Delete.
+	(vornq_x_f16): Delete.
+	(vornq_x_f32): Delete.
+	(__arm_vornq_u8): Delete.
+	(__arm_vornq_s8): Delete.
+	(__arm_vornq_u16): Delete.
+	(__arm_vornq_s16): Delete.
+	(__arm_vornq_u32): Delete.
+	(__arm_vornq_s32): Delete.
+	(__arm_vornq_m_s8): Delete.
+	(__arm_vornq_m_s32): Delete.
+	(__arm_vornq_m_s16): Delete.
+	(__arm_vornq_m_u8): Delete.
+	(__arm_vornq_m_u32): Delete.
+	(__arm_vornq_m_u16): Delete.
+	(__arm_vornq_x_s8): Delete.
+	(__arm_vornq_x_s16): Delete.
+	(__arm_vornq_x_s32): Delete.
+	(__arm_vornq_x_u8): Delete.
+	(__arm_vornq_x_u16): Delete.
+	(__arm_vornq_x_u32): Delete.
+	(__arm_vornq_f16): Delete.
+	(__arm_vornq_f32): Delete.
+	(__arm_vornq_m_f32): Delete.
+	(__arm_vornq_m_f16): Delete.
+	(__arm_vornq_x_f16): Delete.
+	(__arm_vornq_x_f32): Delete.
+	(__arm_vornq): Delete.
+	(__arm_vornq_m): Delete.
+	(__arm_vornq_x): Delete.
+
+2024-10-18  Christophe Lyon  <christophe.lyon@linaro.org>
+
+	* config/arm/iterators.md (MVE_INT_M_BINARY_LOGIC): Add VORNQ_M_S,
+	VORNQ_M_U.
+	(MVE_FP_M_BINARY_LOGIC): Add VORNQ_M_F.
+	(mve_insn): Add VORNQ_M_S, VORNQ_M_U, VORNQ_M_F.
+	* config/arm/mve.md (mve_vornq_s<mode>): Rename into ...
+	(@mve_vornq_s<mode>): ... this.
+	(mve_vornq_u<mode>): Rename into ...
+	(@mve_vornq_u<mode>): ... this.
+	(mve_vornq_f<mode>): Rename into ...
+	(@mve_vornq_f<mode>): ... this.
+	(mve_vornq_m_<supf><mode>): Merge into vand/vbic pattern.
+	(mve_vornq_m_f<mode>): Likewise.
+
+2024-10-18  Christophe Lyon  <christophe.lyon@linaro.org>
+
+	* config/arm/arm-mve-builtins-base.cc (vbicq): New.
+	* config/arm/arm-mve-builtins-base.def (vbicq): New.
+	* config/arm/arm-mve-builtins-base.h (vbicq): New.
+	* config/arm/arm-mve-builtins-functions.h (class
+	unspec_based_mve_function_exact_insn_vbic): New.
+	* config/arm/arm-mve-builtins.cc
+	(function_instance::has_inactive_argument): Add support for vbicq.
+	* config/arm/arm_mve.h (vbicq): Delete.
+	(vbicq_m_n): Delete.
+	(vbicq_m): Delete.
+	(vbicq_x): Delete.
+	(vbicq_u8): Delete.
+	(vbicq_s8): Delete.
+	(vbicq_u16): Delete.
+	(vbicq_s16): Delete.
+	(vbicq_u32): Delete.
+	(vbicq_s32): Delete.
+	(vbicq_n_u16): Delete.
+	(vbicq_f16): Delete.
+	(vbicq_n_s16): Delete.
+	(vbicq_n_u32): Delete.
+	(vbicq_f32): Delete.
+	(vbicq_n_s32): Delete.
+	(vbicq_m_n_s16): Delete.
+	(vbicq_m_n_s32): Delete.
+	(vbicq_m_n_u16): Delete.
+	(vbicq_m_n_u32): Delete.
+	(vbicq_m_s8): Delete.
+	(vbicq_m_s32): Delete.
+	(vbicq_m_s16): Delete.
+	(vbicq_m_u8): Delete.
+	(vbicq_m_u32): Delete.
+	(vbicq_m_u16): Delete.
+	(vbicq_m_f32): Delete.
+	(vbicq_m_f16): Delete.
+	(vbicq_x_s8): Delete.
+	(vbicq_x_s16): Delete.
+	(vbicq_x_s32): Delete.
+	(vbicq_x_u8): Delete.
+	(vbicq_x_u16): Delete.
+	(vbicq_x_u32): Delete.
+	(vbicq_x_f16): Delete.
+	(vbicq_x_f32): Delete.
+	(__arm_vbicq_u8): Delete.
+	(__arm_vbicq_s8): Delete.
+	(__arm_vbicq_u16): Delete.
+	(__arm_vbicq_s16): Delete.
+	(__arm_vbicq_u32): Delete.
+	(__arm_vbicq_s32): Delete.
+	(__arm_vbicq_n_u16): Delete.
+	(__arm_vbicq_n_s16): Delete.
+	(__arm_vbicq_n_u32): Delete.
+	(__arm_vbicq_n_s32): Delete.
+	(__arm_vbicq_m_n_s16): Delete.
+	(__arm_vbicq_m_n_s32): Delete.
+	(__arm_vbicq_m_n_u16): Delete.
+	(__arm_vbicq_m_n_u32): Delete.
+	(__arm_vbicq_m_s8): Delete.
+	(__arm_vbicq_m_s32): Delete.
+	(__arm_vbicq_m_s16): Delete.
+	(__arm_vbicq_m_u8): Delete.
+	(__arm_vbicq_m_u32): Delete.
+	(__arm_vbicq_m_u16): Delete.
+	(__arm_vbicq_x_s8): Delete.
+	(__arm_vbicq_x_s16): Delete.
+	(__arm_vbicq_x_s32): Delete.
+	(__arm_vbicq_x_u8): Delete.
+	(__arm_vbicq_x_u16): Delete.
+	(__arm_vbicq_x_u32): Delete.
+	(__arm_vbicq_f16): Delete.
+	(__arm_vbicq_f32): Delete.
+	(__arm_vbicq_m_f32): Delete.
+	(__arm_vbicq_m_f16): Delete.
+	(__arm_vbicq_x_f16): Delete.
+	(__arm_vbicq_x_f32): Delete.
+	(__arm_vbicq): Delete.
+	(__arm_vbicq_m_n): Delete.
+	(__arm_vbicq_m): Delete.
+	(__arm_vbicq_x): Delete.
+	* config/arm/mve.md (mve_vbicq_u<mode>): Rename into ...
+	(@mve_vbicq_u<mode>): ... this.
+	(mve_vbicq_s<mode>): Rename into ...
+	(@mve_vbicq_s<mode>): ... this.
+	(mve_vbicq_f<mode>): Rename into ...
+	(@mve_vbicq_f<mode>): ... this.
+
+2024-10-18  Christophe Lyon  <christophe.lyon@linaro.org>
+
+	* config/arm/arm-mve-builtins-base.cc (vcvtaq): New.
+	(vcvtmq): New.
+	(vcvtnq): New.
+	(vcvtpq): New.
+	* config/arm/arm-mve-builtins-base.def (vcvtaq): New.
+	(vcvtmq): New.
+	(vcvtnq): New.
+	(vcvtpq): New.
+	* config/arm/arm-mve-builtins-base.h: (vcvtaq): New.
+	(vcvtmq): New.
+	(vcvtnq): New.
+	(vcvtpq): New.
+	* config/arm/arm-mve-builtins.cc (cvtx): New type.
+	* config/arm/arm_mve.h (vcvtaq_m): Delete.
+	(vcvtmq_m): Delete.
+	(vcvtnq_m): Delete.
+	(vcvtpq_m): Delete.
+	(vcvtaq_s16_f16): Delete.
+	(vcvtaq_s32_f32): Delete.
+	(vcvtnq_s16_f16): Delete.
+	(vcvtnq_s32_f32): Delete.
+	(vcvtpq_s16_f16): Delete.
+	(vcvtpq_s32_f32): Delete.
+	(vcvtmq_s16_f16): Delete.
+	(vcvtmq_s32_f32): Delete.
+	(vcvtpq_u16_f16): Delete.
+	(vcvtpq_u32_f32): Delete.
+	(vcvtnq_u16_f16): Delete.
+	(vcvtnq_u32_f32): Delete.
+	(vcvtmq_u16_f16): Delete.
+	(vcvtmq_u32_f32): Delete.
+	(vcvtaq_u16_f16): Delete.
+	(vcvtaq_u32_f32): Delete.
+	(vcvtaq_m_s16_f16): Delete.
+	(vcvtaq_m_u16_f16): Delete.
+	(vcvtaq_m_s32_f32): Delete.
+	(vcvtaq_m_u32_f32): Delete.
+	(vcvtmq_m_s16_f16): Delete.
+	(vcvtnq_m_s16_f16): Delete.
+	(vcvtpq_m_s16_f16): Delete.
+	(vcvtmq_m_u16_f16): Delete.
+	(vcvtnq_m_u16_f16): Delete.
+	(vcvtpq_m_u16_f16): Delete.
+	(vcvtmq_m_s32_f32): Delete.
+	(vcvtnq_m_s32_f32): Delete.
+	(vcvtpq_m_s32_f32): Delete.
+	(vcvtmq_m_u32_f32): Delete.
+	(vcvtnq_m_u32_f32): Delete.
+	(vcvtpq_m_u32_f32): Delete.
+	(vcvtaq_x_s16_f16): Delete.
+	(vcvtaq_x_s32_f32): Delete.
+	(vcvtaq_x_u16_f16): Delete.
+	(vcvtaq_x_u32_f32): Delete.
+	(vcvtnq_x_s16_f16): Delete.
+	(vcvtnq_x_s32_f32): Delete.
+	(vcvtnq_x_u16_f16): Delete.
+	(vcvtnq_x_u32_f32): Delete.
+	(vcvtpq_x_s16_f16): Delete.
+	(vcvtpq_x_s32_f32): Delete.
+	(vcvtpq_x_u16_f16): Delete.
+	(vcvtpq_x_u32_f32): Delete.
+	(vcvtmq_x_s16_f16): Delete.
+	(vcvtmq_x_s32_f32): Delete.
+	(vcvtmq_x_u16_f16): Delete.
+	(vcvtmq_x_u32_f32): Delete.
+	(__arm_vcvtpq_u16_f16): Delete.
+	(__arm_vcvtpq_u32_f32): Delete.
+	(__arm_vcvtnq_u16_f16): Delete.
+	(__arm_vcvtnq_u32_f32): Delete.
+	(__arm_vcvtmq_u16_f16): Delete.
+	(__arm_vcvtmq_u32_f32): Delete.
+	(__arm_vcvtaq_u16_f16): Delete.
+	(__arm_vcvtaq_u32_f32): Delete.
+	(__arm_vcvtaq_s16_f16): Delete.
+	(__arm_vcvtaq_s32_f32): Delete.
+	(__arm_vcvtnq_s16_f16): Delete.
+	(__arm_vcvtnq_s32_f32): Delete.
+	(__arm_vcvtpq_s16_f16): Delete.
+	(__arm_vcvtpq_s32_f32): Delete.
+	(__arm_vcvtmq_s16_f16): Delete.
+	(__arm_vcvtmq_s32_f32): Delete.
+	(__arm_vcvtaq_m_s16_f16): Delete.
+	(__arm_vcvtaq_m_u16_f16): Delete.
+	(__arm_vcvtaq_m_s32_f32): Delete.
+	(__arm_vcvtaq_m_u32_f32): Delete.
+	(__arm_vcvtmq_m_s16_f16): Delete.
+	(__arm_vcvtnq_m_s16_f16): Delete.
+	(__arm_vcvtpq_m_s16_f16): Delete.
+	(__arm_vcvtmq_m_u16_f16): Delete.
+	(__arm_vcvtnq_m_u16_f16): Delete.
+	(__arm_vcvtpq_m_u16_f16): Delete.
+	(__arm_vcvtmq_m_s32_f32): Delete.
+	(__arm_vcvtnq_m_s32_f32): Delete.
+	(__arm_vcvtpq_m_s32_f32): Delete.
+	(__arm_vcvtmq_m_u32_f32): Delete.
+	(__arm_vcvtnq_m_u32_f32): Delete.
+	(__arm_vcvtpq_m_u32_f32): Delete.
+	(__arm_vcvtaq_x_s16_f16): Delete.
+	(__arm_vcvtaq_x_s32_f32): Delete.
+	(__arm_vcvtaq_x_u16_f16): Delete.
+	(__arm_vcvtaq_x_u32_f32): Delete.
+	(__arm_vcvtnq_x_s16_f16): Delete.
+	(__arm_vcvtnq_x_s32_f32): Delete.
+	(__arm_vcvtnq_x_u16_f16): Delete.
+	(__arm_vcvtnq_x_u32_f32): Delete.
+	(__arm_vcvtpq_x_s16_f16): Delete.
+	(__arm_vcvtpq_x_s32_f32): Delete.
+	(__arm_vcvtpq_x_u16_f16): Delete.
+	(__arm_vcvtpq_x_u32_f32): Delete.
+	(__arm_vcvtmq_x_s16_f16): Delete.
+	(__arm_vcvtmq_x_s32_f32): Delete.
+	(__arm_vcvtmq_x_u16_f16): Delete.
+	(__arm_vcvtmq_x_u32_f32): Delete.
+	(__arm_vcvtaq_m): Delete.
+	(__arm_vcvtmq_m): Delete.
+	(__arm_vcvtnq_m): Delete.
+	(__arm_vcvtpq_m): Delete.
+
+2024-10-18  Christophe Lyon  <christophe.lyon@linaro.org>
+
+	* config/arm/arm-mve-builtins-shapes.cc (vcvtx): New.
+	* config/arm/arm-mve-builtins-shapes.h (vcvtx): New.
+
+2024-10-18  Christophe Lyon  <christophe.lyon@linaro.org>
+
+	* config/arm/iterators.md (mve_insn): Add VCVTAQ_M_S, VCVTAQ_M_U,
+	VCVTAQ_S, VCVTAQ_U, VCVTMQ_M_S, VCVTMQ_M_U, VCVTMQ_S, VCVTMQ_U,
+	VCVTNQ_M_S, VCVTNQ_M_U, VCVTNQ_S, VCVTNQ_U, VCVTPQ_M_S,
+	VCVTPQ_M_U, VCVTPQ_S, VCVTPQ_U.
+	(VCVTAQ, VCVTPQ, VCVTNQ, VCVTMQ, VCVTAQ_M, VCVTMQ_M, VCVTNQ_M)
+	(VCVTPQ_M): Delete.
+	(VCVTxQ, VCVTxQ_M): New.
+	* config/arm/mve.md (mve_vcvtpq_<supf><mode>)
+	(mve_vcvtnq_<supf><mode>, mve_vcvtmq_<supf><mode>)
+	(mve_vcvtaq_<supf><mode>): Merge into ...
+	(@mve_<mve_insn>q_<supf><mode>): ... this.
+	(mve_vcvtaq_m_<supf><mode>, mve_vcvtmq_m_<supf><mode>)
+	(mve_vcvtpq_m_<supf><mode>, mve_vcvtnq_m_<supf><mode>): Merge into
+	...
+	(@mve_<mve_insn>q_m_<supf><mode>): ... this.
+
+2024-10-18  Christophe Lyon  <christophe.lyon@linaro.org>
+
+	* config/arm/arm-mve-builtins-base.cc (class vcvtxq_impl): New.
+	(vcvtbq, vcvttq): New.
+	* config/arm/arm-mve-builtins-base.def (vcvtbq, vcvttq): New.
+	* config/arm/arm-mve-builtins-base.h (vcvtbq, vcvttq): New.
+	* config/arm/arm-mve-builtins.cc (cvt_f16_f32, cvt_f32_f16): New
+	types.
+	(function_instance::has_inactive_argument): Support vcvtbq and
+	vcvttq.
+	* config/arm/arm_mve.h (vcvttq_f32): Delete.
+	(vcvtbq_f32): Delete.
+	(vcvtbq_m): Delete.
+	(vcvttq_m): Delete.
+	(vcvttq_f32_f16): Delete.
+	(vcvtbq_f32_f16): Delete.
+	(vcvttq_f16_f32): Delete.
+	(vcvtbq_f16_f32): Delete.
+	(vcvtbq_m_f16_f32): Delete.
+	(vcvtbq_m_f32_f16): Delete.
+	(vcvttq_m_f16_f32): Delete.
+	(vcvttq_m_f32_f16): Delete.
+	(vcvtbq_x_f32_f16): Delete.
+	(vcvttq_x_f32_f16): Delete.
+	(__arm_vcvttq_f32_f16): Delete.
+	(__arm_vcvtbq_f32_f16): Delete.
+	(__arm_vcvttq_f16_f32): Delete.
+	(__arm_vcvtbq_f16_f32): Delete.
+	(__arm_vcvtbq_m_f16_f32): Delete.
+	(__arm_vcvtbq_m_f32_f16): Delete.
+	(__arm_vcvttq_m_f16_f32): Delete.
+	(__arm_vcvttq_m_f32_f16): Delete.
+	(__arm_vcvtbq_x_f32_f16): Delete.
+	(__arm_vcvttq_x_f32_f16): Delete.
+	(__arm_vcvttq_f32): Delete.
+	(__arm_vcvtbq_f32): Delete.
+	(__arm_vcvtbq_m): Delete.
+	(__arm_vcvttq_m): Delete.
+
+2024-10-18  Christophe Lyon  <christophe.lyon@linaro.org>
+
+	* config/arm/arm-mve-builtins-shapes.cc (vcvt_f16_f32)
+	(vcvt_f32_f16): New.
+	* config/arm/arm-mve-builtins-shapes.h (vcvt_f16_f32)
+	(vcvt_f32_f16): New.
+
+2024-10-18  Christophe Lyon  <christophe.lyon@linaro.org>
+
+	* config/arm/iterators.md (mve_insn): Add VCVTBQ_F16_F32,
+	VCVTTQ_F16_F32, VCVTBQ_F32_F16, VCVTTQ_F32_F16, VCVTBQ_M_F16_F32,
+	VCVTTQ_M_F16_F32, VCVTBQ_M_F32_F16, VCVTTQ_M_F32_F16.
+	(VCVTxQ_F16_F32): New iterator.
+	(VCVTxQ_F32_F16): Likewise.
+	(VCVTxQ_M_F16_F32): Likewise.
+	(VCVTxQ_M_F32_F16): Likewise.
+	* config/arm/mve.md (mve_vcvttq_f32_f16v4sf)
+	(mve_vcvtbq_f32_f16v4sf): Merge into ...
+	(@mve_<mve_insn>q_f32_f16v4sf): ... this.
+	(mve_vcvtbq_f16_f32v8hf, mve_vcvttq_f16_f32v8hf): Merge into ...
+	(@mve_<mve_insn>q_f16_f32v8hf): ... this.
+	(mve_vcvtbq_m_f16_f32v8hf, mve_vcvttq_m_f16_f32v8hf): Merge into
+	...
+	(@mve_<mve_insn>q_m_f16_f32v8hf): ... this.
+	(mve_vcvtbq_m_f32_f16v4sf, mve_vcvttq_m_f32_f16v4sf): Merge into
+	...
+	(@mve_<mve_insn>q_m_f32_f16v4sf): ... this.
+
+2024-10-18  Christophe Lyon  <christophe.lyon@linaro.org>
+
+	* config/arm/arm-mve-builtins-base.cc (class vcvtq_impl): New.
+	(vcvtq): New.
+	* config/arm/arm-mve-builtins-base.def (vcvtq): New.
+	* config/arm/arm-mve-builtins-base.h (vcvtq): New.
+	* config/arm/arm-mve-builtins.cc (cvt): New type.
+	* config/arm/arm_mve.h (vcvtq): Delete.
+	(vcvtq_n): Delete.
+	(vcvtq_m): Delete.
+	(vcvtq_m_n): Delete.
+	(vcvtq_x): Delete.
+	(vcvtq_x_n): Delete.
+	(vcvtq_f16_s16): Delete.
+	(vcvtq_f32_s32): Delete.
+	(vcvtq_f16_u16): Delete.
+	(vcvtq_f32_u32): Delete.
+	(vcvtq_s16_f16): Delete.
+	(vcvtq_s32_f32): Delete.
+	(vcvtq_u16_f16): Delete.
+	(vcvtq_u32_f32): Delete.
+	(vcvtq_n_f16_s16): Delete.
+	(vcvtq_n_f32_s32): Delete.
+	(vcvtq_n_f16_u16): Delete.
+	(vcvtq_n_f32_u32): Delete.
+	(vcvtq_n_s16_f16): Delete.
+	(vcvtq_n_s32_f32): Delete.
+	(vcvtq_n_u16_f16): Delete.
+	(vcvtq_n_u32_f32): Delete.
+	(vcvtq_m_f16_s16): Delete.
+	(vcvtq_m_f16_u16): Delete.
+	(vcvtq_m_f32_s32): Delete.
+	(vcvtq_m_f32_u32): Delete.
+	(vcvtq_m_s16_f16): Delete.
+	(vcvtq_m_u16_f16): Delete.
+	(vcvtq_m_s32_f32): Delete.
+	(vcvtq_m_u32_f32): Delete.
+	(vcvtq_m_n_f16_u16): Delete.
+	(vcvtq_m_n_f16_s16): Delete.
+	(vcvtq_m_n_f32_u32): Delete.
+	(vcvtq_m_n_f32_s32): Delete.
+	(vcvtq_m_n_s32_f32): Delete.
+	(vcvtq_m_n_s16_f16): Delete.
+	(vcvtq_m_n_u32_f32): Delete.
+	(vcvtq_m_n_u16_f16): Delete.
+	(vcvtq_x_f16_u16): Delete.
+	(vcvtq_x_f16_s16): Delete.
+	(vcvtq_x_f32_s32): Delete.
+	(vcvtq_x_f32_u32): Delete.
+	(vcvtq_x_n_f16_s16): Delete.
+	(vcvtq_x_n_f16_u16): Delete.
+	(vcvtq_x_n_f32_s32): Delete.
+	(vcvtq_x_n_f32_u32): Delete.
+	(vcvtq_x_s16_f16): Delete.
+	(vcvtq_x_s32_f32): Delete.
+	(vcvtq_x_u16_f16): Delete.
+	(vcvtq_x_u32_f32): Delete.
+	(vcvtq_x_n_s16_f16): Delete.
+	(vcvtq_x_n_s32_f32): Delete.
+	(vcvtq_x_n_u16_f16): Delete.
+	(vcvtq_x_n_u32_f32): Delete.
+	(__arm_vcvtq_f16_s16): Delete.
+	(__arm_vcvtq_f32_s32): Delete.
+	(__arm_vcvtq_f16_u16): Delete.
+	(__arm_vcvtq_f32_u32): Delete.
+	(__arm_vcvtq_s16_f16): Delete.
+	(__arm_vcvtq_s32_f32): Delete.
+	(__arm_vcvtq_u16_f16): Delete.
+	(__arm_vcvtq_u32_f32): Delete.
+	(__arm_vcvtq_n_f16_s16): Delete.
+	(__arm_vcvtq_n_f32_s32): Delete.
+	(__arm_vcvtq_n_f16_u16): Delete.
+	(__arm_vcvtq_n_f32_u32): Delete.
+	(__arm_vcvtq_n_s16_f16): Delete.
+	(__arm_vcvtq_n_s32_f32): Delete.
+	(__arm_vcvtq_n_u16_f16): Delete.
+	(__arm_vcvtq_n_u32_f32): Delete.
+	(__arm_vcvtq_m_f16_s16): Delete.
+	(__arm_vcvtq_m_f16_u16): Delete.
+	(__arm_vcvtq_m_f32_s32): Delete.
+	(__arm_vcvtq_m_f32_u32): Delete.
+	(__arm_vcvtq_m_s16_f16): Delete.
+	(__arm_vcvtq_m_u16_f16): Delete.
+	(__arm_vcvtq_m_s32_f32): Delete.
+	(__arm_vcvtq_m_u32_f32): Delete.
+	(__arm_vcvtq_m_n_f16_u16): Delete.
+	(__arm_vcvtq_m_n_f16_s16): Delete.
+	(__arm_vcvtq_m_n_f32_u32): Delete.
+	(__arm_vcvtq_m_n_f32_s32): Delete.
+	(__arm_vcvtq_m_n_s32_f32): Delete.
+	(__arm_vcvtq_m_n_s16_f16): Delete.
+	(__arm_vcvtq_m_n_u32_f32): Delete.
+	(__arm_vcvtq_m_n_u16_f16): Delete.
+	(__arm_vcvtq_x_f16_u16): Delete.
+	(__arm_vcvtq_x_f16_s16): Delete.
+	(__arm_vcvtq_x_f32_s32): Delete.
+	(__arm_vcvtq_x_f32_u32): Delete.
+	(__arm_vcvtq_x_n_f16_s16): Delete.
+	(__arm_vcvtq_x_n_f16_u16): Delete.
+	(__arm_vcvtq_x_n_f32_s32): Delete.
+	(__arm_vcvtq_x_n_f32_u32): Delete.
+	(__arm_vcvtq_x_s16_f16): Delete.
+	(__arm_vcvtq_x_s32_f32): Delete.
+	(__arm_vcvtq_x_u16_f16): Delete.
+	(__arm_vcvtq_x_u32_f32): Delete.
+	(__arm_vcvtq_x_n_s16_f16): Delete.
+	(__arm_vcvtq_x_n_s32_f32): Delete.
+	(__arm_vcvtq_x_n_u16_f16): Delete.
+	(__arm_vcvtq_x_n_u32_f32): Delete.
+	(__arm_vcvtq): Delete.
+	(__arm_vcvtq_n): Delete.
+	(__arm_vcvtq_m): Delete.
+	(__arm_vcvtq_m_n): Delete.
+	(__arm_vcvtq_x): Delete.
+	(__arm_vcvtq_x_n): Delete.
+
+2024-10-18  Christophe Lyon  <christophe.lyon@linaro.org>
+
+	* config/arm/arm-mve-builtins-shapes.cc
+	(nonoverloaded_base::explicit_type_suffix_p): Add unused
+	type_suffix_info parameter.
+	(overloaded_base::explicit_type_suffix_p): Likewise.
+	(unary_n_def::explicit_type_suffix_p): Likewise.
+	(vcvt): New.
+	* config/arm/arm-mve-builtins-shapes.h (vcvt): New.
+	* config/arm/arm-mve-builtins.cc (function_builder::get_name): Add
+	new type_suffix parameter.
+	(function_builder::add_overloaded_functions): Likewise.
+	* config/arm/arm-mve-builtins.h
+	(function_shape::explicit_type_suffix_p): Likewise.
+
+2024-10-18  Christophe Lyon  <christophe.lyon@linaro.org>
+
+	* config/arm/iterators.md (mve_insn): Add VCVTQ_FROM_F_S,
+	VCVTQ_FROM_F_U, VCVTQ_M_FROM_F_S, VCVTQ_M_FROM_F_U,
+	VCVTQ_M_N_FROM_F_S, VCVTQ_M_N_FROM_F_U, VCVTQ_M_N_TO_F_S,
+	VCVTQ_M_N_TO_F_U, VCVTQ_M_TO_F_S, VCVTQ_M_TO_F_U,
+	VCVTQ_N_FROM_F_S, VCVTQ_N_FROM_F_U, VCVTQ_N_TO_F_S,
+	VCVTQ_N_TO_F_U, VCVTQ_TO_F_S, VCVTQ_TO_F_U.
+	* config/arm/mve.md (mve_vcvtq_to_f_<supf><mode>): Rename into
+	@mve_<mve_insn>q_to_f_<supf><mode>.
+	(mve_vcvtq_from_f_<supf><mode>): Rename into
+	@mve_<mve_insn>q_from_f_<supf><mode>.
+	(mve_vcvtq_n_to_f_<supf><mode>): Rename into
+	@mve_<mve_insn>q_n_to_f_<supf><mode>.
+	(mve_vcvtq_n_from_f_<supf><mode>): Rename into
+	@mve_<mve_insn>q_n_from_f_<supf><mode>.
+	(mve_vcvtq_m_to_f_<supf><mode>): Rename into
+	@mve_<mve_insn>q_m_to_f_<supf><mode>.
+	(mve_vcvtq_m_n_from_f_<supf><mode>): Rename into
+	@mve_<mve_insn>q_m_n_from_f_<supf><mode>.
+	(mve_vcvtq_m_from_f_<supf><mode>): Rename into
+	@mve_<mve_insn>q_m_from_f_<supf><mode>.
+	(mve_vcvtq_m_n_to_f_<supf><mode>): Rename into
+	@mve_<mve_insn>q_m_n_to_f_<supf><mode>.
+
+2024-10-18  Christophe Lyon  <christophe.lyon@linaro.org>
+
+	* config/arm/arm-mve-builtins-functions.h
+	(unspec_based_mve_function_base): Add m_unspec_for_sint,
+	m_unspec_for_uint, m_unspec_for_fp and expand_unspec members.
+	(unspec_based_mve_function_exact_insn): Inherit from
+	unspec_based_mve_function_base and use expand_unspec.
+	(unspec_mve_function_exact_insn): Likewise.
+	(unspec_mve_function_exact_insn_pred_p): Likewise.  Use
+	conditionals.
+	(unspec_mve_function_exact_insn_vshl): Likewise.
+	(unspec_based_mve_function_exact_insn_vcmp): Initialize new
+	inherited members.  Use conditionals.
+	(unspec_mve_function_exact_insn_rot): Merge PRED_m and PRED_x
+	handling.  Use conditionals.
+	(unspec_mve_function_exact_insn_vmull): Likewise.
+	(unspec_mve_function_exact_insn_vmull_poly): Likewise.
+
+2024-10-18  Christophe Lyon  <christophe.lyon@linaro.org>
+
+	* config/arm/arm-mve-builtins-shapes.cc (create_def::resolve):
+	Delete function.
+
+2024-10-18  Christophe Lyon  <christophe.lyon@linaro.org>
+
+	* config/arm/arm-mve-builtins-shapes.cc (binary_orrq_def): Improve comment.
+
+2024-10-18  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/117171
+	* tree-vect-stmts.cc (vect_maybe_update_slp_op_vectype):
+	Relax vect_external_def VECTOR_BOOLEAN_TYPE_P constraint.
+
+2024-10-17  Siddhesh Poyarekar  <siddhesh@gotplt.org>
+
+	PR middle-end/77608
+	* tree-object-size.cc (plus_stmt_object_size): Drop check for
+	constant offset.
+
+2024-10-17  Patrick Palka  <ppalka@redhat.com>
+
+	* doc/extend.texi (C++ Concepts): Remove section.  Move
+	__is_same documentation to the previous Type Traits section.
+
+2024-10-17  Oleg Endo  <olegendo@gcc.gnu.org>
+
+	PR target/113533
+	* config/sh/sh.cc (sh_rtx_costs): Delete wrong semicolon.
+
+2024-10-17  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/117172
+	* tree-vect-loop.cc (vectorizable_nonlinear_induction): Add
+	single-lane SLP support.
+
+2024-10-17  Denis Chertykov  <chertykov@gmail.com>
+
+	PR target/116550
+	* lra-constraints.cc (get_reload_reg): Reuse scratch registers
+	generated by LRA.
+
+2024-10-17  Richard Biener  <rguenther@suse.de>
+
+	* tree-vect-slp.cc (vect_lower_load_permutations): Avoid
+	exempting non-power-of-two group sizes from lowering.
+
+2024-10-17  Lingling Kong  <lingling.kong@intel.com>
+
+	* config/i386/sse.md(avx10_2_comsbf16_v8bf): Fixed scalar
+	operands.
+
+2024-10-17  liuhongt  <hongtao.liu@intel.com>
+
+	PR target/116940
+	* config/i386/sse.md (*avx2_pcmp<mode>3_7): Change
+	UNSPEC_PCMP_ITER to UNSPEC_PCMP.
+	(*avx2_pcmp<mode>3_8): New pre_reload
+	define_insn_and_splitter.
+
+2024-10-17  liuhongt  <hongtao.liu@intel.com>
+
+	PR target/117072
+	* config/i386/sse.md (<avx512>_fmadd_<mode>_mask<round_name>):
+	Relax predicates of fma operands from register_operand to
+	nonimmediate_operand.
+	(<avx512>_fmadd_<mode>_mask3<round_name>): Ditto.
+	(<avx512>_fmsub_<mode>_mask<round_name>): Ditto.
+	(<avx512>_fmsub_<mode>_mask3<round_name>): Ditto.
+	(<avx512>_fnmadd_<mode>_mask<round_name>): Ditto.
+	(<avx512>_fnmadd_<mode>_mask3<round_name>): Ditto.
+	(<avx512>_fnmsub_<mode>_mask<round_name>): Ditto.
+	(<avx512>_fnmsub_<mode>_mask3<round_name>): Ditto.
+	(<avx512>_fmaddsub_<mode>_mask3<round_name>): Ditto.
+	(<avx512>_fmsubadd_<mode>_mask<round_name>): Ditto.
+	(<avx512>_fmsubadd_<mode>_mask3<round_name>): Ditto.
+	(avx512f_vmfmadd_<mode>_mask<round_name>): Ditto.
+	(avx512f_vmfmadd_<mode>_mask3<round_name>): Ditto.
+	(avx512f_vmfmadd_<mode>_maskz_1<round_name>): Ditto.
+	(*avx512f_vmfmsub_<mode>_mask<round_name>): Ditto.
+	(avx512f_vmfmsub_<mode>_mask3<round_name>): Ditto.
+	(*avx512f_vmfmsub_<mode>_maskz_1<round_name>): Ditto.
+	(avx512f_vmfnmadd_<mode>_mask<round_name>): Ditto.
+	(avx512f_vmfnmadd_<mode>_mask3<round_name>): Ditto.
+	(avx512f_vmfnmadd_<mode>_maskz_1<round_name>): Ditto.
+	(*avx512f_vmfnmsub_<mode>_mask<round_name>): Ditto.
+	(*avx512f_vmfnmsub_<mode>_mask3<round_name>): Ditto.
+	(*avx512f_vmfnmsub_<mode>_maskz_1<round_name>): Ditto.
+	(avx10_2_fmaddnepbf16_<mode>_mask3): Ditto.
+	(avx10_2_fnmaddnepbf16_<mode>_mask3): Ditto.
+	(avx10_2_fmsubnepbf16_<mode>_mask3): Ditto.
+	(avx10_2_fnmsubnepbf16_<mode>_mask3): Ditto.
+	(fmai_vmfmadd_<mode><round_name>): Swap operands[1] and operands[2].
+	(fmai_vmfmsub_<mode><round_name>): Ditto.
+	(fmai_vmfnmadd_<mode><round_name>): Ditto.
+	(fmai_vmfnmsub_<mode><round_name>): Ditto.
+	(*fmai_fmadd_<mode>): Swap operands[1] and operands[2] adjust
+	operands[1] predicates from register_operand to
+	nonimmediate_operand.
+	(*fmai_fmsub_<mode>): Ditto.
+	(*fmai_fnmadd_<mode><round_name>): Ditto.
+	(*fmai_fnmsub_<mode><round_name>): Ditto.
+
+2024-10-17  liuhongt  <hongtao.liu@intel.com>
+
+	PR middle-end/117072
+	* combine.cc (maybe_swap_commutative_operands):
+	Canonicalize (vec_merge (fma op2 op1 op3) op1 mask)
+	to (vec_merge (fma op1 op2 op3) op1 mask).
+
+2024-10-17  Cui, Lili  <lili.cui@intel.com>
+
+	* config/i386/sse.md (andn<mode>3): New.
+	* config/i386/mmx.md (andn<mode>3): New.
+
+2024-10-16  Siddhesh Poyarekar  <siddhesh@gotplt.org>
+
+	* tree-object-size.cc (plus_stmt_object_size): Call
+	SIZE_FOR_OFFSET for some negative offset cases.
+
+2024-10-16  Jolen Li  <jolen.li@arm.com>
+	    Christophe Lyon  <christophe.lyon@arm.com>
+
+	* config/arm/arm-mve-builtins-base.cc (vdupq_impl): New class.
+	(vdupq): Use new implementation.
+	* config/arm/arm.cc (arm_rtx_costs_internal): Handle HFmode
+	for COST_DOUBLE. Update costing for CONST_VECTOR.
+	* config/arm/arm_mve_builtins.def: Merge vdupq_n_f, vdupq_n_s
+	and vdupq_n_u into vdupq_n.
+	* config/arm/mve.md (mve_vdup<mode>): Rename into ...
+	(@mve_vdup_n<mode>): ... this.
+	(@mve_<mve_insn>q_n_f<mode>): Delete.
+	(@mve_<mve_insn>q_n_<supf><mode>): Delete..
+	(@mve_<mve_insn>q_m_n_<supf><mode>): Update mve_unpredicated_insn
+	attribute.
+	(@mve_<mve_insn>q_m_n_f<mode>): Likewise.
+
+2024-10-16  Jolen Li  <jolen.li@arm.com>
+	    Christophe Lyon  <christophe.lyon@arm.com>
+
+	* config/arm/mve.md (mve_vdup<mode>): Fix mode iterator.
+
+2024-10-16  David Malcolm  <dmalcolm@redhat.com>
+
+	PR other/116602
+	* diagnostic-format-sarif.cc: Include "demangle.h" and
+	"backtrace.h".
+	(sarif_invocation::add_notification_for_ice): Add "backtrace"
+	param and pass it to ctor.
+	(sarif_ice_notification::sarif_ice_notification): Add "backtrace"
+	param and add it to property bag.
+	(bt_stop): New, taken from diagnostic.cc.
+	(struct bt_closure): New.
+	(bt_callback): New, adapted from diagnostic.cc.
+	(sarif_builder::make_stack_from_backtrace): New.
+	(sarif_builder::on_report_diagnostic): Attempt to get backtrace
+	and pass it to add_notification_for_ice.
+
+2024-10-16  David Malcolm  <dmalcolm@redhat.com>
+
+	PR other/116613
+	* diagnostic-format-sarif.cc
+	(sarif_builder::on_report_diagnostic): Move the fnotice here from
+	sarif_ice_handler.
+	(sarif_ice_handler): Delete.
+	(diagnostic_output_format_init_sarif): Drop setting of ice handler
+	callback.
+	* diagnostic.cc (diagnostic_context::initialize): Likewise.
+	(diagnostic_context::action_after_output): Rather than call
+	m_ice_handler_cb, instead call finish on this context.
+	* diagnostic.h (ice_handler_callback_t): Delete typedef.
+	(diagnostic_context::set_ice_handler_callback): Delete.
+	(diagnostic_context::m_ice_handler_cb): Delete.
+
+2024-10-16  Andi Kleen  <ak@gcc.gnu.org>
+
+	PR middle-end/116510
+	* tree-if-conv.cc (predicate_bbs): Add missing fold_converts.
+
+2024-10-16  Jakub Jelinek  <jakub@redhat.com>
+
+	* attribs.cc (lookup_scoped_attribute_spec): ?: operator formatting
+	fixes.
+	* basic-block.h (FOR_BB_INSNS_SAFE): Likewise.
+	* cfgcleanup.cc (outgoing_edges_match): Likewise.
+	* cgraph.cc (cgraph_node::dump): Likewise.
+	* config/arc/arc.cc (gen_acc1, gen_acc2): Likewise.
+	* config/arc/arc.h (CLASS_MAX_NREGS, CONSTANT_ADDRESS_P): Likewise.
+	* config/arm/arm.cc (arm_print_operand): Likewise.
+	* config/cris/cris.md (*b<rnzcond:code><mode>): Likewise.
+	* config/darwin.cc (darwin_asm_declare_object_name,
+	darwin_emit_common): Likewise.
+	* config/darwin-driver.cc (darwin_driver_init): Likewise.
+	* config/epiphany/epiphany.md (call, sibcall, call_value,
+	sibcall_value): Likewise.
+	* config/i386/i386.cc (gen_push2): Likewise.
+	* config/i386/i386.h (ix86_cur_cost): Likewise.
+	* config/i386/openbsdelf.h (FUNCTION_PROFILER): Likewise.
+	* config/loongarch/loongarch-c.cc (loongarch_cpu_cpp_builtins):
+	Likewise.
+	* config/loongarch/loongarch-cpu.cc (fill_native_cpu_config):
+	Likewise.
+	* config/riscv/riscv.cc (riscv_union_memmodels): Likewise.
+	* config/riscv/zc.md (*mva01s<X:mode>, *mvsa01<X:mode>): Likewise.
+	* config/rs6000/mmintrin.h (_mm_cmpeq_pi8, _mm_cmpgt_pi8,
+	_mm_cmpeq_pi16, _mm_cmpgt_pi16, _mm_cmpeq_pi32, _mm_cmpgt_pi32):
+	Likewise.
+	* config/v850/predicates.md (pattern_is_ok_for_prologue): Likewise.
+	* config/xtensa/constraints.md (d, C, W): Likewise.
+	* coverage.cc (coverage_begin_function, build_init_ctor,
+	build_gcov_exit_decl): Likewise.
+	* df-problems.cc (df_create_unused_note): Likewise.
+	* diagnostic.cc (diagnostic_set_caret_max_width): Likewise.
+	* diagnostic-path.cc (path_summary::path_summary): Likewise.
+	* expr.cc (expand_expr_divmod): Likewise.
+	* gcov.cc (format_gcov): Likewise.
+	* gcov-dump.cc (dump_gcov_file): Likewise.
+	* genmatch.cc (main): Likewise.
+	* incpath.cc (remove_duplicates, register_include_chains): Likewise.
+	* ipa-devirt.cc (dump_odr_type): Likewise.
+	* ipa-icf.cc (sem_item_optimizer::merge_classes): Likewise.
+	* ipa-inline.cc (inline_small_functions): Likewise.
+	* ipa-polymorphic-call.cc (ipa_polymorphic_call_context::dump):
+	Likewise.
+	* ipa-sra.cc (create_parameter_descriptors): Likewise.
+	* ipa-utils.cc (find_always_executed_bbs): Likewise.
+	* predict.cc (predict_loops): Likewise.
+	* selftest.cc (read_file): Likewise.
+	* sreal.h (SREAL_SIGN, SREAL_ABS): Likewise.
+	* tree-dump.cc (dequeue_and_dump): Likewise.
+	* tree-ssa-ccp.cc (bit_value_binop): Likewise.
+
+2024-10-16  Eric Botcazou  <ebotcazou@adacore.com>
+
+	PR target/113952
+	PR target/117168
+	* config/sparc/constraints.md ('U'): Delete.
+	* config/sparc/sparc.md (*movdi_insn_sp32): Remove U alternatives.
+	(*movdf_insn_sp32): Likewise.
+	(*mov<VM64:mode>_insn_sp32): Likewise.
+	* doc/md.texi (SPARC constraints): Remove entry for 'U'.
+
 2024-10-16  Richard Biener  <rguenther@suse.de>
 
 	* tree-vect-stmts.cc (get_group_load_store_type): Move

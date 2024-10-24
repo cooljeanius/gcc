@@ -452,7 +452,7 @@ C ObjC Alias(Wc11-c23-compat)
 Deprecated in favor of -Wc11-c23-compat.
 
 Wc23-c2y-compat
-C ObjC Var(warn_c23_c2y_compat) Init(-1) Warning
+C ObjC CPP(cpp_warn_c23_c2y_compat) CppReason(CPP_W_C23_C2Y_COMPAT) Var(warn_c23_c2y_compat) Init(-1) Warning
 Warn about features not present in ISO C23, but present in ISO C2Y.
 
 Wc90-c99-compat
@@ -927,6 +927,25 @@ Warn about invalid UTF-8 characters.
 Wjump-misses-init
 C ObjC Var(warn_jump_misses_init) Warning LangEnabledby(C ObjC,Wc++-compat)
 Warn when a jump misses a variable initialization.
+
+Enum
+Name(warn_leading_whitespace_kind) Type(int) UnknownError(argument %qs to %<-Wleading-whitespace=%> not recognized)
+
+EnumValue
+Enum(warn_leading_whitespace_kind) String(none) Value(0)
+
+EnumValue
+Enum(warn_leading_whitespace_kind) String(spaces) Value(1)
+
+EnumValue
+Enum(warn_leading_whitespace_kind) String(tabs) Value(2)
+
+EnumValue
+Enum(warn_leading_whitespace_kind) String(blanks) Value(3)
+
+Wleading-whitespace=
+C ObjC C++ ObjC++ CPP(cpp_warn_leading_whitespace) CppReason(CPP_W_LEADING_WHITESPACE) Enum(warn_leading_whitespace_kind) Joined RejectNegative Var(warn_leading_whitespace) Init(0) Warning
+Warn about leading whitespace style issues on lines except when in raw string literals.
 
 Wliteral-suffix
 C++ ObjC++ CPP(warn_literal_suffix) CppReason(CPP_W_LITERAL_SUFFIX) Var(cpp_warn_literal_suffix) Init(1) Warning

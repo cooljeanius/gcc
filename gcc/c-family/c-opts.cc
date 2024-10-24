@@ -1147,6 +1147,8 @@ c_common_post_options (const char **pfilename)
     flag_char8_t = (cxx_dialect >= cxx20) || flag_isoc23;
   cpp_opts->unsigned_utf8char = flag_char8_t ? 1 : cpp_opts->unsigned_char;
 
+  cpp_opts->cpp_tabstop = global_dc->m_tabstop;
+
   if (flag_extern_tls_init)
     {
       if (!TARGET_SUPPORTS_ALIASES || !SUPPORTS_WEAK)
@@ -1892,7 +1894,7 @@ set_std_c23 (int iso)
 static void
 set_std_c2y (int iso)
 {
-  cpp_set_lang (parse_in, iso ? CLK_STDC23: CLK_GNUC23);
+  cpp_set_lang (parse_in, iso ? CLK_STDC2Y : CLK_GNUC2Y);
   flag_no_asm = iso;
   flag_no_nonansi_builtin = iso;
   flag_iso = iso;

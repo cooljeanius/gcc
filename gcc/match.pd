@@ -3325,7 +3325,7 @@ DEFINE_INT_AND_FLOAT_ROUND_FN (RINT)
  (if (INTEGRAL_TYPE_P (type) && TYPE_UNSIGNED (type)
       && types_match (type, @0, @1))))
 
-/* Unsigned saturation sub with op_0 imm, case 9 (branch with gt):
+/* Unsigned saturation sub with op_0 imm, case 9 (branch with le):
    SAT_U_SUB = IMM > Y  ? (IMM - Y) : 0.
              = IMM >= Y ? (IMM - Y) : 0.  */
 (match (unsigned_integer_sat_sub @0 @1)
@@ -3343,6 +3343,29 @@ DEFINE_INT_AND_FLOAT_ROUND_FN (RINT)
    bool less_than_1_p = !wi::eq_p (c2, max) && wi::eq_p (c2_add_1, c0);
   }
   (if (equal_p || less_than_1_p)))))
+
+/* The boundary condition for case 9: IMM = max -1  (branch with ne):
+   SAT_U_SUB = IMM >= Y ? (IMM - Y) : 0.  */
+(match (unsigned_integer_sat_sub @0 @1)
+ (cond^ (ne @1 INTEGER_CST@2) (minus INTEGER_CST@0 @1) integer_zerop)
+ (if (INTEGRAL_TYPE_P (type) && TYPE_UNSIGNED (type)
+     && types_match (type, @1))
+(with
+  {
+   unsigned precision = TYPE_PRECISION (type);
+   wide_int max = wi::mask (precision, false, precision);
+   wide_int c0 = wi::to_wide (@0);
+   wide_int c2 = wi::to_wide (@2);
+   wide_int c0_add_1 = wi::add (c0, wi::uhwi (1, precision));
+  }
+  (if (wi::eq_p (c2, max) && wi::eq_p (c0_add_1, max))))))
+
+/* The boundary condition for case 9: IMM = 1  (branch with le):
+   SAT_U_SUB = IMM >= Y ? (IMM - Y) : 0.  */
+(match (unsigned_integer_sat_sub @0 @1)
+ (cond^ (le @1 integer_onep@0) (bit_xor @1 integer_onep@0) integer_zerop)
+ (if (INTEGRAL_TYPE_P (type) && TYPE_UNSIGNED (type)
+     && types_match (type, @1))))
 
 /* Unsigned saturation sub with op_1 imm, case 10:
    SAT_U_SUB = X > IMM  ? (X - IMM) : 0.
@@ -3482,7 +3505,9 @@ DEFINE_INT_AND_FLOAT_ROUND_FN (RINT)
    SAT_S_TRUNC(X) = (unsigned)X + NT_MAX + 1  > Unsigned_MAX ? (NT)X.  */
 (match (signed_integer_sat_trunc @0)
  (cond^ (gt (plus:c (convert@4 @0) INTEGER_CST@1) INTEGER_CST@2)
-	(bit_xor:c (negate (convert (lt @0 integer_zerop))) INTEGER_CST@3)
+	(bit_xor:c (nop_convert?
+		    (negate (nop_convert? (convert (lt @0 integer_zerop)))))
+		   INTEGER_CST@3)
 	(convert @0))
  (if (INTEGRAL_TYPE_P (type) && !TYPE_UNSIGNED (type)
       && !TYPE_UNSIGNED (TREE_TYPE (@0)) && TYPE_UNSIGNED (TREE_TYPE (@4)))

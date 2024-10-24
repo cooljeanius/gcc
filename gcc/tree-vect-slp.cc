@@ -2020,11 +2020,7 @@ vect_build_slp_tree_2 (vec_info *vinfo, slp_tree node,
 
 	  if (gcall *stmt = dyn_cast <gcall *> (stmt_info->stmt))
 	    {
-	      gcc_assert (gimple_call_internal_p (stmt, IFN_MASK_LOAD)
-			  || gimple_call_internal_p (stmt, IFN_GATHER_LOAD)
-			  || gimple_call_internal_p (stmt, IFN_MASK_GATHER_LOAD)
-			  || gimple_call_internal_p (stmt,
-						     IFN_MASK_LEN_GATHER_LOAD));
+	      gcc_assert (gimple_call_internal_p (stmt, IFN_MASK_LOAD));
 	      bool has_gaps = false;
 	      if (STMT_VINFO_GROUPED_ACCESS (stmt_info))
 		for (stmt_vec_info si = DR_GROUP_NEXT_ELEMENT (first_stmt_info);
@@ -4427,6 +4423,7 @@ vect_lower_load_permutations (loop_vec_info loop_vinfo,
 	  && contiguous
 	  && (SLP_TREE_LANES (load) > 1 || loads.size () == 1)
 	  && pow2p_hwi (SLP_TREE_LANES (load))
+	  && pow2p_hwi (group_lanes)
 	  && SLP_TREE_LOAD_PERMUTATION (load)[0] % SLP_TREE_LANES (load) == 0
 	  && group_lanes % SLP_TREE_LANES (load) == 0)
 	{
@@ -11166,7 +11163,7 @@ vectorize_slp_instance_root_stmt (vec_info *vinfo, slp_tree node, slp_instance i
 	 can't support lane > 1 at this time.  */
       gcc_assert (instance->root_stmts.length () == 1);
       auto root_stmt_info = instance->root_stmts[0];
-      auto last_stmt = STMT_VINFO_STMT (root_stmt_info);
+      auto last_stmt = STMT_VINFO_STMT (vect_orig_stmt (root_stmt_info));
       gimple_stmt_iterator rgsi = gsi_for_stmt (last_stmt);
       gimple *vec_stmt = NULL;
       gcc_assert (!SLP_TREE_VEC_DEFS (node).is_empty ());

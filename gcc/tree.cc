@@ -3701,7 +3701,7 @@ int_byte_position (const_tree field)
    ARRAY_TYPE) minus one.  This counts only elements of the top array.  */
 
 tree
-array_type_nelts (const_tree type)
+array_type_nelts_minus_one (const_tree type)
 {
   tree index_type, min, max;
 
@@ -3731,6 +3731,19 @@ array_type_nelts (const_tree type)
   return (integer_zerop (min)
 	  ? max
 	  : fold_build2 (MINUS_EXPR, TREE_TYPE (max), max, min));
+}
+
+/* Return, as an INTEGER_CST node, the number of elements for TYPE
+   (which is an ARRAY_TYPE).  This counts only elements of the top
+   array.  */
+
+tree
+array_type_nelts_top (tree type)
+{
+  return fold_build2_loc (input_location,
+		      PLUS_EXPR, sizetype,
+		      array_type_nelts_minus_one (type),
+		      size_one_node);
 }
 
 /* If arg is static -- a reference to an object in static storage -- then
@@ -14800,7 +14813,7 @@ is_empty_type (const_tree type)
       return true;
     }
   else if (TREE_CODE (type) == ARRAY_TYPE)
-    return (integer_minus_onep (array_type_nelts (type))
+    return (integer_minus_onep (array_type_nelts_minus_one (type))
 	    || TYPE_DOMAIN (type) == NULL_TREE
 	    || is_empty_type (TREE_TYPE (type)));
   return false;
