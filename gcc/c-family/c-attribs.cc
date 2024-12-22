@@ -48,6 +48,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "gimplify.h"
 #include "tree-pretty-print.h"
 #include "gcc-rich-location.h"
+#include "gcc-urlifier.h"
 
 static tree handle_packed_attribute (tree *, tree, tree, int, bool *);
 static tree handle_nocommon_attribute (tree *, tree, tree, int, bool *);
@@ -100,7 +101,6 @@ static tree handle_destructor_attribute (tree *, tree, tree, int, bool *);
 static tree handle_mode_attribute (tree *, tree, tree, int, bool *);
 static tree handle_section_attribute (tree *, tree, tree, int, bool *);
 static tree handle_special_var_sec_attribute (tree *, tree, tree, int, bool *);
-static tree handle_aligned_attribute (tree *, tree, tree, int, bool *);
 static tree handle_warn_if_not_aligned_attribute (tree *, tree, tree,
 						  int, bool *);
 static tree handle_strict_flex_array_attribute (tree *, tree, tree,
@@ -138,6 +138,8 @@ static tree handle_vector_size_attribute (tree *, tree, tree, int,
 static tree handle_vector_mask_attribute (tree *, tree, tree, int,
 					  bool *) ATTRIBUTE_NONNULL(3);
 static tree handle_nonnull_attribute (tree *, tree, tree, int, bool *);
+static tree handle_nonnull_if_nonzero_attribute (tree *, tree, tree, int,
+						 bool *);
 static tree handle_nonstring_attribute (tree *, tree, tree, int, bool *);
 static tree handle_nothrow_attribute (tree *, tree, tree, int, bool *);
 static tree handle_expected_throw_attribute (tree *, tree, tree, int, bool *);
@@ -192,7 +194,7 @@ static tree handle_null_terminated_string_arg_attribute (tree *, tree, tree, int
   { name, function, type, variable }
 
 /* Define attributes that are mutually exclusive with one another.  */
-static const struct attribute_spec::exclusions attr_aligned_exclusions[] =
+extern const struct attribute_spec::exclusions attr_aligned_exclusions[] =
 {
   /* Attribute name     exclusion applies to:
 	                function, type, variable */
@@ -487,6 +489,8 @@ const struct attribute_spec c_common_gnu_attributes[] =
 			      handle_tls_model_attribute, NULL },
   { "nonnull",                0, -1, false, true, true, false,
 			      handle_nonnull_attribute, NULL },
+  { "nonnull_if_nonzero",     2, 2, false, true, true, false,
+			      handle_nonnull_if_nonzero_attribute, NULL },
   { "nonstring",              0, 0, true, false, false, false,
 			      handle_nonstring_attribute, NULL },
   { "nothrow",                0, 0, true,  false, false, false,
@@ -571,6 +575,9 @@ const struct attribute_spec c_common_gnu_attributes[] =
 			      handle_omp_declare_variant_attribute, NULL },
   { "omp declare variant variant", 0, -1, true,  false, false, false,
 			      handle_omp_declare_variant_attribute, NULL },
+  { "omp declare variant adjust_args need_device_ptr", 0, -1, true,  false,
+			      false, false,
+			      handle_omp_declare_variant_attribute, NULL },
   { "simd",		      0, 1, true,  false, false, false,
 			      handle_simd_attribute, NULL },
   { "omp declare target",     0, -1, true, false, false, false,
@@ -627,11 +634,11 @@ const struct attribute_spec c_common_gnu_attributes[] =
   { "tainted_args",	      0, 0, true,  false, false, false,
 			      handle_tainted_args_attribute, NULL },
   { "fd_arg",             1, 1, false, true, true, false,
-            handle_fd_arg_attribute, NULL},      
+            handle_fd_arg_attribute, NULL},
   { "fd_arg_read",        1, 1, false, true, true, false,
             handle_fd_arg_attribute, NULL},
   { "fd_arg_write",       1, 1, false, true, true, false,
-            handle_fd_arg_attribute, NULL},         
+            handle_fd_arg_attribute, NULL},
   { "flag_enum",	      0, 0, false, true, false, false,
 			      handle_flag_enum_attribute, NULL },
   { "null_terminated_string_arg", 1, 1, false, true, true, false,
@@ -730,6 +737,8 @@ positional_argument (const_tree fn, const_tree atname, tree &pos,
 		     tree_code code, int argno /* = 0 */,
 		     int flags /* = posargflags () */)
 {
+  auto_urlify_attributes sentinel;
+
   const_tree fndecl = TYPE_P (fn) ? NULL_TREE : fn;
   const_tree fntype = TYPE_P (fn) ? fn : TREE_TYPE (fn);
   if (pos && TREE_CODE (pos) != IDENTIFIER_NODE
@@ -2806,7 +2815,7 @@ common_handle_aligned_attribute (tree *node, tree name, tree args, int flags,
 /* Handle a "aligned" attribute; arguments as in
    struct attribute_spec.handler.  */
 
-static tree
+tree
 handle_aligned_attribute (tree *node, tree name, tree args,
 			  int flags, bool *no_add_attrs)
 {
@@ -4999,7 +5008,7 @@ handle_nonnull_attribute (tree *node, tree name,
       /* NEXT is null when the attribute includes just one argument.
 	 That's used to tell positional_argument to avoid mentioning
 	 the argument number in diagnostics (since there's just one
-	 mentioning it is unnecessary and coule be confusing).  */
+	 mentioning it is unnecessary and could be confusing).  */
       tree next = TREE_CHAIN (args);
       if (tree val = positional_argument (type, name, pos, POINTER_TYPE,
 					  next || i > 1 ? i : 0))
@@ -5011,6 +5020,29 @@ handle_nonnull_attribute (tree *node, tree name,
 	}
       args = next;
     }
+
+  return NULL_TREE;
+}
+
+/* Handle the "nonnull_if_nonzero" attribute.  */
+
+static tree
+handle_nonnull_if_nonzero_attribute (tree *node, tree name,
+				     tree args, int ARG_UNUSED (flags),
+				     bool *no_add_attrs)
+{
+  tree type = *node;
+  tree pos = TREE_VALUE (args);
+  tree pos2 = TREE_VALUE (TREE_CHAIN (args));
+  tree val = positional_argument (type, name, pos, POINTER_TYPE, 1);
+  tree val2 = positional_argument (type, name, pos2, INTEGER_TYPE, 2);
+  if (val && val2)
+    {
+      TREE_VALUE (args) = val;
+      TREE_VALUE (TREE_CHAIN (args)) = val2;
+    }
+  else
+    *no_add_attrs = true;
 
   return NULL_TREE;
 }
@@ -5035,7 +5067,7 @@ handle_fd_arg_attribute (tree *node, tree name, tree args,
   if (positional_argument (*node, name, TREE_VALUE (args), INTEGER_TYPE))
       return NULL_TREE;
 
-  *no_add_attrs = true;  
+  *no_add_attrs = true;
   return NULL_TREE;
 }
 

@@ -18,7 +18,6 @@ along with GCC; see the file COPYING3.  If not see
 <http://www.gnu.org/licenses/>.  */
 
 #include "config.h"
-#define INCLUDE_MEMORY
 #include "system.h"
 #include "coretypes.h"
 #include "options.h"
@@ -108,7 +107,7 @@ static struct dump_file_info dump_files[TDI_end] =
   DUMP_FILE_INFO (".lto-stream-out", "ipa-lto-stream-out", DK_ipa, 0),
   DUMP_FILE_INFO (".profile-report", "profile-report", DK_ipa, 0),
 #define FIRST_AUTO_NUMBERED_DUMP 1
-#define FIRST_ME_AUTO_NUMBERED_DUMP 5
+#define FIRST_ME_AUTO_NUMBERED_DUMP 6
 
   DUMP_FILE_INFO (NULL, "lang-all", DK_lang, 0),
   DUMP_FILE_INFO (NULL, "tree-all", DK_tree, 0),
@@ -348,7 +347,7 @@ get_dump_file_name (struct dump_file_info *dfi, int part) const
     {
       /* (null), LANG, TREE, RTL, IPA.  */
       char suffix = " ltri"[dfi->dkind];
-      
+
       if (snprintf (dump_id, sizeof (dump_id), ".%03d%c", dfi->num, suffix) < 0)
 	dump_id[0] = '\0';
     }

@@ -456,7 +456,7 @@ struct conversion_info {
   /* The location of the argument.  */
   location_t loc;
 };
-  
+
 struct rejection_reason {
   enum rejection_reason_code code;
   union {
@@ -1871,7 +1871,7 @@ reference_binding (tree rto, tree rfrom, tree expr, bool c_cast_p, int flags,
 	conv->rvaluedness_matches_p
 	  = (TYPE_REF_IS_RVALUE (rto) == TYPE_REF_IS_RVALUE (rfrom));
       else
-	conv->rvaluedness_matches_p 
+	conv->rvaluedness_matches_p
           = (TYPE_REF_IS_RVALUE (rto) == !is_lvalue);
 
       if ((gl_kind & clk_bitfield) != 0
@@ -3045,16 +3045,16 @@ add_builtin_candidate (struct z_candidate **candidates, enum tree_code code,
 	break;
       if (TYPE_PTR_P (type1) && TYPE_PTR_P (type2))
 	break;
-      if (TREE_CODE (type1) == ENUMERAL_TYPE 
+      if (TREE_CODE (type1) == ENUMERAL_TYPE
 	  && TREE_CODE (type2) == ENUMERAL_TYPE)
 	break;
-      if (TYPE_PTR_P (type1) 
+      if (TYPE_PTR_P (type1)
 	  && null_ptr_cst_p (args[1]))
 	{
 	  type2 = type1;
 	  break;
 	}
-      if (null_ptr_cst_p (args[0]) 
+      if (null_ptr_cst_p (args[0])
 	  && TYPE_PTR_P (type2))
 	{
 	  type1 = type2;
@@ -3219,7 +3219,7 @@ add_builtin_candidate (struct z_candidate **candidates, enum tree_code code,
       if (ARITHMETIC_TYPE_P (type1))
 	break;
       return;
- 
+
     default:
       gcc_unreachable ();
     }
@@ -3886,18 +3886,18 @@ print_conversion_rejection (location_t loc, struct conversion_info *info,
       /* Conversion of implicit `this' argument failed.  */
       if (!TYPE_P (info->from))
 	/* A bad conversion for 'this' must be discarding cv-quals.  */
-	inform (loc, "  passing %qT as %<this%> "
+	inform (loc, "passing %qT as %<this%> "
 		"argument discards qualifiers",
 		from);
       else
-	inform (loc, "  no known conversion for implicit "
+	inform (loc, "no known conversion for implicit "
 		"%<this%> parameter from %qH to %qI",
 		from, info->to_type);
     }
   else if (!TYPE_P (info->from))
     {
       if (info->n_arg >= 0)
-	inform (loc, "  conversion of argument %d would be ill-formed:",
+	inform (loc, "conversion of argument %d would be ill-formed:",
 		info->n_arg + 1);
       iloc_sentinel ils = loc;
       perform_implicit_conversion (info->to_type, info->from,
@@ -3905,13 +3905,13 @@ print_conversion_rejection (location_t loc, struct conversion_info *info,
     }
   else if (info->n_arg == -2)
     /* Conversion of conversion function return value failed.  */
-    inform (loc, "  no known conversion from %qH to %qI",
+    inform (loc, "no known conversion from %qH to %qI",
 	    from, info->to_type);
   else
     {
       if (TREE_CODE (fn) == FUNCTION_DECL)
 	loc = get_fndecl_argument_location (fn, info->n_arg);
-      inform (loc, "  no known conversion for argument %d from %qH to %qI",
+      inform (loc, "no known conversion for argument %d from %qH to %qI",
 	      info->n_arg + 1, from, info->to_type);
     }
 }
@@ -3925,13 +3925,13 @@ print_arity_information (location_t loc, unsigned int have, unsigned int want,
 {
   if (least_p)
     inform_n (loc, want,
-	      "  candidate expects at least %d argument, %d provided",
-	      "  candidate expects at least %d arguments, %d provided",
+	      "candidate expects at least %d argument, %d provided",
+	      "candidate expects at least %d arguments, %d provided",
 	      want, have);
   else
     inform_n (loc, want,
-	      "  candidate expects %d argument, %d provided",
-	      "  candidate expects %d arguments, %d provided",
+	      "candidate expects %d argument, %d provided",
+	      "candidate expects %d arguments, %d provided",
 	      want, have);
 }
 
@@ -3987,11 +3987,12 @@ print_z_candidate (location_t loc, const char *msgstr,
   if (fn != candidate->fn)
     {
       cloc = location_of (candidate->fn);
-      inform (cloc, "  inherited here");
+      inform (cloc, "inherited here");
     }
   /* Give the user some information about why this candidate failed.  */
   if (candidate->reason != NULL)
     {
+      auto_diagnostic_nesting_level sentinel;
       struct rejection_reason *r = candidate->reason;
 
       switch (r->code)
@@ -4008,13 +4009,13 @@ print_z_candidate (location_t loc, const char *msgstr,
 	  print_conversion_rejection (cloc, &r->u.bad_conversion, fn);
 	  break;
 	case rr_explicit_conversion:
-	  inform (cloc, "  return type %qT of explicit conversion function "
+	  inform (cloc, "return type %qT of explicit conversion function "
 		  "cannot be converted to %qT with a qualification "
 		  "conversion", r->u.conversion.from,
 		  r->u.conversion.to_type);
 	  break;
 	case rr_template_conversion:
-	  inform (cloc, "  conversion from return type %qT of template "
+	  inform (cloc, "conversion from return type %qT of template "
 		  "conversion function specialization to %qT is not an "
 		  "exact match", r->u.conversion.from,
 		  r->u.conversion.to_type);
@@ -4025,33 +4026,39 @@ print_z_candidate (location_t loc, const char *msgstr,
 	     them here.  */
 	  if (r->u.template_unification.tmpl == NULL_TREE)
 	    {
-	      inform (cloc, "  substitution of deduced template arguments "
+	      inform (cloc, "substitution of deduced template arguments "
 		      "resulted in errors seen above");
 	      break;
 	    }
 	  /* Re-run template unification with diagnostics.  */
-	  inform (cloc, "  template argument deduction/substitution failed:");
-	  fn_type_unification (r->u.template_unification.tmpl,
-			       r->u.template_unification.explicit_targs,
-			       (make_tree_vec
-				(r->u.template_unification.num_targs)),
-			       r->u.template_unification.args,
-			       r->u.template_unification.nargs,
-			       r->u.template_unification.return_type,
-			       r->u.template_unification.strict,
-			       r->u.template_unification.flags,
-			       NULL, true, false);
+	  inform (cloc, "template argument deduction/substitution failed:");
+	  {
+	    auto_diagnostic_nesting_level sentinel;
+	    fn_type_unification (r->u.template_unification.tmpl,
+				 r->u.template_unification.explicit_targs,
+				 (make_tree_vec
+				  (r->u.template_unification.num_targs)),
+				 r->u.template_unification.args,
+				 r->u.template_unification.nargs,
+				 r->u.template_unification.return_type,
+				 r->u.template_unification.strict,
+				 r->u.template_unification.flags,
+				 NULL, true, false);
+	  }
 	  break;
 	case rr_invalid_copy:
 	  inform (cloc,
-		  "  a constructor taking a single argument of its own "
+		  "a constructor taking a single argument of its own "
 		  "class type is invalid");
 	  break;
 	case rr_constraint_failure:
-	  diagnose_constraints (cloc, fn, NULL_TREE);
+	  {
+	    auto_diagnostic_nesting_level sentinel;
+	    diagnose_constraints (cloc, fn, NULL_TREE);
+	  }
 	  break;
 	case rr_inherited_ctor:
-	  inform (cloc, "  an inherited constructor is not a candidate for "
+	  inform (cloc, "an inherited constructor is not a candidate for "
 		  "initialization from an expression of the same or derived "
 		  "type");
 	  break;
@@ -4124,6 +4131,18 @@ print_z_candidates (location_t loc, struct z_candidate *candidates,
   if (only_viable_p.is_unknown ())
     only_viable_p = candidates->viable == 1;
 
+  auto_diagnostic_nesting_level sentinel;
+
+  int num_candidates = 0;
+  for (auto iter = candidates; iter; iter = iter->next)
+    ++num_candidates;
+
+  inform_n (loc,
+	    num_candidates, "there is %i candidate", "there are %i candidates",
+	    num_candidates);
+  auto_diagnostic_nesting_level sentinel2;
+
+  int candidate_idx = 0;
   for (; candidates; candidates = candidates->next)
     {
       if (only_viable_p.is_true () && candidates->viable != 1)
@@ -4134,7 +4153,11 @@ print_z_candidates (location_t loc, struct z_candidate *candidates,
 		       "use %<-fdiagnostics-all-candidates%> to display them");
 	  break;
 	}
-      print_z_candidate (loc, N_("candidate:"), candidates);
+      pretty_printer pp;
+      pp_printf (&pp, N_("candidate %i:"), candidate_idx + 1);
+      const char *const msgstr = pp_formatted_text (&pp);
+      print_z_candidate (loc, msgstr, candidates);
+      ++candidate_idx;
     }
 }
 
@@ -5418,7 +5441,7 @@ build_op_call (tree obj, vec<tree, va_gc> **args, tsubst_flags_t complain)
           if (complain & tf_error)
             {
               auto_diagnostic_group d;
-              error ("call of %<(%T) (%A)%> is ambiguous", 
+              error ("call of %<(%T) (%A)%> is ambiguous",
                      TREE_TYPE (obj), build_tree_list_vec (*args));
               print_z_candidates (location_of (TREE_TYPE (obj)), candidates);
             }
@@ -7232,7 +7255,7 @@ build_new_op (const op_location_t &loc, enum tree_code code, int flags,
 	  else
 	    {
 	      tree fnname = ovl_op_identifier (ismodop, ismodop ? code2 : code);
-	      const char *msg = (flag_permissive) 
+	      const char *msg = (flag_permissive)
 		? G_("no %<%D(int)%> declared for postfix %qs,"
 		     " trying prefix operator instead")
 		: G_("no %<%D(int)%> declared for postfix %qs");
@@ -8336,7 +8359,7 @@ conversion_null_warnings (tree totype, tree expr, tree fn, int argnum)
 			  "passing NULL to non-pointer argument %P of %qD",
 			  argnum, fn))
 	    inform (get_fndecl_argument_location (fn, argnum),
-		    "  declared here");
+		    "declared here");
 	}
       else
 	warning_at (loc, OPT_Wconversion_null,
@@ -8355,7 +8378,7 @@ conversion_null_warnings (tree totype, tree expr, tree fn, int argnum)
 			  "converting %<false%> to pointer type for argument "
 			  "%P of %qD", argnum, fn))
 	    inform (get_fndecl_argument_location (fn, argnum),
-		    "  declared here");
+		    "declared here");
 	}
       else
 	warning_at (loc, OPT_Wconversion_null,
@@ -8430,7 +8453,7 @@ maybe_inform_about_fndecl_for_bogus_argument_init (tree fn, int argnum,
       gcc_rich_location richloc (get_fndecl_argument_location (fn, argnum));
       richloc.set_highlight_color (highlight_color);
       inform (&richloc,
-	      "  initializing argument %P of %qD", argnum, fn);
+	      "initializing argument %P of %qD", argnum, fn);
     }
 }
 
@@ -8584,6 +8607,8 @@ convert_like_internal (conversion *convs, tree expr, tree fn, int argnum,
 	  complained = permerror (&richloc,
 				  "invalid conversion from %qH to %qI",
 				  TREE_TYPE (expr), totype);
+	  if (complained)
+	    maybe_emit_indirection_note (loc, expr, totype);
 	}
       if (convs->kind == ck_ref_bind)
 	expr = convert_to_reference (totype, expr, CONV_IMPLICIT,
@@ -8962,7 +8987,7 @@ convert_like_internal (conversion *convs, tree expr, tree fn, int argnum,
 	else if (complain & tf_warning)
 	  maybe_warn_array_conv (loc, convs, expr);
 
-	/* If necessary, create a temporary. 
+	/* If necessary, create a temporary.
 
            VA_ARG_EXPR and CONSTRUCTOR expressions are special cases
            that need temporaries, even when their types are reference
@@ -9452,7 +9477,7 @@ convert_for_arg_passing (tree type, tree val, tsubst_flags_t complain)
   tree bitfield_type;
 
   /* If VAL is a bitfield, then -- since it has already been converted
-     to TYPE -- it cannot have a precision greater than TYPE.  
+     to TYPE -- it cannot have a precision greater than TYPE.
 
      If it has a smaller precision, we must widen it here.  For
      example, passing "int f:3;" to a function expecting an "int" will
@@ -9466,7 +9491,7 @@ convert_for_arg_passing (tree type, tree val, tsubst_flags_t complain)
      if we call convert_bitfield_to_declared_type, the bitfield will
      be converted to "long long".  */
   bitfield_type = is_bitfield_expr_with_lowered_type (val);
-  if (bitfield_type 
+  if (bitfield_type
       && TYPE_PRECISION (TREE_TYPE (val)) < TYPE_PRECISION (type))
     val = convert_to_integer_nofold (TYPE_MAIN_VARIANT (bitfield_type), val);
 
@@ -9588,7 +9613,7 @@ get_function_version_dispatcher (tree fn)
   return dispatcher_decl;
 }
 
-/* fn is a function version dispatcher that is marked used. Mark all the 
+/* fn is a function version dispatcher that is marked used. Mark all the
    semantically identical function versions it will dispatch as used.  */
 
 void
@@ -10003,6 +10028,11 @@ build_over_call (struct z_candidate *cand, int flags, tsubst_flags_t complain)
       SET_EXPR_LOCATION (expr, input_location);
       if (TREE_THIS_VOLATILE (fn) && cfun)
 	current_function_returns_abnormally = 1;
+      if (TREE_DEPRECATED (fn)
+	  && warning_suppressed_at (input_location,
+				    OPT_Wdeprecated_declarations))
+	/* Make the expr consistent with the location.  */
+	TREE_NO_WARNING (expr) = true;
       if (immediate_invocation_p (fn))
 	{
 	  tree obj_arg = NULL_TREE, exprimm = expr;
@@ -10703,6 +10733,14 @@ build_over_call (struct z_candidate *cand, int flags, tsubst_flags_t complain)
       if (TREE_CODE (c) == CALL_EXPR)
 	suppress_warning (c /* Suppress all warnings.  */);
     }
+  else if (TREE_DEPRECATED (fn)
+	   && warning_suppressed_at (input_location,
+				     OPT_Wdeprecated_declarations))
+    {
+      tree c = extract_call_expr (call);
+      if (TREE_CODE (c) == CALL_EXPR)
+	TREE_NO_WARNING (c) = true;
+    }
 
   return call;
 }
@@ -11168,7 +11206,8 @@ build_cxx_call (tree fn, int nargs, tree *argarray,
 	argarray[i] = maybe_constant_value (argarray[i]);
 
       if (!check_builtin_function_arguments (EXPR_LOCATION (fn), vNULL, fndecl,
-					     orig_fndecl, nargs, argarray))
+					     orig_fndecl, nargs, argarray,
+					     complain & tf_error))
 	return error_mark_node;
       else if (fndecl_built_in_p (fndecl, BUILT_IN_CLEAR_PADDING))
 	{
@@ -13158,7 +13197,7 @@ joust (struct z_candidate *cand1, struct z_candidate *cand2, bool warn,
 	  auto_diagnostic_group d;
 	  if (warning (OPT_Wconversion, "choosing %qD over %qD", w->fn, l->fn)
 	      && warning (OPT_Wconversion, "  for conversion from %qH to %qI",
-			  source, w->second_conv->type)) 
+			  source, w->second_conv->type))
 	    {
 	      inform (input_location, "  because conversion sequence "
 		      "for the argument is better");
@@ -13415,7 +13454,7 @@ joust (struct z_candidate *cand1, struct z_candidate *cand2, bool warn,
       tree f2 = TREE_TYPE (cand2->fn);
       tree p1 = TYPE_ARG_TYPES (f1);
       tree p2 = TYPE_ARG_TYPES (f2);
-     
+
       /* Check if cand1->fn and cand2->fn are versions of the same function.  It
          is possible that cand1->fn and cand2->fn are function versions but of
          different functions.  Check types to see if they are versions of the same

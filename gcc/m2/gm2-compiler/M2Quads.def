@@ -78,7 +78,7 @@ EXPORT QUALIFIED StartBuildDefFile, StartBuildModFile, EndBuildFile,
                  BuildBinaryOp,
                  BuildUnaryOp,
                  RecordOp,
-                 Top,
+                 Top, DupFrame,
                  PopTF, PushTF, PopT, PushT, PopNothing, PopN, PushTFA,
                  PushTtok, PushTFtok, PopTFtok, PopTtok, PushTFAtok,
                  PushTFn, PushTFntok, PopTFn,
@@ -202,6 +202,7 @@ TYPE
                    InitStartOp,
                    InlineOp,
                    KillLocalVarOp,
+                   LastForIteratorOp,
                    LineNumberOp,
                    LogicalAndOp,
                    LogicalDiffOp,
@@ -2526,6 +2527,13 @@ PROCEDURE DisplayStack ;
 *)
 
 PROCEDURE Top () : CARDINAL ;
+
+
+(*
+   DupFrame - duplicate the top of stack and push the new frame.
+*)
+
+PROCEDURE DupFrame ;
 
 
 (*

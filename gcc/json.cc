@@ -19,7 +19,6 @@ along with GCC; see the file COPYING3.  If not see
 <http://www.gnu.org/licenses/>.  */
 
 #include "config.h"
-#define INCLUDE_MEMORY
 #include "system.h"
 #include "coretypes.h"
 #include "json.h"
@@ -383,7 +382,7 @@ namespace selftest {
 
 /* Verify that JV->print () prints EXPECTED_JSON.  */
 
-static void
+void
 assert_print_eq (const location &loc,
 		 const json::value &jv,
 		 bool formatted,

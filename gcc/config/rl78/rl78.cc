@@ -1675,7 +1675,7 @@ static void
 rl78_start_function (FILE *file)
 {
   int i;
-  
+
   add_vector_labels (file, "interrupt");
   add_vector_labels (file, "vector");
 
@@ -4992,6 +4992,9 @@ rl78_c_mode_for_floating_type (enum tree_index ti)
    deal with them, so disable it.  */
 #undef TARGET_HAVE_STRUB_SUPPORT_FOR
 #define TARGET_HAVE_STRUB_SUPPORT_FOR hook_bool_tree_false
+
+#undef TARGET_DOCUMENTATION_NAME
+#define TARGET_DOCUMENTATION_NAME "RL78"
 
 struct gcc_target targetm = TARGET_INITIALIZER;
 

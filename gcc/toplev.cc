@@ -23,7 +23,6 @@ along with GCC; see the file COPYING3.  If not see
    Error messages and low-level interface to malloc also handled here.  */
 
 #include "config.h"
-#define INCLUDE_MEMORY
 #include "system.h"
 #include "coretypes.h"
 #include "backend.h"
@@ -42,6 +41,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "cgraph.h"
 #include "coverage.h"
 #include "diagnostic.h"
+#include "pretty-print-urlifier.h"
 #include "varasm.h"
 #include "tree-inline.h"
 #include "realmpfr.h"	/* For GMP/MPFR/MPC versions, in print_version.  */
@@ -94,6 +94,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "dbgcnt.h"
 #include "gcc-urlifier.h"
 #include "unique-argv.h"
+#include "make-unique.h"
 
 #include "selftest.h"
 
@@ -229,7 +230,7 @@ announce_function (tree decl)
 	fprintf (stderr, " %s",
 		 identifier_to_locale (lang_hooks.decl_printable_name (decl, 2)));
       fflush (stderr);
-      pp_needs_newline (global_dc->m_printer) = true;
+      pp_needs_newline (global_dc->get_reference_printer ()) = true;
       diagnostic_set_last_function (global_dc, (diagnostic_info *) NULL);
     }
 }
@@ -463,7 +464,7 @@ compile_file (void)
 
   if (flag_syntax_only || flag_wpa)
     return;
- 
+
   /* Reset maximum_field_alignment, it can be adjusted by #pragma pack
      and this shouldn't influence any types built by the middle-end
      from now on (like gcov_info_type).  */
@@ -1094,9 +1095,9 @@ general_init (const char *argv0, bool init_signals, unique_argv original_argv)
   global_dc->m_internal_error = internal_error_function;
   const unsigned lang_mask = lang_hooks.option_lang_mask ();
   global_dc->set_option_manager
-    (new compiler_diagnostic_option_manager (*global_dc,
-					     lang_mask,
-					     &global_options),
+    (::make_unique<compiler_diagnostic_option_manager> (*global_dc,
+							lang_mask,
+							&global_options),
      lang_mask);
   global_dc->set_urlifier (make_gcc_urlifier (lang_mask));
 
@@ -1135,7 +1136,7 @@ general_init (const char *argv0, bool init_signals, unique_argv original_argv)
   linemap_init (line_table, BUILTINS_LOCATION);
   line_table->m_reallocator = realloc_for_line_map;
   line_table->m_round_alloc_size = ggc_round_alloc_size;
-  line_table->default_range_bits = 5;
+  line_table->default_range_bits = line_map_suggested_range_bits;
   init_ttree ();
 
   /* Initialize register usage now so switches may override.  */
@@ -1288,7 +1289,7 @@ process_options ()
     global_dc->create_edit_context ();
 
   /* Avoid any informative notes in the second run of -fcompare-debug.  */
-  if (flag_compare_debug) 
+  if (flag_compare_debug)
     diagnostic_inhibit_notes (global_dc);
 
   if (flag_section_anchors && !target_supports_section_anchors_p ())
@@ -1299,7 +1300,7 @@ process_options ()
       flag_section_anchors = 0;
     }
 
-  if (flag_short_enums == 2)
+  if (!OPTION_SET_P (flag_short_enums))
     flag_short_enums = targetm.default_short_enums ();
 
   /* Set aux_base_name if not already set.  */
@@ -1692,7 +1693,8 @@ process_options ()
 
   if ((flag_sanitize & SANITIZE_USER_ADDRESS)
       && ((targetm.asan_shadow_offset == NULL)
-	  || (targetm.asan_shadow_offset () == 0)))
+	  || ((targetm.asan_shadow_offset () == 0)
+	      && !targetm.asan_dynamic_shadow_offset_p ())))
     {
       warning_at (UNKNOWN_LOCATION, 0,
 		  "%<-fsanitize=address%> not supported for this target");
@@ -1762,9 +1764,6 @@ process_options ()
   if (flag_checking >= 2)
     hash_table_sanitize_eq_limit
       = param_hash_table_verification_limit;
-
-  if (flag_large_source_files)
-    line_table->default_range_bits = 0;
 
   diagnose_options (&global_options, &global_options_set, UNKNOWN_LOCATION);
 
@@ -1978,7 +1977,7 @@ target_reinit (void)
      to allow target_reinit being called even after prepare_function_start.  */
   saved_regno_reg_rtx = regno_reg_rtx;
   if (saved_regno_reg_rtx)
-    {  
+    {
       saved_x_rtl = *crtl;
       memset (crtl, '\0', sizeof (*crtl));
       regno_reg_rtx = NULL;
@@ -2387,7 +2386,7 @@ toplev::main (int argc, char **argv)
   if (auto edit_context_ptr = global_dc->get_edit_context ())
     {
       pretty_printer pp;
-      pp_show_color (&pp) = pp_show_color (global_dc->m_printer);
+      pp_show_color (&pp) = pp_show_color (global_dc->get_reference_printer ());
       edit_context_ptr->print_diff (&pp, true);
       pp_flush (&pp);
     }
@@ -2433,6 +2432,7 @@ toplev::finalize (void)
   ira_costs_cc_finalize ();
   tree_cc_finalize ();
   reginfo_cc_finalize ();
+  varasm_cc_finalize ();
 
   /* save_decoded_options uses opts_obstack, so these must
      be cleaned up together.  */

@@ -1568,7 +1568,7 @@ static const struct loongarch_builtin_description loongarch_builtins[] = {
   LSX_BUILTIN (vssrln_b_h, LARCH_V16QI_FTYPE_V8HI_V8HI),
   LSX_BUILTIN (vssrln_h_w, LARCH_V8HI_FTYPE_V4SI_V4SI),
   LSX_BUILTIN (vssrln_w_d, LARCH_V4SI_FTYPE_V2DI_V2DI),
-  LSX_BUILTIN (vorn_v, LARCH_V16QI_FTYPE_V16QI_V16QI),
+  LSX_BUILTIN (vorn_v, LARCH_UV16QI_FTYPE_UV16QI_UV16QI),
   LSX_BUILTIN (vldi, LARCH_V2DI_FTYPE_HI),
   LSX_BUILTIN (vshuf_b, LARCH_V16QI_FTYPE_V16QI_V16QI_V16QI),
   LSX_BUILTIN (vldx, LARCH_V16QI_FTYPE_CVPOINTER_DI),
@@ -2118,7 +2118,7 @@ static const struct loongarch_builtin_description loongarch_builtins[] = {
   LASX_BUILTIN (xvssrln_b_h, LARCH_V32QI_FTYPE_V16HI_V16HI),
   LASX_BUILTIN (xvssrln_h_w, LARCH_V16HI_FTYPE_V8SI_V8SI),
   LASX_BUILTIN (xvssrln_w_d, LARCH_V8SI_FTYPE_V4DI_V4DI),
-  LASX_BUILTIN (xvorn_v, LARCH_V32QI_FTYPE_V32QI_V32QI),
+  LASX_BUILTIN (xvorn_v, LARCH_UV32QI_FTYPE_UV32QI_UV32QI),
   LASX_BUILTIN (xvldi, LARCH_V4DI_FTYPE_HI),
   LASX_BUILTIN (xvldx, LARCH_V32QI_FTYPE_CVPOINTER_DI),
   LASX_NO_TARGET_BUILTIN (xvstx, LARCH_VOID_FTYPE_V32QI_CVPOINTER_DI),
@@ -2528,108 +2528,6 @@ loongarch_builtin_decl (unsigned int code, bool initialize_p ATTRIBUTE_UNUSED)
   if (code >= ARRAY_SIZE (loongarch_builtins))
     return error_mark_node;
   return loongarch_builtin_decls[code];
-}
-
-/* Implement TARGET_VECTORIZE_BUILTIN_VECTORIZED_FUNCTION.  */
-
-tree
-loongarch_builtin_vectorized_function (unsigned int fn, tree type_out,
-				       tree type_in)
-{
-  machine_mode in_mode, out_mode;
-  int in_n, out_n;
-
-  if (TREE_CODE (type_out) != VECTOR_TYPE
-      || TREE_CODE (type_in) != VECTOR_TYPE
-      || !ISA_HAS_LSX)
-    return NULL_TREE;
-
-  out_mode = TYPE_MODE (TREE_TYPE (type_out));
-  out_n = TYPE_VECTOR_SUBPARTS (type_out);
-  in_mode = TYPE_MODE (TREE_TYPE (type_in));
-  in_n = TYPE_VECTOR_SUBPARTS (type_in);
-
-  /* INSN is the name of the associated instruction pattern, without
-     the leading CODE_FOR_.  */
-#define LARCH_GET_BUILTIN(INSN) \
-  loongarch_builtin_decls[loongarch_get_builtin_decl_index[CODE_FOR_##INSN]]
-
-  switch (fn)
-    {
-    CASE_CFN_CEIL:
-      if (out_mode == DFmode && in_mode == DFmode)
-    {
-      if (out_n == 2 && in_n == 2)
-	return LARCH_GET_BUILTIN (lsx_vfrintrp_d);
-      if (out_n == 4 && in_n == 4)
-	return LARCH_GET_BUILTIN (lasx_xvfrintrp_d);
-    }
-      if (out_mode == SFmode && in_mode == SFmode)
-    {
-      if (out_n == 4 && in_n == 4)
-	return LARCH_GET_BUILTIN (lsx_vfrintrp_s);
-      if (out_n == 8 && in_n == 8)
-	return LARCH_GET_BUILTIN (lasx_xvfrintrp_s);
-    }
-      break;
-
-    CASE_CFN_TRUNC:
-      if (out_mode == DFmode && in_mode == DFmode)
-    {
-      if (out_n == 2 && in_n == 2)
-	return LARCH_GET_BUILTIN (lsx_vfrintrz_d);
-      if (out_n == 4 && in_n == 4)
-	return LARCH_GET_BUILTIN (lasx_xvfrintrz_d);
-    }
-      if (out_mode == SFmode && in_mode == SFmode)
-    {
-      if (out_n == 4 && in_n == 4)
-	return LARCH_GET_BUILTIN (lsx_vfrintrz_s);
-      if (out_n == 8 && in_n == 8)
-	return LARCH_GET_BUILTIN (lasx_xvfrintrz_s);
-    }
-      break;
-
-    CASE_CFN_RINT:
-    CASE_CFN_ROUND:
-      if (out_mode == DFmode && in_mode == DFmode)
-    {
-      if (out_n == 2 && in_n == 2)
-	return LARCH_GET_BUILTIN (lsx_vfrint_d);
-      if (out_n == 4 && in_n == 4)
-	return LARCH_GET_BUILTIN (lasx_xvfrint_d);
-    }
-      if (out_mode == SFmode && in_mode == SFmode)
-    {
-      if (out_n == 4 && in_n == 4)
-	return LARCH_GET_BUILTIN (lsx_vfrint_s);
-      if (out_n == 8 && in_n == 8)
-	return LARCH_GET_BUILTIN (lasx_xvfrint_s);
-    }
-      break;
-
-    CASE_CFN_FLOOR:
-      if (out_mode == DFmode && in_mode == DFmode)
-    {
-      if (out_n == 2 && in_n == 2)
-	return LARCH_GET_BUILTIN (lsx_vfrintrm_d);
-      if (out_n == 4 && in_n == 4)
-	return LARCH_GET_BUILTIN (lasx_xvfrintrm_d);
-    }
-      if (out_mode == SFmode && in_mode == SFmode)
-    {
-      if (out_n == 4 && in_n == 4)
-	return LARCH_GET_BUILTIN (lsx_vfrintrm_s);
-      if (out_n == 8 && in_n == 8)
-	return LARCH_GET_BUILTIN (lasx_xvfrintrm_s);
-    }
-      break;
-
-    default:
-      break;
-    }
-
-  return NULL_TREE;
 }
 
 /* Take argument ARGNO from EXP's argument list and convert it into

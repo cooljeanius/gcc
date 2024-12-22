@@ -464,6 +464,23 @@ package body Accessibility is
             if Attribute_Name (E) = Name_Access then
                return Accessibility_Level (Prefix (E));
 
+            --  If we have reached a 'Input attribute then this is the
+            --  the result of the expansion of an object declaration with
+            --  an initial value featuring it. Is this the only case ???
+
+            --  For example:
+
+            --    Opaque : aliased Stream_Element_Array :=
+            --      Stream_Element_Array'Input (S);
+
+            elsif Attribute_Name (E) = Name_Input then
+
+               --  Return the level of the enclosing declaration
+
+               return Make_Level_Literal
+                        (Innermost_Master_Scope_Depth
+                          (Enclosing_Declaration (Expr)));
+
             --  Unchecked or unrestricted attributes have unlimited depth
 
             elsif Attribute_Name (E) in Name_Address
@@ -2331,7 +2348,20 @@ package body Accessibility is
          return Scope_Depth (Standard_Standard);
       end if;
 
-      return Scope_Depth (Enclosing_Dynamic_Scope (Btyp));
+      --  It is possible that the current scope is an aliased subprogram -
+      --  this can happen when an abstract primitive from a root type is not
+      --  not visible.
+
+      if Is_Subprogram (Enclosing_Dynamic_Scope (Btyp))
+        and then Present (Alias (Enclosing_Dynamic_Scope (Btyp)))
+      then
+         return Scope_Depth (Ultimate_Alias (Enclosing_Dynamic_Scope (Btyp)));
+
+      --  Otherwise, simply use the enclosing dynamic scope
+
+      else
+         return Scope_Depth (Enclosing_Dynamic_Scope (Btyp));
+      end if;
    end Type_Access_Level;
 
 end Accessibility;

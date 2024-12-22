@@ -58,12 +58,6 @@ enum lst_type
   LST_INDEXED,
 };
 
-enum frm_op_type
-{
-  NO_FRM,
-  HAS_FRM,
-};
-
 /* Helper function to fold vleff and vlsegff.  */
 static gimple *
 fold_fault_load (gimple_folder &f)
@@ -1753,6 +1747,8 @@ public:
 
   rtx expand (function_expander &e) const override
   {
+    if (!e.target)
+      return NULL_RTX;
     tree arg = CALL_EXPR_ARG (e.exp, 0);
     rtx src = expand_normal (arg);
     emit_move_insn (gen_lowpart (e.vector_mode (), e.target), src);
@@ -1767,6 +1763,8 @@ public:
 
   rtx expand (function_expander &e) const override
   {
+    if (!e.target)
+      return NULL_RTX;
     rtx src = expand_normal (CALL_EXPR_ARG (e.exp, 0));
     emit_move_insn (e.target, gen_lowpart (GET_MODE (e.target), src));
     return e.target;
@@ -2247,7 +2245,7 @@ public:
   {
     return (CODE == CLZ || CODE == CTZ) ? false : true;
   }
-  
+
   rtx expand (function_expander &e) const override
   {
     switch (e.op_info->op)

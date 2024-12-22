@@ -1107,14 +1107,14 @@ build_cplus_array_type (tree elt_type, tree index_type, int dependent)
 
       if (cplus_array_htab == NULL)
 	cplus_array_htab = hash_table<cplus_array_hasher>::create_ggc (61);
-      
+
       hash = TYPE_UID (elt_type);
       if (index_type)
 	hash ^= TYPE_UID (index_type);
       cai.type = elt_type;
       cai.domain = index_type;
 
-      tree *e = cplus_array_htab->find_slot_with_hash (&cai, hash, INSERT); 
+      tree *e = cplus_array_htab->find_slot_with_hash (&cai, hash, INSERT);
       if (*e)
 	/* We have found the type: we're done.  */
 	return (tree) *e;
@@ -1304,7 +1304,7 @@ cp_build_reference_type_for_mode (tree to_type, machine_mode mode, bool rval)
   if (TYPE_STRUCTURAL_EQUALITY_P (to_type))
     SET_TYPE_STRUCTURAL_EQUALITY (t);
   else if (TYPE_CANONICAL (to_type) != to_type)
-    TYPE_CANONICAL (t) 
+    TYPE_CANONICAL (t)
       = cp_build_reference_type_for_mode (TYPE_CANONICAL (to_type), mode, rval);
   else
     TYPE_CANONICAL (t) = t;
@@ -2444,7 +2444,7 @@ ovl_iterator::reveal_node (tree overload, tree node)
   return overload;
 }
 
-/* NODE is on the overloads of OVL.  Remove it.  
+/* NODE is on the overloads of OVL.  Remove it.
    The removed node is unaltered and may continue to be iterated
    from (i.e. it is safe to remove a node from an overload one is
    currently iterating over).  */
@@ -2560,7 +2560,7 @@ lookup_maybe_add (tree fns, tree lookup, bool deduping)
    overloaded functions.  Returns 2 if the function is actually
    overloaded, i.e., if it is impossible to know the type of the
    function without performing overload resolution.  */
- 
+
 int
 is_overloaded_fn (tree x)
 {
@@ -3074,19 +3074,6 @@ cxx_print_statistics (void)
   if (GATHER_STATISTICS)
     fprintf (stderr, "maximum template instantiation depth reached: %d\n",
 	     depth_reached);
-}
-
-/* Return, as an INTEGER_CST node, the number of elements for TYPE
-   (which is an ARRAY_TYPE).  This counts only elements of the top
-   array.  */
-
-tree
-array_type_nelts_top (tree type)
-{
-  return fold_build2_loc (input_location,
-		      PLUS_EXPR, sizetype,
-		      array_type_nelts (type),
-		      size_one_node);
 }
 
 /* Return, as an INTEGER_CST node, the number of elements for TYPE
@@ -4054,6 +4041,39 @@ cp_tree_equal (tree t1, tree t2)
 			      TARGET_EXPR_INITIAL (t2));
       }
 
+    case AGGR_INIT_EXPR:
+      {
+	int n = aggr_init_expr_nargs (t1);
+	if (n != aggr_init_expr_nargs (t2))
+	  return false;
+
+	if (!cp_tree_equal (AGGR_INIT_EXPR_FN (t1),
+			    AGGR_INIT_EXPR_FN (t2)))
+	  return false;
+
+	tree o1 = AGGR_INIT_EXPR_SLOT (t1);
+	tree o2 = AGGR_INIT_EXPR_SLOT (t2);
+
+	/* Similarly to TARGET_EXPRs, if the VAR_DECL is unallocated we're
+	   going to unify the initialization, so treat it as equivalent
+	   to anything.  */
+	if (VAR_P (o1) && DECL_NAME (o1) == NULL_TREE
+	    && !DECL_RTL_SET_P (o1))
+	  /*Nop*/;
+	else if (VAR_P (o2) && DECL_NAME (o2) == NULL_TREE
+		 && !DECL_RTL_SET_P (o2))
+	  /*Nop*/;
+	else if (!cp_tree_equal (o1, o2))
+	  return false;
+
+	for (int i = 0; i < n; ++i)
+	  if (!cp_tree_equal (AGGR_INIT_EXPR_ARG (t1, i),
+			      AGGR_INIT_EXPR_ARG (t2, i)))
+	    return false;
+
+	return true;
+      }
+
     case PARM_DECL:
       /* For comparing uses of parameters in late-specified return types
 	 with an out-of-class definition of the function, but can also come
@@ -4254,6 +4274,15 @@ cp_tree_equal (tree t1, tree t2)
 	return false;
       if (!comp_template_args (PACK_EXPANSION_EXTRA_ARGS (t1),
 			       PACK_EXPANSION_EXTRA_ARGS (t2)))
+	return false;
+      return true;
+
+    case PACK_INDEX_EXPR:
+      if (!cp_tree_equal (PACK_INDEX_PACK (t1),
+			  PACK_INDEX_PACK (t2)))
+	return false;
+      if (!cp_tree_equal (PACK_INDEX_INDEX (t1),
+			  PACK_INDEX_INDEX (t2)))
 	return false;
       return true;
 
@@ -5085,6 +5114,75 @@ handle_likeliness_attribute (tree *node, tree name, tree args,
     return error_mark_node;
 }
 
+/* The C++11 alignment specifier.  It mostly maps to GNU aligned attribute,
+   but we need to do some extra pedantic checking.  */
+
+static tree
+handle_alignas_attribute (tree *node, tree name, tree args, int flags,
+			  bool *no_add_attrs)
+{
+  tree t = *node;
+  tree ret = handle_aligned_attribute (node, name, args, flags, no_add_attrs);
+  if (pedantic)
+    {
+      if (TREE_CODE (*node) == FUNCTION_DECL)
+	pedwarn (input_location, OPT_Wattributes,
+		 "%<alignas%> on function declaration");
+      else if (TREE_CODE (*node) == ENUMERAL_TYPE)
+	pedwarn (input_location, OPT_Wattributes,
+		 "%<alignas%> on enumerated type");
+      else if (TYPE_P (*node) && t != *node)
+	pedwarn (input_location, OPT_Wattributes,
+		 "%<alignas%> on a type other than class");
+      else if (TREE_CODE (*node) == FIELD_DECL && DECL_C_BIT_FIELD (*node))
+	pedwarn (input_location, OPT_Wattributes, "%<alignas%> on bit-field");
+      else if (TREE_CODE (t) == TYPE_DECL)
+	pedwarn (input_location, OPT_Wattributes,
+		 "%<alignas%> on a type alias");
+    }
+  return ret;
+}
+
+/* The C++14 [[deprecated]] attribute mostly maps to the GNU deprecated
+   attribute.  */
+
+static tree
+handle_std_deprecated_attribute (tree *node, tree name, tree args, int flags,
+				 bool *no_add_attrs)
+{
+  tree t = *node;
+  tree ret = handle_deprecated_attribute (node, name, args, flags,
+					  no_add_attrs);
+  if (TYPE_P (*node) && t != *node)
+    pedwarn (input_location, OPT_Wattributes,
+	     "%qE on a type other than class or enumeration definition", name);
+  else if (TREE_CODE (*node) == FIELD_DECL && DECL_UNNAMED_BIT_FIELD (*node))
+    pedwarn (input_location, OPT_Wattributes, "%qE on unnamed bit-field",
+	     name);
+  return ret;
+}
+
+/* The C++17 [[maybe_unused]] attribute mostly maps to the GNU unused
+   attribute.  */
+
+static tree
+handle_maybe_unused_attribute (tree *node, tree name, tree args, int flags,
+			       bool *no_add_attrs)
+{
+  tree t = *node;
+  tree ret = handle_unused_attribute (node, name, args, flags, no_add_attrs);
+  if (TYPE_P (*node) && t != *node)
+    pedwarn (input_location, OPT_Wattributes,
+	     "%qE on a type other than class or enumeration definition", name);
+  else if (TREE_CODE (*node) == FIELD_DECL && DECL_UNNAMED_BIT_FIELD (*node))
+    pedwarn (input_location, OPT_Wattributes, "%qE on unnamed bit-field",
+	     name);
+  else if (TREE_CODE (*node) == LABEL_DECL && DECL_NAME (*node) == NULL_TREE)
+    pedwarn (input_location, OPT_Wattributes,
+	     "%qE on %<case%> or %<default%> label", name);
+  return ret;
+}
+
 /* Table of valid C++ attributes.  */
 static const attribute_spec cxx_gnu_attributes[] =
 {
@@ -5108,8 +5206,10 @@ static const attribute_spec std_attributes[] =
 {
   /* { name, min_len, max_len, decl_req, type_req, fn_type_req,
        affects_type_identity, handler, exclude } */
+  { "deprecated", 0, 1, false, false, false, false,
+    handle_std_deprecated_attribute, NULL },
   { "maybe_unused", 0, 0, false, false, false, false,
-    handle_unused_attribute, NULL },
+    handle_maybe_unused_attribute, NULL },
   { "nodiscard", 0, 1, false, false, false, false,
     handle_nodiscard_attribute, NULL },
   { "no_unique_address", 0, 0, true, false, false, false,
@@ -5131,6 +5231,18 @@ static const attribute_spec std_attributes[] =
 const scoped_attribute_specs std_attribute_table =
 {
   nullptr, { std_attributes }
+};
+
+/* Table of internal attributes.  */
+static const attribute_spec internal_attributes[] =
+{
+  { "aligned", 0, 1, false, false, false, false,
+    handle_alignas_attribute, attr_aligned_exclusions }
+};
+
+const scoped_attribute_specs internal_attribute_table =
+{
+  "internal ", { internal_attributes }
 };
 
 /* Handle an "init_priority" attribute; arguments as in
@@ -5439,7 +5551,7 @@ cp_build_type_attribute_variant (tree type, tree attributes)
 
   /* Making a new main variant of a class type is broken.  */
   gcc_assert (!CLASS_TYPE_P (type) || new_type == type);
-    
+
   return new_type;
 }
 
@@ -5590,10 +5702,17 @@ cp_walk_subtrees (tree *tp, int *walk_subtrees_p, walk_tree_fn func,
       WALK_SUBTREE (PACK_EXPANSION_EXTRA_ARGS (t));
       *walk_subtrees_p = 0;
       break;
-      
+
     case EXPR_PACK_EXPANSION:
       WALK_SUBTREE (TREE_OPERAND (t, 0));
       WALK_SUBTREE (PACK_EXPANSION_EXTRA_ARGS (t));
+      *walk_subtrees_p = 0;
+      break;
+
+    case PACK_INDEX_TYPE:
+    case PACK_INDEX_EXPR:
+      WALK_SUBTREE (PACK_INDEX_PACK (t));
+      WALK_SUBTREE (PACK_INDEX_INDEX (t));
       *walk_subtrees_p = 0;
       break;
 
@@ -5858,14 +5977,16 @@ decl_linkage (tree decl)
      linkage first, and then transform that into a concrete
      implementation.  */
 
-  /* An explicit type alias has no linkage.  */
+  /* An explicit type alias has no linkage.  Nor do the built-in declarations
+     of 'int' and such.  */
   if (TREE_CODE (decl) == TYPE_DECL
-      && !DECL_IMPLICIT_TYPEDEF_P (decl)
-      && !DECL_SELF_REFERENCE_P (decl))
+      && !DECL_IMPLICIT_TYPEDEF_P (decl))
     {
       /* But this could be a typedef name for linkage purposes, in which
 	 case we're interested in the linkage of the main decl.  */
-      if (decl == TYPE_NAME (TYPE_MAIN_VARIANT (TREE_TYPE (decl))))
+      if (decl == TYPE_NAME (TYPE_MAIN_VARIANT (TREE_TYPE (decl)))
+	  /* Likewise for the injected-class-name.  */
+	  || DECL_SELF_REFERENCE_P (decl))
 	decl = TYPE_MAIN_DECL (TREE_TYPE (decl));
       else
 	return lk_none;
@@ -6074,7 +6195,7 @@ stabilize_aggr_init (tree call, tree *initp)
   *initp = inits;
 }
 
-/* Like stabilize_expr, but for an initialization.  
+/* Like stabilize_expr, but for an initialization.
 
    If the initialization is for an object of class type, this function
    takes care not to introduce additional temporaries.

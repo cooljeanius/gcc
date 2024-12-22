@@ -19,7 +19,6 @@ along with GCC; see the file COPYING3.  If not see
 <http://www.gnu.org/licenses/>.  */
 
 #include "config.h"
-#define INCLUDE_MEMORY
 #define INCLUDE_VECTOR
 #include "system.h"
 #include "coretypes.h"
@@ -740,10 +739,10 @@ saved_diagnostic::add_event (std::unique_ptr<checker_event> event)
     "pending_diagnostic": str,
     "idx": int}.  */
 
-json::object *
+std::unique_ptr<json::object>
 saved_diagnostic::to_json () const
 {
-  json::object *sd_obj = new json::object ();
+  auto sd_obj = ::make_unique<json::object> ();
 
   if (m_sm)
     sd_obj->set_string ("sm", m_sm->get_name ());
@@ -1216,18 +1215,18 @@ diagnostic_manager::add_event (std::unique_ptr<checker_event> event)
 /* Return a new json::object of the form
    {"diagnostics"  : [obj for saved_diagnostic]}.  */
 
-json::object *
+std::unique_ptr<json::object>
 diagnostic_manager::to_json () const
 {
-  json::object *dm_obj = new json::object ();
+  auto dm_obj = ::make_unique<json::object> ();
 
   {
-    json::array *sd_arr = new json::array ();
+    auto sd_arr = ::make_unique<json::array> ();
     int i;
     saved_diagnostic *sd;
     FOR_EACH_VEC_ELT (m_saved_diagnostics, i, sd)
       sd_arr->append (sd->to_json ());
-    dm_obj->set ("diagnostics", sd_arr);
+    dm_obj->set ("diagnostics", std::move (sd_arr));
   }
 
   return dm_obj;
@@ -2833,7 +2832,8 @@ diagnostic_manager::prune_interproc_events (checker_path *path) const
 	      if (get_logger ())
 		{
 		  label_text desc
-		    (path->get_checker_event (idx)->get_desc (false));
+		    (path->get_checker_event (idx)->get_desc
+		       (*global_dc->get_reference_printer ()));
 		  log ("filtering events %i-%i:"
 		       " irrelevant call/entry/return: %s",
 		       idx, idx + 2, desc.get ());
@@ -2855,7 +2855,8 @@ diagnostic_manager::prune_interproc_events (checker_path *path) const
 	      if (get_logger ())
 		{
 		  label_text desc
-		    (path->get_checker_event (idx)->get_desc (false));
+		    (path->get_checker_event (idx)->get_desc
+		     (*global_dc->get_reference_printer ()));
 		  log ("filtering events %i-%i:"
 		       " irrelevant call/return: %s",
 		       idx, idx + 1, desc.get ());
@@ -2952,7 +2953,8 @@ diagnostic_manager::prune_system_headers (checker_path *path) const
 	      {
 		if (get_logger ())
 		  {
-		    label_text desc (event->get_desc (false));
+		    label_text desc
+		      (event->get_desc (*global_dc->get_reference_printer ()));
 		    log ("filtering event %i:"
 			 "system header entry event: %s",
 			 idx, desc.get ());

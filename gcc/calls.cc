@@ -4694,7 +4694,7 @@ emit_library_call_value_1 (int retval, rtx orgfun, rtx value,
       rtx val = argvec[argnum].value;
       rtx reg = argvec[argnum].reg;
       int partial = argvec[argnum].partial;
-      
+
       /* Handle calls that pass values in multiple non-contiguous
 	 locations.  The PA64 has examples of this for library calls.  */
       if (reg != 0 && GET_CODE (reg) == PARALLEL)
@@ -5245,7 +5245,7 @@ store_one_arg (struct arg_data *arg, rtx argblock, int flags,
 		     they aren't really at the same location.  Check for
 		     this by making sure that the incoming size is the
 		     same as the outgoing size.  */
-		  if (maybe_ne (arg->locate.size.constant, size_val))
+		  if (partial != 0)
 		    sibcall_failure = true;
 		}
 	      else if (maybe_in_range_p (arg->locate.offset.constant,

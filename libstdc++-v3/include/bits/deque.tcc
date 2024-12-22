@@ -601,6 +601,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 			  std::forward_iterator_tag)
       {
 	const size_type __n = std::distance(__first, __last);
+	if (__builtin_expect(__n == 0, 0))
+	  return;
+
 	if (__pos._M_cur == this->_M_impl._M_start._M_cur)
 	  {
 	    iterator __new_start = _M_reserve_elements_at_front(__n);
@@ -955,6 +958,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	  size_type __new_map_size = this->_M_impl._M_map_size
 				     + std::max(this->_M_impl._M_map_size,
 						__nodes_to_add) + 2;
+
+	  const size_t __bufsz = __deque_buf_size(sizeof(_Tp));
+	  if (__new_map_size > ((max_size() + __bufsz - 1) / __bufsz) * 2)
+	    __builtin_unreachable();
 
 	  _Map_pointer __new_map = this->_M_allocate_map(__new_map_size);
 	  __new_nstart = __new_map + (__new_map_size - __new_num_nodes) / 2

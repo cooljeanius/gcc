@@ -183,9 +183,6 @@ mips*-*-*)
 nds32*-*)
 	cpu_type=nds32
 	;;
-nios2*-*-*)
-	cpu_type=nios2
-	;;
 or1k*-*-*)
 	cpu_type=or1k
 	;;
@@ -479,6 +476,7 @@ aarch64-*-mingw*)
 	tmake_file="${tmake_file} ${cpu_type}/t-no-eh ${tmake_thr_file}"
 	tmake_file="${tmake_file} t-dfprules"
 	tmake_file="${tmake_file} ${cpu_type}/t-aarch64"
+	tmake_file="${tmake_file} ${cpu_type}/t-mingw"
 	tmake_file="${tmake_file} ${cpu_type}/t-lse"
 	tmake_file="${tmake_file} ${cpu_type}/t-softfp t-softfp t-crtfm"
 	;;
@@ -1198,15 +1196,6 @@ nds32*-elf*)
 		;;
 	esac
 	;;
-nios2-*-linux*)
-	tmake_file="$tmake_file nios2/t-nios2 nios2/t-linux t-libgcc-pic t-eh-dw2-dip t-slibgcc-libgcc"
-	tm_file="$tm_file nios2/elf-lib.h"
-	md_unwind_header=nios2/linux-unwind.h
-	;;
-nios2-*-*)
-	tmake_file="$tmake_file nios2/t-nios2 t-softfp-sfdf t-softfp-excl t-softfp"
-	extra_parts="$extra_parts crti.o crtn.o"
-	;;
 or1k-*-linux*)
 	tmake_file="$tmake_file or1k/t-or1k or1k/t-crtstuff"
 	tmake_file="$tmake_file t-softfp-sfdf t-softfp"
@@ -1414,7 +1403,7 @@ s390x-ibm-tpf*)
 	md_unwind_header=s390/tpf-unwind.h
 	;;
 sh-*-elf* | sh[12346l]*-*-elf*)
-	tmake_file="$tmake_file sh/t-sh t-crtstuff-pic t-fdpbit"
+	tmake_file="$tmake_file sh/t-sh t-crtstuff-pic t-softfp-sfdf t-softfp"
 	extra_parts="$extra_parts crt1.o crti.o crtn.o crtbeginS.o crtendS.o \
 		libic_invalidate_array_4-100.a \
 		libic_invalidate_array_4-200.a \
