@@ -54,6 +54,7 @@ docs, and the testsuite related to that.
 
                         CPU Port Maintainers    (CPU alphabetical order)
 
+aarch64 ldp/stp         Alex Coplan             <alex.coplan@arm.com>
 aarch64 port            Richard Earnshaw        <richard.earnshaw@arm.com>
 aarch64 port            Richard Sandiford       <richard.sandiford@arm.com>
 aarch64 port            Marcus Shawcroft        <marcus.shawcroft@arm.com>
@@ -101,8 +102,6 @@ moxie port              Anthony Green           <green@moxielogic.com>
 msp430 port             Nick Clifton            <nickc@redhat.com>
 nds32 port              Chung-Ju Wu             <jasonwucj@gmail.com>
 nds32 port              Shiva Chen              <shiva0217@gmail.com>
-nios2 port              Chung-Lin Tang          <cltang@baylibre.com>
-nios2 port              Sandra Loosemore        <sloosemore@baylibre.com>
 nvptx port              Tom de Vries            <tdevries@suse.de>
 nvptx port              Thomas Schwinge         <tschwinge@baylibre.com>
 or1k port               Stafford Horne          <shorne@gmail.com>
@@ -120,6 +119,7 @@ rs6000 vector extns     Aldy Hernandez          <aldy@quesejoda.com>
 rx port                 Nick Clifton            <nickc@redhat.com>
 s390 port               Ulrich Weigand          <uweigand@de.ibm.com>
 s390 port               Andreas Krebbel         <krebbel@linux.ibm.com>
+s390 port               Stefan Schulze Frielinghaus <stefansf@linux.ibm.com>
 sh port                 Alexandre Oliva         <aoliva@gcc.gnu.org>
 sh port                 Oleg Endo               <olegendo@gcc.gnu.org>
 sparc port              David S. Miller         <davem@redhat.com>
@@ -250,6 +250,7 @@ AutoFDO                 Eugene Rozenfeld        <erozen@microsoft.com>
 reload                  Ulrich Weigand          <uweigand@de.ibm.com>
 RTL optimizers          Eric Botcazou           <ebotcazou@libertysurf.fr>
 instruction combiner    Segher Boessenkool      <segher@kernel.crashing.org>
+pair fusion             Alex Coplan             <alex.coplan@arm.com>
 auto-vectorizer         Richard Biener          <rguenther@suse.de>
 auto-vectorizer         Zdenek Dvorak           <ook@ucw.cz>
 loop infrastructure     Zdenek Dvorak           <ook@ucw.cz>
@@ -331,6 +332,7 @@ Ajit Kumar Agarwal              aagarwa         <aagarwa1@linux.ibm.com>
 Pedro Alves                     palves          <palves@redhat.com>
 John David Anglin               danglin         <dave.anglin@bell.net>
 Harald Anlauf                   anlauf          <anlauf@gmx.de>
+Soumya AR                       soumyaa         <soumyaa@nvidia.com>
 Paul-Antoine Arras              parras          <parras@baylibre.com>
 Arsen Arsenović                 arsen           <arsen@aarsen.me>
 Raksit Ashok                    raksit          <raksit@google.com>
@@ -343,7 +345,9 @@ Simon Baldwin                   simonb          <simonb@google.com>
 Richard Ball                    ricbal02        <richard.ball@arm.com>
 Scott Bambrough                 -               <scottb@netwinder.org>
 Wolfgang Bangerth               -               <bangerth@dealii.org>
+Claudio Bantaloukas             rdfm            <claudio.bantaloukas@arm.com>
 Gergö Barany                    -               <gergo@codesourcery.com>
+Thiago Jung Bauermann           -               <thiago.bauermann@linaro.org>
 Charles Baylis                  cbaylis         <charles.baylis@linaro.org>
 Tejas Belagod                   belagod         <tejas.belagod@arm.com>
 Andrey Belevantsev              abel            <abel@ispras.ru>
@@ -565,10 +569,12 @@ Kean Johnston                   -               <jkj@sco.com>
 Phillip Jordan                  pmj             <phillip.m.jordan@gmail.com>
 Tim Josling                     timjosling      <tej@melbpc.org.au>
 Victor Kaplansky                victork         <victork@il.ibm.com>
+Evgeny Karpov                   -               <evgeny.karpov@microsoft.com>
 Filip Kastl                     pheeck          <fkastl@suse.cz>
 Geoffrey Keating                geoffk          <geoffk@geoffk.org>
 Brendan Kehoe                   -               <brendan@zen.org>
 Richard Kenner                  kenner          <kenner@nyu.edu>
+Yury Khrustalev                 ykhrustalev     <yury.khrustalev@arm.com>
 Andi Kleen                      ak              <andi@firstfloor.org>
 Matthias Klose                  doko            <doko@debian.org>
 Jeff Knaggs                     -               <jknaggs@redhat.com>
@@ -624,6 +630,7 @@ Sa Liu                          saliu           <saliu@de.ibm.com>
 Ralph Loader                    ralph           <rcl@ihug.co.nz>
 Sheldon Lobo                    smlobo          <sheldon.lobo@oracle.com>
 Gabor Loki                      loki            <loki@inf.u-szeged.hu>
+Matthieu Longo                  mlongo          <matthieu.longo@arm.com>
 Sandra Loosemore                sandra          <sloosemore@baylibre.com>
 Manuel López-Ibáñez             manu            <manu@gcc.gnu.org>
 Carl Love                       carll           <cel@linux.ibm.com>
@@ -656,6 +663,7 @@ Bryce McKinlay                  bryce           <mckinlay@redhat.com>
 Adam Megacz                     -               <adam@xwt.org>
 Bingfeng Mei                    meibf           <bmei@broadcom.com>
 Michael Meissner                meissner        <gnu@the-meissners.org>
+Josef Melcr                     -               <melcrjos@fit.cvut.cz>
 Jason Merrill                   jason           <jason@redhat.com>
 Jim Meyering                    -               <jim@meyering.net>
 Martin Michlmayr                tbm             <tbm@cyrius.com>
@@ -876,6 +884,7 @@ Ruoyao Xi                       xry111          <xry111@xry111.site>
 Mingjie Xing                    xmj             <mingjie.xing@gmail.com>
 Chenghua Xu                     paulhua         <paul.hua.gm@gmail.com>
 Li Xu                           -               <xuli1@eswincomputing.com>
+Feng Xue                        fxue            <fxue@os.amperecomputing.com>
 Canqun Yang                     canqun          <canqun@nudt.edu.cn>
 Fei Yang                        fyang           <felix.yang@huawei.com>
 Jeffrey Yasskin                 jyasskin        <jyasskin@google.com>
@@ -915,6 +924,7 @@ Certificate of Origin Version 1.1.  See https://gcc.gnu.org/dco.html for more
 information.
 
 
+Soumya AR                                       <soumyaa@nvidia.com>
 Juergen Christ                                  <jchrist@linux.ibm.com>
 Robin Dapp                                      <rdapp.gcc@gmail.com>
 Robin Dapp                                      <rdapp@ventanamicro.com>

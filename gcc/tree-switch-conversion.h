@@ -397,9 +397,27 @@ public:
 	     tree default_label_expr, basic_block default_bb, location_t loc)
      final override;
 
+  /* Find bit tests of given CLUSTERS, where all members of the vector are of
+     type simple_cluster.  Use a fast algorithm that might not find the optimal
+     solution (minimal number of clusters on the output).  New clusters are
+     returned.
+
+     You should call find_bit_tests () instead of calling this function
+     directly.  */
+  static vec<cluster *> find_bit_tests_fast (vec<cluster *> &clusters);
+
+  /* Find bit tests of given CLUSTERS, where all members of the vector
+     are of type simple_cluster.  Use a slow (quadratic) algorithm that always
+     finds the optimal solution (minimal number of clusters on the output).  New
+     clusters are returned.
+
+     You should call find_bit_tests () instead of calling this function
+     directly.  */
+  static vec<cluster *> find_bit_tests_slow (vec<cluster *> &clusters);
+
   /* Find bit tests of given CLUSTERS, where all members of the vector
      are of type simple_cluster.  New clusters are returned.  */
-  static vec<cluster *> find_bit_tests (vec<cluster *> &clusters);
+  static vec<cluster *> find_bit_tests (vec<cluster *> &clusters, int max_c);
 
   /* Return true when RANGE of case values with UNIQ labels
      can build a bit test.  */
@@ -576,8 +594,9 @@ public:
   bool try_switch_expansion (vec<cluster *> &clusters);
   /* Compute the number of case labels that correspond to each outgoing edge of
      switch statement.  Record this information in the aux field of the edge.
+     Returns approx max number of cases per edge.
      */
-  void compute_cases_per_edge ();
+  int compute_cases_per_edge ();
 
   /* Before switch transformation, record all SSA_NAMEs defined in switch BB
      and used in a label basic block.  */

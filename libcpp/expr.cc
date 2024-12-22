@@ -99,12 +99,10 @@ interpret_float_suffix (cpp_reader *pfile, const uchar *s, size_t len)
   /* The following decimal float suffixes, from TR 24732:2009, TS
      18661-2:2015 and C23, are supported:
 
-     df, DF - _Decimal32.
-     dd, DD - _Decimal64.
-     dl, DL - _Decimal128.
-
-     The dN and DN suffixes for _DecimalN, and dNx and DNx for
-     _DecimalNx, defined in TS 18661-3:2015, are not supported.
+     df, DF, d32, D32 - _Decimal32.
+     dd, DD, d64, D64 - _Decimal64.
+     dl, DL, d128, D128 - _Decimal128.
+     d64x, D64x - _Decimal64x.
 
      Fixed-point suffixes, from TR 18037:2008, are supported.  They
      consist of three parts, in order:
@@ -141,9 +139,9 @@ interpret_float_suffix (cpp_reader *pfile, const uchar *s, size_t len)
       bool uppercase = (*s == 'D');
       switch (s[1])
       {
-      case 'f': return (!uppercase ? (CPP_N_DFLOAT | CPP_N_SMALL): 0); break;
+      case 'f': return (!uppercase ? (CPP_N_DFLOAT | CPP_N_SMALL) : 0); break;
       case 'F': return (uppercase ? (CPP_N_DFLOAT | CPP_N_SMALL) : 0); break;
-      case 'd': return (!uppercase ? (CPP_N_DFLOAT | CPP_N_MEDIUM): 0); break;
+      case 'd': return (!uppercase ? (CPP_N_DFLOAT | CPP_N_MEDIUM) : 0); break;
       case 'D': return (uppercase ? (CPP_N_DFLOAT | CPP_N_MEDIUM) : 0); break;
       case 'l': return (!uppercase ? (CPP_N_DFLOAT | CPP_N_LARGE) : 0); break;
       case 'L': return (uppercase ? (CPP_N_DFLOAT | CPP_N_LARGE) : 0); break;
@@ -253,7 +251,23 @@ interpret_float_suffix (cpp_reader *pfile, const uchar *s, size_t len)
 	      break;
 	    }
 	  return 0;
-	case 'd': case 'D': d++; break;
+	case 'd': case 'D':
+	  if (!CPP_OPTION (pfile, cplusplus) && orig_s == s && len > 1)
+	    {
+	      if (s[1] == '3' && s[2] == '2' && len == 2)
+		return CPP_N_DFLOAT | CPP_N_SMALL;
+	      if (s[1] == '6' && s[2] == '4')
+		{
+		  if (len == 2)
+		    return CPP_N_DFLOAT | CPP_N_MEDIUM;
+		  if (len == 3 && s[3] == 'x')
+		    return CPP_N_DFLOAT | CPP_N_FLOATNX;
+		}
+	      if (s[1] == '1' && s[2] == '2' && len == 3 && s[3] == '8')
+		return CPP_N_DFLOAT | CPP_N_LARGE;
+	    }
+	  d++;
+	  break;
 	case 'l': case 'L': l++; break;
 	case 'w': case 'W': w++; break;
 	case 'q': case 'Q': q++; break;
@@ -556,6 +570,7 @@ cpp_classify_number (cpp_reader *pfile, const cpp_token *token,
   enum {NOT_FLOAT = 0, AFTER_POINT, AFTER_EXPON} float_flag;
   bool seen_digit;
   bool seen_digit_sep;
+  bool zero_o_prefix;
 
   if (ud_suffix)
     *ud_suffix = NULL;
@@ -571,6 +586,7 @@ cpp_classify_number (cpp_reader *pfile, const cpp_token *token,
   radix = 10;
   seen_digit = false;
   seen_digit_sep = false;
+  zero_o_prefix = false;
 
   /* First, interpret the radix.  */
   if (*str == '0')
@@ -595,6 +611,17 @@ cpp_classify_number (cpp_reader *pfile, const cpp_token *token,
 	  if (str[1] == '0' || str[1] == '1')
 	    {
 	      radix = 2;
+	      str++;
+	    }
+	  else if (DIGIT_SEP (str[1]))
+	    SYNTAX_ERROR_AT (virtual_location,
+			     "digit separator after base indicator");
+	}
+      else if ((*str == 'o' || *str == 'O') && !CPP_OPTION (pfile, cplusplus))
+	{
+	  if (ISDIGIT (str[1]))
+	    {
+	      zero_o_prefix = true;
 	      str++;
 	    }
 	  else if (DIGIT_SEP (str[1]))
@@ -678,10 +705,12 @@ cpp_classify_number (cpp_reader *pfile, const cpp_token *token,
     {
       if (radix == 2)
 	SYNTAX_ERROR2_AT (virtual_location,
-			  "invalid digit \"%c\" in binary constant", '0' + max_digit);
+			  "invalid digit %<%c%> in binary constant",
+			  '0' + max_digit);
       else
 	SYNTAX_ERROR2_AT (virtual_location,
-			  "invalid digit \"%c\" in octal constant", '0' + max_digit);
+			  "invalid digit %<%c%> in octal constant",
+			  '0' + max_digit);
     }
 
   if (float_flag != NOT_FLOAT)
@@ -689,7 +718,13 @@ cpp_classify_number (cpp_reader *pfile, const cpp_token *token,
       if (radix == 2)
 	{
 	  cpp_error_with_line (pfile, CPP_DL_ERROR, virtual_location, 0,
-			       "invalid prefix \"0b\" for floating constant");
+			       "invalid prefix %<0b%> for floating constant");
+	  return CPP_N_INVALID;
+	}
+      if (zero_o_prefix)
+	{
+	  cpp_error_with_line (pfile, CPP_DL_ERROR, virtual_location, 0,
+			       "invalid prefix %<0o%> for floating constant");
 	  return CPP_N_INVALID;
 	}
 
@@ -751,8 +786,8 @@ cpp_classify_number (cpp_reader *pfile, const cpp_token *token,
 	  else
 	    {
 	      cpp_error_with_line (pfile, CPP_DL_ERROR, virtual_location, 0,
-				   "invalid suffix \"%.*s\" on floating constant",
-				   (int) (limit - str), str);
+				   "invalid suffix %<%.*s%> on floating "
+				   "constant", (int) (limit - str), str);
 	      return CPP_N_INVALID;
 	    }
 	}
@@ -762,7 +797,7 @@ cpp_classify_number (cpp_reader *pfile, const cpp_token *token,
 	  && CPP_WTRADITIONAL (pfile)
 	  && ! cpp_sys_macro_p (pfile))
 	cpp_warning_with_line (pfile, CPP_W_TRADITIONAL, virtual_location, 0,
-			       "traditional C rejects the \"%.*s\" suffix",
+			       "traditional C rejects the %<%.*s%> suffix",
 			       (int) (limit - str), str);
 
       /* A suffix for double is a GCC extension via decimal float support.
@@ -777,8 +812,8 @@ cpp_classify_number (cpp_reader *pfile, const cpp_token *token,
       if ((result & CPP_N_DFLOAT) && radix != 10)
         {
           cpp_error_with_line (pfile, CPP_DL_ERROR, virtual_location, 0,
-			       "invalid suffix \"%.*s\" with hexadecimal floating constant",
-			       (int) (limit - str), str);
+			       "invalid suffix %<%.*s%> with hexadecimal "
+			       "floating constant", (int) (limit - str), str);
           return CPP_N_INVALID;
         }
 
@@ -791,11 +826,12 @@ cpp_classify_number (cpp_reader *pfile, const cpp_token *token,
 	  if (!CPP_OPTION (pfile, dfp_constants))
 	    cpp_pedwarning_with_line
 	      (pfile, CPP_W_PEDANTIC, virtual_location, 0,
-	       "decimal float constants are a C23 feature");
+	       "decimal floating constants are a C23 feature");
 	  else if (CPP_OPTION (pfile, cpp_warn_c11_c23_compat) > 0)
 	    cpp_warning_with_line (pfile, CPP_W_C11_C23_COMPAT,
 				   virtual_location, 0,
-				   "decimal float constants are a C23 feature");
+				   "decimal floating constants are a C23 "
+				   "feature");
 	}
 
       result |= CPP_N_FLOATING;
@@ -814,8 +850,8 @@ cpp_classify_number (cpp_reader *pfile, const cpp_token *token,
 	  else
 	    {
 	      cpp_error_with_line (pfile, CPP_DL_ERROR, virtual_location, 0,
-				   "invalid suffix \"%.*s\" on integer constant",
-				   (int) (limit - str), str);
+				   "invalid suffix %<%.*s%> on integer "
+				   "constant", (int) (limit - str), str);
 	      return CPP_N_INVALID;
 	    }
 	}
@@ -831,14 +867,14 @@ cpp_classify_number (cpp_reader *pfile, const cpp_token *token,
 	  if (u_or_i || large)
 	    cpp_warning_with_line (pfile, large ? CPP_W_LONG_LONG : CPP_W_TRADITIONAL,
 				   virtual_location, 0,
-				   "traditional C rejects the \"%.*s\" suffix",
+				   "traditional C rejects the %<%.*s%> suffix",
 				   (int) (limit - str), str);
 	}
 
       if ((result & CPP_N_WIDTH) == CPP_N_LARGE
 	  && CPP_OPTION (pfile, cpp_warn_long_long))
         {
-          const char *message = CPP_OPTION (pfile, cplusplus) 
+          const char *message = CPP_OPTION (pfile, cplusplus)
 				? N_("use of C++11 long long integer constant")
 		                : N_("use of C99 long long integer constant");
 
@@ -853,9 +889,10 @@ cpp_classify_number (cpp_reader *pfile, const cpp_token *token,
       if ((result & CPP_N_SIZE_T) == CPP_N_SIZE_T
 	  && !CPP_OPTION (pfile, size_t_literals))
        {
-	  const char *message = (result & CPP_N_UNSIGNED) == CPP_N_UNSIGNED
-				? N_("use of C++23 %<size_t%> integer constant")
-				: N_("use of C++23 %<make_signed_t<size_t>%> integer constant");
+	  const char *message
+	    = (result & CPP_N_UNSIGNED) == CPP_N_UNSIGNED
+	      ? N_("use of C++23 %<size_t%> integer constant")
+	      : N_("use of C++23 %<make_signed_t<size_t>%> integer constant");
 	  cpp_warning_with_line (pfile, CPP_W_SIZE_T_LITERALS,
 				 virtual_location, 0, message);
        }
@@ -888,13 +925,29 @@ cpp_classify_number (cpp_reader *pfile, const cpp_token *token,
 
  syntax_ok:
   if (result & CPP_N_IMAGINARY)
-    cpp_pedwarning_with_line (pfile, CPP_W_PEDANTIC, virtual_location, 0,
-			      "imaginary constants are a GCC extension");
+    {
+      if (CPP_OPTION (pfile, cplusplus) || (result & CPP_N_FLOATING) == 0)
+	cpp_pedwarning_with_line (pfile, CPP_W_PEDANTIC, virtual_location, 0,
+				  "imaginary constants are a GCC extension");
+      else
+	{
+	  bool warned = false;
+	  if (!CPP_OPTION (pfile, imaginary_constants) && CPP_PEDANTIC (pfile))
+	    warned
+	      = cpp_pedwarning_with_line (pfile, CPP_W_PEDANTIC,
+					  virtual_location, 0,
+					  "imaginary constants are a C2Y "
+					  "feature or GCC extension");
+	  if (!warned && CPP_OPTION (pfile, cpp_warn_c23_c2y_compat) > 0)
+	    cpp_warning_with_line (pfile, CPP_W_C23_C2Y_COMPAT,
+				   virtual_location, 0,
+				   "imaginary constants are a C2Y feature");
+	}
+    }
   if (radix == 2)
     {
       bool warned = false;
-      if (!CPP_OPTION (pfile, binary_constants)
-	  && CPP_PEDANTIC (pfile))
+      if (!CPP_OPTION (pfile, binary_constants) && CPP_PEDANTIC (pfile))
 	{
 	  if (CPP_OPTION (pfile, cplusplus))
 	    warned
@@ -911,6 +964,19 @@ cpp_classify_number (cpp_reader *pfile, const cpp_token *token,
 	cpp_warning_with_line (pfile, CPP_W_C11_C23_COMPAT,
 			       virtual_location, 0,
 			       "binary constants are a C23 feature");
+    }
+  if (zero_o_prefix)
+    {
+      bool warned = false;
+      if (!CPP_OPTION (pfile, octal_constants) && CPP_PEDANTIC (pfile))
+	warned
+	  = cpp_pedwarning_with_line (pfile, CPP_W_PEDANTIC, virtual_location,
+				      0, "%<0o%> prefixed constants are a C2Y "
+					 "feature or GCC extension");
+      if (!warned && CPP_OPTION (pfile, cpp_warn_c23_c2y_compat) > 0)
+	cpp_warning_with_line (pfile, CPP_W_C23_C2Y_COMPAT,
+			       virtual_location, 0,
+			       "%<0o%> prefixed constants are a C2Y feature");
     }
 
   if (radix == 10)
@@ -963,6 +1029,8 @@ cpp_interpret_integer (cpp_reader *pfile, const cpp_token *token,
 	{
 	  base = 8;
 	  p++;
+	  if (*p == 'o' || *p == 'O')
+	    p++;
 	}
       else if ((type & CPP_N_RADIX) == CPP_N_HEX)
 	{
@@ -1118,7 +1186,7 @@ parse_defined (cpp_reader *pfile)
   cpp_context *initial_context = pfile->context;
 
   if (pfile->state.in_directive == 3)
-    cpp_error (pfile, CPP_DL_ERROR, "'defined' in #embed parameter");
+    cpp_error (pfile, CPP_DL_ERROR, "%<defined%> in %<#embed%> parameter");
 
   /* Don't expand macros.  */
   pfile->state.prevent_expansion++;
@@ -1135,14 +1203,14 @@ parse_defined (cpp_reader *pfile)
       node = token->val.node.node;
       if (paren && cpp_get_token (pfile)->type != CPP_CLOSE_PAREN)
 	{
-	  cpp_error (pfile, CPP_DL_ERROR, "missing ')' after \"defined\"");
+	  cpp_error (pfile, CPP_DL_ERROR, "missing %<)%> after %<defined%>");
 	  node = 0;
 	}
     }
   else
     {
       cpp_error (pfile, CPP_DL_ERROR,
-		 "operator \"defined\" requires an identifier");
+		 "operator %<defined%> requires an identifier");
       if (token->flags & NAMED_OP)
 	{
 	  cpp_token op;
@@ -1150,7 +1218,7 @@ parse_defined (cpp_reader *pfile)
 	  op.flags = 0;
 	  op.type = token->type;
 	  cpp_error (pfile, CPP_DL_ERROR,
-		     "(\"%s\" is an alternative token for \"%s\" in C++)",
+		     "(%qs is an alternative token for %qs in C++)",
 		     cpp_token_as_text (pfile, token),
 		     cpp_token_as_text (pfile, &op));
 	}
@@ -1163,7 +1231,7 @@ parse_defined (cpp_reader *pfile)
 	   || initial_context != &pfile->base_context)
 	  && CPP_OPTION (pfile, warn_expansion_to_defined))
         cpp_pedwarning (pfile, CPP_W_EXPANSION_TO_DEFINED,
-		        "this use of \"defined\" may not be portable");
+		        "this use of %<defined%> may not be portable");
       is_defined = _cpp_defined_macro_p (node);
       if (!_cpp_maybe_notify_macro_use (pfile, node, token->src_loc))
 	/* It wasn't a macro after all.  */
@@ -1268,7 +1336,7 @@ eval_token (cpp_reader *pfile, const cpp_token *token,
 	  result.low = 0;
 	  if (CPP_OPTION (pfile, warn_undef) && !pfile->state.skip_eval)
 	    cpp_warning_with_line (pfile, CPP_W_UNDEF, virtual_location, 0,
-				   "\"%s\" is not defined, evaluates to 0",
+				   "%qs is not defined, evaluates to %<0%>",
 				   NODE_NAME (token->val.node.node));
 	}
       break;
@@ -1431,7 +1499,7 @@ _cpp_parse_expr (cpp_reader *pfile, const char *dir,
 	case CPP_HASH:
 	  if (!want_value)
 	    SYNTAX_ERROR2_AT (op.loc,
-			      "missing binary operator before token \"%s\"",
+			      "missing binary operator before token %qs",
 			      cpp_token_as_text (pfile, op.token));
 	  want_value = false;
 	  top->value = eval_token (pfile, op.token, op.loc);
@@ -1456,7 +1524,8 @@ _cpp_parse_expr (cpp_reader *pfile, const char *dir,
 	default:
 	  if ((int) op.op <= (int) CPP_EQ || (int) op.op >= (int) CPP_PLUS_EQ)
 	    SYNTAX_ERROR2_AT (op.loc,
-			      "token \"%s\" is not valid in preprocessor expressions",
+			      "token %qs is not valid in preprocessor "
+			      "expressions",
 			      cpp_token_as_text (pfile, op.token));
 	  break;
 	}
@@ -1466,7 +1535,7 @@ _cpp_parse_expr (cpp_reader *pfile, const char *dir,
 	{
 	  if (!want_value)
 	    SYNTAX_ERROR2_AT (op.loc,
-			      "missing binary operator before token \"%s\"",
+			      "missing binary operator before token %qs",
 			      cpp_token_as_text (pfile, op.token));
 	}
       else if (want_value)
@@ -1475,7 +1544,7 @@ _cpp_parse_expr (cpp_reader *pfile, const char *dir,
 	     Try to emit a specific diagnostic.  */
 	  if (op.op == CPP_CLOSE_PAREN && top->op == CPP_OPEN_PAREN)
 	    SYNTAX_ERROR_AT (op.loc,
-			     "missing expression between '(' and ')'");
+			     "missing expression between %<(%> and %<)%>");
 
 	  if (op.op == CPP_EOF && top->op == CPP_EOF)
  	    SYNTAX_ERROR2_AT (op.loc,
@@ -1483,13 +1552,13 @@ _cpp_parse_expr (cpp_reader *pfile, const char *dir,
 
  	  if (top->op != CPP_EOF && top->op != CPP_OPEN_PAREN)
  	    SYNTAX_ERROR2_AT (op.loc,
-			      "operator '%s' has no right operand",
+			      "operator %qs has no right operand",
 			      cpp_token_as_text (pfile, top->token));
 	  else if (op.op == CPP_CLOSE_PAREN || op.op == CPP_EOF)
 	    /* Complain about missing paren during reduction.  */;
 	  else
 	    SYNTAX_ERROR2_AT (op.loc,
-			      "operator '%s' has no left operand",
+			      "operator %qs has no left operand",
 			      cpp_token_as_text (pfile, op.token));
 	}
 
@@ -1518,7 +1587,7 @@ _cpp_parse_expr (cpp_reader *pfile, const char *dir,
 	case CPP_COLON:
 	  if (top->op != CPP_QUERY)
 	    SYNTAX_ERROR_AT (op.loc,
-			     " ':' without preceding '?'");
+			     " %<:%> without preceding %<?%>");
 	  if (!num_zerop (top[-1].value)) /* Was '?' condition true?  */
 	    pfile->state.skip_eval++;
 	  else
@@ -1685,9 +1754,9 @@ reduce (cpp_reader *pfile, struct op *top, enum cpp_ttype op)
 	case CPP_OPEN_PAREN:
 	  if (op != CPP_CLOSE_PAREN)
 	    {
-	      cpp_error_with_line (pfile, CPP_DL_ERROR, 
+	      cpp_error_with_line (pfile, CPP_DL_ERROR,
 				   top->token->src_loc,
-				   0, "missing ')' in expression");
+				   0, "missing %<)%> in expression");
 	      return 0;
 	    }
 	  top--;
@@ -1716,7 +1785,7 @@ reduce (cpp_reader *pfile, struct op *top, enum cpp_ttype op)
 	  /* COMMA and COLON should not reduce a QUERY operator.  */
 	  if (op == CPP_COMMA || op == CPP_COLON)
 	    return top;
-	  cpp_error (pfile, CPP_DL_ERROR, "'?' without following ':'");
+	  cpp_error (pfile, CPP_DL_ERROR, "%<?%> without following %<:%>");
 	  return 0;
 
 	default:
@@ -1731,7 +1800,7 @@ reduce (cpp_reader *pfile, struct op *top, enum cpp_ttype op)
 
   if (op == CPP_CLOSE_PAREN)
     {
-      cpp_error (pfile, CPP_DL_ERROR, "missing '(' in expression");
+      cpp_error (pfile, CPP_DL_ERROR, "missing %<(%> in expression");
       return 0;
     }
 
@@ -1763,12 +1832,12 @@ check_promotion (cpp_reader *pfile, const struct op *op)
     {
       if (!num_positive (op[-1].value, CPP_OPTION (pfile, precision)))
 	cpp_error_with_line (pfile, CPP_DL_WARNING, op[-1].loc, 0,
-			     "the left operand of \"%s\" changes sign when promoted",
-			     cpp_token_as_text (pfile, op->token));
+			     "the left operand of %qs changes sign when "
+			     "promoted", cpp_token_as_text (pfile, op->token));
     }
   else if (!num_positive (op->value, CPP_OPTION (pfile, precision)))
     cpp_error_with_line (pfile, CPP_DL_WARNING, op->loc, 0,
-	       "the right operand of \"%s\" changes sign when promoted",
+	       "the right operand of %qs changes sign when promoted",
 	       cpp_token_as_text (pfile, op->token));
 }
 

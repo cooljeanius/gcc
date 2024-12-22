@@ -576,7 +576,7 @@ ssa_cache::has_range (tree name) const
   return m_tab[v] != NULL;
 }
 
-// Retrieve the global range of NAME from cache memory if it exists. 
+// Retrieve the global range of NAME from cache memory if it exists.
 // Return the value in R.
 
 bool
@@ -1002,7 +1002,10 @@ ranger_cache::ranger_cache (int not_executable_flag, bool use_imm_uses)
 
   // If DOM info is available, spawn an oracle as well.
   create_relation_oracle ();
-  create_infer_oracle (use_imm_uses);
+  // Create an infer oracle using this cache as the range query.  The cache
+  // version acts as a read-only query, and will spawn no additional lookups.
+  // It just ues what is already known.
+  create_infer_oracle (this, use_imm_uses);
   create_gori (not_executable_flag, param_vrp_switch_limit);
 
   unsigned x, lim = last_basic_block_for_fn (cfun);
@@ -1180,6 +1183,13 @@ ranger_cache::entry_range (vrange &r, tree name, basic_block bb,
   if (bb == ENTRY_BLOCK_PTR_FOR_FN (cfun))
     {
       gimple_range_global (r, name);
+      return;
+    }
+
+  // If NAME is invariant, simply return the defining range.
+  if (!gori ().has_edge_range_p (name))
+    {
+      range_of_def (r, name);
       return;
     }
 
@@ -1364,7 +1374,7 @@ ranger_cache::propagate_cache (tree name)
 	  // If the cache couldn't set the value, mark it as failed.
 	  if (!ok_p)
 	    m_update->propagation_failed (bb);
-	  if (DEBUG_RANGE_CACHE) 
+	  if (DEBUG_RANGE_CACHE)
 	    {
 	      if (!ok_p)
 		{
@@ -1383,11 +1393,11 @@ ranger_cache::propagate_cache (tree name)
 	  FOR_EACH_EDGE (e, ei, bb->succs)
 	    if (m_on_entry.bb_range_p (name, e->dest))
 	      {
-		if (DEBUG_RANGE_CACHE) 
+		if (DEBUG_RANGE_CACHE)
 		  fprintf (dump_file, " bb%d",e->dest->index);
 		m_update->add (e->dest);
 	      }
-	  if (DEBUG_RANGE_CACHE) 
+	  if (DEBUG_RANGE_CACHE)
 	    fprintf (dump_file, "\n");
 	}
     }

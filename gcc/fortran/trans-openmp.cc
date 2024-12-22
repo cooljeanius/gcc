@@ -582,7 +582,7 @@ gfc_walk_alloc_comps (tree decl, tree dest, tree var,
 	      tem = size_binop (MINUS_EXPR, tem, size_one_node);
 	    }
 	  else
-	    tem = array_type_nelts (type);
+	    tem = array_type_nelts_minus_one (type);
 	  tem = fold_convert (gfc_array_index_type, tem);
 	}
 
@@ -1309,7 +1309,7 @@ gfc_omp_clause_linear_ctor (tree clause, tree dest, tree src, tree add)
 	  nelems = size_binop (MINUS_EXPR, nelems, size_one_node);
 	}
       else
-	nelems = array_type_nelts (type);
+	nelems = array_type_nelts_minus_one (type);
       nelems = fold_convert (gfc_array_index_type, nelems);
 
       gfc_omp_linear_clause_add_loop (&block, dest, src, add, nelems);
@@ -1552,6 +1552,11 @@ gfc_omp_finish_clause (tree c, gimple_seq *pre_p, bool openacc)
 		"implicit mapping of assumed size array %qD", decl);
       return;
     }
+
+  if (!openacc && GFC_CLASS_TYPE_P (TREE_TYPE (decl)))
+    warning_at (OMP_CLAUSE_LOCATION (c), OPT_Wopenmp,
+		"Implicit mapping of polymorphic variable %qD is "
+		"unspecified behavior", decl);
 
   tree c2 = NULL_TREE, c3 = NULL_TREE, c4 = NULL_TREE;
   tree present = gfc_omp_check_optional_argument (decl, true);
@@ -2769,12 +2774,56 @@ gfc_trans_omp_clauses (stmtblock_t *block, gfc_omp_clauses *clauses,
 	case OMP_LIST_SCAN_EX:
 	  clause_code = OMP_CLAUSE_EXCLUSIVE;
 	  goto add_clause;
+	case OMP_LIST_USE:
+	  clause_code = OMP_CLAUSE_USE;
+	  goto add_clause;
+	case OMP_LIST_DESTROY:
+	  clause_code = OMP_CLAUSE_DESTROY;
+	  goto add_clause;
 
 	add_clause:
 	  omp_clauses
 	    = gfc_trans_omp_variable_list (clause_code, n, omp_clauses,
 					   declare_simd);
 	  break;
+
+	case OMP_LIST_INIT:
+	  {
+	    tree pref_type = NULL_TREE;
+	    const char *last = NULL;
+	    for (; n != NULL; n = n->next)
+	      if (n->sym->attr.referenced)
+		{
+		  tree t = gfc_trans_omp_variable (n->sym, false);
+		  if (t == error_mark_node)
+		    continue;
+		  tree node = build_omp_clause (input_location,
+						OMP_CLAUSE_INIT);
+		  OMP_CLAUSE_DECL (node) = t;
+		  if (n->u.init.target)
+		    OMP_CLAUSE_INIT_TARGET (node) = 1;
+		  if (n->u.init.targetsync)
+		    OMP_CLAUSE_INIT_TARGETSYNC (node) = 1;
+		  if (last != n->u2.init_interop)
+		    {
+		      last = n->u2.init_interop;
+		      if (n->u2.init_interop == NULL)
+			pref_type = NULL_TREE;
+		      else
+			{
+			  pref_type = build_string (n->u.init.len,
+						    n->u2.init_interop);
+			  TREE_TYPE (pref_type)
+			    = build_array_type_nelts (unsigned_char_type_node,
+						      n->u.init.len);
+			}
+		    }
+		  OMP_CLAUSE_INIT_PREFER_TYPE (node) = pref_type;
+		  omp_clauses = gfc_trans_add_clause (node, omp_clauses);
+		}
+	    break;
+	  }
+
 	case OMP_LIST_ALIGNED:
 	  for (; n != NULL; n = n->next)
 	    if (n->sym->attr.referenced || declare_simd)
@@ -2962,7 +3011,7 @@ gfc_trans_omp_clauses (stmtblock_t *block, gfc_omp_clauses *clauses,
 	  for (; n != NULL; n = n->next)
 	    {
 	      if (iterator && prev->u2.ns != n->u2.ns)
-		{ 
+		{
 		  BLOCK_SUBBLOCKS (tree_block) = gfc_finish_block (&iter_block);
 		  TREE_VEC_ELT (iterator, 5) = tree_block;
 		  for (tree c = omp_clauses; c != prev_clauses;
@@ -3119,7 +3168,7 @@ gfc_trans_omp_clauses (stmtblock_t *block, gfc_omp_clauses *clauses,
 	      omp_clauses = gfc_trans_add_clause (node, omp_clauses);
 	    }
 	  if (iterator)
-	    { 
+	    {
 	      BLOCK_SUBBLOCKS (tree_block) = gfc_finish_block (&iter_block);
 	      TREE_VEC_ELT (iterator, 5) = tree_block;
 	      for (tree c = omp_clauses; c != prev_clauses;
@@ -4975,7 +5024,7 @@ gfc_trans_oacc_construct (gfc_code *code)
 }
 
 /* update, enter_data, exit_data, cache. */
-static tree 
+static tree
 gfc_trans_oacc_executable_directive (gfc_code *code)
 {
   stmtblock_t block;
@@ -5003,7 +5052,7 @@ gfc_trans_oacc_executable_directive (gfc_code *code)
   gfc_start_block (&block);
   oacc_clauses = gfc_trans_omp_clauses (&block, code->ext.omp_clauses,
 					code->loc, false, true, code->op);
-  stmt = build1_loc (input_location, construct_code, void_type_node, 
+  stmt = build1_loc (input_location, construct_code, void_type_node,
 		     oacc_clauses);
   gfc_add_expr_to_block (&block, stmt);
   return gfc_finish_block (&block);
@@ -7211,7 +7260,7 @@ gfc_split_omp_clauses (gfc_code *code,
 		 }
 	     }
 	   if (!found)
-	     gfc_error ("%qs specified in 'allocate' clause at %L but not "
+	     gfc_error ("%qs specified in %<allocate%> clause at %L but not "
 			"in an explicit privatization clause",
 			alloc_nl->sym->name, &alloc_nl->where);
 	 }
@@ -8022,6 +8071,18 @@ gfc_trans_omp_target_update (gfc_code *code)
 }
 
 static tree
+gfc_trans_openmp_interop (gfc_code *code, gfc_omp_clauses *clauses)
+{
+  stmtblock_t block;
+  gfc_start_block (&block);
+  tree omp_clauses = gfc_trans_omp_clauses (&block, clauses, code->loc);
+  tree stmt = build1_loc (input_location, OMP_INTEROP, void_type_node,
+			  omp_clauses);
+  gfc_add_expr_to_block (&block, stmt);
+  return gfc_finish_block (&block);
+}
+
+static tree
 gfc_trans_omp_workshare (gfc_code *code, gfc_omp_clauses *clauses)
 {
   tree res, tmp, stmt;
@@ -8114,7 +8175,7 @@ gfc_trans_omp_workshare (gfc_code *code, gfc_omp_clauses *clauses)
 	  gfc_internal_error ("gfc_trans_omp_workshare(): Bad statement code");
 	}
 
-      gfc_set_backend_locus (&code->loc);
+      input_location = gfc_get_location (&code->loc);
 
       if (res != NULL_TREE && ! IS_EMPTY_STMT (res))
 	{
@@ -8359,8 +8420,7 @@ gfc_trans_omp_directive (gfc_code *code)
     case EXEC_OMP_WORKSHARE:
       return gfc_trans_omp_workshare (code, code->ext.omp_clauses);
     case EXEC_OMP_INTEROP:
-      sorry ("%<!$OMP INTEROP%>");
-      return build_empty_stmt (input_location);
+      return gfc_trans_openmp_interop (code, code->ext.omp_clauses);
     default:
       gcc_unreachable ();
     }
@@ -8419,7 +8479,7 @@ gfc_trans_omp_declare_variant (gfc_namespace *ns)
 	{
 	  if (!search_ns->proc_name->attr.function
 	      && !search_ns->proc_name->attr.subroutine)
-	    gfc_error ("The base name for 'declare variant' must be "
+	    gfc_error ("The base name for %<declare variant%> must be "
 		       "specified at %L ", &odv->where);
 	  else
 	    error_found = false;

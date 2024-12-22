@@ -26,8 +26,9 @@
   [(match_operand:V 0 "register_operand")
    (match_operand:V 1 "memory_operand")
    (match_operand:<VM> 2 "vector_mask_operand")
-   (match_operand 3 "autovec_length_operand")
-   (match_operand 4 "const_0_operand")]
+   (match_operand:V 3 "maskload_else_operand")
+   (match_operand 4 "autovec_length_operand")
+   (match_operand 5 "const_0_operand")]
   "TARGET_VECTOR"
 {
   riscv_vector::expand_load_store (operands, true);
@@ -57,8 +58,9 @@
    (match_operand 3 "<RATIO64:gs_extension>")
    (match_operand 4 "<RATIO64:gs_scale>")
    (match_operand:<RATIO64:VM> 5 "vector_mask_operand")
-   (match_operand 6 "autovec_length_operand")
-   (match_operand 7 "const_0_operand")]
+   (match_operand 6 "maskload_else_operand")
+   (match_operand 7 "autovec_length_operand")
+   (match_operand 8 "const_0_operand")]
   "TARGET_VECTOR && riscv_vector::gather_scatter_valid_offset_p (<RATIO64I:MODE>mode)"
 {
   riscv_vector::expand_gather_scatter (operands, true);
@@ -72,8 +74,9 @@
    (match_operand 3 "<RATIO32:gs_extension>")
    (match_operand 4 "<RATIO32:gs_scale>")
    (match_operand:<RATIO32:VM> 5 "vector_mask_operand")
-   (match_operand 6 "autovec_length_operand")
-   (match_operand 7 "const_0_operand")]
+   (match_operand 6 "maskload_else_operand")
+   (match_operand 7 "autovec_length_operand")
+   (match_operand 8 "const_0_operand")]
   "TARGET_VECTOR && riscv_vector::gather_scatter_valid_offset_p (<RATIO32I:MODE>mode)"
 {
   riscv_vector::expand_gather_scatter (operands, true);
@@ -87,8 +90,9 @@
    (match_operand 3 "<RATIO16:gs_extension>")
    (match_operand 4 "<RATIO16:gs_scale>")
    (match_operand:<RATIO16:VM> 5 "vector_mask_operand")
-   (match_operand 6 "autovec_length_operand")
-   (match_operand 7 "const_0_operand")]
+   (match_operand 6 "maskload_else_operand")
+   (match_operand 7 "autovec_length_operand")
+   (match_operand 8 "const_0_operand")]
   "TARGET_VECTOR && riscv_vector::gather_scatter_valid_offset_p (<RATIO16I:MODE>mode)"
 {
   riscv_vector::expand_gather_scatter (operands, true);
@@ -102,8 +106,9 @@
    (match_operand 3 "<RATIO8:gs_extension>")
    (match_operand 4 "<RATIO8:gs_scale>")
    (match_operand:<RATIO8:VM> 5 "vector_mask_operand")
-   (match_operand 6 "autovec_length_operand")
-   (match_operand 7 "const_0_operand")]
+   (match_operand 6 "maskload_else_operand")
+   (match_operand 7 "autovec_length_operand")
+   (match_operand 8 "const_0_operand")]
   "TARGET_VECTOR && riscv_vector::gather_scatter_valid_offset_p (<RATIO8I:MODE>mode)"
 {
   riscv_vector::expand_gather_scatter (operands, true);
@@ -117,8 +122,9 @@
    (match_operand 3 "<RATIO4:gs_extension>")
    (match_operand 4 "<RATIO4:gs_scale>")
    (match_operand:<RATIO4:VM> 5 "vector_mask_operand")
-   (match_operand 6 "autovec_length_operand")
-   (match_operand 7 "const_0_operand")]
+   (match_operand 6 "maskload_else_operand")
+   (match_operand 7 "autovec_length_operand")
+   (match_operand 8 "const_0_operand")]
   "TARGET_VECTOR && riscv_vector::gather_scatter_valid_offset_p (<RATIO4I:MODE>mode)"
 {
   riscv_vector::expand_gather_scatter (operands, true);
@@ -132,8 +138,9 @@
    (match_operand 3 "<RATIO2:gs_extension>")
    (match_operand 4 "<RATIO2:gs_scale>")
    (match_operand:<RATIO2:VM> 5 "vector_mask_operand")
-   (match_operand 6 "autovec_length_operand")
-   (match_operand 7 "const_0_operand")]
+   (match_operand 6 "maskload_else_operand")
+   (match_operand 7 "autovec_length_operand")
+   (match_operand 8 "const_0_operand")]
   "TARGET_VECTOR && riscv_vector::gather_scatter_valid_offset_p (<RATIO2I:MODE>mode)"
 {
   riscv_vector::expand_gather_scatter (operands, true);
@@ -151,8 +158,9 @@
    (match_operand 3 "<gs_extension>")
    (match_operand 4 "<gs_scale>")
    (match_operand:<VM> 5 "vector_mask_operand")
-   (match_operand 6 "autovec_length_operand")
-   (match_operand 7 "const_0_operand")]
+   (match_operand 6 "maskload_else_operand")
+   (match_operand 7 "autovec_length_operand")
+   (match_operand 8 "const_0_operand")]
   "TARGET_VECTOR"
 {
   riscv_vector::expand_gather_scatter (operands, true);
@@ -280,9 +288,10 @@
   [(match_operand:VT 0 "register_operand")
    (match_operand:VT 1 "memory_operand")
    (match_operand:<VM> 2 "vector_mask_operand")
-   (match_operand 3 "autovec_length_operand")
-   (match_operand 4 "const_0_operand")]
-  "TARGET_VECTOR"
+   (match_operand 3 "maskload_else_operand")
+   (match_operand 4 "autovec_length_operand")
+   (match_operand 5 "const_0_operand")]
+  "TARGET_VECTOR_AUTOVEC_SEGMENT"
   {
     riscv_vector::expand_lanes_load_store (operands, true);
     DONE;
@@ -295,7 +304,7 @@
    (match_operand:<VM> 2 "vector_mask_operand")
    (match_operand 3 "autovec_length_operand")
    (match_operand 4 "const_0_operand")]
-  "TARGET_VECTOR"
+  "TARGET_VECTOR_AUTOVEC_SEGMENT"
   {
     riscv_vector::expand_lanes_load_store (operands, false);
     DONE;
@@ -2734,6 +2743,17 @@
   }
 )
 
+(define_expand "sssub<mode>3"
+  [(match_operand:V_VLSI 0 "register_operand")
+   (match_operand:V_VLSI 1 "register_operand")
+   (match_operand:V_VLSI 2 "register_operand")]
+  "TARGET_VECTOR"
+  {
+    riscv_vector::expand_vec_sssub (operands[0], operands[1], operands[2], <MODE>mode);
+    DONE;
+  }
+)
+
 (define_expand "ustrunc<mode><v_double_trunc>2"
   [(match_operand:<V_DOUBLE_TRUNC> 0 "register_operand")
    (match_operand:VWEXTI           1 "register_operand")]
@@ -2758,10 +2778,44 @@
 
 (define_expand "ustrunc<mode><v_oct_trunc>2"
   [(match_operand:<V_OCT_TRUNC> 0 "register_operand")
-   (match_operand:VOEXTI         1 "register_operand")]
+   (match_operand:VOEXTI        1 "register_operand")]
   "TARGET_VECTOR"
   {
     riscv_vector::expand_vec_oct_ustrunc (operands[0], operands[1], <MODE>mode,
+					  <V_DOUBLE_TRUNC>mode,
+					  <V_QUAD_TRUNC>mode);
+    DONE;
+  }
+)
+
+(define_expand "sstrunc<mode><v_double_trunc>2"
+  [(match_operand:<V_DOUBLE_TRUNC> 0 "register_operand")
+   (match_operand:VWEXTI           1 "register_operand")]
+  "TARGET_VECTOR"
+  {
+    riscv_vector::expand_vec_double_sstrunc (operands[0], operands[1],
+					  <MODE>mode);
+    DONE;
+  }
+)
+
+(define_expand "sstrunc<mode><v_quad_trunc>2"
+  [(match_operand:<V_QUAD_TRUNC> 0 "register_operand")
+   (match_operand:VQEXTI         1 "register_operand")]
+  "TARGET_VECTOR"
+  {
+    riscv_vector::expand_vec_quad_sstrunc (operands[0], operands[1], <MODE>mode,
+					   <V_DOUBLE_TRUNC>mode);
+    DONE;
+  }
+)
+
+(define_expand "sstrunc<mode><v_oct_trunc>2"
+  [(match_operand:<V_OCT_TRUNC> 0 "register_operand")
+   (match_operand:VOEXTI        1 "register_operand")]
+  "TARGET_VECTOR"
+  {
+    riscv_vector::expand_vec_oct_sstrunc (operands[0], operands[1], <MODE>mode,
 					  <V_DOUBLE_TRUNC>mode,
 					  <V_QUAD_TRUNC>mode);
     DONE;
@@ -2844,3 +2898,33 @@
     DONE;
   }
 )
+
+;; =========================================================================
+;; == Strided Load/Store
+;; =========================================================================
+(define_expand "mask_len_strided_load_<mode>"
+  [(match_operand:V_VLS 0 "register_operand")
+   (match_operand       1 "pmode_reg_or_0_operand")
+   (match_operand       2 "pmode_reg_or_0_operand")
+   (match_operand:<VM>  3 "vector_mask_operand")
+   (match_operand       4 "maskload_else_operand")
+   (match_operand       5 "autovec_length_operand")
+   (match_operand       6 "const_0_operand")]
+  "TARGET_VECTOR"
+  {
+    riscv_vector::expand_strided_load (<MODE>mode, operands);
+    DONE;
+  })
+
+(define_expand "mask_len_strided_store_<mode>"
+  [(match_operand       0 "pmode_reg_or_0_operand")
+   (match_operand       1 "pmode_reg_or_0_operand")
+   (match_operand:V_VLS 2 "register_operand")
+   (match_operand:<VM>  3 "vector_mask_operand")
+   (match_operand       4 "autovec_length_operand")
+   (match_operand       5 "const_0_operand")]
+  "TARGET_VECTOR"
+  {
+    riscv_vector::expand_strided_store (<MODE>mode, operands);
+    DONE;
+  })

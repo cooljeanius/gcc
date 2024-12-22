@@ -986,10 +986,11 @@ find_combined_omp_for (tree *tp, int *walk_subtrees, void *data)
   return NULL_TREE;
 }
 
-/* Return maximum possible vectorization factor for the target.  */
+/* Return maximum possible vectorization factor for the target, or for
+   the OpenMP offload target if one exists.  */
 
 poly_uint64
-omp_max_vf (void)
+omp_max_vf (bool offload)
 {
   if (!optimize
       || optimize_debug
@@ -997,6 +998,18 @@ omp_max_vf (void)
       || (!flag_tree_loop_vectorize
 	  && OPTION_SET_P (flag_tree_loop_vectorize)))
     return 1;
+
+  if (ENABLE_OFFLOADING && offload)
+    {
+      for (const char *c = getenv ("OFFLOAD_TARGET_NAMES"); c;)
+	{
+	  if (startswith (c, "amdgcn"))
+	    return ordered_max (poly_uint64 (64), omp_max_vf (false));
+	  else if ((c = strchr (c, ':')))
+	    c++;
+	}
+      /* Otherwise, fall through to host VF.  */
+    }
 
   auto_vector_modes modes;
   targetm.vectorize.autovectorize_vector_modes (&modes, true);
@@ -1049,7 +1062,7 @@ omp_construct_traits_to_codes (tree ctx, int nconstructs,
   /* Order must match the OMP_TRAIT_CONSTRUCT_* enumerators in
      enum omp_ts_code.  */
   static enum tree_code code_map[]
-    = { OMP_TARGET, OMP_TEAMS, OMP_PARALLEL, OMP_FOR, OMP_SIMD };
+    = { OMP_TARGET, OMP_TEAMS, OMP_PARALLEL, OMP_FOR, OMP_SIMD, OMP_DISPATCH };
 
   for (tree ts = ctx; ts; ts = TREE_CHAIN (ts), i--)
     {
@@ -1150,7 +1163,7 @@ static const char *const kind_properties[] =
   { "host", "nohost", "cpu", "gpu", "fpga", "any", NULL };
 static const char *const vendor_properties[] =
   { "amd", "arm", "bsc", "cray", "fujitsu", "gnu", "hpe", "ibm", "intel",
-    "llvm", "nvidia", "pgi", "ti", "unknown", NULL };
+    "llvm", "nec", "nvidia", "pgi", "ti", "unknown", NULL };
 static const char *const extension_properties[] =
   { NULL };
 static const char *const atomic_default_mem_order_properties[] =
@@ -1253,9 +1266,13 @@ struct omp_ts_info omp_ts_map[] =
      OMP_TRAIT_PROPERTY_CLAUSE_LIST,  false,
      NULL
    },
+   { "dispatch",
+     (1 << OMP_TRAIT_SET_CONSTRUCT),
+     OMP_TRAIT_PROPERTY_NONE,  false,
+     NULL
+   },
    { NULL, 0, OMP_TRAIT_PROPERTY_NONE, false, NULL }  /* OMP_TRAIT_LAST */
   };
-
 
 /* Return a name from PROP, a property in selectors accepting
    name lists.  */
@@ -2579,6 +2596,9 @@ omp_resolve_declare_variant (tree base)
   if (cfun && (cfun->curr_properties & PROP_gimple_any) != 0)
     return omp_resolve_late_declare_variant (base);
 
+  if (omp_has_novariants () == 1)
+    return base;
+
   auto_vec <tree, 16> variants;
   auto_vec <bool, 16> defer;
   bool any_deferred = false;
@@ -2725,6 +2745,8 @@ omp_resolve_declare_variant (tree base)
       (*slot)->variants = entry.variants;
       tree alt = build_decl (DECL_SOURCE_LOCATION (base), FUNCTION_DECL,
 			     DECL_NAME (base), TREE_TYPE (base));
+      if (DECL_ASSEMBLER_NAME_SET_P (base))
+	SET_DECL_ASSEMBLER_NAME (alt, DECL_ASSEMBLER_NAME (base));
       DECL_ARTIFICIAL (alt) = 1;
       DECL_IGNORED_P (alt) = 1;
       TREE_STATIC (alt) = 1;
@@ -3135,7 +3157,7 @@ oacc_verify_routine_clauses (tree fndecl, tree *clauses, location_t loc,
 	  /* See <https://gcc.gnu.org/PR93465>; the semantics of combining
 	     OpenACC and OpenMP 'target' are not clear.  */
 	  error_at (loc,
-		    "cannot apply %<%s%> to %qD, which has also been"
+		    "cannot apply %qs to %qD, which has also been"
 		    " marked with an OpenMP 'declare target' directive",
 		    routine_str, fndecl);
 	  /* Incompatible.  */
@@ -3190,14 +3212,14 @@ oacc_verify_routine_clauses (tree fndecl, tree *clauses, location_t loc,
       if (c_diag != NULL_TREE)
 	error_at (OMP_CLAUSE_LOCATION (c_diag),
 		  "incompatible %qs clause when applying"
-		  " %<%s%> to %qD, which has already been"
+		  " %qs to %qD, which has already been"
 		  " marked with an OpenACC 'routine' directive",
 		  omp_clause_code_name[OMP_CLAUSE_CODE (c_diag)],
 		  routine_str, fndecl);
       else if (c_diag_p != NULL_TREE)
 	error_at (loc,
 		  "missing %qs clause when applying"
-		  " %<%s%> to %qD, which has already been"
+		  " %qs to %qD, which has already been"
 		  " marked with an OpenACC 'routine' directive",
 		  omp_clause_code_name[OMP_CLAUSE_CODE (c_diag_p)],
 		  routine_str, fndecl);
@@ -3478,7 +3500,7 @@ static const char* omp_interop_fr_str[] = {"cuda", "cuda_driver", "opencl",
 
 /* Returns the foreign-runtime ID if found or 0 otherwise.  */
 
-int
+char
 omp_get_fr_id_from_name (const char *str)
 {
   static_assert (GOMP_INTEROP_IFR_LAST == ARRAY_SIZE (omp_interop_fr_str), "");
@@ -3486,7 +3508,7 @@ omp_get_fr_id_from_name (const char *str)
   for (unsigned i = 0; i < ARRAY_SIZE (omp_interop_fr_str); ++i)
     if (!strcmp (str, omp_interop_fr_str[i]))
       return i + 1;
-  return 0;
+  return GOMP_INTEROP_IFR_UNKNOWN;
 }
 
 /* Returns the string value to a foreign-runtime integer value or NULL if value
@@ -3496,7 +3518,7 @@ const char *
 omp_get_name_from_fr_id (int fr_id)
 {
   if (fr_id < 1 || fr_id > (int) ARRAY_SIZE (omp_interop_fr_str))
-    return NULL;
+    return "<unknown>";
   return omp_interop_fr_str[fr_id-1];
 }
 

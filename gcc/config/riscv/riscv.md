@@ -95,6 +95,10 @@
   ;; XTheadFmv moves
   UNSPEC_XTHEADFMV
   UNSPEC_XTHEADFMV_HW
+
+  ;; CRC unspecs
+  UNSPEC_CRC
+  UNSPEC_CRC_REV
 ])
 
 (define_c_enum "unspecv" [
@@ -475,6 +479,9 @@
 ;; vfncvtbf16  vector narrowing single floating-point to brain floating-point instruction
 ;; vfwcvtbf16  vector widening brain floating-point to single floating-point instruction
 ;; vfwmaccbf16  vector BF16 widening multiply-accumulate
+;; SiFive custom extension instrctions
+;; sf_vqmacc      vector matrix integer multiply-add instructions
+;; sf_vfnrclip     vector fp32 to int8 ranged clip instructions
 (define_attr "type"
   "unknown,branch,jump,jalr,ret,call,load,fpload,store,fpstore,
    mtc,mfc,const,arith,logical,shift,slt,imul,idiv,move,fmove,fadd,fmul,
@@ -485,8 +492,8 @@
    vldux,vldox,vstux,vstox,vldff,vldr,vstr,
    vlsegde,vssegte,vlsegds,vssegts,vlsegdux,vlsegdox,vssegtux,vssegtox,vlsegdff,
    vialu,viwalu,vext,vicalu,vshift,vnshift,vicmp,viminmax,
-   vimul,vidiv,viwmul,vimuladd,viwmuladd,vimerge,vimov,
-   vsalu,vaalu,vsmul,vsshift,vnclip,
+   vimul,vidiv,viwmul,vimuladd,sf_vqmacc,viwmuladd,vimerge,vimov,
+   vsalu,vaalu,vsmul,vsshift,vnclip,sf_vfnrclip,
    vfalu,vfwalu,vfmul,vfdiv,vfwmul,vfmuladd,vfwmuladd,vfsqrt,vfrecp,
    vfcmp,vfminmax,vfsgnj,vfclass,vfmerge,vfmov,
    vfcvtitof,vfcvtftoi,vfwcvtitof,vfwcvtftoi,
@@ -850,6 +857,34 @@
   "add%i2w\t%0,%1,%2"
   [(set_attr "type" "arith")
    (set_attr "mode" "SI")])
+
+;; Transform (X & C1) + C2 into (X | ~C1) - (-C2 | ~C1)
+;; Where C1 is not a LUI operand, but ~C1 is a LUI operand
+
+(define_insn_and_split "*lui_constraint<ANYI:mode>_and_to_or"
+	[(set (match_operand:ANYI 0 "register_operand" "=r")
+	(plus:ANYI (and:ANYI (match_operand:ANYI 1 "register_operand" "r")
+			 (match_operand 2 "const_int_operand"))
+		 (match_operand 3 "const_int_operand")))
+   (clobber (match_scratch:X 4 "=&r"))]
+  "LUI_OPERAND (~INTVAL (operands[2]))
+   && ((INTVAL (operands[2]) & (-INTVAL (operands[3])))
+   == (-INTVAL (operands[3])))
+   && riscv_const_insns (operands[3], false)
+   && (riscv_const_insns
+   (GEN_INT (~INTVAL (operands[2]) | -INTVAL (operands[3])), false)
+   <= riscv_const_insns (operands[3], false))"
+  "#"
+  "&& reload_completed"
+  [(set (match_dup 4) (match_dup 5))
+   (set (match_dup 0) (ior:X (match_dup 1) (match_dup 4)))
+   (set (match_dup 4) (match_dup 6))
+   (set (match_dup 0) (minus:X (match_dup 0) (match_dup 4)))]
+  {
+    operands[5] = GEN_INT (~INTVAL (operands[2]));
+    operands[6] = GEN_INT ((~INTVAL (operands[2])) | (-INTVAL (operands[3])));
+  }
+  [(set_attr "type" "arith")])
 
 ;;
 ;;  ....................
@@ -1813,7 +1848,15 @@
 (define_expand "zero_extendsidi2"
   [(set (match_operand:DI 0 "register_operand")
 	(zero_extend:DI (match_operand:SI 1 "nonimmediate_operand")))]
-  "TARGET_64BIT")
+  "TARGET_64BIT"
+{
+  if (SUBREG_P (operands[1]) && SUBREG_PROMOTED_VAR_P (operands[1])
+      && SUBREG_PROMOTED_UNSIGNED_P (operands[1]))
+    {
+      emit_insn (gen_movdi (operands[0], SUBREG_REG (operands[1])));
+      DONE;
+    }
+})
 
 (define_insn_and_split "*zero_extendsidi2_internal"
   [(set (match_operand:DI     0 "register_operand"     "=r,r")
@@ -1894,7 +1937,15 @@
   [(set (match_operand:DI     0 "register_operand"     "=r,r")
 	(sign_extend:DI
 	    (match_operand:SI 1 "nonimmediate_operand" " r,m")))]
-  "TARGET_64BIT")
+  "TARGET_64BIT"
+{
+  if (SUBREG_P (operands[1]) && SUBREG_PROMOTED_VAR_P (operands[1])
+      && SUBREG_PROMOTED_SIGNED_P (operands[1]))
+    {
+      emit_insn (gen_movdi (operands[0], SUBREG_REG (operands[1])));
+      DONE;
+    }
+})
 
 (define_insn "*extendsidi2_internal"
   [(set (match_operand:DI     0 "register_operand"     "=r,r")
@@ -2745,12 +2796,6 @@
     FAIL;
 })
 
-;; Inlining general memmove is a pessimisation: we can't avoid having to decide
-;; which direction to go at runtime, which is costly in instruction count
-;; however for situations where the entire move fits in one vector operation
-;; we can do all reads before doing any writes so we don't have to worry
-;; so generate the inline vector code in such situations
-;; nb. prefer scalar path for tiny memmoves.
 (define_expand "movmem<mode>"
   [(parallel [(set (match_operand:BLK 0 "general_operand")
    (match_operand:BLK 1 "general_operand"))
@@ -2758,10 +2803,8 @@
     (use (match_operand:SI 3 "const_int_operand"))])]
   "TARGET_VECTOR"
 {
-  if ((INTVAL (operands[2]) >= TARGET_MIN_VLEN / 8)
-	&& (INTVAL (operands[2]) <= TARGET_MIN_VLEN)
-	&& riscv_vector::expand_block_move (operands[0], operands[1],
-	     operands[2]))
+  if (riscv_vector::expand_block_move (operands[0], operands[1], operands[2],
+				       true))
     DONE;
   else
     FAIL;
@@ -3129,6 +3172,38 @@
 }
 [(set_attr "type" "branch")])
 
+(define_insn_and_split "*branch<ANYI:mode>_shiftedarith_<optab>_shifted"
+  [(set (pc)
+	(if_then_else (any_eq
+		    (and:ANYI (match_operand:ANYI 1 "register_operand" "r")
+			  (match_operand 2 "shifted_const_arith_operand" "i"))
+		    (match_operand 3 "shifted_const_arith_operand" "i"))
+	 (label_ref (match_operand 0 "" ""))
+	 (pc)))
+   (clobber (match_scratch:X 4 "=&r"))
+   (clobber (match_scratch:X 5 "=&r"))]
+  "!SMALL_OPERAND (INTVAL (operands[2]))
+    && !SMALL_OPERAND (INTVAL (operands[3]))
+    && SMALL_AFTER_COMMON_TRAILING_SHIFT (INTVAL (operands[2]),
+					     INTVAL (operands[3]))"
+  "#"
+  "&& reload_completed"
+  [(set (match_dup 4) (ashiftrt:X (match_dup 1) (match_dup 7)))
+   (set (match_dup 4) (and:X (match_dup 4) (match_dup 8)))
+   (set (match_dup 5) (match_dup 9))
+   (set (pc) (if_then_else (any_eq (match_dup 4) (match_dup 5))
+			   (label_ref (match_dup 0)) (pc)))]
+{
+  HOST_WIDE_INT mask1 = INTVAL (operands[2]);
+  HOST_WIDE_INT mask2 = INTVAL (operands[3]);
+  int trailing_shift = COMMON_TRAILING_ZEROS (mask1, mask2);
+
+  operands[7] = GEN_INT (trailing_shift);
+  operands[8] = GEN_INT (mask1 >> trailing_shift);
+  operands[9] = GEN_INT (mask2 >> trailing_shift);
+}
+[(set_attr "type" "branch")])
+
 (define_insn_and_split "*branch<ANYI:mode>_shiftedmask_equals_zero"
   [(set (pc)
 	(if_then_else (match_operator 1 "equality_operator"
@@ -3168,7 +3243,7 @@
   "!TARGET_XCVBI"
 {
   if (get_attr_length (insn) == 12)
-    return "b%N1\t%2,%z3,1f; jump\t%l0,ra; 1:";
+    return "b%n1\t%2,%z3,1f; jump\t%l0,ra; 1:";
 
   return "b%C1\t%2,%z3,%l0";
 }
@@ -4179,7 +4254,8 @@
 {
   switch (INTVAL (operands[1]))
   {
-    case 0: return TARGET_ZIHINTNTL ? "%L2prefetch.r\t%a0" : "prefetch.r\t%a0";
+    case 0:
+    case 2: return TARGET_ZIHINTNTL ? "%L2prefetch.r\t%a0" : "prefetch.r\t%a0";
     case 1: return TARGET_ZIHINTNTL ? "%L2prefetch.w\t%a0" : "prefetch.w\t%a0";
     default: gcc_unreachable ();
   }
@@ -4413,6 +4489,16 @@
   }
 )
 
+(define_expand "sstrunc<mode><anyi_double_truncated>2"
+  [(match_operand:<ANYI_DOUBLE_TRUNCATED> 0 "register_operand")
+   (match_operand:ANYI_DOUBLE_TRUNC       1 "register_operand")]
+  ""
+  {
+    riscv_expand_sstrunc (operands[0], operands[1]);
+    DONE;
+  }
+)
+
 (define_expand "ustrunc<mode><anyi_quad_truncated>2"
   [(match_operand:<ANYI_QUAD_TRUNCATED> 0 "register_operand")
    (match_operand:ANYI_QUAD_TRUNC       1 "register_operand")]
@@ -4423,12 +4509,32 @@
   }
 )
 
+(define_expand "sstrunc<mode><anyi_quad_truncated>2"
+  [(match_operand:<ANYI_QUAD_TRUNCATED> 0 "register_operand")
+   (match_operand:ANYI_QUAD_TRUNC       1 "register_operand")]
+  ""
+  {
+    riscv_expand_sstrunc (operands[0], operands[1]);
+    DONE;
+  }
+)
+
 (define_expand "ustrunc<mode><anyi_oct_truncated>2"
   [(match_operand:<ANYI_OCT_TRUNCATED> 0 "register_operand")
    (match_operand:ANYI_OCT_TRUNC       1 "register_operand")]
   ""
   {
     riscv_expand_ustrunc (operands[0], operands[1]);
+    DONE;
+  }
+)
+
+(define_expand "sstrunc<mode><anyi_oct_truncated>2"
+  [(match_operand:<ANYI_OCT_TRUNCATED> 0 "register_operand")
+   (match_operand:ANYI_OCT_TRUNC       1 "register_operand")]
+  ""
+  {
+    riscv_expand_sstrunc (operands[0], operands[1]);
     DONE;
   }
 )

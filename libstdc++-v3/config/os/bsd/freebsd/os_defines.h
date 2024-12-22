@@ -29,6 +29,8 @@
 // System-specific #define, typedefs, corrections, etc, go here.  This
 // file will come before all others.
 
+#include <sys/cdefs.h> // For __LONG_LONG_SUPPORTED
+
 #define _GLIBCXX_USE_C99_STDIO 1
 #define _GLIBCXX_USE_C99_STDLIB 1
 #define _GLIBCXX_USE_C99_WCHAR 1
@@ -47,5 +49,8 @@
 #else
 #define _GLIBCXX_USE_C99_FLOAT_TRANSCENDENTALS_DYNAMIC 0
 #endif
+
+// read(2) can return EINVAL for n >= INT_MAX.
+#define _GLIBCXX_MAX_READ_SIZE (__INT_MAX__ - 1)
 
 #endif

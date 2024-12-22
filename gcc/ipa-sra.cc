@@ -1256,7 +1256,7 @@ create_parameter_descriptors (cgraph_node *node,
 	    fprintf (dump_file, " is a scalar with only %i call uses%s\n",
 		     desc->call_uses,
 		     desc->remove_only_when_retval_removed
-		     ? " and return uses": "");
+		     ? " and return uses" : "");
 	}
 
       if (POINTER_TYPE_P (type))
@@ -2898,7 +2898,7 @@ ipa_sra_write_summary (void)
         isra_write_node_summary (ob, node);
     }
   streamer_write_char_stream (ob->main_stream, 0);
-  produce_asm (ob, NULL);
+  produce_asm (ob);
   destroy_output_block (ob);
 }
 

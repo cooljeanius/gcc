@@ -958,7 +958,7 @@ set_addressable (varpool_node *node, void *)
   return false;
 }
 
-/* Clear DECL_RTL of NODE. 
+/* Clear DECL_RTL of NODE.
    Helper for call_for_symbol_thunks_and_aliases.  */
 
 static bool
@@ -1902,7 +1902,7 @@ sem_variable::equals (tree t1, tree t2)
 	  return false;
 	return true;
       }
-     
+
     case COMPONENT_REF:
     case POINTER_PLUS_EXPR:
     case PLUS_EXPR:
@@ -2216,7 +2216,7 @@ sem_item_optimizer::write_summary (void)
     }
 
   streamer_write_char_stream (ob->main_stream, 0);
-  produce_asm (ob, NULL);
+  produce_asm (ob);
   destroy_output_block (ob);
 }
 
@@ -3410,7 +3410,7 @@ sem_item_optimizer::merge_classes (unsigned int prev_class_count,
       unsigned total = equal_items + non_singular_classes_count;
       fprintf (dump_file, "Totally needed symbols: %u"
 	       ", fraction of loaded symbols: %.2f%%\n\n", total,
-	       loaded_symbols ? 100.0f * total / loaded_symbols: 0.0f);
+	       loaded_symbols ? 100.0f * total / loaded_symbols : 0.0f);
     }
 
   unsigned int l;

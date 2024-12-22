@@ -36,7 +36,8 @@ diagnostic_context *global_dc = &global_diagnostic_context;
 /* Standard error reporting routines in increasing order of severity.  */
 
 /* Text to be emitted verbatim to the error message stream; this
-   produces no prefix and disables line-wrapping.  Use rarely.  */
+   produces no prefix and disables line-wrapping.  Use rarely.
+   It is ignored for machine-readable output formats.  */
 void
 verbatim (const char *gmsgid, ...)
 {
@@ -44,8 +45,7 @@ verbatim (const char *gmsgid, ...)
 
   va_start (ap, gmsgid);
   text_info text (_(gmsgid), &ap, errno);
-  pp_format_verbatim (global_dc->m_printer, &text);
-  pp_newline_and_flush (global_dc->m_printer);
+  global_dc->report_verbatim (text);
   va_end (ap);
 }
 
@@ -550,10 +550,8 @@ fnotice (FILE *file, const char *cmsgid, ...)
      emitting free-form text on stderr will lead to corrupt output.
      Skip the message for such cases.  */
   if (file == stderr && global_dc)
-    if (const diagnostic_output_format *output_format
-	  = global_dc->get_output_format ())
-      if (output_format->machine_readable_stderr_p ())
-	return;
+    if (!global_dc->supports_fnotice_on_stderr_p ())
+      return;
 
   va_list ap;
 
@@ -576,4 +574,16 @@ auto_diagnostic_group::auto_diagnostic_group ()
 auto_diagnostic_group::~auto_diagnostic_group ()
 {
   global_dc->end_group ();
+}
+
+/* class auto_diagnostic_nesting_level.  */
+
+auto_diagnostic_nesting_level::auto_diagnostic_nesting_level ()
+{
+  global_dc->push_nesting_level ();
+}
+
+auto_diagnostic_nesting_level::~auto_diagnostic_nesting_level ()
+{
+  global_dc->pop_nesting_level ();
 }
