@@ -551,6 +551,10 @@ attr_rtx_1 (enum rtx_code code, va_list p)
 	      XINT (rt_val, i) = va_arg (p, int);
 	      break;
 
+	    case 'L':		/* A location_t?  */
+	      XLOC (rt_val, i) = va_arg (p, location_t);
+	      break;
+
 	    case 'w':		/* A wide integer? */
 	      XWINT (rt_val, i) = va_arg (p, HOST_WIDE_INT);
 	      break;
@@ -5370,7 +5374,7 @@ main (int argc, const char **argv)
 	if (startswith(attr->name, "*internal_dfa_insn_code"))
 	  outf = dfa_file;
 	else if (startswith (attr->name, "*insn_default_latency"))
-	  outf = latency_file;  
+	  outf = latency_file;
 	else
 	  outf = attr_file;
 

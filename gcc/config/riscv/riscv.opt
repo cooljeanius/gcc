@@ -34,8 +34,8 @@ Target RejectNegative Joined UInteger Var(riscv_branch_cost)
 -mbranch-cost=N	Set the cost of branches to roughly N instructions.
 
 mplt
-Target Var(TARGET_PLT) Init(1)
-When generating -fpic code, allow the use of PLTs. Ignored for fno-pic.
+Target Alias(fplt)
+This option is deprecated; use -fplt or -fno-plt instead.
 
 mabi=
 Target RejectNegative Joined Enum(abi_type) Var(riscv_abi) Init(ABI_ILP32) Negative(mabi=)
@@ -466,6 +466,8 @@ Mask(SVINVAL) Var(riscv_sv_subext)
 
 Mask(SVNAPOT) Var(riscv_sv_subext)
 
+Mask(SVVPTC) Var(riscv_sv_subext)
+
 TargetVariable
 int riscv_ztso_subext
 
@@ -522,6 +524,15 @@ int riscv_sifive_subext
 Mask(XSFVCP) Var(riscv_sifive_subext)
 
 Mask(XSFCEASE) Var(riscv_sifive_subext)
+
+Mask(XSFVQMACCQOQ) Var(riscv_sifive_subext)
+
+Mask(XSFVQMACCDOD) Var(riscv_sifive_subext)
+
+Mask(XSFVFNRCLIPXFQF) Var(riscv_sifive_subext)
+
+TargetVariable
+int riscv_fmv_priority = 0
 
 Enum
 Name(isa_spec_class) Type(enum riscv_isa_spec_class)

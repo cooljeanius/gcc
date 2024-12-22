@@ -55,7 +55,6 @@ along with GCC; see the file COPYING3.  If not see
 */
 
 #include "config.h"
-#define INCLUDE_MEMORY
 #include "system.h"
 #include "coretypes.h"
 #include "backend.h"
@@ -481,8 +480,7 @@ vec_info::~vec_info ()
 }
 
 vec_info_shared::vec_info_shared ()
-  : n_stmts (0),
-    datarefs (vNULL),
+  : datarefs (vNULL),
     datarefs_copy (vNULL),
     ddrs (vNULL)
 {
@@ -540,6 +538,29 @@ vec_info::add_pattern_stmt (gimple *stmt, stmt_vec_info stmt_info)
   set_vinfo_for_stmt (stmt, res, false);
   STMT_VINFO_RELATED_STMT (res) = stmt_info;
   return res;
+}
+
+/* If STMT was previously associated with a stmt_vec_info and STMT now resides
+   at a different address than before (e.g., because STMT is a phi node that has
+   been resized), update the stored address to match the new one.  It is not
+   possible to use lookup_stmt () to perform this task, because that function
+   returns NULL if the stored stmt pointer does not match the one being looked
+   up.  */
+
+stmt_vec_info
+vec_info::resync_stmt_addr (gimple *stmt)
+{
+  unsigned int uid = gimple_uid (stmt);
+  if (uid > 0 && uid - 1 < stmt_vec_infos.length ())
+    {
+      stmt_vec_info res = stmt_vec_infos[uid - 1];
+      if (res && res->stmt)
+	{
+	  res->stmt = stmt;
+	  return res;
+	}
+    }
+  return nullptr;
 }
 
 /* If STMT has an associated stmt_vec_info, return that vec_info, otherwise
@@ -1326,6 +1347,7 @@ pass_vectorize::execute (function *fun)
 	    if (g)
 	      {
 		fold_loop_internal_call (g, boolean_false_node);
+		loop->dont_vectorize = false;
 		ret |= TODO_cleanup_cfg;
 		g = NULL;
 	      }
@@ -1335,6 +1357,7 @@ pass_vectorize::execute (function *fun)
 	    if (g)
 	      {
 		fold_loop_internal_call (g, boolean_false_node);
+		loop->dont_vectorize = false;
 		ret |= TODO_cleanup_cfg;
 	      }
 	  }
@@ -1572,7 +1595,7 @@ static hash_map<tree, unsigned> *type_align_map;
 /* Return alignment of array's vector type corresponding to scalar type.
    0 if no vector type exists.  */
 static unsigned
-get_vec_alignment_for_array_type (tree type) 
+get_vec_alignment_for_array_type (tree type)
 {
   gcc_assert (TREE_CODE (type) == ARRAY_TYPE);
   poly_uint64 array_size, vector_size;
@@ -1593,7 +1616,7 @@ get_vec_alignment_for_array_type (tree type)
    offset is a multiple of it's vector alignment.
    0 if no suitable field is found.  */
 static unsigned
-get_vec_alignment_for_record_type (tree type) 
+get_vec_alignment_for_record_type (tree type)
 {
   gcc_assert (TREE_CODE (type) == RECORD_TYPE);
 
@@ -1612,7 +1635,7 @@ get_vec_alignment_for_record_type (tree type)
        field != NULL_TREE;
        field = DECL_CHAIN (field))
     {
-      /* Skip if not FIELD_DECL or if alignment is set by user.  */ 
+      /* Skip if not FIELD_DECL or if alignment is set by user.  */
       if (TREE_CODE (field) != FIELD_DECL
 	  || DECL_USER_ALIGN (field)
 	  || DECL_ARTIFICIAL (field))
@@ -1630,11 +1653,11 @@ get_vec_alignment_for_record_type (tree type)
       if (!tree_fits_uhwi_p (offset_tree))
 	break;
 
-      offset = tree_to_uhwi (offset_tree); 
+      offset = tree_to_uhwi (offset_tree);
       alignment = get_vec_alignment_for_type (TREE_TYPE (field));
 
       /* Get maximum alignment of vectorized field/array among those members
-	 whose offset is multiple of the vector alignment.  */ 
+	 whose offset is multiple of the vector alignment.  */
       if (alignment
 	  && (offset % alignment == 0)
 	  && (alignment > max_align))

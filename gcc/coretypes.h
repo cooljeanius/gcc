@@ -421,7 +421,8 @@ enum function_class {
   function_c99_math_complex,
   function_sincos,
   function_c11_misc,
-  function_c23_misc
+  function_c23_misc,
+  function_c2y_misc
 };
 
 /* Enumerate visibility settings.  This is deliberately ordered from most
@@ -479,7 +480,7 @@ typedef unsigned char uchar;
 #if !defined (USED_FOR_TARGET)
 #include "insn-modes.h"
 #include "signop.h"
-#include "wide-int.h" 
+#include "wide-int.h"
 #include "wide-int-print.h"
 
 /* On targets that don't need polynomial offsets, target-specific code

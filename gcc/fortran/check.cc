@@ -2605,6 +2605,23 @@ gfc_check_complex (gfc_expr *x, gfc_expr *y)
   if (!boz_args_check (x, y))
     return false;
 
+  /* COMPLEX is an extension, we do not want UNSIGNED there.  */
+  if (x->ts.type == BT_UNSIGNED)
+    {
+      gfc_error ("%qs argument of %qs intrinsic at %L shall not be "
+		 "UNSIGNED", gfc_current_intrinsic_arg[0]->name,
+		 gfc_current_intrinsic, &x->where);
+      return false;
+    }
+
+  if (y->ts.type == BT_UNSIGNED)
+    {
+      gfc_error ("%qs argument of %qs intrinsic at %L shall not be "
+		 "UNSIGNED", gfc_current_intrinsic_arg[1]->name,
+		 gfc_current_intrinsic, &y->where);
+      return false;
+    }
+
   if (x->ts.type == BT_BOZ)
     {
       if (gfc_invalid_boz (G_("BOZ constant at %L cannot appear in the COMPLEX"
@@ -4465,7 +4482,12 @@ gfc_check_mask (gfc_expr *i, gfc_expr *kind)
 {
   int k;
 
-  if (!type_check (i, 0, BT_INTEGER))
+  if (flag_unsigned)
+    {
+      if (!type_check2 (i, 0, BT_INTEGER, BT_UNSIGNED))
+	return false;
+    }
+  else if (!type_check (i, 0, BT_INTEGER))
     return false;
 
   if (!nonnegative_check ("I", i))
@@ -4477,7 +4499,7 @@ gfc_check_mask (gfc_expr *i, gfc_expr *kind)
   if (kind)
     gfc_extract_int (kind, &k);
   else
-    k = gfc_default_integer_kind;
+    k = i->ts.type == BT_UNSIGNED ? gfc_default_unsigned_kind : gfc_default_integer_kind;
 
   if (!less_than_bitsizekind ("I", i, k))
     return false;

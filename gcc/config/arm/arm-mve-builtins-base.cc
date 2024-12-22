@@ -150,16 +150,18 @@ public:
   expand (function_expander &e) const override
   {
     insn_code icode;
-    if (e.type_suffix (0).float_p)
-      icode = code_for_mve_vld1q_f(e.vector_mode (0));
-    else
+    switch (e.pred)
       {
-	if (e.type_suffix (0).unsigned_p)
-	  icode = code_for_mve_vld1q(VLD1Q_U,
-				     e.vector_mode (0));
-	else
-	  icode = code_for_mve_vld1q(VLD1Q_S,
-				     e.vector_mode (0));
+      case PRED_none:
+	icode = code_for_mve_vldrq (e.vector_mode (0));
+	break;
+
+      case PRED_z:
+	icode = code_for_mve_vldrq_z (e.vector_mode (0));
+	break;
+
+      default:
+	gcc_unreachable ();
       }
     return e.use_contiguous_load_insn (icode);
   }
@@ -178,18 +180,353 @@ public:
   expand (function_expander &e) const override
   {
     insn_code icode;
-    if (e.type_suffix (0).float_p)
-      icode = code_for_mve_vst1q_f(e.vector_mode (0));
-    else
+    switch (e.pred)
       {
-	if (e.type_suffix (0).unsigned_p)
-	  icode = code_for_mve_vst1q(VST1Q_U,
-				     e.vector_mode (0));
-	else
-	  icode = code_for_mve_vst1q(VST1Q_S,
-				     e.vector_mode (0));
+      case PRED_none:
+	icode = code_for_mve_vstrq (e.vector_mode (0));
+	break;
+
+      case PRED_p:
+	icode = code_for_mve_vstrq_p (e.vector_mode (0));
+	break;
+
+      default:
+	gcc_unreachable ();
       }
     return e.use_contiguous_store_insn (icode);
+  }
+};
+
+/* Builds the vstrq* intrinsics.  */
+class vstrq_impl : public store_truncating
+{
+public:
+  using store_truncating::store_truncating;
+
+  rtx expand (function_expander &e) const override
+  {
+    insn_code icode;
+    switch (e.pred)
+      {
+      case PRED_none:
+	if (e.vector_mode (0) == e.memory_vector_mode ())
+	  /* Non-truncating store case.  */
+	  icode = code_for_mve_vstrq (e.vector_mode (0));
+	else
+	  /* Truncating store case.
+	     (there is only one possible truncation for each memory mode so only
+	     one mode argument is needed).  */
+	  icode = code_for_mve_vstrq_truncate (e.memory_vector_mode ());
+	break;
+
+      case PRED_p:
+	if (e.vector_mode (0) == e.memory_vector_mode ())
+	  icode = code_for_mve_vstrq_p (e.vector_mode (0));
+	else
+	  icode = code_for_mve_vstrq_p_truncate (e.memory_vector_mode ());
+	break;
+
+      default:
+	gcc_unreachable ();
+      }
+
+    return e.use_contiguous_store_insn (icode);
+  }
+};
+
+  /* Builds the vstrq_scatter*offset intrinsics.  */
+class vstrq_scatter_impl : public store_truncating
+{
+public:
+  using store_truncating::store_truncating;
+
+  CONSTEXPR vstrq_scatter_impl (bool shifted,
+				scalar_mode to_int_mode,
+				opt_scalar_mode to_float_mode)
+    : store_truncating (to_int_mode, to_float_mode),
+      m_shifted (shifted)
+  {}
+
+  /* Shifted offset (true) or plain offset (false).  */
+  bool m_shifted;
+
+  rtx expand (function_expander &e) const override
+  {
+    insn_code icode;
+    machine_mode memory_mode = e.memory_vector_mode ();
+
+    switch (e.pred)
+      {
+      case PRED_none:
+	icode = (e.vector_mode (0) == memory_mode
+		 /* Non-truncating store case.  */
+		 ? (m_shifted
+		    ? code_for_mve_vstrq_scatter_shifted_offset (memory_mode)
+		    : code_for_mve_vstrq_scatter_offset (memory_mode))
+		 /* Truncating store case.  */
+		 : (m_shifted
+		    ? CODE_FOR_mve_vstrq_truncate_scatter_shifted_offset_v4si
+		    : code_for_mve_vstrq_truncate_scatter_offset (memory_mode)));
+	break;
+
+      case PRED_p:
+	icode = (e.vector_mode (0) == memory_mode
+		 ? (m_shifted
+		    ? code_for_mve_vstrq_scatter_shifted_offset_p (memory_mode)
+		    : code_for_mve_vstrq_scatter_offset_p (memory_mode))
+		 : (m_shifted
+		    ? CODE_FOR_mve_vstrq_truncate_scatter_shifted_offset_p_v4si
+		    : code_for_mve_vstrq_truncate_scatter_offset_p (memory_mode)));
+	break;
+
+      default:
+	gcc_unreachable ();
+      }
+    return e.use_exact_insn (icode);
+  }
+};
+
+  /* Builds the vstrq_scatter_base intrinsics.  */
+class vstrq_scatter_base_impl : public function_base
+{
+public:
+  CONSTEXPR vstrq_scatter_base_impl (scalar_mode to_int_mode)
+    : m_to_int_mode (to_int_mode)
+  {}
+
+  unsigned int call_properties (const function_instance &) const override
+  {
+    return CP_WRITE_MEMORY;
+  }
+
+  machine_mode memory_vector_mode (const function_instance &fi) const override
+  {
+    poly_uint64 nunits = GET_MODE_NUNITS (fi.vector_mode (0));
+    return arm_mve_data_mode (m_to_int_mode, nunits).require ();
+  }
+
+  rtx expand (function_expander &e) const override
+  {
+    insn_code icode;
+    rtx insns, base_ptr, new_base = NULL_RTX;
+    machine_mode base_mode;
+
+    if ((e.mode_suffix_id != MODE_none)
+	&& (e.mode_suffix_id != MODE_wb))
+      gcc_unreachable ();
+
+    /* In _wb mode, the start offset is passed via a pointer,
+       dereference it.  */
+    if (e.mode_suffix_id == MODE_wb)
+      {
+	base_mode = e.memory_vector_mode ();
+	rtx base = gen_reg_rtx (base_mode);
+	base_ptr = e.args[0];
+	emit_insn (gen_rtx_SET (base, gen_rtx_MEM (base_mode, base_ptr)));
+	e.args[0] = base;
+	new_base = gen_reg_rtx (base_mode);
+	e.args.quick_insert (0, new_base);
+      }
+
+    switch (e.pred)
+      {
+      case PRED_none:
+	icode = (e.mode_suffix_id == MODE_none)
+	  ? code_for_mve_vstrq_scatter_base (e.vector_mode (0))
+	  : code_for_mve_vstrq_scatter_base_wb (e.vector_mode (0));
+	break;
+
+      case PRED_p:
+	icode = (e.mode_suffix_id == MODE_none)
+	  ? code_for_mve_vstrq_scatter_base_p (e.vector_mode (0))
+	  : code_for_mve_vstrq_scatter_base_wb_p (e.vector_mode (0));
+	break;
+
+      default:
+	gcc_unreachable ();
+      }
+    insns = e.use_exact_insn (icode);
+
+    /* Update offset as appropriate.  */
+    if (e.mode_suffix_id == MODE_wb)
+      emit_insn (gen_rtx_SET (gen_rtx_MEM (base_mode, base_ptr), new_base));
+
+    return insns;
+  }
+
+  /* The mode of a single memory element.  */
+  scalar_mode m_to_int_mode;
+};
+
+/* Builds the vldrq* intrinsics.  */
+class vldrq_impl : public load_extending
+{
+public:
+  using load_extending::load_extending;
+
+  rtx expand (function_expander &e) const override
+  {
+    insn_code icode;
+    switch (e.pred)
+      {
+      case PRED_none:
+	if (e.vector_mode (0) == e.memory_vector_mode ())
+	  /* Non-extending load case.  */
+	  icode = code_for_mve_vldrq (e.vector_mode (0));
+	else
+	  /* Extending load case.
+	     (there is only one extension for each memory mode so only one type
+	     argument is needed).  */
+	  icode = code_for_mve_vldrq_extend (e.memory_vector_mode (),
+					     e.type_suffix (0).unsigned_p
+					     ? ZERO_EXTEND
+					     : SIGN_EXTEND);
+	break;
+
+      case PRED_z:
+	if (e.vector_mode (0) == e.memory_vector_mode ())
+	  icode = code_for_mve_vldrq_z (e.vector_mode (0));
+	else
+	  icode = code_for_mve_vldrq_z_extend (e.memory_vector_mode (),
+					       e.type_suffix (0).unsigned_p
+					       ? ZERO_EXTEND
+					       : SIGN_EXTEND);
+	break;
+
+      default:
+	gcc_unreachable ();
+      }
+
+    return e.use_contiguous_load_insn (icode);
+  }
+};
+
+/* Builds the vldrq_gather*offset intrinsics.  */
+class vldrq_gather_impl : public load_extending
+{
+public:
+  using load_extending::load_extending;
+
+  CONSTEXPR vldrq_gather_impl (bool shifted,
+			       type_suffix_index signed_memory_type,
+			       type_suffix_index unsigned_memory_type,
+			       type_suffix_index float_memory_type)
+    : load_extending (signed_memory_type, unsigned_memory_type, float_memory_type),
+      m_shifted (shifted)
+  {}
+
+  CONSTEXPR vldrq_gather_impl (bool shifted,
+			       type_suffix_index signed_memory_type,
+			       type_suffix_index unsigned_memory_type)
+    : load_extending (signed_memory_type, unsigned_memory_type, NUM_TYPE_SUFFIXES),
+      m_shifted (shifted)
+  {}
+
+  /* Shifted offset (true) or plain offset (false).  */
+  bool m_shifted;
+
+  rtx expand (function_expander &e) const override
+  {
+    insn_code icode;
+    machine_mode memory_mode = e.memory_vector_mode ();
+    rtx_code extend = (e.type_suffix (0).unsigned_p
+		       ? ZERO_EXTEND
+		       : SIGN_EXTEND);
+
+    switch (e.pred)
+      {
+      case PRED_none:
+	icode = (e.vector_mode (0) == memory_mode
+		 /* Non-extending load case.  */
+		 ? (m_shifted
+		    ? code_for_mve_vldrq_gather_shifted_offset (memory_mode)
+		    : code_for_mve_vldrq_gather_offset (memory_mode))
+		 /* Extending load case.  */
+		 : (m_shifted
+		    ? code_for_mve_vldrq_gather_shifted_offset_extend_v4si (extend)
+		    : code_for_mve_vldrq_gather_offset_extend (memory_mode,
+							       extend)));
+	break;
+
+      case PRED_z:
+	icode = (e.vector_mode (0) == memory_mode
+		 ? (m_shifted
+		    ? code_for_mve_vldrq_gather_shifted_offset_z (memory_mode)
+		    : code_for_mve_vldrq_gather_offset_z (memory_mode))
+		 : (m_shifted
+		    ? code_for_mve_vldrq_gather_shifted_offset_z_extend_v4si (extend)
+		    : code_for_mve_vldrq_gather_offset_z_extend (memory_mode,
+								 extend)));
+	break;
+
+      default:
+	gcc_unreachable ();
+      }
+
+    return e.use_exact_insn (icode);
+  }
+};
+
+  /* Builds the vldrq_gather_base intrinsics.  */
+class vldrq_gather_base_impl : public load_extending
+{
+public:
+  using load_extending::load_extending;
+
+  machine_mode memory_vector_mode (const function_instance &fi) const override
+  {
+    unsigned int element_bits = fi.type_suffix (0).element_bits;
+    type_suffix_index suffix = find_type_suffix (TYPE_unsigned, element_bits);
+    return type_suffixes[suffix].vector_mode;
+  }
+
+  rtx expand (function_expander &e) const override
+  {
+    insn_code icode;
+    rtx insns, base_ptr, new_base = NULL_RTX;
+    machine_mode base_mode;
+
+    if ((e.mode_suffix_id != MODE_none)
+	&& (e.mode_suffix_id != MODE_wb))
+      gcc_unreachable ();
+
+    /* In _wb mode, the start offset is passed via a pointer,
+       dereference it.  */
+    if (e.mode_suffix_id == MODE_wb)
+      {
+	base_mode = e.memory_vector_mode ();
+	rtx base = gen_reg_rtx (base_mode);
+	base_ptr = e.args[0];
+	emit_insn (gen_rtx_SET (base, gen_rtx_MEM (base_mode, base_ptr)));
+	e.args[0] = base;
+	new_base = gen_reg_rtx (base_mode);
+	e.args.quick_insert (0, new_base);
+      }
+
+    switch (e.pred)
+      {
+      case PRED_none:
+	icode = (e.mode_suffix_id == MODE_none)
+	  ? code_for_mve_vldrq_gather_base (e.vector_mode (0))
+	  : code_for_mve_vldrq_gather_base_wb (e.vector_mode (0));
+	break;
+
+      case PRED_z:
+	icode = (e.mode_suffix_id == MODE_none)
+	  ? code_for_mve_vldrq_gather_base_z (e.vector_mode (0))
+	  : code_for_mve_vldrq_gather_base_wb_z (e.vector_mode (0));
+	break;
+
+      default:
+	gcc_unreachable ();
+      }
+    insns = e.use_exact_insn (icode);
+
+    /* Update offset as appropriate.  */
+    if (e.mode_suffix_id == MODE_wb)
+      emit_insn (gen_rtx_SET (gen_rtx_MEM (base_mode, base_ptr), new_base));
+
+    return insns;
   }
 };
 
@@ -763,6 +1100,73 @@ public:
   }
 };
 
+
+/* Implements vst2 and vst4.  */
+class vst24_impl : public full_width_access
+{
+public:
+  using full_width_access::full_width_access;
+
+  unsigned int
+  call_properties (const function_instance &) const override
+  {
+    return CP_WRITE_MEMORY;
+  }
+
+  rtx
+  expand (function_expander &e) const override
+  {
+    insn_code icode;
+    switch (vectors_per_tuple ())
+      {
+      case 2:
+	icode = code_for_mve_vst2q (e.vector_mode (0));
+	break;
+
+      case 4:
+	icode = code_for_mve_vst4q (e.vector_mode (0));
+	break;
+
+      default:
+	gcc_unreachable ();
+      }
+    return e.use_contiguous_store_insn (icode);
+  }
+};
+
+/* Implements vld2 and vld4.  */
+class vld24_impl : public full_width_access
+{
+public:
+  using full_width_access::full_width_access;
+
+  unsigned int
+  call_properties (const function_instance &) const override
+  {
+    return CP_READ_MEMORY;
+  }
+
+  rtx
+  expand (function_expander &e) const override
+  {
+    insn_code icode;
+    switch (vectors_per_tuple ())
+      {
+      case 2:
+	icode = code_for_mve_vld2q (e.vector_mode (0));
+	break;
+
+      case 4:
+	icode = code_for_mve_vld4q (e.vector_mode (0));
+	break;
+
+      default:
+	gcc_unreachable ();
+      }
+    return e.use_contiguous_load_insn (icode);
+  }
+};
+
 } /* end anonymous namespace */
 
 namespace arm_mve {
@@ -989,6 +1393,20 @@ FUNCTION (vfmsq, unspec_mve_function_exact_insn, (-1, -1, VFMSQ_F, -1, -1, -1, -
 FUNCTION_WITH_M_N_NO_F (vhaddq, VHADDQ)
 FUNCTION_WITH_M_N_NO_F (vhsubq, VHSUBQ)
 FUNCTION (vld1q, vld1_impl,)
+FUNCTION (vld2q, vld24_impl, (2))
+FUNCTION (vld4q, vld24_impl, (4))
+FUNCTION (vldrbq, vldrq_impl, (TYPE_SUFFIX_s8, TYPE_SUFFIX_u8))
+FUNCTION (vldrbq_gather, vldrq_gather_impl, (false, TYPE_SUFFIX_s8, TYPE_SUFFIX_u8))
+FUNCTION (vldrdq_gather, vldrq_gather_impl, (false, TYPE_SUFFIX_s64, TYPE_SUFFIX_u64, NUM_TYPE_SUFFIXES))
+FUNCTION (vldrdq_gather_base, vldrq_gather_base_impl, (TYPE_SUFFIX_s64, TYPE_SUFFIX_u64))
+FUNCTION (vldrdq_gather_shifted, vldrq_gather_impl, (true, TYPE_SUFFIX_s64, TYPE_SUFFIX_u64, NUM_TYPE_SUFFIXES))
+FUNCTION (vldrhq, vldrq_impl, (TYPE_SUFFIX_s16, TYPE_SUFFIX_u16, TYPE_SUFFIX_f16))
+FUNCTION (vldrhq_gather, vldrq_gather_impl, (false, TYPE_SUFFIX_s16, TYPE_SUFFIX_u16, TYPE_SUFFIX_f16))
+FUNCTION (vldrhq_gather_shifted, vldrq_gather_impl, (true, TYPE_SUFFIX_s16, TYPE_SUFFIX_u16, TYPE_SUFFIX_f16))
+FUNCTION (vldrwq, vldrq_impl, (TYPE_SUFFIX_s32, TYPE_SUFFIX_u32, TYPE_SUFFIX_f32))
+FUNCTION (vldrwq_gather, vldrq_gather_impl, (false, TYPE_SUFFIX_s32, TYPE_SUFFIX_u32, TYPE_SUFFIX_f32))
+FUNCTION (vldrwq_gather_base, vldrq_gather_base_impl, (TYPE_SUFFIX_s32, TYPE_SUFFIX_u32, TYPE_SUFFIX_f32))
+FUNCTION (vldrwq_gather_shifted, vldrq_gather_impl, (true, TYPE_SUFFIX_s32, TYPE_SUFFIX_u32, TYPE_SUFFIX_f32))
 FUNCTION_PRED_P_S (vmaxavq, VMAXAVQ)
 FUNCTION_WITHOUT_N_NO_U_F (vmaxaq, VMAXAQ)
 FUNCTION_ONLY_F (vmaxnmaq, VMAXNMAQ)
@@ -1109,6 +1527,20 @@ FUNCTION_ONLY_N_NO_F (vshrq, VSHRQ)
 FUNCTION_ONLY_N_NO_F (vsliq, VSLIQ)
 FUNCTION_ONLY_N_NO_F (vsriq, VSRIQ)
 FUNCTION (vst1q, vst1_impl,)
+FUNCTION (vst2q, vst24_impl, (2))
+FUNCTION (vst4q, vst24_impl, (4))
+FUNCTION (vstrbq, vstrq_impl, (QImode, opt_scalar_mode ()))
+FUNCTION (vstrbq_scatter, vstrq_scatter_impl, (false, QImode, opt_scalar_mode ()))
+FUNCTION (vstrdq_scatter, vstrq_scatter_impl, (false, DImode, opt_scalar_mode ()))
+FUNCTION (vstrdq_scatter_base, vstrq_scatter_base_impl, (DImode))
+FUNCTION (vstrdq_scatter_shifted, vstrq_scatter_impl, (true, DImode, opt_scalar_mode ()))
+FUNCTION (vstrhq, vstrq_impl, (HImode, HFmode))
+FUNCTION (vstrhq_scatter, vstrq_scatter_impl, (false, HImode, HFmode))
+FUNCTION (vstrhq_scatter_shifted, vstrq_scatter_impl, (true, HImode, HFmode))
+FUNCTION (vstrwq, vstrq_impl, (SImode, SFmode))
+FUNCTION (vstrwq_scatter, vstrq_scatter_impl, (false, SImode, SFmode))
+FUNCTION (vstrwq_scatter_base, vstrq_scatter_base_impl, (SImode))
+FUNCTION (vstrwq_scatter_shifted, vstrq_scatter_impl, (true, SImode, SFmode))
 FUNCTION_WITH_RTX_M_N (vsubq, MINUS, VSUBQ)
 FUNCTION (vuninitializedq, vuninitializedq_impl,)
 

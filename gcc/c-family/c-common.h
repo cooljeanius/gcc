@@ -80,7 +80,7 @@ enum rid
      are keywords only in specific contexts)  */
   RID_IN, RID_OUT, RID_INOUT, RID_BYCOPY, RID_BYREF, RID_ONEWAY,
 
-  /* ObjC ("PATTR" reserved words - they do not appear after a '@' 
+  /* ObjC ("PATTR" reserved words - they do not appear after a '@'
      and are keywords only as property attributes)  */
   RID_GETTER, RID_SETTER,
   RID_READONLY, RID_READWRITE,
@@ -105,13 +105,13 @@ enum rid
 
   /* C extensions */
   RID_ASM,       RID_TYPEOF,   RID_TYPEOF_UNQUAL, RID_ALIGNOF,  RID_ATTRIBUTE,
-  RID_VA_ARG,
+  RID_C23_VA_START, RID_VA_ARG,
   RID_EXTENSION, RID_IMAGPART, RID_REALPART, RID_LABEL,    RID_CHOOSE_EXPR,
   RID_TYPES_COMPATIBLE_P,      RID_BUILTIN_COMPLEX,	   RID_BUILTIN_SHUFFLE,
   RID_BUILTIN_SHUFFLEVECTOR,   RID_BUILTIN_CONVERTVECTOR,  RID_BUILTIN_TGMATH,
   RID_BUILTIN_HAS_ATTRIBUTE,   RID_BUILTIN_ASSOC_BARRIER,  RID_BUILTIN_STDC,
   RID_BUILTIN_COUNTED_BY_REF,
-  RID_DFLOAT32, RID_DFLOAT64, RID_DFLOAT128,
+  RID_DFLOAT32, RID_DFLOAT64, RID_DFLOAT128, RID_DFLOAT64X,
 
   /* TS 18661-3 keywords, in the same sequence as the TI_* values.  */
   RID_FLOAT16,
@@ -168,6 +168,7 @@ enum rid
   RID_ADDRESSOF,
   RID_BUILTIN_LAUNDER,
   RID_BUILTIN_BIT_CAST,
+  RID_BUILTIN_OPERATOR_NEW, RID_BUILTIN_OPERATOR_DELETE,
 
   /* C++11 */
   RID_CONSTEXPR, RID_DECLTYPE, RID_NOEXCEPT, RID_NULLPTR, RID_STATIC_ASSERT,
@@ -197,7 +198,7 @@ enum rid
   RID_AT_PRIVATE,  RID_AT_PROTECTED, RID_AT_PUBLIC,  RID_AT_PACKAGE,
   RID_AT_PROTOCOL, RID_AT_SELECTOR,
   RID_AT_THROW,	   RID_AT_TRY,       RID_AT_CATCH,
-  RID_AT_FINALLY,  RID_AT_SYNCHRONIZED, 
+  RID_AT_FINALLY,  RID_AT_SYNCHRONIZED,
   RID_AT_OPTIONAL, RID_AT_REQUIRED, RID_AT_PROPERTY,
   RID_AT_SYNTHESIZE, RID_AT_DYNAMIC,
   RID_AT_INTERFACE,
@@ -840,7 +841,7 @@ extern bool in_late_binary_op;
 extern const char *c_addr_space_name (addr_space_t as);
 extern tree identifier_global_value (tree);
 extern tree identifier_global_tag (tree);
-extern bool names_builtin_p (const char *);
+extern int names_builtin_p (const char *);
 extern tree c_linkage_bindings (tree);
 extern void record_builtin_type (enum rid, const char *, tree);
 extern void start_fname_decls (void);
@@ -858,8 +859,8 @@ extern void check_function_arguments_recurse (void (*)
 					      void *, tree,
 					      unsigned HOST_WIDE_INT,
 					      opt_code);
-extern bool check_builtin_function_arguments (location_t, vec<location_t>,
-					      tree, tree, int, tree *);
+extern bool check_builtin_function_arguments (location_t, vec<location_t>, tree,
+					      tree, int, tree *, bool = true);
 extern void check_function_format (const_tree, tree, int, tree *,
 				   vec<location_t> *,
 				   bool (*comp_types) (tree, tree));
@@ -1104,7 +1105,8 @@ extern tree build_function_call_vec (location_t, vec<location_t>, tree,
 				     vec<tree, va_gc> *, vec<tree, va_gc> *,
 				     tree = NULL_TREE);
 
-extern tree resolve_overloaded_builtin (location_t, tree, vec<tree, va_gc> *);
+extern tree resolve_overloaded_builtin (location_t, tree, vec<tree, va_gc> *,
+					bool = true);
 
 extern tree finish_label_address_expr (tree, location_t);
 
@@ -1259,6 +1261,7 @@ extern void c_stddef_cpp_builtins (void);
 extern void fe_file_change (const line_map_ordinary *);
 extern void c_parse_error (const char *, enum cpp_ttype, tree, unsigned char,
 			   rich_location *richloc);
+extern diagnostic_option_id get_option_for_builtin_define (const char *macro_name);
 
 /* In c-ppoutput.cc  */
 extern void init_pp_output (FILE *);
@@ -1295,9 +1298,11 @@ enum c_omp_region_type
   C_ORT_DECLARE_SIMD		= 1 << 2,
   C_ORT_TARGET			= 1 << 3,
   C_ORT_EXIT_DATA		= 1 << 4,
+  C_ORT_INTEROP			= 1 << 5,
   C_ORT_OMP_DECLARE_SIMD	= C_ORT_OMP | C_ORT_DECLARE_SIMD,
   C_ORT_OMP_TARGET		= C_ORT_OMP | C_ORT_TARGET,
   C_ORT_OMP_EXIT_DATA		= C_ORT_OMP | C_ORT_EXIT_DATA,
+  C_ORT_OMP_INTEROP		= C_ORT_OMP | C_ORT_INTEROP,
   C_ORT_ACC_TARGET		= C_ORT_ACC | C_ORT_TARGET
 };
 
@@ -1310,6 +1315,7 @@ extern void c_finish_omp_barrier (location_t);
 extern tree c_finish_omp_atomic (location_t, enum tree_code, enum tree_code,
 				 tree, tree, tree, tree, tree, tree, bool,
 				 enum omp_memory_order, bool, bool = false);
+extern bool c_omp_interop_t_p (tree);
 extern bool c_omp_depend_t_p (tree);
 extern void c_finish_omp_depobj (location_t, tree, enum omp_clause_depend_kind,
 				 tree);
@@ -1660,8 +1666,10 @@ extern int parse_tm_stmt_attr (tree, int);
 extern int tm_attr_to_mask (tree);
 extern tree tm_mask_to_attr (int);
 extern tree find_tm_attribute (tree);
+extern const struct attribute_spec::exclusions attr_aligned_exclusions[];
 extern const struct attribute_spec::exclusions attr_cold_hot_exclusions[];
 extern const struct attribute_spec::exclusions attr_noreturn_exclusions[];
+extern tree handle_aligned_attribute (tree *, tree, tree, int, bool *);
 extern tree handle_noreturn_attribute (tree *, tree, tree, int, bool *);
 extern tree handle_musttail_attribute (tree *, tree, tree, int, bool *);
 extern bool has_attribute (location_t, tree, tree, tree (*)(tree));
@@ -1693,6 +1701,10 @@ extern void maybe_add_include_fixit (rich_location *, const char *, bool);
 extern void maybe_suggest_missing_token_insertion (rich_location *richloc,
 						   enum cpp_ttype token_type,
 						   location_t prev_token_loc);
+extern void maybe_emit_indirection_note (location_t loc,
+					 tree expr, tree expected_type);
+extern bool compatible_types_for_indirection_note_p (tree type1, tree type2);
+
 extern tree braced_lists_to_strings (tree, tree);
 
 #if CHECKING_P

@@ -22,7 +22,6 @@ along with GCC; see the file COPYING3.  If not see
 #include "config.h"
 #define INCLUDE_LIST
 #define INCLUDE_MAP
-#define INCLUDE_MEMORY
 #define INCLUDE_VECTOR
 #include "system.h"
 #include "coretypes.h"
@@ -38,6 +37,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "diagnostic-diagram.h"
 #include "text-art/canvas.h"
 #include "diagnostic-format-sarif.h"
+#include "diagnostic-format-text.h"
 #include "ordered-hash-map.h"
 #include "sbitmap.h"
 #include "make-unique.h"
@@ -657,9 +657,13 @@ private:
    - secondary ranges without labels (as related locations)
 
    Known limitations:
-   - GCC supports one-deep nesting of diagnostics (via auto_diagnostic_group),
-     but we only capture location and message information from such nested
-     diagnostics (e.g. we ignore fix-it hints on them)
+   - GCC supports nesting of diagnostics (one-deep nesting via
+     auto_diagnostic_group, and arbitrary nesting via
+     auto_diagnostic_nesting_level).  These are captured in the SARIF
+     as related locations, and so we only capture location and message
+     information from such nested diagnostics (e.g. we ignore fix-it
+     hints on them).  Diagnostics within an auto_diagnostic_nesting_level
+     have their nesting level captured as a property.
    - although we capture command-line arguments (section 3.20.2), we don't
      yet capture response files.
    - doesn't capture "artifact.encoding" property
@@ -680,11 +684,17 @@ public:
   friend class diagnostic_sarif_format_buffer;
 
   sarif_builder (diagnostic_context &context,
+		 pretty_printer &printer,
 		 const line_maps *line_maps,
 		 const char *main_input_filename_,
 		 bool formatted,
 		 enum sarif_version version);
   ~sarif_builder ();
+
+  void set_printer (pretty_printer &printer)
+  {
+    m_printer = &printer;
+  }
 
   void on_report_diagnostic (const diagnostic_info &diagnostic,
 			     diagnostic_t orig_diag_kind,
@@ -1215,6 +1225,12 @@ sarif_result::on_nested_diagnostic (const diagnostic_info &diagnostic,
   pp_clear_output_area (builder.get_printer ());
   location_obj->set<sarif_message> ("message", std::move (message_obj));
 
+  /* Add nesting level, as per "P3358R0 SARIF for Structured Diagnostics"
+     https://wg21.link/P3358R0  */
+  sarif_property_bag &bag = location_obj->get_or_create_properties ();
+  bag.set_integer ("nestingLevel",
+		   builder.get_context ().get_diagnostic_nesting_level ());
+
   add_related_location (std::move (location_obj), builder);
 }
 
@@ -1540,12 +1556,13 @@ sarif_thread_flow::add_location ()
 /* sarif_builder's ctor.  */
 
 sarif_builder::sarif_builder (diagnostic_context &context,
+			      pretty_printer &printer,
 			      const line_maps *line_maps,
 			      const char *main_input_filename_,
 			      bool formatted,
 			      enum sarif_version version)
 : m_context (context),
-  m_printer (context.m_printer),
+  m_printer (&printer),
   m_line_maps (line_maps),
   m_token_printer (*this),
   m_version (version),
@@ -2123,11 +2140,13 @@ sarif_builder::make_location_object (sarif_location_manager &loc_mgr,
 
       diagnostic_source_print_policy source_policy (dc);
       dc.set_escape_format (m_escape_format);
-      source_policy.print (*dc.m_printer, my_rich_loc, DK_ERROR, nullptr);
+      diagnostic_text_output_format text_output (dc);
+      source_policy.print (*text_output.get_printer (),
+			   my_rich_loc, DK_ERROR, nullptr);
 
+      const char *buf = pp_formatted_text (text_output.get_printer ());
       std::unique_ptr<sarif_multiformat_message_string> result
-	= builder.make_multiformat_message_string
-	    (pp_formatted_text (dc.m_printer));
+	= builder.make_multiformat_message_string (buf);
 
       diagnostic_finish (&dc);
 
@@ -2292,9 +2311,11 @@ sarif_builder::make_location_object (sarif_location_manager &loc_mgr,
   set_any_logical_locs_arr (*location_obj, logical_loc);
 
   /* "message" property (SARIF v2.1.0 section 3.28.5).  */
-  label_text ev_desc = event.get_desc (false);
-  location_obj->set<sarif_message> ("message",
-				    make_message_object (ev_desc.get ()));
+  std::unique_ptr<pretty_printer> pp = get_printer ()->clone ();
+  event.print_desc (*pp);
+  location_obj->set<sarif_message>
+    ("message",
+     make_message_object (pp_formatted_text (pp.get ())));
 
   add_any_include_chain (loc_mgr, *location_obj.get (), loc);
 
@@ -3409,15 +3430,38 @@ public:
     diagnostic_output_format::dump (out, indent);
   }
 
-  diagnostic_per_format_buffer *make_per_format_buffer () final override
+  std::unique_ptr<diagnostic_per_format_buffer>
+  make_per_format_buffer () final override
   {
-    return new diagnostic_sarif_format_buffer (m_builder);
+    return ::make_unique<diagnostic_sarif_format_buffer> (m_builder);
   }
   void set_buffer (diagnostic_per_format_buffer *base_buffer) final override
   {
     diagnostic_sarif_format_buffer *buffer
       = static_cast<diagnostic_sarif_format_buffer *> (base_buffer);
     m_buffer = buffer;
+  }
+
+  bool follows_reference_printer_p () const final override
+  {
+    return false;
+  }
+
+  void update_printer () final override
+  {
+    m_printer = m_context.clone_printer ();
+
+    /* Don't colorize the text.  */
+    pp_show_color (m_printer.get ()) = false;
+
+    /* No textual URLs.  */
+    m_printer->set_url_format (URL_FORMAT_NONE);
+
+    /* Use builder's token printer.  */
+    get_printer ()->set_token_printer (&m_builder.get_token_printer ());
+
+    /* Update the builder to use the new printer.  */
+    m_builder.set_printer (*get_printer ());
   }
 
   void on_begin_group () final override
@@ -3455,7 +3499,8 @@ protected:
 		       bool formatted,
 		       enum sarif_version version)
   : diagnostic_output_format (context),
-    m_builder (context, line_maps, main_input_filename_, formatted, version),
+    m_builder (context, *get_printer (), line_maps, main_input_filename_,
+	       formatted, version),
     m_buffer (nullptr)
   {}
 
@@ -3648,16 +3693,9 @@ static void
 diagnostic_output_format_init_sarif (diagnostic_context &context,
 				     std::unique_ptr<sarif_output_format> fmt)
 {
-  /* Suppress normal textual path output.  */
-  context.set_path_format (DPF_NONE);
+  fmt->update_printer ();
 
-  /* Don't colorize the text.  */
-  pp_show_color (fmt->get_printer ()) = false;
-  context.set_show_highlight_colors (false);
-
-  context.m_printer->set_token_printer
-    (&fmt->get_builder ().get_token_printer ());
-  context.set_output_format (fmt.release ());
+  context.set_output_format (std::move (fmt));
 }
 
 /* Populate CONTEXT in preparation for SARIF output to stderr.  */
@@ -3680,26 +3718,23 @@ diagnostic_output_format_init_sarif_stderr (diagnostic_context &context,
 						stderr));
 }
 
-/* Populate CONTEXT in preparation for SARIF output to a file named
-   BASE_FILE_NAME.sarif.  */
+/* Attempt to open BASE_FILE_NAME.sarif for writing.
+   Return a non-null diagnostic_output_file,
+   or return a null diagnostic_output_file and complain to CONTEXT
+   using LINE_MAPS.  */
 
-void
-diagnostic_output_format_init_sarif_file (diagnostic_context &context,
+diagnostic_output_file
+diagnostic_output_format_open_sarif_file (diagnostic_context &context,
 					  line_maps *line_maps,
-					  const char *main_input_filename_,
-					  bool formatted,
-					  enum sarif_version version,
 					  const char *base_file_name)
 {
-  gcc_assert (line_maps);
-
   if (!base_file_name)
     {
       rich_location richloc (line_maps, UNKNOWN_LOCATION);
       context.emit_diagnostic_with_group
 	(DK_ERROR, richloc, nullptr, 0,
 	 "unable to determine filename for SARIF output");
-      return;
+      return diagnostic_output_file ();
     }
 
   label_text filename = label_text::take (concat (base_file_name,
@@ -3713,9 +3748,29 @@ diagnostic_output_format_init_sarif_file (diagnostic_context &context,
 	(DK_ERROR, richloc, nullptr, 0,
 	 "unable to open %qs for SARIF output: %m",
 	 filename.get ());
-      return;
+      return diagnostic_output_file ();
     }
-  diagnostic_output_file output_file (outf, true, std::move (filename));
+  return diagnostic_output_file (outf, true, std::move (filename));
+}
+
+/* Populate CONTEXT in preparation for SARIF output to a file named
+   BASE_FILE_NAME.sarif.  */
+
+void
+diagnostic_output_format_init_sarif_file (diagnostic_context &context,
+					  line_maps *line_maps,
+					  const char *main_input_filename_,
+					  bool formatted,
+					  enum sarif_version version,
+					  const char *base_file_name)
+{
+  gcc_assert (line_maps);
+
+  diagnostic_output_file output_file
+    = diagnostic_output_format_open_sarif_file (context,
+						line_maps,
+						base_file_name);
+
   diagnostic_output_format_init_sarif
     (context,
      ::make_unique<sarif_file_output_format> (context,
@@ -3745,6 +3800,23 @@ diagnostic_output_format_init_sarif_stream (diagnostic_context &context,
 						formatted,
 						version,
 						stream));
+}
+
+std::unique_ptr<diagnostic_output_format>
+make_sarif_sink (diagnostic_context &context,
+		 const line_maps &line_maps,
+		 const char *main_input_filename_,
+		 enum sarif_version version,
+		 diagnostic_output_file output_file)
+{
+  auto sink = ::make_unique<sarif_file_output_format> (context,
+						       &line_maps,
+						       main_input_filename_,
+						       true,
+						       version,
+						       std::move (output_file));
+  sink->update_printer ();
+  return sink;
 }
 
 #if CHECKING_P
@@ -3819,8 +3891,9 @@ test_make_location_object (const line_table_case &case_,
     return;
 
   test_diagnostic_context dc;
-
-  sarif_builder builder (dc, line_table, "MAIN_INPUT_FILENAME", true, version);
+  pretty_printer pp;
+  sarif_builder builder (dc, pp, line_table, "MAIN_INPUT_FILENAME",
+			 true, version);
 
   /* These "columns" are byte offsets, whereas later on the columns
      in the generated SARIF use sarif_builder::get_sarif_column and
@@ -4255,7 +4328,7 @@ test_message_with_embedded_link (enum sarif_version version)
     };
 
     test_sarif_diagnostic_context dc ("test.c", version);
-    dc.set_urlifier (new test_urlifier ());
+    dc.set_urlifier (::make_unique<test_urlifier> ());
     rich_location richloc (line_table, UNKNOWN_LOCATION);
     dc.report (DK_ERROR, richloc, nullptr, 0,
 	       "foo %<-foption%> %<unrecognized%> bar");

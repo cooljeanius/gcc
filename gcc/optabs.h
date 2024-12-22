@@ -262,11 +262,6 @@ extern bool can_compare_p (enum rtx_code, machine_mode,
    with MASK_MODE.  */
 extern bool can_vec_cmp_compare_p (enum rtx_code, machine_mode, machine_mode);
 
-/* Return whether the backend can emit a vector comparison (vcond/vcondu) for
-   code CODE, comparing operands of mode CMP_OP_MODE and producing a result
-   with VALUE_MODE.  */
-extern bool can_vcond_compare_p (enum rtx_code, machine_mode, machine_mode);
-
 /* Return whether the backend can emit vector set instructions for inserting
    element into vector at variable index position.  */
 extern bool can_vec_set_var_idx_p (machine_mode);
@@ -365,7 +360,7 @@ extern void expand_mem_signal_fence (enum memmodel);
 
 rtx expand_atomic_load (rtx, rtx, enum memmodel);
 rtx expand_atomic_store (rtx, rtx, enum memmodel, bool);
-rtx expand_atomic_fetch_op (rtx, rtx, rtx, enum rtx_code, enum memmodel, 
+rtx expand_atomic_fetch_op (rtx, rtx, rtx, enum rtx_code, enum memmodel,
 			      bool);
 
 extern void expand_asm_reg_clobber_mem_blockage (HARD_REG_SET);

@@ -204,6 +204,9 @@ struct GTY(()) cpp_string {
 #define PURE_ZERO	(1 << 7) /* Single 0 digit, used by the C++ frontend,
 				    set in c-lex.cc.  */
 #define COLON_SCOPE	PURE_ZERO /* Adjacent colons in C < 23.  */
+#define NO_DOT_COLON	PURE_ZERO /* Set on CPP_NAME tokens whose expansion
+				     shouldn't start with CPP_DOT or CPP_COLON
+				     after optional CPP_PADDING.  */
 #define SP_DIGRAPH	(1 << 8) /* # or ## token was a digraph.  */
 #define SP_PREV_WHITE	(1 << 9) /* If whitespace before a ##
 				    operator, or before this token
@@ -252,8 +255,10 @@ struct GTY(()) cpp_identifier {
        spelling;
 };
 
-/* A preprocessing token.  This has been carefully packed and should
-   occupy 16 bytes on 32-bit hosts and 24 bytes on 64-bit hosts.  */
+/* A preprocessing token.  This occupies 32 bytes on a 64-bit host.  On a
+   32-bit host it occupies 20 or 24 bytes, depending whether a uint64_t
+   requires 4- or 8-byte alignment.  */
+
 struct GTY(()) cpp_token {
 
   /* Location of first char of token, together with range of full token.  */
@@ -266,7 +271,7 @@ struct GTY(()) cpp_token {
   {
     /* An identifier.  */
     struct cpp_identifier GTY ((tag ("CPP_TOKEN_FLD_NODE"))) node;
-	 
+
     /* Inherit padding from this token.  */
     cpp_token * GTY ((tag ("CPP_TOKEN_FLD_SOURCE"))) source;
 
@@ -325,7 +330,7 @@ enum cpp_normalize_level {
   normalized_none
 };
 
-enum cpp_main_search 
+enum cpp_main_search
 {
   CMS_none,    /* A regular source file.  */
   CMS_header,  /* Is a directly-specified header file (eg PCH or
@@ -477,7 +482,7 @@ struct cpp_options
   /* Nonzero means we're looking at already preprocessed code, so don't
      bother trying to do macro expansion and whatnot.  */
   unsigned char preprocessed;
-  
+
   /* Nonzero means we are going to emit debugging logs during
      preprocessing.  */
   unsigned char debug;
@@ -521,6 +526,9 @@ struct cpp_options
   /* Nonzero for C++ 2014 Standard binary constants.  */
   unsigned char binary_constants;
 
+  /* Nonzero for C2Y imaginary (floating) constants.  */
+  unsigned char imaginary_constants;
+
   /* Nonzero for C++ 2014 Standard digit separators.  */
   unsigned char digit_separators;
 
@@ -550,6 +558,9 @@ struct cpp_options
 
   /* Nonzero for C++23 named universal character escape sequences.  */
   unsigned char named_uc_escape_seqs;
+
+  /* Nonzero for C++ and C23 UCNs for characters below 0xa0.  */
+  unsigned char low_ucns;
 
   /* Nonzero for C2Y 0o prefixed octal integer constants.  */
   unsigned char octal_constants;
@@ -874,7 +885,7 @@ struct cpp_dir
   /* Is this a user-supplied directory? */
   bool user_supplied_p;
 
-  /* The canonicalized NAME as determined by lrealpath.  This field 
+  /* The canonicalized NAME as determined by lrealpath.  This field
      is only used by hosts that lack reliable inode numbers.  */
   char *canonical_name;
 
@@ -904,7 +915,7 @@ enum cpp_macro_kind {
 /* Each macro definition is recorded in a cpp_macro structure.
    Variadic macros cannot occur with traditional cpp.  */
 struct GTY(()) cpp_macro {
-  union cpp_parm_u 
+  union cpp_parm_u
   {
     /* Parameters, if any.  If parameter names use extended identifiers,
        the original spelling of those identifiers, not the canonical
@@ -1245,7 +1256,7 @@ inline location_t cpp_macro_definition_location (cpp_hashnode *node)
   return macro ? macro->line : 0;
 }
 /* Return an idempotent time stamp (possibly from SOURCE_DATE_EPOCH).  */
-enum class CPP_time_kind 
+enum class CPP_time_kind
 {
   FIXED = -1,	/* Fixed time via source epoch.  */
   DYNAMIC = -2,	/* Dynamic via time(2).  */
@@ -1280,7 +1291,7 @@ extern cppchar_t cpp_host_to_exec_charset (cpp_reader *, cppchar_t);
    The text is the same as the command line argument.  */
 extern void cpp_define (cpp_reader *, const char *);
 extern void cpp_define_unused (cpp_reader *, const char *);
-extern void cpp_define_formatted (cpp_reader *pfile, 
+extern void cpp_define_formatted (cpp_reader *pfile,
 				  const char *fmt, ...) ATTRIBUTE_PRINTF_2;
 extern void cpp_define_formatted_unused (cpp_reader *pfile,
 					 const char *fmt,

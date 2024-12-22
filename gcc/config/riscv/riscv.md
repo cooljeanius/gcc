@@ -95,6 +95,10 @@
   ;; XTheadFmv moves
   UNSPEC_XTHEADFMV
   UNSPEC_XTHEADFMV_HW
+
+  ;; CRC unspecs
+  UNSPEC_CRC
+  UNSPEC_CRC_REV
 ])
 
 (define_c_enum "unspecv" [
@@ -475,6 +479,9 @@
 ;; vfncvtbf16  vector narrowing single floating-point to brain floating-point instruction
 ;; vfwcvtbf16  vector widening brain floating-point to single floating-point instruction
 ;; vfwmaccbf16  vector BF16 widening multiply-accumulate
+;; SiFive custom extension instrctions
+;; sf_vqmacc      vector matrix integer multiply-add instructions
+;; sf_vfnrclip     vector fp32 to int8 ranged clip instructions
 (define_attr "type"
   "unknown,branch,jump,jalr,ret,call,load,fpload,store,fpstore,
    mtc,mfc,const,arith,logical,shift,slt,imul,idiv,move,fmove,fadd,fmul,
@@ -485,8 +492,8 @@
    vldux,vldox,vstux,vstox,vldff,vldr,vstr,
    vlsegde,vssegte,vlsegds,vssegts,vlsegdux,vlsegdox,vssegtux,vssegtox,vlsegdff,
    vialu,viwalu,vext,vicalu,vshift,vnshift,vicmp,viminmax,
-   vimul,vidiv,viwmul,vimuladd,viwmuladd,vimerge,vimov,
-   vsalu,vaalu,vsmul,vsshift,vnclip,
+   vimul,vidiv,viwmul,vimuladd,sf_vqmacc,viwmuladd,vimerge,vimov,
+   vsalu,vaalu,vsmul,vsshift,vnclip,sf_vfnrclip,
    vfalu,vfwalu,vfmul,vfdiv,vfwmul,vfmuladd,vfwmuladd,vfsqrt,vfrecp,
    vfcmp,vfminmax,vfsgnj,vfclass,vfmerge,vfmov,
    vfcvtitof,vfcvtftoi,vfwcvtitof,vfwcvtftoi,
@@ -850,6 +857,34 @@
   "add%i2w\t%0,%1,%2"
   [(set_attr "type" "arith")
    (set_attr "mode" "SI")])
+
+;; Transform (X & C1) + C2 into (X | ~C1) - (-C2 | ~C1)
+;; Where C1 is not a LUI operand, but ~C1 is a LUI operand
+
+(define_insn_and_split "*lui_constraint<ANYI:mode>_and_to_or"
+	[(set (match_operand:ANYI 0 "register_operand" "=r")
+	(plus:ANYI (and:ANYI (match_operand:ANYI 1 "register_operand" "r")
+			 (match_operand 2 "const_int_operand"))
+		 (match_operand 3 "const_int_operand")))
+   (clobber (match_scratch:X 4 "=&r"))]
+  "LUI_OPERAND (~INTVAL (operands[2]))
+   && ((INTVAL (operands[2]) & (-INTVAL (operands[3])))
+   == (-INTVAL (operands[3])))
+   && riscv_const_insns (operands[3], false)
+   && (riscv_const_insns
+   (GEN_INT (~INTVAL (operands[2]) | -INTVAL (operands[3])), false)
+   <= riscv_const_insns (operands[3], false))"
+  "#"
+  "&& reload_completed"
+  [(set (match_dup 4) (match_dup 5))
+   (set (match_dup 0) (ior:X (match_dup 1) (match_dup 4)))
+   (set (match_dup 4) (match_dup 6))
+   (set (match_dup 0) (minus:X (match_dup 0) (match_dup 4)))]
+  {
+    operands[5] = GEN_INT (~INTVAL (operands[2]));
+    operands[6] = GEN_INT ((~INTVAL (operands[2])) | (-INTVAL (operands[3])));
+  }
+  [(set_attr "type" "arith")])
 
 ;;
 ;;  ....................
@@ -3153,7 +3188,7 @@
 					     INTVAL (operands[3]))"
   "#"
   "&& reload_completed"
-  [(set (match_dup 4) (lshiftrt:X (match_dup 1) (match_dup 7)))
+  [(set (match_dup 4) (ashiftrt:X (match_dup 1) (match_dup 7)))
    (set (match_dup 4) (and:X (match_dup 4) (match_dup 8)))
    (set (match_dup 5) (match_dup 9))
    (set (pc) (if_then_else (any_eq (match_dup 4) (match_dup 5))
@@ -3208,7 +3243,7 @@
   "!TARGET_XCVBI"
 {
   if (get_attr_length (insn) == 12)
-    return "b%N1\t%2,%z3,1f; jump\t%l0,ra; 1:";
+    return "b%n1\t%2,%z3,1f; jump\t%l0,ra; 1:";
 
   return "b%C1\t%2,%z3,%l0";
 }
@@ -4219,7 +4254,8 @@
 {
   switch (INTVAL (operands[1]))
   {
-    case 0: return TARGET_ZIHINTNTL ? "%L2prefetch.r\t%a0" : "prefetch.r\t%a0";
+    case 0:
+    case 2: return TARGET_ZIHINTNTL ? "%L2prefetch.r\t%a0" : "prefetch.r\t%a0";
     case 1: return TARGET_ZIHINTNTL ? "%L2prefetch.w\t%a0" : "prefetch.w\t%a0";
     default: gcc_unreachable ();
   }

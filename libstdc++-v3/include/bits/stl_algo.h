@@ -200,7 +200,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  __tailSize -= __remainder;
 	  // __first here is always pointing to one past the last element of
 	  // next possible match.
-	  _RandomAccessIter __backTrack = __first; 
+	  _RandomAccessIter __backTrack = __first;
 	  while (__unary_pred(--__backTrack))
 	    {
 	      if (--__remainder == 0)
@@ -732,7 +732,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       __glibcxx_function_requires(_UnaryPredicateConcept<_Predicate,
 	    typename iterator_traits<_InputIterator>::value_type>)
       __glibcxx_requires_valid_range(__first, __last);
-      
+
       for (; __first != __last; ++__first)
 	if (__pred(*__first))
 	  {
@@ -1313,7 +1313,7 @@ _GLIBCXX_BEGIN_INLINE_ABI_NAMESPACE(_V2)
    *  @param  __last    A forward iterator.
    *  @return  first + (last - middle).
    *
-   *  Rotates the elements of the range @p [__first,__last) by 
+   *  Rotates the elements of the range @p [__first,__last) by
    *  @p (__middle - __first) positions so that the element at @p __middle
    *  is moved to @p __first, the element at @p __middle+1 is moved to
    *  @p __first+1 and so on for each element in the range
@@ -1354,13 +1354,13 @@ _GLIBCXX_END_INLINE_ABI_NAMESPACE(_V2)
    *  @return   An iterator designating the end of the resulting sequence.
    *
    *  Copies the elements of the range @p [__first,__last) to the
-   *  range beginning at @result, rotating the copied elements by 
+   *  range beginning at @result, rotating the copied elements by
    *  @p (__middle-__first) positions so that the element at @p __middle
    *  is moved to @p __result, the element at @p __middle+1 is moved
    *  to @p __result+1 and so on for each element in the range @p
    *  [__first,__last).
    *
-   *  Performs 
+   *  Performs
    *  @p *(__result+(n+(__last-__middle))%(__last-__first))=*(__first+n)
    *  for each @p n in the range @p [0,__last-__first).
   */
@@ -1605,7 +1605,7 @@ _GLIBCXX_END_INLINE_ABI_NAMESPACE(_V2)
 	  ++__result_real_last;
 	  ++__first;
 	}
-      
+
       std::__make_heap(__result_first, __result_real_last, __comp);
       while (__first != __last)
 	{
@@ -3362,7 +3362,7 @@ _GLIBCXX_END_INLINE_ABI_NAMESPACE(_V2)
    *  @ingroup sorting_algorithms
    *  @param  __first  Start of range.
    *  @param  __last   End of range.
-   *  @return  make_pair(m, M), where m is the first iterator i in 
+   *  @return  make_pair(m, M), where m is the first iterator i in
    *           [__first, __last) such that no other element in the range is
    *           smaller, and where M is the last iterator i in [__first, __last)
    *           such that no other element in the range is larger.
@@ -3390,7 +3390,7 @@ _GLIBCXX_END_INLINE_ABI_NAMESPACE(_V2)
    *  @param  __first  Start of range.
    *  @param  __last   End of range.
    *  @param  __comp   Comparison functor.
-   *  @return  make_pair(m, M), where m is the first iterator i in 
+   *  @return  make_pair(m, M), where m is the first iterator i in
    *           [__first, __last) such that no other element in the range is
    *           smaller, and where M is the last iterator i in [__first, __last)
    *           such that no other element in the range is larger.
@@ -3471,6 +3471,8 @@ _GLIBCXX_END_INLINE_ABI_NAMESPACE(_V2)
     }
 
 #if __cplusplus > 201103L
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wc++17-extensions" // if constexpr
   template<typename _ForwardIterator1, typename _ForwardIterator2,
 	   typename _BinaryPredicate>
     _GLIBCXX20_CONSTEXPR
@@ -3485,12 +3487,10 @@ _GLIBCXX_END_INLINE_ABI_NAMESPACE(_V2)
 	= typename iterator_traits<_ForwardIterator2>::iterator_category;
       using _It1_is_RA = is_same<_Cat1, random_access_iterator_tag>;
       using _It2_is_RA = is_same<_Cat2, random_access_iterator_tag>;
-      constexpr bool __ra_iters = _It1_is_RA() && _It2_is_RA();
-      if (__ra_iters)
+      constexpr bool __ra_iters = __and_<_It1_is_RA, _It2_is_RA>::value;
+      if constexpr (__ra_iters)
 	{
-	  auto __d1 = std::distance(__first1, __last1);
-	  auto __d2 = std::distance(__first2, __last2);
-	  if (__d1 != __d2)
+	  if ((__last1 - __first1) != (__last2 - __first2))
 	    return false;
 	}
 
@@ -3501,7 +3501,7 @@ _GLIBCXX_END_INLINE_ABI_NAMESPACE(_V2)
 	if (!__pred(__first1, __first2))
 	  break;
 
-      if (__ra_iters)
+      if constexpr (__ra_iters)
 	{
 	  if (__first1 == __last1)
 	    return true;
@@ -3532,6 +3532,7 @@ _GLIBCXX_END_INLINE_ABI_NAMESPACE(_V2)
 	}
       return true;
     }
+#pragma GCC diagnostic pop
 
   /**
    *  @brief  Checks whether a permutaion of the second sequence is equal
@@ -4907,7 +4908,7 @@ _GLIBCXX_BEGIN_NAMESPACE_ALGO
 	    typename iterator_traits<_InputIterator2>::value_type>)
       __glibcxx_function_requires(_LessThanOpConcept<
 	    typename iterator_traits<_InputIterator2>::value_type,
-	    typename iterator_traits<_InputIterator1>::value_type>)	
+	    typename iterator_traits<_InputIterator1>::value_type>)
       __glibcxx_requires_sorted_set(__first1, __last1, __first2);
       __glibcxx_requires_sorted_set(__first2, __last2, __first1);
       __glibcxx_requires_irreflexive2(__first1, __last1);
@@ -5390,7 +5391,7 @@ _GLIBCXX_BEGIN_NAMESPACE_ALGO
 	    typename iterator_traits<_InputIterator2>::value_type>)
       __glibcxx_function_requires(_LessThanOpConcept<
 	    typename iterator_traits<_InputIterator2>::value_type,
-	    typename iterator_traits<_InputIterator1>::value_type>)	
+	    typename iterator_traits<_InputIterator1>::value_type>)
       __glibcxx_requires_sorted_set(__first1, __last1, __first2);
       __glibcxx_requires_sorted_set(__first2, __last2, __first1);
       __glibcxx_requires_irreflexive2(__first1, __last1);
@@ -5483,7 +5484,7 @@ _GLIBCXX_BEGIN_NAMESPACE_ALGO
 	    ++__first1;
 	    ++__first2;
 	  }
-      return std::copy(__first2, __last2, 
+      return std::copy(__first2, __last2,
 		       std::copy(__first1, __last1, __result));
     }
 
@@ -5525,7 +5526,7 @@ _GLIBCXX_BEGIN_NAMESPACE_ALGO
 	    typename iterator_traits<_InputIterator2>::value_type>)
       __glibcxx_function_requires(_LessThanOpConcept<
 	    typename iterator_traits<_InputIterator2>::value_type,
-	    typename iterator_traits<_InputIterator1>::value_type>)	
+	    typename iterator_traits<_InputIterator1>::value_type>)
       __glibcxx_requires_sorted_set(__first1, __last1, __first2);
       __glibcxx_requires_sorted_set(__first2, __last2, __first1);
       __glibcxx_requires_irreflexive2(__first1, __last1);

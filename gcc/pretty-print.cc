@@ -19,7 +19,6 @@ along with GCC; see the file COPYING3.  If not see
 <http://www.gnu.org/licenses/>.  */
 
 #include "config.h"
-#define INCLUDE_MEMORY
 #define INCLUDE_VECTOR
 #include "system.h"
 #include "coretypes.h"
@@ -1001,7 +1000,7 @@ pp_write_text_to_stream (pretty_printer *pp)
    Flush the formatted text of pretty-printer PP onto the attached stream.
    Replace characters in PPF that have special meaning in a GraphViz .dot
    file.
-   
+
    This routine is not very fast, but it doesn't have to be as this is only
    be used by routines dumping intermediate representations in graph form.  */
 
@@ -2519,10 +2518,10 @@ pretty_printer::~pretty_printer ()
 
 /* Base class implementation of pretty_printer::clone vfunc.  */
 
-pretty_printer *
+std::unique_ptr<pretty_printer>
 pretty_printer::clone () const
 {
-  return new pretty_printer (*this);
+  return ::make_unique<pretty_printer> (*this);
 }
 
 /* Append a string delimited by START and END to the output area of
@@ -2581,6 +2580,32 @@ pp_printf (pretty_printer *pp, const char *msg, ...)
   va_end (ap);
 }
 
+/* Format a message into PP using ngettext to handle
+   singular vs plural.  */
+
+void
+pp_printf_n (pretty_printer *pp,
+	     unsigned HOST_WIDE_INT n,
+	     const char *singular_gmsgid, const char *plural_gmsgid, ...)
+{
+  va_list ap;
+
+  va_start (ap, plural_gmsgid);
+
+  unsigned long gtn;
+  if (sizeof n <= sizeof gtn)
+    gtn = n;
+  else
+    /* Use the largest number ngettext can handle, otherwise
+       preserve the six least significant decimal digits for
+       languages where the plural form depends on them.  */
+    gtn = n <= ULONG_MAX ? n : n % 1000000LU + 1000000LU;
+  const char *msg = ngettext (singular_gmsgid, plural_gmsgid, gtn);
+  text_info text (msg, &ap, errno);
+  pp_format (pp, &text);
+  pp_output_formatted_text (pp);
+  va_end (ap);
+}
 
 /* Output MESSAGE verbatim into BUFFER.  */
 void
@@ -3289,22 +3314,6 @@ assert_pp_format_colored (const location &loc, const char *expected,
                       (ARG1), (ARG2), (ARG3));		      \
   SELFTEST_END_STMT
 
-class test_element : public pp_element
-{
-public:
-  test_element (const char *text) : m_text (text) {}
-
-  void add_to_phase_2 (pp_markup::context &ctxt) final override
-  {
-    ctxt.begin_quote ();
-    pp_string (&ctxt.m_pp, m_text);
-    ctxt.end_quote ();
-  }
-
-private:
-  const char *m_text;
-};
-
 /* Verify that pp_format works, for various format codes.  */
 
 static void
@@ -3411,16 +3420,16 @@ test_pp_format ()
   }
 
   /* Verify %Z.  */
-  int v[] = { 1, 2, 3 }; 
+  int v[] = { 1, 2, 3 };
   ASSERT_PP_FORMAT_3 ("1, 2, 3 12345678", "%Z %x", v, 3, 0x12345678);
 
-  int v2[] = { 0 }; 
+  int v2[] = { 0 };
   ASSERT_PP_FORMAT_3 ("0 12345678", "%Z %x", v2, 1, 0x12345678);
 
   /* Verify %e.  */
   {
-    test_element foo ("foo");
-    test_element bar ("bar");
+    pp_element_quoted_string foo ("foo");
+    pp_element_quoted_string bar ("bar");
     ASSERT_PP_FORMAT_2 ("before `foo' `bar' after",
 			"before %e %e after",
 			&foo, &bar);
@@ -3447,6 +3456,14 @@ test_pp_format ()
   assert_pp_format (SELFTEST_LOCATION,
 		    "foo: second bar: 1776",
 		    "foo: %2$s bar: %1$i",
+		    1776, "second");
+  assert_pp_format (SELFTEST_LOCATION,
+		    "foo: sec bar: 3360",
+		    "foo: %3$.*2$s bar: %1$o",
+		    1776, 3, "second");
+  assert_pp_format (SELFTEST_LOCATION,
+		    "foo: seco bar: 3360",
+		    "foo: %2$.4s bar: %1$o",
 		    1776, "second");
 }
 
@@ -4171,7 +4188,7 @@ test_urlification ()
   {
     pretty_printer pp;
     pp.set_url_format (URL_FORMAT_ST);
-    test_element elem ("-foption");
+    pp_element_quoted_string elem ("-foption");
     pp_printf_with_urlifier (&pp, &urlifier,
 			     "foo %e bar",
 			     &elem);

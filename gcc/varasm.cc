@@ -62,6 +62,8 @@ along with GCC; see the file COPYING3.  If not see
 #include "toplev.h"
 #include "opts.h"
 #include "asan.h"
+#include "recog.h"
+#include "gimple-expr.h"
 
 /* The (assembler) name of the first globally-visible object output.  */
 extern GTY(()) const char *first_global_object_name;
@@ -355,17 +357,20 @@ get_section (const char *name, unsigned int flags, tree decl,
 	      && decl != sect->named.decl)
 	    {
 	      if (decl != NULL && DECL_P (decl))
-		error ("%+qD causes a section type conflict with %qD",
-		       decl, sect->named.decl);
+		error ("%+qD causes a section type conflict with %qD"
+		       " in section %qs",
+		       decl, sect->named.decl, name);
 	      else
-		error ("section type conflict with %qD", sect->named.decl);
+		error ("section type conflict with %qD in section %qs",
+		       sect->named.decl, name);
 	      inform (DECL_SOURCE_LOCATION (sect->named.decl),
 		      "%qD was declared here", sect->named.decl);
 	    }
 	  else if (decl != NULL && DECL_P (decl))
-	    error ("%+qD causes a section type conflict", decl);
+	    error ("%+qD causes a section type conflict for section %qs",
+		   decl, name);
 	  else
-	    error ("section type conflict");
+	    error ("section type conflict for section %qs", name);
 	  /* Make sure we don't error about one section multiple times.  */
 	  sect->common.flags |= SECTION_OVERRIDE;
 	}
@@ -965,9 +970,11 @@ set_user_assembler_name (tree decl, const char *name)
 
 /* Decode an `asm' spec for a declaration as a register name.
    Return the register number, or -1 if nothing specified,
-   or -2 if the ASMSPEC is not `cc' or `memory' and is not recognized,
+   or -2 if the ASMSPEC is not `cc' or `memory' or `redzone' and is not
+   recognized,
    or -3 if ASMSPEC is `cc' and is not recognized,
-   or -4 if ASMSPEC is `memory' and is not recognized.
+   or -4 if ASMSPEC is `memory' and is not recognized,
+   or -5 if ASMSPEC is `redzone' and is not recognized.
    Accept an exact spelling or a decimal number.
    Prefixes such as % are optional.  */
 
@@ -985,16 +992,21 @@ decode_reg_name_and_count (const char *asmspec, int *pnregs)
       asmspec = strip_reg_name (asmspec);
 
       /* Allow a decimal number as a "register name".  */
-      for (i = strlen (asmspec) - 1; i >= 0; i--)
-	if (! ISDIGIT (asmspec[i]))
-	  break;
-      if (asmspec[0] != 0 && i < 0)
+      if (ISDIGIT (asmspec[0]))
 	{
-	  i = atoi (asmspec);
-	  if (i < FIRST_PSEUDO_REGISTER && i >= 0 && reg_names[i][0])
-	    return i;
-	  else
-	    return -2;
+	  char *pend;
+	  errno = 0;
+	  unsigned long j = strtoul (asmspec, &pend, 10);
+	  if (*pend == '\0')
+	    {
+	      static_assert (FIRST_PSEUDO_REGISTER <= INT_MAX, "");
+	      if (errno != ERANGE
+		  && j < FIRST_PSEUDO_REGISTER
+		  && reg_names[j][0])
+		return j;
+	      else
+		return -2;
+	    }
 	}
 
       for (i = 0; i < FIRST_PSEUDO_REGISTER; i++)
@@ -1033,6 +1045,9 @@ decode_reg_name_and_count (const char *asmspec, int *pnregs)
 	    return table[i].number;
       }
 #endif /* ADDITIONAL_REGISTER_NAMES */
+
+      if (!strcmp (asmspec, "redzone"))
+	return -5;
 
       if (!strcmp (asmspec, "memory"))
 	return -4;
@@ -1261,9 +1276,14 @@ get_variable_section (tree decl, bool prefer_noswitch_p)
       if ((sect->common.flags & SECTION_BSS)
 	  && !bss_initializer_p (decl, true))
 	{
-	  error_at (DECL_SOURCE_LOCATION (decl),
-		    "only zero initializers are allowed in section %qs",
-		    sect->named.name);
+	  if (flag_zero_initialized_in_bss)
+	    error_at (DECL_SOURCE_LOCATION (decl),
+		      "only zero initializers are allowed in section %qs",
+		      sect->named.name);
+	  else
+	    error_at (DECL_SOURCE_LOCATION (decl),
+		      "no initializers are allowed in section %qs",
+		      sect->named.name);
 	  DECL_INITIAL (decl) = error_mark_node;
 	}
       return sect;
@@ -1667,16 +1687,167 @@ make_decl_rtl_for_debug (tree decl)
    for an `asm' keyword used between functions.  */
 
 void
-assemble_asm (tree string)
+assemble_asm (tree asm_str)
 {
   const char *p;
-  app_enable ();
 
-  if (TREE_CODE (string) == ADDR_EXPR)
-    string = TREE_OPERAND (string, 0);
+  if (TREE_CODE (asm_str) != ASM_EXPR)
+    {
+      app_enable ();
+      if (TREE_CODE (asm_str) == ADDR_EXPR)
+	asm_str = TREE_OPERAND (asm_str, 0);
 
-  p = TREE_STRING_POINTER (string);
-  fprintf (asm_out_file, "%s%s\n", p[0] == '\t' ? "" : "\t", p);
+      p = TREE_STRING_POINTER (asm_str);
+      fprintf (asm_out_file, "%s%s\n", p[0] == '\t' ? "" : "\t", p);
+    }
+  else
+    {
+      location_t save_loc = input_location;
+      int save_reload_completed = reload_completed;
+      int save_cse_not_expected = cse_not_expected;
+      input_location = EXPR_LOCATION (asm_str);
+      int noutputs = list_length (ASM_OUTPUTS (asm_str));
+      int ninputs = list_length (ASM_INPUTS (asm_str));
+      const char **constraints = NULL;
+      int i;
+      tree tail;
+      bool allows_mem, allows_reg, is_inout;
+      rtx *ops = NULL;
+      if (noutputs + ninputs > MAX_RECOG_OPERANDS)
+	{
+	  error ("more than %d operands in %<asm%>", MAX_RECOG_OPERANDS);
+	  goto done;
+	}
+      constraints = XALLOCAVEC (const char *, noutputs + ninputs);
+      ops = XALLOCAVEC (rtx, noutputs + ninputs);
+      memset (&recog_data, 0, sizeof (recog_data));
+      recog_data.n_operands = ninputs + noutputs;
+      recog_data.is_asm = true;
+      reload_completed = 0;
+      cse_not_expected = 1;
+      for (i = 0, tail = ASM_OUTPUTS (asm_str); tail;
+	   ++i, tail = TREE_CHAIN (tail))
+	{
+	  tree output = TREE_VALUE (tail);
+	  if (output == error_mark_node)
+	    goto done;
+	  constraints[i]
+	    = TREE_STRING_POINTER (TREE_VALUE (TREE_PURPOSE (tail)));
+	  if (!parse_output_constraint (&constraints[i], i, ninputs, noutputs,
+					&allows_mem, &allows_reg, &is_inout))
+	    goto done;
+	  if (is_inout)
+	    {
+	      error ("%qc in output operand outside of a function", '+');
+	      goto done;
+	    }
+	  if (strchr (constraints[i], '&'))
+	    {
+	      error ("%qc in output operand outside of a function", '&');
+	      goto done;
+	    }
+	  if (strchr (constraints[i], '%'))
+	    {
+	      error ("%qc in output operand outside of a function", '%');
+	      goto done;
+	    }
+	  output_addressed_constants (output, 0);
+	  if (!is_gimple_addressable (output))
+	    {
+	      error ("output number %d not directly addressable", i);
+	      goto done;
+	    }
+	  ops[i] = expand_expr (build_fold_addr_expr (output), NULL_RTX,
+				VOIDmode, EXPAND_INITIALIZER);
+	  ops[i] = gen_rtx_MEM (TYPE_MODE (TREE_TYPE (output)), ops[i]);
+
+	  recog_data.operand[i] = ops[i];
+	  recog_data.operand_loc[i] = &ops[i];
+	  recog_data.constraints[i] = constraints[i];
+	  recog_data.operand_mode[i] = TYPE_MODE (TREE_TYPE (output));
+	}
+      for (i = 0, tail = ASM_INPUTS (asm_str); tail;
+	   ++i, tail = TREE_CHAIN (tail))
+	{
+	  tree input = TREE_VALUE (tail);
+	  if (input == error_mark_node)
+	    goto done;
+	  constraints[i + noutputs]
+	    = TREE_STRING_POINTER (TREE_VALUE (TREE_PURPOSE (tail)));
+	  if (!parse_input_constraint (&constraints[i + noutputs], i,
+				       ninputs, noutputs, 0, constraints,
+				       &allows_mem, &allows_reg))
+	    goto done;
+	  if (strchr (constraints[i], '%'))
+	    {
+	      error ("%qc in input operand outside of a function", '%');
+	      goto done;
+	    }
+	  const char *constraint = constraints[i + noutputs];
+	  size_t c_len = strlen (constraint);
+	  for (size_t j = 0; j < c_len;
+	       j += CONSTRAINT_LEN (constraint[j], constraint + j))
+	    if (constraint[j] >= '0' && constraint[j] <= '9')
+	      {
+		error ("matching constraint outside of a function");
+		goto done;
+	      }
+	  output_addressed_constants (input, 0);
+	  if (allows_mem && is_gimple_addressable (input))
+	    {
+	      ops[i + noutputs]
+		= expand_expr (build_fold_addr_expr (input), NULL_RTX,
+			       VOIDmode, EXPAND_INITIALIZER);
+	      ops[i + noutputs] = gen_rtx_MEM (TYPE_MODE (TREE_TYPE (input)),
+					       ops[i + noutputs]);
+	    }
+	  else
+	    ops[i + noutputs] = expand_expr (input, NULL_RTX, VOIDmode,
+					     EXPAND_INITIALIZER);
+	  if (asm_operand_ok (ops[i + noutputs], constraint, NULL) <= 0)
+	    {
+	      if (!allows_mem)
+		warning (0, "%<asm%> operand %d probably does not "
+			    "match constraints", i + noutputs);
+	    }
+	  recog_data.operand[i + noutputs] = ops[i + noutputs];
+	  recog_data.operand_loc[i + noutputs] = &ops[i + noutputs];
+	  recog_data.constraints[i + noutputs] = constraints[i + noutputs];
+	  recog_data.operand_mode[i + noutputs]
+	    = TYPE_MODE (TREE_TYPE (input));
+	}
+      if (recog_data.n_operands > 0)
+	{
+	  const char *p = recog_data.constraints[0];
+	  recog_data.n_alternatives = 1;
+	  while (*p)
+	    recog_data.n_alternatives += (*p++ == ',');
+	}
+      for (i = 0; i < recog_data.n_operands; i++)
+	recog_data.operand_type[i]
+	  = recog_data.constraints[i][0] == '=' ? OP_OUT : OP_IN;
+      reload_completed = 1;
+      constrain_operands (1, ALL_ALTERNATIVES);
+      if (which_alternative < 0)
+	{
+	  error ("impossible constraint in %<asm%>");
+	  goto done;
+	}
+      this_is_asm_operands = make_insn_raw (gen_nop ());
+      insn_noperands = recog_data.n_operands;
+      if (TREE_STRING_POINTER (ASM_STRING (asm_str))[0])
+	{
+	  app_enable ();
+	  output_asm_insn (TREE_STRING_POINTER (ASM_STRING (asm_str)), ops);
+	}
+      insn_noperands = 0;
+      this_is_asm_operands = NULL;
+
+    done:
+      input_location = save_loc;
+      reload_completed = save_reload_completed;
+      cse_not_expected = save_cse_not_expected;
+    }
 }
 
 /* Write the address of the entity given by SYMBOL to SEC.  */
@@ -2575,6 +2746,7 @@ process_pending_assemble_externals (void)
   pending_assemble_externals_processed = true;
   pending_libcall_symbols = NULL_RTX;
   delete pending_assemble_externals_set;
+  pending_assemble_externals_set = nullptr;
 #endif
 }
 
@@ -4243,7 +4415,7 @@ output_constant_pool_1 (class constant_descriptor_rtx *desc,
   /* Output the data.
      Pass actual alignment value while emitting string constant to asm code
      as function 'output_constant_pool_1' explicitly passes the alignment as 1
-     assuming that the data is already aligned which prevents the generation 
+     assuming that the data is already aligned which prevents the generation
      of fix-up table entries.  */
   output_constant_pool_2 (desc->mode, x, desc->align);
 
@@ -6883,6 +7055,9 @@ default_section_type_flags (tree decl, const char *name, int reloc)
 
   if (decl && TREE_CODE (decl) == FUNCTION_DECL)
     flags = SECTION_CODE;
+  else if (strcmp (name, ".data.rel.ro") == 0
+	   || strcmp (name, ".data.rel.ro.local") == 0)
+    flags = SECTION_WRITE | SECTION_RELRO;
   else if (decl)
     {
       enum section_category category
@@ -6896,12 +7071,7 @@ default_section_type_flags (tree decl, const char *name, int reloc)
 	flags = SECTION_WRITE;
     }
   else
-    {
-      flags = SECTION_WRITE;
-      if (strcmp (name, ".data.rel.ro") == 0
-	  || strcmp (name, ".data.rel.ro.local") == 0)
-	flags |= SECTION_RELRO;
-    }
+    flags = SECTION_WRITE;
 
   if (decl && DECL_P (decl) && DECL_COMDAT_GROUP (decl))
     flags |= SECTION_LINKONCE;
@@ -8725,7 +8895,7 @@ get_elf_initfini_array_priority_section (int priority,
   if (priority != DEFAULT_INIT_PRIORITY)
     {
       char buf[18];
-      sprintf (buf, "%s.%.5u", 
+      sprintf (buf, "%s.%.5u",
 	       constructor_p ? ".init_array" : ".fini_array",
 	       priority);
       sec = get_section (buf, SECTION_WRITE | SECTION_NOTYPE, NULL_TREE);
@@ -8796,7 +8966,7 @@ default_asm_output_ident_directive (const char *ident_str)
 }
 
 /* Switch to a COMDAT section with COMDAT name of decl.
-   
+
    FIXME:  resolve_unique_section needs to deal better with
    decls with both DECL_SECTION_NAME and DECL_ONE_ONLY.  Once
    that is fixed, this if-else statement can be replaced with
@@ -8893,6 +9063,7 @@ varasm_cc_finalize ()
 
 #ifdef ASM_OUTPUT_EXTERNAL
   pending_assemble_externals_processed = false;
+  delete pending_assemble_externals_set;
   pending_assemble_externals_set = nullptr;
 #endif
 

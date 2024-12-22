@@ -36,6 +36,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "stringpool.h"
 #include "attribs.h"
 #include "escaped_string.h"
+#include "gcc-urlifier.h"
 
 static tree convert_to_pointer_force (tree, tree, tsubst_flags_t);
 static tree build_type_conversion (tree, tree);
@@ -832,7 +833,7 @@ ocp_convert (tree type, tree expr, int convtype, int flags,
 	      && TREE_CODE (val) == INTEGER_CST
 	      && ENUM_UNDERLYING_TYPE (type)
 	      && !int_fits_type_p (val, ENUM_UNDERLYING_TYPE (type)))
-	    warning_at (loc, OPT_Wconversion, 
+	    warning_at (loc, OPT_Wconversion,
 			"the result of the conversion is unspecified because "
 			"%qE is outside the range of type %qT",
 			expr, type);
@@ -1086,11 +1087,12 @@ maybe_warn_nodiscard (tree expr, impl_conv_void implicit)
       const char *format
 	= (msg
 	   ? G_("ignoring return value of %qD, "
-		"declared with attribute %<nodiscard%>: %<%s%>")
+		"declared with attribute %<nodiscard%>: %qs")
 	   : G_("ignoring return value of %qD, "
 		"declared with attribute %<nodiscard%>%s"));
       const char *raw_msg = msg ? (const char *) msg : "";
       auto_diagnostic_group d;
+      auto_urlify_attributes sentinel;
       if (warning_at (loc, OPT_Wunused_result, format, fn, raw_msg))
 	inform (DECL_SOURCE_LOCATION (fn), "declared here");
     }
@@ -1104,11 +1106,12 @@ maybe_warn_nodiscard (tree expr, impl_conv_void implicit)
       const char *format
 	= (msg
 	   ? G_("ignoring returned value of type %qT, "
-		"declared with attribute %<nodiscard%>: %<%s%>")
+		"declared with attribute %<nodiscard%>: %qs")
 	   : G_("ignoring returned value of type %qT, "
 		"declared with attribute %<nodiscard%>%s"));
       const char *raw_msg = msg ? (const char *) msg : "";
       auto_diagnostic_group d;
+      auto_urlify_attributes sentinel;
       if (warning_at (loc, OPT_Wunused_result, format, rettype, raw_msg))
 	{
 	  if (fn)
@@ -1123,6 +1126,7 @@ maybe_warn_nodiscard (tree expr, impl_conv_void implicit)
     {
       /* The TARGET_EXPR confuses do_warn_unused_result into thinking that the
 	 result is used, so handle that case here.  */
+      auto_urlify_attributes sentinel;
       if (fn)
 	{
 	  auto_diagnostic_group d;
@@ -2003,7 +2007,7 @@ type_promotes_to (tree type)
 		 whose underlying type is fixed (10.2) can be converted to a
 		 prvalue of its underlying type. Moreover, if integral promotion
 		 can be applied to its underlying type, a prvalue of an unscoped
-		 enumeration type whose underlying type is fixed can also be 
+		 enumeration type whose underlying type is fixed can also be
 		 converted to a prvalue of the promoted underlying type.  */
 	      return type_promotes_to (prom);
 	    }

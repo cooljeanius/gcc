@@ -54,6 +54,7 @@ FROM M2Printf IMPORT printf0 ;
 FROM M2Debug IMPORT Assert ;
 
 FROM M2Quads IMPORT PushT, PopT, PushTF, PopTF, PopNothing, OperandT, PushTFA, Top, Annotate,
+                    OperandTok,
                     PushTFtok, PopTFtok, PushTFAtok, PopTtok, PushTtok,
                     StartBuildInit,
                     EndBuildInit,
@@ -97,8 +98,6 @@ FROM P2SymBuild IMPORT P2StartBuildProgramModule,
                        EndBuildProcedure,
                        BuildFunction, BuildOptFunction,
                        BuildNoReturnAttribute,
-                       BuildProcedureDefinedByForward,
-                       BuildProcedureDefinedByProper,
                        EndBuildForward,
 
                        BuildPointerType,
@@ -785,8 +784,9 @@ ArrayType := "ARRAY"                                                       % VAR
                 SimpleType                                                 % BuildFieldArray ; %
               } "OF"                                                       % BuildNulName ; %
              Type                                                          % EndBuildArray ;
+                                                                             tok := OperandTok (1) ;
                                                                              PopNothing ;
-                                                                             PushTtok(arrayType, tok) %
+                                                                             PushTtok (arrayType, tok) %
            =:
 
 RecordType := "RECORD"                                                     % BuildRecord %
@@ -1024,7 +1024,6 @@ ProcedureDeclaration :=                                                    % VAR
 PostProcedureHeading := ProperProcedure | ForwardDeclaration =:
 
 ForwardDeclaration := "FORWARD"                                            % Assert (IsProcedure (OperandT (1))) %
-                                                                           % BuildProcedureDefinedByForward (OperandT (1)) %
                                                                            % EndBuildForward %
                     =:
 
@@ -1044,7 +1043,10 @@ ProcedureHeading := "PROCEDURE"                                            % M2E
                                                                            % StartBuildProcedure %
                                                                            % Assert(IsProcedure(OperandT(1))) %
                                                                            % StartBuildFormalParameters  %
-                       [ FormalParameters ]                                % EndBuildFormalParameters %
+                                                                           % Assert(IsProcedure(OperandT(2))) %
+                       [ FormalParameters
+                                                                           % Assert(IsProcedure(OperandT(2))) %
+                                          ]                                % EndBuildFormalParameters %
                                             AttributeNoReturn
                                                                            % BuildProcedureHeading %
                      )
@@ -1057,8 +1059,12 @@ DefProcedureHeading := "PROCEDURE"                                         % M2E
                         ( Ident
                                                                            % StartBuildProcedure %
                                                                            % Assert(IsProcedure(OperandT(1))) %
+                                                                           % DisplayStack %
                                                                            % StartBuildFormalParameters  %
-                          [ DefFormalParameters ]                          % EndBuildFormalParameters %
+                                                                           % DisplayStack %
+                          [ DefFormalParameters                            % DisplayStack %
+                                                ]                          % DisplayStack %
+                                                                           % EndBuildFormalParameters %
                                                   AttributeNoReturn
                                                                            % BuildProcedureHeading %
                         )                                                  % M2Error.LeaveErrorScope %
@@ -1068,7 +1074,7 @@ AttributeNoReturn := [ "<*"                                                % Pus
                             Ident                                          % PopAuto %
                                                                            % checkReturnAttribute %
                                                                            % Assert(IsProcedure(OperandT(1))) %
-                                                                           % BuildNoReturnAttribute (OperandT(1)) %
+                                                                           % BuildNoReturnAttribute %
                                    "*>" ] =:
 
 AttributeUnused := [ "<*"                                                  % PushAutoOn %
@@ -1080,7 +1086,6 @@ AttributeUnused := [ "<*"                                                  % Pus
 -- error messages
 
 ProcedureBlock :=                                                          % Assert(IsProcedure(OperandT(1))) %
-                                                                           % BuildProcedureDefinedByProper (OperandT (1)) %
                   {                                                        % Assert(IsProcedure(OperandT(1))) %
                     Declaration                                            % Assert(IsProcedure(OperandT(1))) %
                                 } [ "BEGIN" ProcedureBlockBody ] "END"     % Assert(IsProcedure(OperandT(1))) %
@@ -1117,7 +1122,8 @@ DefFormalParameters := "("
                         [ DefMultiFPSection ]                              % VAR n: CARDINAL; %
                                                                            % PopT(n) ; (* remove param count *) %
                         ")"
-                        FormalReturn                                       % PushT(n) ; (* restore param count *) %
+                        FormalReturn                                       % PushT(n) ; (* restore param count *)
+                                                                             Annotate ("%1d||running total of no. of parameters") %
                      =:
 
 DefMultiFPSection := DefExtendedFP |
@@ -1127,7 +1133,8 @@ FormalParameters := "("
                     [ MultiFPSection ]                                     % VAR n: CARDINAL; %
                                                                            % PopT(n) ; (* remove param count *) %
                     ")"
-                    FormalReturn                                           % PushT(n) ; (* restore param count *) %
+                    FormalReturn                                           % PushT(n) ; (* restore param count *) ;
+                                                                             Annotate ("%1d||running total of no. of parameters") %
                   =:
 
 MultiFPSection := ExtendedFP |
@@ -1147,6 +1154,7 @@ OptArg := "["                                                              % VAR
                                                                            % PushT(NulTok) %
               Ident                                                        % PushT(1) %
                     ":" FormalType                                         % PushT(n) %
+                                                                           % Annotate ("%1d||running total of no. of parameters") %
                                                                            % BuildFPSection %
                                                                            % BuildOptArg %
                                    [ "=" ConstExpression ]
@@ -1157,6 +1165,7 @@ DefOptArg := "["                                                           % VAR
                                                                            % PushT(NulTok) %
               Ident                                                        % PushT(1) %
                     ":" FormalType                                         % PushT(n) %
+                                                                           % Annotate ("%1d||running total of no. of parameters") %
                                                                            % BuildFPSection %
                                                                            % BuildOptArg %
                                    "=" ConstExpression
@@ -1166,6 +1175,7 @@ VarFPSection := "VAR"                                                      % VAR
                                                                            % PopT(n) ; %
                                                                            % PushT(VarTok) ; %
                 IdentList ":" FormalType                                   % PushT(n) %
+                                                                           % Annotate ("%1d||running total of no. of parameters") %
                 [ AttributeUnused ]
                                                                            % BuildFPSection %
              =:
@@ -1174,6 +1184,7 @@ NonVarFPSection :=                                                         % VAR
                                                                            % PopT(n) %
                                                                            % PushT(NulTok) %
                    IdentList ":" FormalType                                % PushT(n) %
+                                                                           % Annotate ("%1d||running total of no. of parameters") %
                    [ AttributeUnused ]
                                                                            % BuildFPSection %
                 =:
@@ -1246,7 +1257,7 @@ NamedOperand := '[' Ident ']' =:
 
 AsmOperandName := [ NamedOperand ] =:
 
-AsmOperands  := ConstExpression ':' AsmList [ ':' AsmList [ ':' TrashList ] ]
+AsmOperands  := ConstExpression [ ':' AsmList [ ':' AsmList [ ':' TrashList ] ] ]
               =:
 
 AsmList      := [ AsmElement ] { ',' AsmElement } =:

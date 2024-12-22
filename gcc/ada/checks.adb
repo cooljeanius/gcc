@@ -3976,8 +3976,10 @@ package body Checks is
    -------------------------------------
 
    --  Note: internally Disable/Enable_Atomic_Synchronization is implemented
-   --  using a bogus check called Atomic_Synchronization. This is to make it
-   --  more convenient to get exactly the same semantics as [Un]Suppress.
+   --  using a pseudo-check called _Atomic_Synchronization. This is to make it
+   --  more convenient to get the same placement and scope rules as
+   --  [Un]Suppress. The check name has a leading underscore to make
+   --  it reserved by the implementation.
 
    function Atomic_Synchronization_Disabled (E : Entity_Id) return Boolean is
    begin
@@ -8403,11 +8405,15 @@ package body Checks is
 
       if Inside_A_Generic then
          return;
-      end if;
+
+      --  No check during preanalysis
+
+      elsif Preanalysis_Active then
+         return;
 
       --  No check needed if known to be non-null
 
-      if Known_Non_Null (N) then
+      elsif Known_Non_Null (N) then
          return;
       end if;
 
@@ -8425,7 +8431,7 @@ package body Checks is
            --  where the expression might not be evaluated, and the warning
            --  appear as extraneous noise.
 
-           and then not Within_Case_Or_If_Expression (N)
+           and then not Within_Conditional_Expression (N)
          then
             Apply_Compile_Time_Constraint_Error
               (N, "null value not allowed here??", CE_Access_Check_Failed);
@@ -8565,6 +8571,11 @@ package body Checks is
       --  expansion is not desirable.
 
       if GNATprove_Mode then
+         return;
+
+      --  No check during preanalysis
+
+      elsif Preanalysis_Active then
          return;
 
       --  Do not generate an elaboration check if all checks have been
@@ -9615,16 +9626,11 @@ package body Checks is
 
    function Range_Checks_Suppressed (E : Entity_Id) return Boolean is
    begin
-      if Present (E) then
-         if Kill_Range_Checks (E) then
-            return True;
-
-         elsif Checks_May_Be_Suppressed (E) then
-            return Is_Check_Suppressed (E, Range_Check);
-         end if;
+      if Present (E) and then Checks_May_Be_Suppressed (E) then
+         return Is_Check_Suppressed (E, Range_Check);
+      else
+         return Scope_Suppress.Suppress (Range_Check);
       end if;
-
-      return Scope_Suppress.Suppress (Range_Check);
    end Range_Checks_Suppressed;
 
    -----------------------------------------

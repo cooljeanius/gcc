@@ -36,6 +36,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "function.h"
 #include "basic-block.h"
 #include "gimple.h"
+#include "make-unique.h"
 
 /* The pretty-printer code is primarily designed to closely follow
    (GNU) C and C++ grammars.  That is to be contrasted with spaghetti
@@ -688,7 +689,11 @@ c_pretty_printer::direct_abstract_declarator (tree t)
 			maxval = TREE_OPERAND (maxval, 0);
 		    }
 
-		  expression (maxval);
+		  /* This covers unspecified bounds.  */
+		  if (TREE_CODE (maxval) == COMPOUND_EXPR)
+		    pp_string (this, "*");
+		  else
+		    expression (maxval);
 		}
 	    }
 	  else if (TYPE_SIZE (t))
@@ -748,7 +753,8 @@ c_pretty_printer::storage_class_specifier (tree t)
     pp_c_ws_string (this, "typedef");
   else if (DECL_P (t))
     {
-      if (DECL_REGISTER (t))
+      if ((TREE_CODE (t) == PARM_DECL || VAR_P (t))
+	  && DECL_REGISTER (t))
 	pp_c_ws_string (this, "register");
       else if (TREE_STATIC (t) && VAR_P (t))
 	pp_c_ws_string (this, "static");
@@ -1153,6 +1159,8 @@ pp_c_floating_constant (c_pretty_printer *pp, tree r)
     pp_string (pp, "dd");
   else if (TREE_TYPE (r) == dfloat32_type_node)
     pp_string (pp, "df");
+  else if (TREE_TYPE (r) == dfloat64x_type_node)
+    pp_string (pp, "d64x");
   else if (TREE_TYPE (r) != double_type_node)
     for (int i = 0; i < NUM_FLOATN_NX_TYPES; i++)
       if (TREE_TYPE (r) == FLOATN_NX_TYPE_NODE (i))
@@ -2986,10 +2994,10 @@ c_pretty_printer::c_pretty_printer ()
 
 /* c_pretty_printer's implementation of pretty_printer::clone vfunc.  */
 
-pretty_printer *
+std::unique_ptr<pretty_printer>
 c_pretty_printer::clone () const
 {
-  return new c_pretty_printer (*this);
+  return ::make_unique<c_pretty_printer> (*this);
 }
 
 /* Print the tree T in full, on file FILE.  */

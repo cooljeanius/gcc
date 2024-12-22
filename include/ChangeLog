@@ -1,3 +1,42 @@
+2024-11-23  Jakub Jelinek  <jakub@redhat.com>
+
+	* dwarf2.h (enum dwarf_source_language): Add DW_LANG_Fortran23
+	enumerator.
+
+2024-11-22  Tobias Burnus  <tburnus@baylibre.com>
+
+	* gomp-constants.h (GOMP_INTEROP_IFR_NONE): Rename ...
+	(GOMP_INTEROP_IFR_UNKNOWN): ... to this. And change value.
+	(GOMP_INTEROP_IFR_SEPARATOR): Likewise.
+
+2024-11-21  Jakub Jelinek  <jakub@redhat.com>
+
+	* dwarf2.h (enum dwarf_source_language): Add comment where
+	the post DWARF 5 additions start.  Refresh list from
+	https://dwarfstd.org/languages.html.
+
+2024-10-31  Mark Wielaard  <mark@klomp.org>
+
+	* safe-ctype.h: Change accidently to accidentally.
+
+2024-10-25  Jakub Jelinek  <jakub@redhat.com>
+
+	* dyn-string.h: Remove trailing whitespace.
+	* libiberty.h: Likewise.
+	* xregex.h: Likewise.
+	* splay-tree.h: Likewise.
+	* partition.h: Likewise.
+	* plugin-api.h: Likewise.
+	* demangle.h: Likewise.
+	* vtv-change-permission.h: Likewise.
+	* fibheap.h: Likewise.
+	* hsa_ext_image.h: Likewise.
+	* hashtab.h: Likewise.
+	* libcollector.h: Likewise.
+	* sort.h: Likewise.
+	* symcat.h: Likewise.
+	* hsa_ext_amd.h: Likewise.
+
 2024-10-07  Tobias Burnus  <tburnus@baylibre.com>
 
 	* gomp-constants.h (GOMP_OMP_PREDEF_ALLOC_MAX,

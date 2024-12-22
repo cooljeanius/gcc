@@ -258,6 +258,9 @@ extern int ix86_ternlog_idx (rtx op, rtx *args);
 extern bool ix86_ternlog_operand_p (rtx op);
 extern rtx ix86_expand_ternlog (machine_mode mode, rtx op0, rtx op1, rtx op2,
 				int idx, rtx target);
+extern void ix86_expand_vector_sf2bf_with_vec_perm (rtx, rtx);
+extern void ix86_expand_vector_bf2sf_with_vec_perm (rtx, rtx);
+
 
 #ifdef TREE_CODE
 extern void init_cumulative_args (CUMULATIVE_ARGS *, tree, rtx, tree, int);
@@ -317,8 +320,6 @@ extern void i386_pe_asm_output_aligned_decl_common (FILE *, tree,
 						    const char *,
 						    HOST_WIDE_INT,
 						    HOST_WIDE_INT);
-extern void i386_pe_asm_lto_start (void);
-extern void i386_pe_asm_lto_end (void);
 extern void i386_pe_start_function (FILE *, const char *, tree);
 extern void i386_pe_end_function (FILE *, const char *, tree);
 extern void i386_pe_end_cold_function (FILE *, const char *, tree);

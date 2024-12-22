@@ -699,6 +699,8 @@ enum gfc_isym_id
   GFC_ISYM_UBOUND,
   GFC_ISYM_UCOBOUND,
   GFC_ISYM_UMASK,
+  GFC_ISYM_UMASKL,
+  GFC_ISYM_UMASKR,
   GFC_ISYM_UNLINK,
   GFC_ISYM_UNPACK,
   GFC_ISYM_VERIFY,
@@ -1212,11 +1214,12 @@ typedef struct gfc_component
   /* Needed for procedure pointer components.  */
   struct gfc_typebound_proc *tb;
   /* When allocatable/pointer and in a coarray the associated token.  */
-  tree caf_token;
+  struct gfc_component *caf_token;
 }
 gfc_component;
 
 #define gfc_get_component() XCNEW (gfc_component)
+#define gfc_comp_caf_token(cm) (cm)->caf_token->backend_decl
 
 /* Formal argument lists are lists of symbols.  */
 typedef struct gfc_formal_arglist
@@ -1401,7 +1404,6 @@ typedef struct gfc_omp_namelist
       bool present_modifier;
       struct
 	{
-	  char *attr;
 	  int len;
 	  bool target;
 	  bool targetsync;
@@ -1414,7 +1416,7 @@ typedef struct gfc_omp_namelist
       gfc_expr *allocator;
       struct gfc_symbol *traits_sym;
       struct gfc_omp_namelist *duplicate_of;
-      char *init_interop_fr;
+      char *init_interop;
     } u2;
   struct gfc_omp_namelist *next;
   locus where;
@@ -4170,5 +4172,6 @@ bool gfc_is_reallocatable_lhs (gfc_expr *);
 
 void finish_oacc_declare (gfc_namespace *, gfc_symbol *, bool);
 void gfc_adjust_builtins (void);
+void gfc_add_caf_accessor (gfc_expr *, gfc_expr *);
 
 #endif /* GCC_GFORTRAN_H  */

@@ -706,8 +706,8 @@ package body Exp_Ch7 is
                    else Empty);
 
       function Build_BIP_Cleanup_Stmts
-         (Func_Id  : Entity_Id;
-          Obj_Addr : Node_Id) return Node_Id;
+        (Func_Id  : Entity_Id;
+         Obj_Addr : Node_Id) return Node_Id;
       --  Func_Id denotes a build-in-place function. Generate the following
       --  cleanup code:
       --
@@ -985,6 +985,11 @@ package body Exp_Ch7 is
             New_Occurrence_Of (Master_Node, Loc)));
 
       Set_Finalize_Address_For_Node (Master_Node, Fin_Id);
+
+      --  Propagate the Ghost policy from the procedure to the node
+
+      Set_Is_Ignored_Ghost_Entity
+        (Master_Node, Is_Ignored_Ghost_Entity (Fin_Id));
 
       Insert_After_And_Analyze
         (Master_Node_Ins, Master_Node_Attach, Suppress => All_Checks);
@@ -1300,6 +1305,19 @@ package body Exp_Ch7 is
       Scop := Enclosing_Dynamic_Scope (Desig_Typ);
       if Scop /= Standard_Standard
         and then Scope_Depth (Scop) > Scope_Depth (Unit_Id)
+      then
+         return;
+      end if;
+
+      --  For the access result type of a function that is a library unit,
+      --  we cannot create a finalization collection attached to the unit as
+      --  this would cause premature finalization of objects created through
+      --  the access result type, which may be returned from the function.
+
+      if Is_Local_Anonymous_Access (Ptr_Typ)
+        and then Ekind (Unit_Id) = E_Function
+        and then Parent (Ptr_Typ) =
+                   Result_Definition (Subprogram_Specification (Unit_Id))
       then
          return;
       end if;
@@ -2516,6 +2534,12 @@ package body Exp_Ch7 is
                elsif Is_Ignored_For_Finalization (Obj_Id) then
                   null;
 
+               --  Ignored Ghost objects do not need any cleanup actions
+               --  because they will not appear in the final tree.
+
+               elsif Is_Ignored_Ghost_Entity (Obj_Id) then
+                  null;
+
                --  Conversely, if one of the above cases created a Master_Node,
                --  finalization actions are required for the associated object.
 
@@ -2523,12 +2547,6 @@ package body Exp_Ch7 is
                  and then Is_RTE (Obj_Typ, RE_Master_Node)
                then
                   Processing_Actions (Decl);
-
-               --  Ignored Ghost objects do not need any cleanup actions
-               --  because they will not appear in the final tree.
-
-               elsif Is_Ignored_Ghost_Entity (Obj_Id) then
-                  null;
 
                --  The object is of the form:
                --    Obj : [constant] Typ [:= Expr];
@@ -2672,9 +2690,10 @@ package body Exp_Ch7 is
                Process_Package_Body (Decl);
 
             elsif Nkind (Decl) = N_Package_Body_Stub
-              and then Present (Library_Unit (Decl))
+              and then Present (Stub_Subunit (Decl))
             then
-               Process_Package_Body (Proper_Body (Unit (Library_Unit (Decl))));
+               Process_Package_Body
+                 (Proper_Body (Unit (Stub_Subunit (Decl))));
             end if;
 
             Decl := Prev;
@@ -2780,17 +2799,23 @@ package body Exp_Ch7 is
 
          if Ekind (Obj_Id) in E_Constant | E_Variable then
 
-            --  The object is initialized by a build-in-place function call.
-            --  The Master_Node insertion point is after the function call.
+            --  The object has delayed freezing. The Master_Node insertion
+            --  point is after the freeze node.
 
-            if Present (BIP_Initialization_Call (Obj_Id)) then
-               Master_Node_Ins := BIP_Initialization_Call (Obj_Id);
+            if Has_Delayed_Freeze (Obj_Id) then
+               Master_Node_Ins := Freeze_Node (Obj_Id);
 
             --  The object is initialized by an aggregate. The Master_Node
             --  insertion point is after the last aggregate assignment.
 
             elsif Present (Last_Aggregate_Assignment (Obj_Id)) then
                Master_Node_Ins := Last_Aggregate_Assignment (Obj_Id);
+
+            --  The object is initialized by a build-in-place function call.
+            --  The Master_Node insertion point is after the function call.
+
+            elsif Present (BIP_Initialization_Call (Obj_Id)) then
+               Master_Node_Ins := BIP_Initialization_Call (Obj_Id);
 
             --  In other cases the Master_Node is inserted after the last call
             --  to either [Deep_]Initialize or the type-specific init proc.
@@ -3903,7 +3928,8 @@ package body Exp_Ch7 is
                   Set_Scope (Id, Block_Elab_Proc);
 
                when N_Object_Declaration
-                 | N_Object_Renaming_Declaration =>
+                  | N_Object_Renaming_Declaration
+               =>
                   Id := Defining_Entity (Stat);
                   if No (Block_Elab_Proc) then
                      Append_Elmt (Id, Maybe_Reset_Scopes_For_Decl);
@@ -5352,6 +5378,7 @@ package body Exp_Ch7 is
       First_Obj    : Node_Id;
       Last_Obj     : Node_Id;
       Mark_Id      : Entity_Id;
+      Marker       : Node_Id;
       Target       : Node_Id;
 
    --  Start of processing for Insert_Actions_In_Scope_Around
@@ -5383,9 +5410,6 @@ package body Exp_Ch7 is
          Target := N;
       end if;
 
-      First_Obj := Target;
-      Last_Obj  := Target;
-
       --  Add all actions associated with a transient scope into the main tree.
       --  There are several scenarios here:
 
@@ -5396,18 +5420,26 @@ package body Exp_Ch7 is
 
       --    3)                   Target ........ Last_Obj
 
-      --  Flag declarations are inserted before the first object
+      --  Declarations are inserted before the target
 
       if Present (Act_Before) then
          First_Obj := First (Act_Before);
          Insert_List_Before (Target, Act_Before);
+      else
+         First_Obj := Target;
       end if;
 
-      --  Finalization calls are inserted after the last object
+      --  Set a marker on the next statement
+
+      Marker := Next (Target);
+
+      --  Finalization calls are inserted after the target
 
       if Present (Act_After) then
          Last_Obj := Last (Act_After);
          Insert_List_After (Target, Act_After);
+      else
+         Last_Obj := Target;
       end if;
 
       --  Mark and release the secondary stack when the context warrants it
@@ -5436,6 +5468,16 @@ package body Exp_Ch7 is
            (First_Object => First_Obj,
             Last_Object  => Last_Obj,
             Related_Node => Target);
+      end if;
+
+      --  If the target is the declaration of an object, park the generated
+      --  statements if need be.
+
+      if Nkind (Target) = N_Object_Declaration
+        and then Next (Target) /= Marker
+        and then Needs_Initialization_Statements (Target)
+      then
+         Move_To_Initialization_Statements (Target, Marker);
       end if;
 
       --  Reset the action lists
@@ -5473,6 +5515,8 @@ package body Exp_Ch7 is
       Obj_Ref : Node_Id;
       Obj_Typ : Entity_Id) return Node_Id
    is
+      Utyp : constant Entity_Id := Underlying_Type (Obj_Typ);
+
       Obj_Addr : Node_Id;
 
    begin
@@ -5488,13 +5532,13 @@ package body Exp_Ch7 is
       --  but the address of the object is still that of its elements,
       --  so we need to shift it.
 
-      if Is_Array_Type (Obj_Typ)
-        and then not Is_Constrained (First_Subtype (Obj_Typ))
+      if Is_Array_Type (Utyp)
+        and then not Is_Constrained (First_Subtype (Utyp))
       then
          --  Shift the address from the start of the elements to the
          --  start of the dope vector:
 
-         --    V - (Obj_Typ'Descriptor_Size / Storage_Unit)
+         --    V - (Utyp'Descriptor_Size / Storage_Unit)
 
          Obj_Addr :=
            Make_Function_Call (Loc,
@@ -5511,7 +5555,7 @@ package body Exp_Ch7 is
                Make_Op_Divide (Loc,
                  Left_Opnd  =>
                    Make_Attribute_Reference (Loc,
-                     Prefix         => New_Occurrence_Of (Obj_Typ, Loc),
+                     Prefix         => New_Occurrence_Of (Utyp, Loc),
                      Attribute_Name => Name_Descriptor_Size),
                  Right_Opnd =>
                    Make_Integer_Literal (Loc, System_Storage_Unit))));

@@ -204,7 +204,7 @@ package body Ch5 is
                null;
 
             --  If not Ada 2012, or not special case above, and no declaration
-            --  seen (as allowed in Ada 2020), give error message.
+            --  seen (as allowed in Ada 2022), give error message.
 
             elsif No (Decl_Loc) then
                Error_Msg_BC -- CODEFIX
@@ -257,8 +257,7 @@ package body Ch5 is
                   while Present (Decl) loop
                      if not (Nkind (Decl) in
                         N_Object_Declaration | N_Object_Renaming_Declaration |
-                        N_Use_Type_Clause | N_Use_Package_Clause |
-                        N_Representation_Clause)
+                        N_Use_Type_Clause | N_Use_Package_Clause)
                      then
                         Error_Msg
                           ("Declaration kind not allowed in statements lists",

@@ -154,6 +154,13 @@ EXTERN void Indexing_ForeachIndiceInIndexDo (Indexing_Index i, Indexing_IndexPro
 */
 
 EXTERN bool Indexing_IsEmpty (Indexing_Index i);
+
+/*
+   FindIndice - returns the indice containing a.
+                It returns zero if a is not found in array i.
+*/
+
+EXTERN unsigned int Indexing_FindIndice (Indexing_Index i, void * a);
 #   ifdef __cplusplus
 }
 #   endif

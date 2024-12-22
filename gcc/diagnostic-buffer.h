@@ -74,10 +74,10 @@ class diagnostic_buffer
   void move_to (diagnostic_buffer &dest);
 
  private:
-  void ensure_per_format_buffer ();
+  void ensure_per_format_buffers ();
 
   diagnostic_context &m_ctxt;
-  diagnostic_per_format_buffer *m_per_format_buffer;
+  auto_vec<diagnostic_per_format_buffer *> *m_per_format_buffers;
 
   /* The number of buffered diagnostics of each kind.  */
   diagnostic_counters m_diagnostic_counters;

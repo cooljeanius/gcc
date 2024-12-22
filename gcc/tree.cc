@@ -270,6 +270,10 @@ unsigned const char omp_clause_num_ops[] =
   1, /* OMP_CLAUSE_HAS_DEVICE_ADDR  */
   1, /* OMP_CLAUSE_DOACROSS  */
   2, /* OMP_CLAUSE__CACHE_  */
+  1, /* OMP_CLAUSE_DESTROY  */
+  2, /* OMP_CLAUSE_INIT  */
+  1, /* OMP_CLAUSE_USE  */
+  1, /* OMP_CLAUSE_INTEROP  */
   2, /* OMP_CLAUSE_GANG  */
   1, /* OMP_CLAUSE_ASYNC  */
   1, /* OMP_CLAUSE_WAIT  */
@@ -331,6 +335,8 @@ unsigned const char omp_clause_num_ops[] =
   0, /* OMP_CLAUSE_IF_PRESENT */
   0, /* OMP_CLAUSE_FINALIZE */
   0, /* OMP_CLAUSE_NOHOST */
+  1, /* OMP_CLAUSE_NOVARIANTS */
+  1, /* OMP_CLAUSE_NOCONTEXT */
 };
 
 const char * const omp_clause_code_name[] =
@@ -366,6 +372,10 @@ const char * const omp_clause_code_name[] =
   "has_device_addr",
   "doacross",
   "_cache_",
+  "destroy",
+  "init",
+  "use",
+  "interop",
   "gang",
   "async",
   "wait",
@@ -427,6 +437,8 @@ const char * const omp_clause_code_name[] =
   "if_present",
   "finalize",
   "nohost",
+  "novariants",
+  "nocontext",
 };
 
 /* Unless specific to OpenACC, we tend to internally maintain OpenMP-centric
@@ -786,8 +798,9 @@ need_assembler_name_p (tree decl)
       || DECL_ASSEMBLER_NAME_SET_P (decl))
     return false;
 
-  /* Abstract decls do not need an assembler name.  */
-  if (DECL_ABSTRACT_P (decl))
+  /* Abstract decls do not need an assembler name, except they
+     can be looked up by autofdo.  */
+  if (DECL_ABSTRACT_P (decl) && !flag_auto_profile)
     return false;
 
   /* For VAR_DECLs, only static, public and external symbols need an
@@ -2071,12 +2084,18 @@ build_vector_from_ctor (tree type, const vec<constructor_elt, va_gc> *v)
   if (vec_safe_length (v) == 0)
     return build_zero_cst (type);
 
-  unsigned HOST_WIDE_INT idx, nelts;
+  unsigned HOST_WIDE_INT idx, nelts, step = 1;
   tree value;
 
-  /* We can't construct a VECTOR_CST for a variable number of elements.  */
-  nelts = TYPE_VECTOR_SUBPARTS (type).to_constant ();
-  tree_vector_builder vec (type, nelts, 1);
+  /* If the vector is a VLA, build a VLA constant vector.  */
+  if (!TYPE_VECTOR_SUBPARTS (type).is_constant (&nelts))
+    {
+      nelts = constant_lower_bound (TYPE_VECTOR_SUBPARTS (type));
+      gcc_assert (vec_safe_length (v) <= nelts);
+      step = 2;
+    }
+
+  tree_vector_builder vec (type, nelts, step);
   FOR_EACH_CONSTRUCTOR_VALUE (v, idx, value)
     {
       if (TREE_CODE (value) == VECTOR_CST)
@@ -2089,7 +2108,7 @@ build_vector_from_ctor (tree type, const vec<constructor_elt, va_gc> *v)
       else
 	vec.quick_push (value);
     }
-  while (vec.length () < nelts)
+  while (vec.length () < nelts * step)
     vec.quick_push (build_zero_cst (TREE_TYPE (type)));
 
   return vec.build ();
@@ -3554,7 +3573,7 @@ build_tree_list_vec (const vec<tree, va_gc> *vec MEM_STAT_DECL)
    purpose and value fields are PURPOSE and VALUE
    and whose TREE_CHAIN is CHAIN.  */
 
-tree 
+tree
 tree_cons (tree purpose, tree value, tree chain MEM_STAT_DECL)
 {
   tree node;
@@ -5532,7 +5551,7 @@ check_lang_type (const_tree cand, const_tree base)
   return lang_hooks.types.type_hash_eq (cand, base);
 }
 
-/* This function checks to see if TYPE matches the size one of the built-in 
+/* This function checks to see if TYPE matches the size one of the built-in
    atomic types, and returns that core atomic type.  */
 
 static tree
@@ -6101,6 +6120,10 @@ type_hash_canon_hash (tree type)
       hstate.add_poly_int (TYPE_VECTOR_SUBPARTS (type));
       break;
 
+    case REFERENCE_TYPE:
+      hstate.add_flag (TYPE_REF_IS_RVALUE (type));
+      break;
+
     default:
       break;
     }
@@ -6143,7 +6166,6 @@ type_cache_hasher::equal (type_hash *a, type_hash *b)
     case OPAQUE_TYPE:
     case COMPLEX_TYPE:
     case POINTER_TYPE:
-    case REFERENCE_TYPE:
     case NULLPTR_TYPE:
       return true;
 
@@ -6232,6 +6254,9 @@ type_cache_hasher::equal (type_hash *a, type_hash *b)
 				  TYPE_ARG_TYPES (b->type))))
 	break;
       return false;
+
+    case REFERENCE_TYPE:
+      return TYPE_REF_IS_RVALUE (a->type) == TYPE_REF_IS_RVALUE (b->type);
 
     default:
       return false;
@@ -7146,7 +7171,7 @@ build_nonstandard_integer_type (unsigned HOST_WIDE_INT precision,
 
   if (unsignedp)
     unsignedp = MAX_INT_CACHED_PREC + 1;
-    
+
   if (precision <= MAX_INT_CACHED_PREC)
     {
       itype = nonstandard_integer_type_cache[precision + unsignedp];
@@ -8878,7 +8903,7 @@ static GTY(()) unsigned anon_cnt = 0; /* Saved for PCH.  */
 tree
 make_anon_name ()
 {
-  const char *fmt = 
+  const char *fmt =
 #if !defined (NO_DOT_IN_LABEL)
     "."
 #elif !defined (NO_DOLLAR_IN_LABEL)
@@ -8922,7 +8947,7 @@ get_file_function_name (const char *type)
     p = q = ASTRDUP (first_global_object_name);
   /* If the target is handling the constructors/destructors, they
      will be local to this file and the name is only necessary for
-     debugging purposes. 
+     debugging purposes.
      We also assign sub_I and sub_D sufixes to constructors called from
      the global static constructors.  These are always local.
      OpenMP "declare target" offloaded constructors/destructors use "off_I" and
@@ -9408,7 +9433,7 @@ build_atomic_base (tree type, unsigned int align)
   /* Make sure its not already registered.  */
   if ((t = get_qualified_type (type, TYPE_QUAL_ATOMIC)))
     return t;
-  
+
   t = build_variant_type_copy (type);
   set_type_quals (t, TYPE_QUAL_ATOMIC);
 
@@ -9562,7 +9587,7 @@ build_common_tree_nodes (bool signed_char)
   /* Don't call build_qualified type for atomics.  That routine does
      special processing for atomics, and until they are initialized
      it's better not to make that call.
-     
+
      Check to see if there is a target override for atomic types.  */
 
   atomicQI_type_node = build_atomic_base (unsigned_intQI_type_node,
@@ -9575,7 +9600,7 @@ build_common_tree_nodes (bool signed_char)
 					targetm.atomic_align_for_mode (DImode));
   atomicTI_type_node = build_atomic_base (unsigned_intTI_type_node,
 					targetm.atomic_align_for_mode (TImode));
-  	
+
   access_public_node = get_identifier ("public");
   access_protected_node = get_identifier ("protected");
   access_private_node = get_identifier ("private");
@@ -9697,6 +9722,11 @@ build_common_tree_nodes (bool signed_char)
       TYPE_PRECISION (dfloat128_type_node) = DECIMAL128_TYPE_SIZE;
       SET_TYPE_MODE (dfloat128_type_node, TDmode);
       layout_type (dfloat128_type_node);
+
+      dfloat64x_type_node = make_node (REAL_TYPE);
+      TYPE_PRECISION (dfloat64x_type_node) = DECIMAL128_TYPE_SIZE;
+      SET_TYPE_MODE (dfloat64x_type_node, TDmode);
+      layout_type (dfloat64x_type_node);
     }
 
   complex_integer_type_node = build_complex_type (integer_type_node, true);
@@ -10896,7 +10926,7 @@ build_call_expr_loc_array (location_t loc, tree fndecl, int n, tree *argarray)
 {
   tree fntype = TREE_TYPE (fndecl);
   tree fn = build1 (ADDR_EXPR, build_pointer_type (fntype), fndecl);
- 
+
   return fold_build_call_array_loc (loc, TREE_TYPE (fntype), fn, n, argarray);
 }
 
@@ -12428,7 +12458,7 @@ escaped_string::escape (const char *unescaped)
 	  continue;
 	}
 
-      if (c != '\n' || !pp_is_wrapping_line (global_dc->m_printer))
+      if (c != '\n' || !pp_is_wrapping_line (global_dc->get_reference_printer ()))
 	{
 	  if (escaped == NULL)
 	    {
@@ -13547,7 +13577,7 @@ verify_type_variant (const_tree t, tree tv)
   /* Type variant can differ by:
 
      - TYPE_QUALS: TYPE_READONLY, TYPE_VOLATILE, TYPE_ATOMIC, TYPE_RESTRICT,
-                   ENCODE_QUAL_ADDR_SPACE. 
+                   ENCODE_QUAL_ADDR_SPACE.
      - main variant may be TYPE_COMPLETE_P and variant types !TYPE_COMPLETE_P
        in this case some values may not be set in the variant types
        (see TYPE_COMPLETE_P checks).
@@ -13630,7 +13660,7 @@ verify_type_variant (const_tree t, tree tv)
   else if (TREE_CODE (t) == ARRAY_TYPE)
     verify_variant_match (TYPE_NONALIASED_COMPONENT);
   /* During LTO we merge variant lists from diferent translation units
-     that may differ BY TYPE_CONTEXT that in turn may point 
+     that may differ BY TYPE_CONTEXT that in turn may point
      to TRANSLATION_UNIT_DECL.
      Ada also builds variants of types with different TYPE_CONTEXT.   */
 #if 0
@@ -13808,7 +13838,7 @@ type_with_interoperable_signedness (const_tree type)
 }
 
 /* Return true iff T1 and T2 are structurally identical for what
-   TBAA is concerned.  
+   TBAA is concerned.
    This function is used both by lto.cc canonical type merging and by the
    verifier.  If TRUST_TYPE_CANONICAL we do not look into structure of types
    that have TYPE_CANONICAL defined and assume them equivalent.  This is useful
@@ -13890,8 +13920,11 @@ gimple_canonical_types_compatible_p (const_tree t1, const_tree t2,
       || TREE_CODE (t1) == NULLPTR_TYPE)
     return true;
 
-  /* Can't be the same type if they have different mode.  */
-  if (TYPE_MODE (t1) != TYPE_MODE (t2))
+  /* Can't be compatible types if they have different mode.  Because of
+     flexible array members, we allow mismatching modes for structures or
+     unions.  */
+  if (!RECORD_OR_UNION_TYPE_P (t1)
+      && TYPE_MODE (t1) != TYPE_MODE (t2))
     return false;
 
   /* Non-aggregate types can be handled cheaply.  */
@@ -13942,7 +13975,7 @@ gimple_canonical_types_compatible_p (const_tree t1, const_tree t2,
     {
     case ARRAY_TYPE:
       /* Array types are the same if the element types are the same and
-	 the number of elements are the same.  */
+	 minimum and maximum index are the same.  */
       if (!gimple_canonical_types_compatible_p (TREE_TYPE (t1), TREE_TYPE (t2),
 						trust_type_canonical)
 	  || TYPE_STRING_FLAG (t1) != TYPE_STRING_FLAG (t2)
@@ -14036,23 +14069,46 @@ gimple_canonical_types_compatible_p (const_tree t1, const_tree t2,
 	     f1 || f2;
 	     f1 = TREE_CHAIN (f1), f2 = TREE_CHAIN (f2))
 	  {
-	    /* Skip non-fields and zero-sized fields.  */
+	    /* Skip non-fields and zero-sized fields, except zero-sized
+	       arrays at the end.  */
 	    while (f1 && (TREE_CODE (f1) != FIELD_DECL
 			  || (DECL_SIZE (f1)
-			      && integer_zerop (DECL_SIZE (f1)))))
+			      && integer_zerop (DECL_SIZE (f1))
+			      && (TREE_CHAIN (f1)
+				  || TREE_CODE (TREE_TYPE (f1))
+				     != ARRAY_TYPE))))
 	      f1 = TREE_CHAIN (f1);
 	    while (f2 && (TREE_CODE (f2) != FIELD_DECL
 			  || (DECL_SIZE (f2)
-			      && integer_zerop (DECL_SIZE (f2)))))
+			      && integer_zerop (DECL_SIZE (f2))
+			      && (TREE_CHAIN (f2)
+				  || TREE_CODE (TREE_TYPE (f2))
+				     != ARRAY_TYPE))))
 	      f2 = TREE_CHAIN (f2);
 	    if (!f1 || !f2)
 	      break;
-	    /* The fields must have the same name, offset and type.  */
+
+	    tree t1 = TREE_TYPE (f1);
+	    tree t2 = TREE_TYPE (f2);
+
+	    /* If the last element are arrays, we only compare the element
+	       types.  */
+	    if (TREE_CHAIN (f1) == NULL_TREE && TREE_CODE (t1) == ARRAY_TYPE
+		&& TREE_CHAIN (f2) == NULL_TREE && TREE_CODE (t2) == ARRAY_TYPE)
+	      {
+		/* If both arrays have zero size, this is a match.  */
+		if (DECL_SIZE (f1) && integer_zerop (DECL_SIZE (f1))
+		    && DECL_SIZE (f2) && integer_zerop (DECL_SIZE (f2)))
+		  return true;
+
+		t1 = TREE_TYPE (t1);
+		t2 = TREE_TYPE (t2);
+	      }
+
 	    if (DECL_NONADDRESSABLE_P (f1) != DECL_NONADDRESSABLE_P (f2)
 		|| !gimple_compare_field_offset (f1, f2)
 		|| !gimple_canonical_types_compatible_p
-		      (TREE_TYPE (f1), TREE_TYPE (f2),
-		       trust_type_canonical))
+		      (t1, t2, trust_type_canonical))
 	      return false;
 	  }
 
@@ -14194,8 +14250,11 @@ verify_type (const_tree t)
       debug_tree (ct);
       error_found = true;
     }
-
   if (COMPLETE_TYPE_P (t) && TYPE_CANONICAL (t)
+      /* We allow a mismatch for structure or union because of
+	 flexible array members.  */
+      && !RECORD_OR_UNION_TYPE_P (t)
+      && !RECORD_OR_UNION_TYPE_P (TYPE_CANONICAL (t))
       && TYPE_MODE (t) != TYPE_MODE (TYPE_CANONICAL (t)))
     {
       error ("%<TYPE_MODE%> of %<TYPE_CANONICAL%> is not compatible");
@@ -14310,7 +14369,7 @@ verify_type (const_tree t)
 	  error ("%<TYPE_ARRAY_MAX_SIZE%> not %<INTEGER_CST%>");
 	  debug_tree (TYPE_ARRAY_MAX_SIZE (t));
 	  error_found = true;
-        } 
+        }
     }
   else if (TYPE_MAX_VALUE_RAW (t))
     {
@@ -14473,7 +14532,7 @@ verify_type (const_tree t)
       error ("%<TYPE_CACHED_VALUES_P%> is set while it should not be");
       error_found = true;
     }
-  
+
   /* ipa-devirt makes an assumption that TYPE_METHOD_BASETYPE is always
      TYPE_MAIN_VARIANT and it would be odd to add methods only to variatns
      of a type. */
@@ -14493,8 +14552,8 @@ verify_type (const_tree t)
 
 
 /* Return 1 if ARG interpreted as signed in its precision is known to be
-   always positive or 2 if ARG is known to be always negative, or 3 if
-   ARG may be positive or negative.  */
+   always non-negative or 2 if ARG is known to be always negative, or 3 if
+   ARG may be non-negative or negative.  */
 
 int
 get_range_pos_neg (tree arg)
@@ -14767,7 +14826,7 @@ get_nonnull_args (const_tree fntype)
   /* A function declaration can specify multiple attribute nonnull,
      each with zero or more arguments.  The loop below creates a bitmap
      representing a union of all the arguments.  An empty (but non-null)
-     bitmap means that all arguments have been declaraed nonnull.  */
+     bitmap means that all arguments have been declared nonnull.  */
   for ( ; attrs; attrs = TREE_CHAIN (attrs))
     {
       attrs = lookup_attribute ("nonnull", attrs);
@@ -14973,7 +15032,7 @@ get_typenode_from_name (const char *name)
    real declaration.
 
    Keep the size up to date in tree.h !  */
-const builtin_structptr_type builtin_structptr_types[6] = 
+const builtin_structptr_type builtin_structptr_types[6] =
 {
   { fileptr_type_node, ptr_type_node, "FILE" },
   { const_tm_ptr_type_node, const_ptr_type_node, "tm" },
@@ -15080,7 +15139,7 @@ valid_new_delete_pair_p (tree new_asm, tree delete_asm,
 	       && !memcmp (new_name + 4, "St11align_val_tRKSt9nothrow_t", 29)))
     {
       /* _ZnXYSt11align_val_t or _ZnXYSt11align_val_tRKSt9nothrow_t matches
-	 _ZdXPvSt11align_val_t or _ZdXPvYSt11align_val_t or  or
+	 _ZdXPvSt11align_val_t or _ZdXPvYSt11align_val_t or
 	 _ZdXPvSt11align_val_tRKSt9nothrow_t.  */
       if (delete_len == 20 && !memcmp (delete_name + 5, "St11align_val_t", 15))
 	return true;
@@ -15228,7 +15287,9 @@ get_target_clone_attr_len (tree arglist)
       const char *str = TREE_STRING_POINTER (TREE_VALUE (arg));
       size_t len = strlen (str);
       str_len_sum += len + 1;
-      for (const char *p = strchr (str, ','); p; p = strchr (p + 1, ','))
+      for (const char *p = strchr (str, TARGET_CLONES_ATTR_SEPARATOR);
+	   p;
+	   p = strchr (p + 1, TARGET_CLONES_ATTR_SEPARATOR))
 	argnum++;
       argnum++;
     }
@@ -15900,7 +15961,7 @@ test_escaped_strings (void)
   ASSERT_STREQ ("foobar", (const char *) msg);
 
   /* Ensure that we have -fmessage-length set to 0.  */
-  pretty_printer *pp = global_dc->m_printer;
+  pretty_printer *pp = global_dc->get_reference_printer ();
   saved_cutoff = pp_line_cutoff (pp);
   pp_line_cutoff (pp) = 0;
 

@@ -17,7 +17,6 @@ You should have received a copy of the GNU General Public License
 along with GCC; see the file COPYING3.  If not see
 <http://www.gnu.org/licenses/>.  */
 
-#define INCLUDE_MEMORY
 #define INCLUDE_STRING
 #define IN_TARGET_CODE 1
 
@@ -512,7 +511,7 @@ ix86_conditional_register_usage (void)
 
   /*  See the definition of CALL_USED_REGISTERS in i386.h.  */
   c_mask = CALL_USED_REGISTERS_MASK (TARGET_64BIT_MS_ABI);
-  
+
   CLEAR_HARD_REG_SET (reg_class_contents[(int)CLOBBERED_REGS]);
 
   for (i = 0; i < FIRST_PSEUDO_REGISTER; i++)
@@ -579,10 +578,24 @@ ix86_canonicalize_comparison (int *code, rtx *op0, rtx *op1,
 	{
 	  std::swap (*op0, *op1);
 	  *code = (int) scode;
+	  return;
 	}
     }
+
+  /* Swap operands of GTU comparison to canonicalize
+     addcarry/subborrow comparison.  */
+  if (!op0_preserve_value
+      && *code == GTU
+      && GET_CODE (*op0) == PLUS
+      && ix86_carry_flag_operator (XEXP (*op0, 0), VOIDmode)
+      && GET_CODE (XEXP (*op0, 1)) == ZERO_EXTEND
+      && GET_CODE (*op1) == ZERO_EXTEND)
+    {
+      std::swap (*op0, *op1);
+      *code = (int) swap_condition ((enum rtx_code) *code);
+      return;
+    }
 }
-
 
 /* Hook to determine if one function can safely inline another.  */
 
@@ -1940,7 +1953,7 @@ init_cumulative_args (CUMULATIVE_ARGS *cum,  /* Argument info to initialize */
 
    The midde-end can't deal with the vector types > 16 bytes.  In this
    case, we return the original mode and warn ABI change if CUM isn't
-   NULL. 
+   NULL.
 
    If INT_RETURN is true, warn ABI change if the vector mode isn't
    available for function return value.  */
@@ -4270,7 +4283,7 @@ ix86_function_value_1 (const_tree valtype, const_tree fntype_or_decl,
   if (fntype_or_decl && DECL_P (fntype_or_decl))
     fn = fntype_or_decl;
   fntype = fn ? TREE_TYPE (fn) : fntype_or_decl;
-  
+
   if (ix86_function_type_abi (fntype) == MS_ABI)
     {
       if (TARGET_64BIT)
@@ -4388,7 +4401,7 @@ ix86_return_in_memory (const_tree type, const_tree fntype ATTRIBUTE_UNUSED)
 
 	  /* Unless ABI prescibes otherwise,
 	     MMX/3dNow values are returned in MM0 if available.  */
-	     
+
 	  if (size == 8)
 	    return TARGET_VECT8_RETURNS || !TARGET_MMX;
 
@@ -4507,7 +4520,7 @@ ix86_build_builtin_va_list (void)
 
       /* For SYSV_ABI we use an array of one record.  */
       sysv_va_list_type_node = ix86_build_builtin_va_list_64 ();
-	
+
       /* For MS_ABI we use plain pointer to argument area.  */
       tree char_ptr_type = build_pointer_type (char_type_node);
       tree attr = tree_cons (get_identifier ("ms_abi va_list"), NULL_TREE,
@@ -5464,7 +5477,7 @@ standard_sse_constant_opcode (rtx_insn *insn, rtx *operands)
 	       && float_vector_all_ones_operand (x, mode)))
     {
       enum attr_mode insn_mode = get_attr_mode (insn);
-      
+
       switch (insn_mode)
 	{
 	case MODE_XI:
@@ -5984,7 +5997,7 @@ ix86_frame_pointer_required (void)
   /* SSE saves require frame-pointer when stack is misaligned.  */
   if (TARGET_64BIT_MS_ABI && ix86_incoming_stack_boundary < 128)
     return true;
-  
+
   /* In ix86_option_override_internal, TARGET_OMIT_LEAF_FRAME_POINTER
      turns off the frame pointer by default.  Turn it back on now if
      we've not got a leaf function.  */
@@ -7171,6 +7184,7 @@ ix86_compute_frame_layout (void)
   if (ix86_using_red_zone ()
       && crtl->sp_is_unchanging
       && crtl->is_leaf
+      && !cfun->machine->asm_redzone_clobber_seen
       && !ix86_pc_thunk_call_expanded
       && !ix86_current_function_calls_tls_descriptor)
     {
@@ -10791,37 +10805,30 @@ ix86_decompose_address (rtx addr, struct ix86_address *out)
 	  addr = XEXP (addr, 0);
 	  if (CONST_INT_P (addr))
 	    return false;
-	}	      
-      else if (GET_CODE (addr) == AND
-	       && const_32bit_mask (XEXP (addr, 1), DImode))
-	{
-	  addr = lowpart_subreg (SImode, XEXP (addr, 0), DImode);
-	  if (addr == NULL_RTX)
-	    return false;
-
-	  if (CONST_INT_P (addr))
-	    return false;
 	}
       else if (GET_CODE (addr) == AND)
 	{
-	  /* For ASHIFT inside AND, combine will not generate
-	     canonical zero-extend. Merge mask for AND and shift_count
-	     to check if it is canonical zero-extend.  */
-	  tmp = XEXP (addr, 0);
 	  rtx mask = XEXP (addr, 1);
-	  if (tmp && GET_CODE(tmp) == ASHIFT)
-	    {
-	      rtx shift_val = XEXP (tmp, 1);
-	      if (CONST_INT_P (mask) && CONST_INT_P (shift_val)
-		  && (((unsigned HOST_WIDE_INT) INTVAL(mask)
-		      | ((HOST_WIDE_INT_1U << INTVAL(shift_val)) - 1))
-		      == 0xffffffff))
-		{
-		  addr = lowpart_subreg (SImode, XEXP (addr, 0),
-					 DImode);
-		}
-	    }
+	  rtx shift_val;
 
+	  if (const_32bit_mask (mask, DImode)
+	      /* For ASHIFT inside AND, combine will not generate
+		 canonical zero-extend. Merge mask for AND and shift_count
+		 to check if it is canonical zero-extend.  */
+	      || (CONST_INT_P (mask)
+		  && GET_CODE (XEXP (addr, 0)) == ASHIFT
+		  && CONST_INT_P (shift_val = XEXP (XEXP (addr, 0), 1))
+		  && ((UINTVAL (mask)
+		       | ((HOST_WIDE_INT_1U << INTVAL (shift_val)) - 1))
+		      == HOST_WIDE_INT_UC (0xffffffff))))
+	    {
+	      addr = lowpart_subreg (SImode, XEXP (addr, 0), DImode);
+	      if (addr == NULL_RTX)
+		return false;
+
+	      if (CONST_INT_P (addr))
+		return false;
+	    }
 	}
     }
 
@@ -12320,17 +12327,6 @@ legitimize_tls_address (rtx x, enum tls_model model, bool for_mov)
     case TLS_MODEL_INITIAL_EXEC:
       if (TARGET_64BIT)
 	{
-	  if (TARGET_SUN_TLS && !TARGET_X32)
-	    {
-	      /* The Sun linker took the AMD64 TLS spec literally
-		 and can only handle %rax as destination of the
-		 initial executable code sequence.  */
-
-	      dest = gen_reg_rtx (DImode);
-	      emit_insn (gen_tls_initial_exec_64_sun (dest, x));
-	      return dest;
-	    }
-
 	  /* Generate DImode references to avoid %fs:(%reg32)
 	     problems and linker IE->LE relaxation bug.  */
 	  tp_mode = DImode;
@@ -13647,7 +13643,7 @@ ix86_print_operand (FILE *file, rtx x, int code)
 	    case 2:
 	      putc ('w', file);
 	      break;
-  
+
 	    case 4:
 	      putc ('l', file);
 	      break;
@@ -16008,7 +16004,7 @@ ix86_avoid_lea_for_addr (rtx_insn *insn, rtx operands[])
   if (optimize_size > 1
       && parts.scale > 1
       && !parts.base
-      && (!parts.disp || parts.disp == const0_rtx)) 
+      && (!parts.disp || parts.disp == const0_rtx))
     return true;
 
   /* Check we need to optimize.  */
@@ -16489,6 +16485,13 @@ ix86_cc_mode (enum rtx_code code, rtx op0, rtx op1)
 	       && GET_MODE (XEXP (XEXP (op0, 0), 0)) == CCCmode
 	       && GET_CODE (op1) == GEU
 	       && GET_MODE (XEXP (op1, 0)) == CCCmode)
+	return CCCmode;
+      /* Similarly for the comparison of addcarry/subborrow pattern.  */
+      else if (code == LTU
+	       && GET_CODE (op0) == ZERO_EXTEND
+	       && GET_CODE (op1) == PLUS
+	       && ix86_carry_flag_operator (XEXP (op1, 0), VOIDmode)
+	       && GET_CODE (XEXP (op1, 1)) == ZERO_EXTEND)
 	return CCCmode;
       else
 	return CCmode;
@@ -17169,7 +17172,7 @@ ix86_output_call_insn (rtx_insn *insn, rtx call_op)
 	      seh_nop_p = true;
 	      break;
 	    }
-	    
+
 	  /* If we get to another real insn, we don't need the nop.  */
 	  if (INSN_P (i))
 	    break;
@@ -17759,7 +17762,7 @@ ix86_dependencies_evaluation_hook (rtx_insn *head, rtx_insn *tail)
 		       using topological ordering in the region.  */
 		    if (rgn == CONTAINING_RGN (e->src->index)
 			&& BLOCK_TO_BB (bb->index) > BLOCK_TO_BB (e->src->index))
-		      add_dependee_for_func_arg (first_arg, e->src); 
+		      add_dependee_for_func_arg (first_arg, e->src);
 		  }
 	      }
 	    insn = first_arg;
@@ -18131,7 +18134,7 @@ ix86_local_alignment (tree exp, machine_mode mode,
      other unit cannot rely on the alignment.
 
      Exclude va_list type.  It is the common case of local array where
-     we cannot benefit from the alignment.  
+     we cannot benefit from the alignment.
 
      TODO: Probably one should optimize for size only when var is not escaping.  */
   if (TARGET_64BIT && optimize_function_for_speed_p (cfun)
@@ -19882,6 +19885,148 @@ ix86_veclibabi_acml (combined_fn fn, tree type_out, tree type_in)
   return new_fndecl;
 }
 
+/* Handler for an AOCL-LibM-style interface to
+   a library with vectorized intrinsics.  */
+
+tree
+ix86_veclibabi_aocl (combined_fn fn, tree type_out, tree type_in)
+{
+  char name[20] = "amd_vr";
+  int name_len = 6;
+  tree fntype, new_fndecl, args;
+  unsigned arity;
+  const char *bname;
+  machine_mode el_mode, in_mode;
+  int n, in_n;
+
+  /* AOCL-LibM is 64bits only.  It is also only suitable for unsafe math only
+     as it trades off some accuracy for increased performance.  */
+  if (!TARGET_64BIT
+      || !flag_unsafe_math_optimizations)
+    return NULL_TREE;
+
+  el_mode = TYPE_MODE (TREE_TYPE (type_out));
+  n = TYPE_VECTOR_SUBPARTS (type_out);
+  in_mode = TYPE_MODE (TREE_TYPE (type_in));
+  in_n = TYPE_VECTOR_SUBPARTS (type_in);
+  if (el_mode != in_mode
+      || n != in_n)
+    return NULL_TREE;
+
+  gcc_checking_assert (n > 0);
+
+  /* Decide whether there exists a function for the combination of FN, the mode
+     and the vector width.  Return early if it doesn't.  */
+
+  if (el_mode != DFmode && el_mode != SFmode)
+    return NULL_TREE;
+
+  /* Supported vector widths for given FN and single/double precision.  Zeros
+     are used to fill out unused positions in the arrays.  */
+  static const int supported_n[][2][3] = {
+  /*   Single prec. ,  Double prec.  */
+    { { 16,  0,  0 }, {  2,  4,  8 } }, /* TAN.  */
+    { {  4,  8, 16 }, {  2,  4,  8 } }, /* EXP.  */
+    { {  4,  8, 16 }, {  2,  4,  8 } }, /* EXP2.  */
+    { {  4,  8, 16 }, {  2,  4,  8 } }, /* LOG.  */
+    { {  4,  8, 16 }, {  2,  4,  8 } }, /* LOG2.  */
+    { {  4,  8, 16 }, {  2,  4,  8 } }, /* COS.  */
+    { {  4,  8, 16 }, {  2,  4,  8 } }, /* SIN.  */
+    { {  4,  8, 16 }, {  2,  4,  8 } }, /* POW.  */
+    { {  4,  8, 16 }, {  2,  4,  8 } }, /* ERF.  */
+    { {  4,  8, 16 }, {  2,  8,  0 } }, /* ATAN.  */
+    { {  4,  8, 16 }, {  2,  0,  0 } }, /* LOG10.  */
+    { {  4,  0,  0 }, {  2,  0,  0 } }, /* EXP10.  */
+    { {  4,  0,  0 }, {  2,  0,  0 } }, /* LOG1P.  */
+    { {  4,  8, 16 }, {  8,  0,  0 } }, /* ASIN.  */
+    { {  4, 16,  0 }, {  0,  0,  0 } }, /* ACOS.  */
+    { {  4,  8, 16 }, {  0,  0,  0 } }, /* TANH.  */
+    { {  4,  0,  0 }, {  0,  0,  0 } }, /* EXPM1.  */
+    { {  4,  8,  0 }, {  0,  0,  0 } }, /* COSH.  */
+  };
+
+  /* We cannot simply index the supported_n array with FN since multiple FNs
+     may correspond to a single operation (see the definitions of these
+     CASE_CFN_* macros).  */
+  int i;
+  switch (fn)
+    {
+    CASE_CFN_TAN   :  i = 0; break;
+    CASE_CFN_EXP   :  i = 1; break;
+    CASE_CFN_EXP2  :  i = 2; break;
+    CASE_CFN_LOG   :  i = 3; break;
+    CASE_CFN_LOG2  :  i = 4; break;
+    CASE_CFN_COS   :  i = 5; break;
+    CASE_CFN_SIN   :  i = 6; break;
+    CASE_CFN_POW   :  i = 7; break;
+    CASE_CFN_ERF   :  i = 8; break;
+    CASE_CFN_ATAN  :  i = 9; break;
+    CASE_CFN_LOG10 : i = 10; break;
+    CASE_CFN_EXP10 : i = 11; break;
+    CASE_CFN_LOG1P : i = 12; break;
+    CASE_CFN_ASIN  : i = 13; break;
+    CASE_CFN_ACOS  : i = 14; break;
+    CASE_CFN_TANH  : i = 15; break;
+    CASE_CFN_EXPM1 : i = 16; break;
+    CASE_CFN_COSH  : i = 17; break;
+    default: return NULL_TREE;
+    }
+
+  int j = el_mode == DFmode;
+  bool n_is_supported = false;
+  for (unsigned k = 0; k < 3; k++)
+    if (supported_n[i][j][k] == n)
+      {
+	n_is_supported = true;
+	break;
+      }
+  if (!n_is_supported)
+    return NULL_TREE;
+
+  /* Append the precision and the vector width to the function name we are
+     constructing.  */
+  name[name_len++] = el_mode == DFmode ? 'd' : 's';
+  switch (n)
+    {
+      case 2:
+      case 4:
+      case 8:
+	name[name_len++] = '0' + n;
+	break;
+      case 16:
+	name[name_len++] = '1';
+	name[name_len++] = '6';
+	break;
+      default:
+	gcc_unreachable ();
+    }
+  name[name_len++] = '_';
+
+  /* Append the operation name (steal it from the name of a builtin).  */
+  tree fndecl = mathfn_built_in (el_mode == DFmode
+				 ? double_type_node : float_type_node, fn);
+  bname = IDENTIFIER_POINTER (DECL_NAME (fndecl));
+  sprintf (name + name_len, "%s", bname + 10);
+
+  arity = 0;
+  for (args = DECL_ARGUMENTS (fndecl); args; args = TREE_CHAIN (args))
+    arity++;
+
+  if (arity == 1)
+    fntype = build_function_type_list (type_out, type_in, NULL);
+  else
+    fntype = build_function_type_list (type_out, type_in, type_in, NULL);
+
+  /* Build a function declaration for the vectorized function.  */
+  new_fndecl = build_decl (BUILTINS_LOCATION,
+			   FUNCTION_DECL, get_identifier (name), fntype);
+  TREE_PUBLIC (new_fndecl) = 1;
+  DECL_EXTERNAL (new_fndecl) = 1;
+  TREE_READONLY (new_fndecl) = 1;
+
+  return new_fndecl;
+}
+
 /* Returns a decl of a function that implements scatter store with
    register type VECTYPE and index type INDEX_TYPE and SCALE.
    Return NULL_TREE if it is not available.  */
@@ -21010,10 +21155,6 @@ ix86_hard_regno_mode_ok (unsigned int regno, machine_mode mode)
       if (EXT_REX_SSE_REGNO_P (regno))
 	return false;
 
-      /* Use pinsrw/pextrw to mov 16-bit data from/to sse to/from integer.  */
-      if (TARGET_SSE2 && mode == HImode)
-	return true;
-
       /* OImode and AVX modes are available only when AVX is enabled.  */
       return ((TARGET_AVX
 	       && VALID_AVX256_REG_OR_OI_MODE (mode))
@@ -21324,7 +21465,7 @@ ix86_multiplication_cost (const struct processor_costs *cost,
   if (VECTOR_MODE_P (mode))
     inner_mode = GET_MODE_INNER (mode);
 
-  if (SSE_FLOAT_MODE_SSEMATH_OR_HF_P (mode))
+  if (SSE_FLOAT_MODE_SSEMATH_OR_HFBF_P (mode))
     return inner_mode == DFmode ? cost->mulsd : cost->mulss;
   else if (X87_FLOAT_MODE_P (mode))
     return cost->fmul;
@@ -21449,7 +21590,7 @@ ix86_division_cost (const struct processor_costs *cost,
   if (VECTOR_MODE_P (mode))
     inner_mode = GET_MODE_INNER (mode);
 
-  if (SSE_FLOAT_MODE_SSEMATH_OR_HF_P (mode))
+  if (SSE_FLOAT_MODE_SSEMATH_OR_HFBF_P (mode))
     return inner_mode == DFmode ? cost->divsd : cost->divss;
   else if (X87_FLOAT_MODE_P (mode))
     return cost->fdiv;
@@ -21991,7 +22132,7 @@ ix86_rtx_costs (rtx x, machine_mode mode, int outer_code_i, int opno,
 	  return true;
 	}
 
-      if (SSE_FLOAT_MODE_SSEMATH_OR_HF_P (mode))
+      if (SSE_FLOAT_MODE_SSEMATH_OR_HFBF_P (mode))
 	*total = cost->addss;
       else if (X87_FLOAT_MODE_P (mode))
 	*total = cost->fadd;
@@ -22198,7 +22339,7 @@ ix86_rtx_costs (rtx x, machine_mode mode, int outer_code_i, int opno,
       return false;
 
     case NEG:
-      if (SSE_FLOAT_MODE_SSEMATH_OR_HF_P (mode))
+      if (SSE_FLOAT_MODE_SSEMATH_OR_HFBF_P (mode))
 	*total = cost->sse_op;
       else if (X87_FLOAT_MODE_P (mode))
 	*total = cost->fchs;
@@ -22281,7 +22422,7 @@ ix86_rtx_costs (rtx x, machine_mode mode, int outer_code_i, int opno,
 	    *total = COSTS_N_BYTES (1);
 	  else if (TARGET_SLOW_STC)
 	    *total = COSTS_N_INSNS (2);
-	  else 
+	  else
 	    *total = COSTS_N_INSNS (1);
 	  return true;
 	}
@@ -22306,14 +22447,14 @@ ix86_rtx_costs (rtx x, machine_mode mode, int outer_code_i, int opno,
       return false;
 
     case FLOAT_EXTEND:
-      if (!SSE_FLOAT_MODE_SSEMATH_OR_HF_P (mode))
+      if (!SSE_FLOAT_MODE_SSEMATH_OR_HFBF_P (mode))
 	*total = 0;
       else
         *total = ix86_vec_cost (mode, cost->addss);
       return false;
 
     case FLOAT_TRUNCATE:
-      if (!SSE_FLOAT_MODE_SSEMATH_OR_HF_P (mode))
+      if (!SSE_FLOAT_MODE_SSEMATH_OR_HFBF_P (mode))
 	*total = cost->fadd;
       else
         *total = ix86_vec_cost (mode, cost->addss);
@@ -22323,7 +22464,7 @@ ix86_rtx_costs (rtx x, machine_mode mode, int outer_code_i, int opno,
       /* SSE requires memory load for the constant operand. It may make
 	 sense to account for this.  Of course the constant operand may or
 	 may not be reused. */
-      if (SSE_FLOAT_MODE_SSEMATH_OR_HF_P (mode))
+      if (SSE_FLOAT_MODE_SSEMATH_OR_HFBF_P (mode))
 	*total = cost->sse_op;
       else if (X87_FLOAT_MODE_P (mode))
 	*total = cost->fabs;
@@ -22334,7 +22475,7 @@ ix86_rtx_costs (rtx x, machine_mode mode, int outer_code_i, int opno,
       return false;
 
     case SQRT:
-      if (SSE_FLOAT_MODE_SSEMATH_OR_HF_P (mode))
+      if (SSE_FLOAT_MODE_SSEMATH_OR_HFBF_P (mode))
 	*total = mode == SFmode ? cost->sqrtss : cost->sqrtsd;
       else if (X87_FLOAT_MODE_P (mode))
 	*total = cost->fsqrt;
@@ -25083,7 +25224,7 @@ ix86_vector_costs::add_stmt_cost (int count, vect_cost_for_stmt kind,
 	case MINUS_EXPR:
 	  if (kind == scalar_stmt)
 	    {
-	      if (SSE_FLOAT_MODE_SSEMATH_OR_HF_P (mode))
+	      if (SSE_FLOAT_MODE_SSEMATH_OR_HFBF_P (mode))
 		stmt_cost = ix86_cost->addss;
 	      else if (X87_FLOAT_MODE_P (mode))
 		stmt_cost = ix86_cost->fadd;
@@ -25109,7 +25250,7 @@ ix86_vector_costs::add_stmt_cost (int count, vect_cost_for_stmt kind,
 	  break;
 
 	case NEGATE_EXPR:
-	  if (SSE_FLOAT_MODE_SSEMATH_OR_HF_P (mode))
+	  if (SSE_FLOAT_MODE_SSEMATH_OR_HFBF_P (mode))
 	    stmt_cost = ix86_cost->sse_op;
 	  else if (X87_FLOAT_MODE_P (mode))
 	    stmt_cost = ix86_cost->fchs;
@@ -25165,7 +25306,7 @@ ix86_vector_costs::add_stmt_cost (int count, vect_cost_for_stmt kind,
 	case BIT_XOR_EXPR:
 	case BIT_AND_EXPR:
 	case BIT_NOT_EXPR:
-	  if (SSE_FLOAT_MODE_SSEMATH_OR_HF_P (mode))
+	  if (SSE_FLOAT_MODE_SSEMATH_OR_HFBF_P (mode))
 	    stmt_cost = ix86_cost->sse_op;
 	  else if (VECTOR_MODE_P (mode))
 	    stmt_cost = ix86_vec_cost (mode, ix86_cost->sse_op);
@@ -25210,9 +25351,11 @@ ix86_vector_costs::add_stmt_cost (int count, vect_cost_for_stmt kind,
 	       || (STMT_VINFO_MEMORY_ACCESS_TYPE (stmt_info)
 		   == VMAT_GATHER_SCATTER)))
 	  || (node
-	      && ((SLP_TREE_MEMORY_ACCESS_TYPE (node) == VMAT_ELEMENTWISE
-		  && (TREE_CODE (DR_STEP (STMT_VINFO_DATA_REF
-					    (SLP_TREE_REPRESENTATIVE (node))))
+	      && (((SLP_TREE_MEMORY_ACCESS_TYPE (node) == VMAT_ELEMENTWISE
+		    || (SLP_TREE_MEMORY_ACCESS_TYPE (node) == VMAT_STRIDED_SLP
+			&& SLP_TREE_LANES (node) == 1))
+		   && (TREE_CODE (DR_STEP (STMT_VINFO_DATA_REF
+					     (SLP_TREE_REPRESENTATIVE (node))))
 		      != INTEGER_CST))
 		  || (SLP_TREE_MEMORY_ACCESS_TYPE (node)
 		      == VMAT_GATHER_SCATTER)))))
@@ -25352,6 +25495,25 @@ ix86_vector_costs::finish_cost (const vector_costs *scalar_costs)
     if (m_num_avx256_vec_perm[i]
 	&& TARGET_AVX256_AVOID_VEC_PERM)
       m_costs[i] = INT_MAX;
+
+  /* When X86_TUNE_AVX512_TWO_EPILOGUES is enabled arrange for both
+     a AVX2 and a SSE epilogue for AVX512 vectorized loops.  */
+  if (loop_vinfo
+      && ix86_tune_features[X86_TUNE_AVX512_TWO_EPILOGUES])
+    {
+      if (GET_MODE_SIZE (loop_vinfo->vector_mode) == 64)
+	m_suggested_epilogue_mode = V32QImode;
+      else if (LOOP_VINFO_EPILOGUE_P (loop_vinfo)
+	       && GET_MODE_SIZE (loop_vinfo->vector_mode) == 32)
+	m_suggested_epilogue_mode = V16QImode;
+    }
+  /* When a 128bit SSE vectorized epilogue still has a VF of 16 or larger
+     enable a 64bit SSE epilogue.  */
+  if (loop_vinfo
+      && LOOP_VINFO_EPILOGUE_P (loop_vinfo)
+      && GET_MODE_SIZE (loop_vinfo->vector_mode) == 16
+      && LOOP_VINFO_VECT_FACTOR (loop_vinfo).to_constant () >= 16)
+    m_suggested_epilogue_mode = V8QImode;
 
   vector_costs::finish_cost (scalar_costs);
 }
@@ -25555,7 +25717,7 @@ ix86_simd_clone_compute_vecsize_and_simdlen (struct cgraph_node *node,
    slightly less desirable, etc.).  */
 
 static int
-ix86_simd_clone_usable (struct cgraph_node *node)
+ix86_simd_clone_usable (struct cgraph_node *node, machine_mode)
 {
   switch (node->simdclone->vecsize_mangle)
     {
@@ -25824,7 +25986,7 @@ extract_base_offset_in_addr (rtx mem, rtx *base, rtx *symbase, rtx *offset)
   gcc_assert (MEM_P (mem));
 
   addr = XEXP (mem, 0);
-  
+
   if (GET_CODE (addr) == CONST)
     addr = XEXP (addr, 0);
 
@@ -26266,6 +26428,22 @@ ix86_mode_can_transfer_bits (machine_mode mode)
       }
 
   return true;
+}
+
+/* Implement TARGET_REDZONE_CLOBBER.  */
+static rtx
+ix86_redzone_clobber ()
+{
+  cfun->machine->asm_redzone_clobber_seen = true;
+  if (ix86_using_red_zone ())
+    {
+      rtx base = plus_constant (Pmode, stack_pointer_rtx,
+				GEN_INT (-RED_ZONE_SIZE));
+      rtx mem = gen_rtx_MEM (BLKmode, base);
+      set_mem_size (mem, RED_ZONE_SIZE);
+      return mem;
+    }
+  return NULL_RTX;
 }
 
 /* Target-specific selftests.  */
@@ -27121,6 +27299,9 @@ ix86_libgcc_floating_mode_supported_p
 #undef TARGET_MODE_CAN_TRANSFER_BITS
 #define TARGET_MODE_CAN_TRANSFER_BITS ix86_mode_can_transfer_bits
 
+#undef TARGET_REDZONE_CLOBBER
+#define TARGET_REDZONE_CLOBBER ix86_redzone_clobber
+
 static bool
 ix86_libc_has_fast_function (int fcode ATTRIBUTE_UNUSED)
 {
@@ -27216,6 +27397,9 @@ ix86_cannot_copy_insn_p (rtx_insn *insn)
 #undef TARGET_RUN_TARGET_SELFTESTS
 #define TARGET_RUN_TARGET_SELFTESTS selftest::ix86_run_selftests
 #endif /* #if CHECKING_P */
+
+#undef TARGET_DOCUMENTATION_NAME
+#define TARGET_DOCUMENTATION_NAME "x86"
 
 struct gcc_target targetm = TARGET_INITIALIZER;
 

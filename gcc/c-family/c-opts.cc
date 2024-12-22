@@ -146,7 +146,7 @@ static struct deferred_opt
 } *deferred_opts;
 
 
-extern const unsigned int 
+extern const unsigned int
 c_family_lang_mask = (CL_C | CL_CXX | CL_ObjC | CL_ObjCXX);
 
 /* Defer option CODE with argument ARG.  */
@@ -175,9 +175,10 @@ c_diagnostic_text_finalizer (diagnostic_text_output_format &text_output,
 {
   pretty_printer *const pp = text_output.get_printer ();
   char *saved_prefix = pp_take_prefix (pp);
-  pp_set_prefix (pp, NULL);
+  pp_set_prefix (pp, text_output.build_indent_prefix (false));
   pp_newline (pp);
   diagnostic_show_locus (&text_output.get_context (),
+			 text_output.get_source_printing_options (),
 			 diagnostic->richloc, diagnostic->kind, pp);
   /* By default print macro expansion contexts in the diagnostic
      finalizer -- for tokens resulting from macro expansion.  */
@@ -260,8 +261,8 @@ c_common_init_options (unsigned int decoded_options_count,
 
   if (c_language == clk_c)
     {
-      /* The default for C is gnu17.  */
-      set_std_c17 (false /* ISO */);
+      /* The default for C is gnu23.  */
+      set_std_c23 (false /* ISO */);
 
       /* If preprocessing assembly language, accept any of the C-family
 	 front end options since the driver may pass them through.  */
@@ -374,7 +375,7 @@ c_common_handle_option (size_t scode, const char *arg, HOST_WIDE_INT value,
       if (!strcmp (arg, "p1689r5"))
 	cpp_opts->deps.fdeps_format = FDEPS_FMT_P1689R5;
       else
-	error ("%<-fdeps-format=%> unknown format %<%s%>", arg);
+	error ("%<-fdeps-format=%> unknown format %qs", arg);
       break;
 
     case OPT_fdeps_file_:
@@ -769,6 +770,19 @@ c_common_handle_option (size_t scode, const char *arg, HOST_WIDE_INT value,
       cpp_opts->traditional = 1;
       break;
 
+    case OPT_fsearch_include_path:
+      cpp_opts->main_search = CMS_user;
+      break;
+
+    case OPT_fsearch_include_path_:
+      if (!strcmp (arg, "user"))
+	cpp_opts->main_search = CMS_user;
+      else if (!strcmp (arg, "system"))
+	cpp_opts->main_search = CMS_system;
+      else
+	error ("invalid argument %qs to %<-fsearch-include-path%>", arg);
+      break;
+
     case OPT_v:
       verbose = true;
       break;
@@ -777,15 +791,15 @@ c_common_handle_option (size_t scode, const char *arg, HOST_WIDE_INT value,
   switch (c_language)
     {
     case clk_c:
-      C_handle_option_auto (&global_options, &global_options_set, 
-                            scode, arg, value, 
+      C_handle_option_auto (&global_options, &global_options_set,
+                            scode, arg, value,
                             c_family_lang_mask, kind,
                             loc, handlers, global_dc);
       break;
 
     case clk_objc:
       ObjC_handle_option_auto (&global_options, &global_options_set,
-                               scode, arg, value, 
+                               scode, arg, value,
                                c_family_lang_mask, kind,
                                loc, handlers, global_dc);
       break;
@@ -985,6 +999,21 @@ c_common_post_options (const char **pfilename)
   if (warn_shift_overflow == -1)
     warn_shift_overflow = cxx_dialect >= cxx11 || flag_isoc99;
 
+  /* -Wmissing-parameter-name is enabled by -pedantic before C23,
+     and for -Wc11-c23-compat.  */
+  if (warn_missing_parameter_name == -1)
+    warn_missing_parameter_name
+      = ((pedantic && !flag_isoc23 && warn_c11_c23_compat != 0)
+	 || warn_c11_c23_compat > 0);
+
+  /* Likewise for -Wfree-labels.  */
+  if (warn_free_labels == -1)
+    warn_free_labels = ((pedantic && !flag_isoc23 && warn_c11_c23_compat != 0)
+			|| warn_c11_c23_compat > 0);
+
+  if (warn_deprecated_non_prototype == -1)
+    warn_deprecated_non_prototype = warn_c11_c23_compat > 0;
+
   /* -Wshift-negative-value is enabled by -Wextra in C99 and C++11 to C++17
      modes.  */
   if (warn_shift_negative_value == -1)
@@ -1027,6 +1056,16 @@ c_common_post_options (const char **pfilename)
   SET_OPTION_IF_UNSET (&global_options, &global_options_set,
 		       warn_deprecated_literal_operator,
 		       deprecated_in (cxx23));
+
+  /* -Warray-compare is enabled by default in C++20.  */
+  SET_OPTION_IF_UNSET (&global_options, &global_options_set,
+		       warn_array_compare,
+		       warn_array_compare || deprecated_in (cxx20));
+
+  /* -Wdeprecated-variadic-comma-omission is enabled by default in C++26.  */
+  SET_OPTION_IF_UNSET (&global_options, &global_options_set,
+		       warn_deprecated_variadic_comma_omission,
+		       deprecated_in (cxx26));
 
   /* -Wtemplate-id-cdtor is enabled by default in C++20.  */
   SET_OPTION_IF_UNSET (&global_options, &global_options_set,
@@ -1540,7 +1579,7 @@ sanitize_cpp_opts (void)
 
   /* Wlong-long is disabled by default. It is enabled by:
       [-Wpedantic | -Wtraditional] -std=[gnu|c]++98 ; or
-      [-Wpedantic | -Wtraditional] -std=non-c99 
+      [-Wpedantic | -Wtraditional] -std=non-c99
 
       Either -Wlong-long or -Wno-long-long override any other settings.
       ??? These conditions should be handled in c.opt.  */
@@ -1783,13 +1822,13 @@ cb_file_change (cpp_reader *reader, const line_map_ordinary *new_map)
     /* We're starting the main file.  Inform the FE of that.  */
     lang_hooks.preprocess_main_file (reader, line_table, new_map);
 
-  if (new_map 
+  if (new_map
       && (new_map->reason == LC_ENTER || new_map->reason == LC_RENAME))
     {
       /* Signal to plugins that a file is included.  This could happen
 	 several times with the same file path, e.g. because of
 	 several '#include' or '#line' directives...  */
-      invoke_plugin_callbacks 
+      invoke_plugin_callbacks
 	(PLUGIN_INCLUDE_FILE,
 	 const_cast<char*> (ORDINARY_MAP_FILE_NAME (new_map)));
     }

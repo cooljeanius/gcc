@@ -699,6 +699,11 @@ ftms = {
 ftms = {
   name = string_view;
   values = {
+    v = 202403;
+    cxxmin = 26;
+    hosted = yes;
+  };
+  values = {
     v = 201803;
     cxxmin = 17;
     hosted = yes;
@@ -1659,6 +1664,22 @@ ftms = {
 };
 
 ftms = {
+  name = flat_map;
+  values = {
+    v = 202207;
+    cxxmin = 23;
+  };
+};
+
+ftms = {
+  name = flat_set;
+  values = {
+    v = 202207;
+    cxxmin = 23;
+  };
+};
+
+ftms = {
   name = formatters;
   values = {
     v = 202302;
@@ -1865,6 +1886,15 @@ ftms = {
     cxxmin = 26;
     hosted = yes;
     extra_cond = "__glibcxx_to_chars";
+  };
+};
+
+ftms = {
+  name = modules;
+  values = {
+    v = 202207;
+    cxxmin = 20;
+    extra_cond = "__cpp_modules";
   };
 };
 

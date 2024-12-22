@@ -104,7 +104,7 @@ add_line_note (cpp_buffer *buffer, const uchar *pos, unsigned int type)
    path below.  Since this loop is very hot it's worth doing these kinds
    of optimizations.
 
-   One of the paths through the ifdefs should provide 
+   One of the paths through the ifdefs should provide
 
      const uchar *search_line_fast (const uchar *s, const uchar *end);
 
@@ -168,7 +168,7 @@ static inline word_type
 acc_char_cmp (word_type val, word_type c)
 {
 #if defined(__GNUC__) && defined(__alpha__)
-  /* We can get exact results using a compare-bytes instruction.  
+  /* We can get exact results using a compare-bytes instruction.
      Get (val == c) via (0 >= (val ^ c)).  */
   return __builtin_alpha_cmpbge (0, val ^ c);
 #else
@@ -215,7 +215,7 @@ acc_char_index (word_type cmp ATTRIBUTE_UNUSED,
 }
 
 /* A version of the fast scanner using bit fiddling techniques.
- 
+
    For 32-bit words, one would normally perform 16 comparisons and
    16 branches.  With this algorithm one performs 24 arithmetic
    operations and one branch.  Whether this is faster with a 32-bit
@@ -236,7 +236,7 @@ search_line_acc_char (const uchar *s, const uchar *end ATTRIBUTE_UNUSED)
   unsigned int misalign;
   const word_type *p;
   word_type val, t;
-  
+
   /* Align the buffer.  Mask out any bytes from before the beginning.  */
   p = (word_type *)((uintptr_t)s & -sizeof(word_type));
   val = *p;
@@ -433,20 +433,20 @@ search_line_fast (const uchar *s, const uchar *end ATTRIBUTE_UNUSED)
   typedef __attribute__((altivec(vector))) unsigned char vc;
 
   const vc repl_nl = {
-    '\n', '\n', '\n', '\n', '\n', '\n', '\n', '\n', 
+    '\n', '\n', '\n', '\n', '\n', '\n', '\n', '\n',
     '\n', '\n', '\n', '\n', '\n', '\n', '\n', '\n'
   };
   const vc repl_cr = {
-    '\r', '\r', '\r', '\r', '\r', '\r', '\r', '\r', 
+    '\r', '\r', '\r', '\r', '\r', '\r', '\r', '\r',
     '\r', '\r', '\r', '\r', '\r', '\r', '\r', '\r'
   };
   const vc repl_bs = {
-    '\\', '\\', '\\', '\\', '\\', '\\', '\\', '\\', 
+    '\\', '\\', '\\', '\\', '\\', '\\', '\\', '\\',
     '\\', '\\', '\\', '\\', '\\', '\\', '\\', '\\'
   };
   const vc repl_qm = {
-    '?', '?', '?', '?', '?', '?', '?', '?', 
-    '?', '?', '?', '?', '?', '?', '?', '?', 
+    '?', '?', '?', '?', '?', '?', '?', '?',
+    '?', '?', '?', '?', '?', '?', '?', '?',
   };
   const vc zero = { 0 };
 
@@ -537,20 +537,20 @@ search_line_fast (const uchar *s, const uchar *end ATTRIBUTE_UNUSED)
   typedef __attribute__((altivec(vector))) unsigned char vc;
 
   const vc repl_nl = {
-    '\n', '\n', '\n', '\n', '\n', '\n', '\n', '\n', 
+    '\n', '\n', '\n', '\n', '\n', '\n', '\n', '\n',
     '\n', '\n', '\n', '\n', '\n', '\n', '\n', '\n'
   };
   const vc repl_cr = {
-    '\r', '\r', '\r', '\r', '\r', '\r', '\r', '\r', 
+    '\r', '\r', '\r', '\r', '\r', '\r', '\r', '\r',
     '\r', '\r', '\r', '\r', '\r', '\r', '\r', '\r'
   };
   const vc repl_bs = {
-    '\\', '\\', '\\', '\\', '\\', '\\', '\\', '\\', 
+    '\\', '\\', '\\', '\\', '\\', '\\', '\\', '\\',
     '\\', '\\', '\\', '\\', '\\', '\\', '\\', '\\'
   };
   const vc repl_qm = {
-    '?', '?', '?', '?', '?', '?', '?', '?', 
-    '?', '?', '?', '?', '?', '?', '?', '?', 
+    '?', '?', '?', '?', '?', '?', '?', '?',
+    '?', '?', '?', '?', '?', '?', '?', '?',
   };
   const vc ones = {
     -1, -1, -1, -1, -1, -1, -1, -1,
@@ -786,8 +786,8 @@ search_line_fast (const uchar *s, const uchar *end ATTRIBUTE_UNUSED)
       l = vpadd_u8 (vget_low_u8 (t), vget_high_u8 (t));
       m = vpaddl_u8 (l);
       n = vpaddl_u16 (m);
-      
-      found = vget_lane_u32 ((uint32x2_t) vorr_u64 ((uint64x1_t) n, 
+
+      found = vget_lane_u32 ((uint32x2_t) vorr_u64 ((uint64x1_t) n,
 	      vshr_n_u64 ((uint64x1_t) n, 24)), 0);
       found &= mask;
     }
@@ -2022,7 +2022,7 @@ name_p (cpp_reader *pfile, const cpp_string *string)
 /* After parsing an identifier or other sequence, produce a warning about
    sequences not in NFC/NFKC.  */
 static void
-warn_about_normalization (cpp_reader *pfile, 
+warn_about_normalization (cpp_reader *pfile,
 			  const cpp_token *token,
 			  const struct normalize_state *s,
 			  bool identifier)
@@ -2587,7 +2587,7 @@ lex_raw_string (cpp_reader *pfile, cpp_token *token, const uchar *base)
     ++note;
 
   lit_accum accum;
-  
+
   uchar prefix[17];
   unsigned prefix_len = 0;
   enum Phase
@@ -2762,7 +2762,8 @@ lex_raw_string (cpp_reader *pfile, cpp_token *token, const uchar *base)
 	{
 	  pos--;
 	  pfile->buffer->cur = pos;
-	  if ((pfile->state.in_directive || pfile->state.parsing_args)
+	  if ((pfile->state.in_directive || pfile->state.parsing_args
+	       || pfile->state.in_deferred_pragma)
 	      && pfile->buffer->next_line >= pfile->buffer->rlimit)
 	    {
 	      cpp_error_with_line (pfile, CPP_DL_ERROR, token->src_loc, 0,
@@ -2998,14 +2999,14 @@ cpp_get_comments (cpp_reader *pfile)
 }
 
 /* Append a comment to the end of the comment table. */
-static void 
-store_comment (cpp_reader *pfile, cpp_token *token) 
+static void
+store_comment (cpp_reader *pfile, cpp_token *token)
 {
   int len;
 
   if (pfile->comments.allocated == 0)
     {
-      pfile->comments.allocated = 256; 
+      pfile->comments.allocated = 256;
       pfile->comments.entries = (cpp_comment *) xmalloc
 	(pfile->comments.allocated * sizeof (cpp_comment));
     }
@@ -3021,7 +3022,7 @@ store_comment (cpp_reader *pfile, cpp_token *token)
   len = token->val.str.len;
 
   /* Copy comment. Note, token may not be NULL terminated. */
-  pfile->comments.entries[pfile->comments.count].comment = 
+  pfile->comments.entries[pfile->comments.count].comment =
     (char *) xmalloc (sizeof (char) * (len + 1));
   memcpy (pfile->comments.entries[pfile->comments.count].comment,
 	  token->val.str.text, len);
@@ -3588,7 +3589,7 @@ cpp_maybe_module_directive (cpp_reader *pfile, cpp_token *result)
 	  if (_cpp_defined_macro_p (node)
 	      && _cpp_maybe_notify_macro_use (pfile, node, tok->src_loc)
 	      && !cpp_fun_like_macro_p (node))
-	    cpp_error_with_line (pfile, CPP_DL_ERROR, tok->src_loc, 0, 
+	    cpp_error_with_line (pfile, CPP_DL_ERROR, tok->src_loc, 0,
 				 "module control-line %qs cannot be"
 				 " an object-like macro",
 				 NODE_NAME (node));
@@ -3604,6 +3605,78 @@ cpp_maybe_module_directive (cpp_reader *pfile, cpp_token *result)
       /* Maybe tell the tokenizer we expect a header-name down the
 	 road.  */
       pfile->state.directive_file_token = header_count;
+
+      /* According to P3034R1, pp-module-name and pp-module-partition tokens
+	 if any shouldn't be macro expanded and identifiers shouldn't be
+	 defined as object-like macro.  */
+      if (!header_count && peek->type == CPP_NAME)
+	{
+	  int state = 0;
+	  do
+	    {
+	      cpp_token *tok = peek;
+	      if (tok->type == CPP_NAME)
+		{
+		  cpp_hashnode *node = tok->val.node.node;
+		  /* Don't attempt to expand the token.  */
+		  tok->flags |= NO_EXPAND;
+		  if (_cpp_defined_macro_p (node)
+		      && _cpp_maybe_notify_macro_use (pfile, node,
+						      tok->src_loc)
+		      && !cpp_fun_like_macro_p (node))
+		    {
+		      if (state == 0)
+			cpp_error_with_line (pfile, CPP_DL_ERROR,
+					     tok->src_loc, 0,
+					     "module name %qs cannot "
+					     "be an object-like macro",
+					     NODE_NAME (node));
+		      else
+			cpp_error_with_line (pfile, CPP_DL_ERROR,
+					     tok->src_loc, 0,
+					     "module partition %qs cannot "
+					     "be an object-like macro",
+					     NODE_NAME (node));
+		    }
+		}
+	      peek = _cpp_lex_direct (pfile);
+	      backup++;
+	      if (tok->type == CPP_NAME)
+		{
+		  if (peek->type == CPP_DOT)
+		    continue;
+		  else if (peek->type == CPP_COLON && state == 0)
+		    {
+		      ++state;
+		      continue;
+		    }
+		  else if (peek->type == CPP_OPEN_PAREN)
+		    {
+		      if (state == 0)
+			cpp_error_with_line (pfile, CPP_DL_ERROR,
+					     peek->src_loc, 0,
+					     "module name followed by %<(%>");
+		      else
+			cpp_error_with_line (pfile, CPP_DL_ERROR,
+					     peek->src_loc, 0,
+					     "module partition followed by "
+					     "%<(%>");
+		      break;
+		    }
+		  else if (peek->type == CPP_NAME
+			   && _cpp_defined_macro_p (peek->val.node.node))
+		    {
+		      peek->flags |= NO_DOT_COLON;
+		      break;
+		    }
+		  else
+		    break;
+		}
+	      else if (peek->type != CPP_NAME)
+		break;
+	    }
+	  while (true);
+	}
     }
   else
     {
@@ -3991,7 +4064,7 @@ _cpp_lex_direct (cpp_reader *pfile)
       /* A potential block or line comment.  */
       comment_start = buffer->cur;
       c = *buffer->cur;
-      
+
       if (c == '*')
 	{
 	  if (_cpp_skip_block_comment (pfile))
@@ -4379,21 +4452,21 @@ utf8_to_ucn (unsigned char *buffer, const unsigned char *name)
   int ucn_len_c;
   unsigned t;
   unsigned long utf32;
-  
+
   /* Compute the length of the UTF-8 sequence.  */
   for (t = *name; t & 0x80; t <<= 1)
     ucn_len++;
-  
+
   utf32 = *name & (0x7F >> ucn_len);
   for (ucn_len_c = 1; ucn_len_c < ucn_len; ucn_len_c++)
     {
       utf32 = (utf32 << 6) | (*++name & 0x3F);
-      
+
       /* Ill-formed UTF-8.  */
       if ((*name & ~0x3F) != 0x80)
 	abort ();
     }
-  
+
   *buffer++ = '\\';
   *buffer++ = 'U';
   for (j = 7; j >= 0; j--)
@@ -4418,7 +4491,7 @@ _cpp_spell_ident_ucns (unsigned char *buffer, cpp_hashnode *ident)
 {
   size_t i;
   const unsigned char *name = NODE_NAME (ident);
-	  
+
   for (i = 0; i < NODE_LEN (ident); i++)
     if (name[i] & ~0x7F)
       {
@@ -4492,7 +4565,7 @@ cpp_spell_token (cpp_reader *pfile, const cpp_token *token,
    freed when the reader is destroyed.  Useful for diagnostics.  */
 unsigned char *
 cpp_token_as_text (cpp_reader *pfile, const cpp_token *token)
-{ 
+{
   unsigned int len = cpp_token_len (token) + 1;
   unsigned char *start = _cpp_unaligned_alloc (pfile, len), *end;
 
@@ -4925,7 +4998,8 @@ _cpp_aligned_alloc (cpp_reader *pfile, size_t len)
 void *
 _cpp_commit_buff (cpp_reader *pfile, size_t size)
 {
-  void *ptr = BUFF_FRONT (pfile->a_buff);
+  const auto buff = pfile->a_buff;
+  void *ptr = BUFF_FRONT (buff);
 
   if (pfile->hash_table->alloc_subobject)
     {
@@ -4934,7 +5008,12 @@ _cpp_commit_buff (cpp_reader *pfile, size_t size)
       ptr = copy;
     }
   else
-    BUFF_FRONT (pfile->a_buff) += size;
+    {
+      BUFF_FRONT (buff) += size;
+      /* Make sure the remaining space is maximally aligned for whatever this
+	 buffer holds next.  */
+      BUFF_FRONT (buff) += BUFF_ROOM (buff) % DEFAULT_ALIGNMENT;
+    }
 
   return ptr;
 }
@@ -5154,7 +5233,7 @@ do_peek_module (cpp_reader *pfile, unsigned char c,
      preprocessing tokens, or module followed by identifier, ':' or
      ';' preprocessing tokens.  */
   unsigned char p = *peek++;
-      
+
   /* A character literal is ... single quotes, ... optionally preceded
      by u8, u, U, or L */
   /* A string-literal is a ... double quotes, optionally prefixed by
@@ -5310,7 +5389,7 @@ cpp_directive_only_process (cpp_reader *pfile,
 		  goto next_line;
 		}
 	      goto dflt;
-	      
+
 	    case '#':
 	      if (bol)
 		{
@@ -5648,7 +5727,7 @@ cpp_directive_only_process (cpp_reader *pfile,
 	      bad_string:
 		cpp_error_with_line (pfile, CPP_DL_ERROR, sloc, 0,
 				     "unterminated literal");
-		
+
 	      done_string:
 		raw = false;
 		lwm = pos - 1;

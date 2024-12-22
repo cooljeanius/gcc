@@ -36,7 +36,7 @@ along with GCC; see the file COPYING3.  If not see
    location rather than implicitly using input_location.  */
 
 #include "config.h"
-#define INCLUDE_MEMORY
+#define INCLUDE_STRING
 #include "system.h"
 #include "coretypes.h"
 #include "target.h"
@@ -74,13 +74,16 @@ along with GCC; see the file COPYING3.  If not see
 #include "bitmap.h"
 #include "analyzer/analyzer-language.h"
 #include "toplev.h"
+#include "asan.h"
+#include "c-family/c-ubsan.h"
+#include "gcc-urlifier.h"
 
 /* We need to walk over decls with incomplete struct/union/enum types
    after parsing the whole translation unit.
    In finish_decl(), if the decl is static, has incomplete
    struct/union/enum type, it is appended to incomplete_record_decls.
    In c_parser_translation_unit(), we iterate over incomplete_record_decls
-   and report error if any of the decls are still incomplete.  */ 
+   and report error if any of the decls are still incomplete.  */
 
 vec<tree> incomplete_record_decls;
 
@@ -412,7 +415,7 @@ c_lex_one_token (c_parser *parser, c_token *token, bool raw = false)
 		/* Else they are not special keywords.
 		*/
 	      }
-	    else if (c_dialect_objc () 
+	    else if (c_dialect_objc ()
 		     && (OBJC_IS_AT_KEYWORD (rid_code)
 			 || OBJC_IS_CXX_KEYWORD (rid_code)))
 	      {
@@ -595,6 +598,7 @@ c_keyword_starts_typename (enum rid keyword)
     case RID_DFLOAT32:
     case RID_DFLOAT64:
     case RID_DFLOAT128:
+    case RID_DFLOAT64X:
     CASE_RID_FLOATN_NX:
     case RID_BOOL:
     case RID_BITINT:
@@ -799,6 +803,7 @@ c_token_starts_declspecs (c_token *token)
 	case RID_DFLOAT32:
 	case RID_DFLOAT64:
 	case RID_DFLOAT128:
+	case RID_DFLOAT64X:
 	CASE_RID_FLOATN_NX:
 	case RID_BOOL:
 	case RID_BITINT:
@@ -863,9 +868,9 @@ c_parser_next_token_starts_declspecs (c_parser *parser)
      setter/getter on the class.  c_token_starts_declspecs() can't
      differentiate between the two cases because it only checks the
      current token, so we have a special check here.  */
-  if (c_dialect_objc () 
+  if (c_dialect_objc ()
       && token->type == CPP_NAME
-      && token->id_kind == C_ID_CLASSNAME 
+      && token->id_kind == C_ID_CLASSNAME
       && c_parser_peek_2nd_token (parser)->type == CPP_DOT)
     return false;
 
@@ -881,9 +886,9 @@ c_parser_next_tokens_start_declaration (c_parser *parser)
   c_token *token = c_parser_peek_token (parser);
 
   /* Same as above.  */
-  if (c_dialect_objc () 
+  if (c_dialect_objc ()
       && token->type == CPP_NAME
-      && token->id_kind == C_ID_CLASSNAME 
+      && token->id_kind == C_ID_CLASSNAME
       && c_parser_peek_2nd_token (parser)->type == CPP_DOT)
     return false;
 
@@ -1632,8 +1637,8 @@ static bool c_parser_nth_token_starts_std_attributes (c_parser *,
 static tree c_parser_std_attribute_specifier_sequence (c_parser *);
 static void c_parser_external_declaration (c_parser *);
 static void c_parser_asm_definition (c_parser *);
-static void c_parser_declaration_or_fndef (c_parser *, bool, bool, bool,
-					   bool, bool, tree * = NULL,
+static tree c_parser_declaration_or_fndef (c_parser *, bool, bool, bool,
+					   bool, bool, bool, tree * = NULL,
 					   vec<c_token> * = NULL,
 					   bool have_attrs = false,
 					   tree attrs = NULL,
@@ -1658,6 +1663,7 @@ static struct c_arg_info *c_parser_parms_declarator (c_parser *, bool, tree,
 static struct c_arg_info *c_parser_parms_list_declarator (c_parser *, tree,
 							  tree, bool);
 static struct c_parm *c_parser_parameter_declaration (c_parser *, tree, bool);
+static tree c_parser_asm_string_literal (c_parser *);
 static tree c_parser_simple_asm_expr (c_parser *);
 static tree c_parser_gnu_attributes (c_parser *);
 static struct c_expr c_parser_initializer (c_parser *, tree);
@@ -1748,6 +1754,8 @@ static void c_parser_omp_assumption_clauses (c_parser *, bool);
 static void c_parser_omp_allocate (c_parser *);
 static void c_parser_omp_assumes (c_parser *);
 static bool c_parser_omp_ordered (c_parser *, enum pragma_context, bool *);
+static tree c_parser_omp_dispatch (location_t, c_parser *);
+static void c_parser_omp_interop (c_parser *);
 static void c_parser_oacc_routine (c_parser *, enum pragma_context);
 
 /* These Objective-C parser functions are only ever called when
@@ -2058,7 +2066,8 @@ c_parser_external_declaration (c_parser *parser)
 	 an @interface or @protocol with prefix attributes).  We can
 	 only tell which after parsing the declaration specifiers, if
 	 any, and the first declarator.  */
-      c_parser_declaration_or_fndef (parser, true, true, true, false, true);
+      c_parser_declaration_or_fndef (parser, true, true, true, false, true,
+				     false);
       break;
     }
 }
@@ -2122,6 +2131,43 @@ handle_assume_attribute (location_t here, tree attrs, bool nested)
   return remove_attribute ("gnu", "assume", attrs);
 }
 
+/* We might need to reclassify any previously-lexed identifier, e.g.
+   when we've left a for loop with an if-statement without else in the
+   body - we might have used a wrong scope for the token.  See PR67784.  */
+
+static void
+c_parser_maybe_reclassify_token (c_parser *parser)
+{
+  if (c_parser_next_token_is (parser, CPP_NAME))
+    {
+      c_token *token = c_parser_peek_token (parser);
+
+      if (token->id_kind != C_ID_CLASSNAME)
+	{
+	  tree decl = lookup_name (token->value);
+
+	  token->id_kind = C_ID_ID;
+	  if (decl)
+	    {
+	      if (TREE_CODE (decl) == TYPE_DECL)
+		token->id_kind = C_ID_TYPENAME;
+	    }
+	  else if (c_dialect_objc ())
+	    {
+	      tree objc_interface_decl = objc_is_class_name (token->value);
+	      /* Objective-C class names are in the same namespace as
+		 variables and typedefs, and hence are shadowed by local
+		 declarations.  */
+	      if (objc_interface_decl)
+		{
+		  token->value = objc_interface_decl;
+		  token->id_kind = C_ID_CLASSNAME;
+		}
+	    }
+	}
+    }
+}
+
 /* Parse a declaration or function definition (C90 6.5, 6.7.1, C99
    6.7, 6.9.1, C11 6.7, 6.9.1).  If FNDEF_OK is true, a function definition
    is accepted; otherwise (old-style parameter declarations) only other
@@ -2143,7 +2189,13 @@ handle_assume_attribute (location_t here, tree attrs, bool nested)
    parsed in the caller (in contexts where such attributes had to be
    parsed to determine whether what follows is a declaration or a
    statement); HAVE_ATTRS says whether there were any such attributes
-   (even empty).
+   (even empty).  If SIMPLE_OK, the construct can be a simple-declaration;
+   in that case, the ';' is not consumed (left to the caller so that it
+   can figure out if there was a simple-declaration or not), there must
+   be an initializer, and only one object may be declared.  When SIMPLE_OK
+   is true we are called from c_parser_selection_header.
+
+   Returns the resulting declaration, if there was any with an initializer.
 
    declaration:
      declaration-specifiers init-declarator-list[opt] ;
@@ -2164,6 +2216,10 @@ handle_assume_attribute (location_t here, tree attrs, bool nested)
    init-declarator:
      declarator simple-asm-expr[opt] gnu-attributes[opt]
      declarator simple-asm-expr[opt] gnu-attributes[opt] = initializer
+
+   simple-declaration:
+     attribute-specifier-sequence[opt] declaration-specifiers declarator
+       = initializer
 
    GNU extensions:
 
@@ -2211,10 +2267,11 @@ handle_assume_attribute (location_t here, tree attrs, bool nested)
      declaration-specifiers[opt] __RTL (gimple-or-rtl-pass-list) declarator
        declaration-list[opt] compound-statement  */
 
-static void
+static tree
 c_parser_declaration_or_fndef (c_parser *parser, bool fndef_ok,
 			       bool static_assert_ok, bool empty_ok,
 			       bool nested, bool start_attr_ok,
+			       bool simple_ok,
 			       tree *objc_foreach_object_declaration
 			       /* = NULL */,
 			       vec<c_token> *omp_declare_simd_clauses
@@ -2230,6 +2287,7 @@ c_parser_declaration_or_fndef (c_parser *parser, bool fndef_ok,
   tree all_prefix_attrs;
   bool diagnosed_no_specs = false;
   location_t here = c_parser_peek_token (parser)->location;
+  tree result = NULL_TREE;
 
   add_debug_begin_stmt (c_parser_peek_token (parser)->location);
 
@@ -2237,7 +2295,7 @@ c_parser_declaration_or_fndef (c_parser *parser, bool fndef_ok,
       && c_parser_next_token_is_keyword (parser, RID_STATIC_ASSERT))
     {
       c_parser_static_assert_declaration (parser);
-      return;
+      return result;
     }
   specs = build_null_declspecs ();
 
@@ -2323,13 +2381,13 @@ c_parser_declaration_or_fndef (c_parser *parser, bool fndef_ok,
   if (parser->error)
     {
       c_parser_skip_to_end_of_block_or_statement (parser);
-      return;
+      return result;
     }
   if (nested && !specs->declspecs_seen_p)
     {
       c_parser_error (parser, "expected declaration specifiers");
       c_parser_skip_to_end_of_block_or_statement (parser);
-      return;
+      return result;
     }
 
   finish_declspecs (specs);
@@ -2364,6 +2422,7 @@ c_parser_declaration_or_fndef (c_parser *parser, bool fndef_ok,
 	  break;
 	}
     }
+
   if (c_parser_next_token_is (parser, CPP_SEMICOLON))
     {
       bool handled_assume = false;
@@ -2381,7 +2440,7 @@ c_parser_declaration_or_fndef (c_parser *parser, bool fndef_ok,
 	      c_parser_pragma (parser, pragma_external, NULL, NULL_TREE);
 	    }
 	  c_parser_consume_token (parser);
-	  return;
+	  return result;
 	}
       if (specs->typespec_kind == ctsk_none
 	  && lookup_attribute ("gnu", "assume", specs->attrs))
@@ -2423,7 +2482,7 @@ c_parser_declaration_or_fndef (c_parser *parser, bool fndef_ok,
       c_parser_consume_token (parser);
       if (oacc_routine_data)
 	c_finish_oacc_routine (oacc_routine_data, NULL_TREE, false);
-      return;
+      return result;
     }
 
   /* Provide better error recovery.  Note that a type name here is usually
@@ -2436,7 +2495,7 @@ c_parser_declaration_or_fndef (c_parser *parser, bool fndef_ok,
       c_parser_error (parser, "expected %<;%>, identifier or %<(%>");
       parser->error = false;
       shadow_tag_warned (specs, 1);
-      return;
+      return result;
     }
   else if (c_dialect_objc () && !any_auto_type_p)
     {
@@ -2446,10 +2505,10 @@ c_parser_declaration_or_fndef (c_parser *parser, bool fndef_ok,
 	  case CPP_PLUS:
 	  case CPP_MINUS:
 	    if (c_parser_objc_diagnose_bad_element_prefix (parser, specs))
-	      return;
+	      return result;
 	    if (specs->attrs)
 	      {
-		warning_at (c_parser_peek_token (parser)->location, 
+		warning_at (c_parser_peek_token (parser)->location,
 			    OPT_Wattributes,
 	       		    "prefix attributes are ignored for methods");
 		specs->attrs = NULL_TREE;
@@ -2458,7 +2517,7 @@ c_parser_declaration_or_fndef (c_parser *parser, bool fndef_ok,
 	      c_parser_objc_method_definition (parser);
 	    else
 	      c_parser_objc_methodproto (parser);
-	    return;
+	    return result;
 	    break;
 	  default:
 	    break;
@@ -2473,32 +2532,32 @@ c_parser_declaration_or_fndef (c_parser *parser, bool fndef_ok,
 	case RID_AT_INTERFACE:
 	  {
 	    if (c_parser_objc_diagnose_bad_element_prefix (parser, specs))
-	      return;
+	      return result;
 	    c_parser_objc_class_definition (parser, specs->attrs);
-	    return;
+	    return result;
 	  }
 	  break;
 	case RID_AT_IMPLEMENTATION:
 	  {
 	    if (c_parser_objc_diagnose_bad_element_prefix (parser, specs))
-	      return;
+	      return result;
 	    if (specs->attrs)
 	      {
-		warning_at (c_parser_peek_token (parser)->location, 
+		warning_at (c_parser_peek_token (parser)->location,
 			OPT_Wattributes,
 			"prefix attributes are ignored for implementations");
 		specs->attrs = NULL_TREE;
 	      }
-	    c_parser_objc_class_definition (parser, NULL_TREE);	    
-	    return;
+	    c_parser_objc_class_definition (parser, NULL_TREE);
+	    return result;
 	  }
 	  break;
 	case RID_AT_PROTOCOL:
 	  {
 	    if (c_parser_objc_diagnose_bad_element_prefix (parser, specs))
-	      return;
+	      return result;
 	    c_parser_objc_protocol_definition (parser, specs->attrs);
-	    return;
+	    return result;
 	  }
 	  break;
 	case RID_AT_ALIAS:
@@ -2530,6 +2589,7 @@ c_parser_declaration_or_fndef (c_parser *parser, bool fndef_ok,
   prefix_attrs = specs->attrs;
   all_prefix_attrs = prefix_attrs;
   specs->attrs = NULL_TREE;
+  bool more_than_one_decl = false;
   while (true)
     {
       struct c_declarator *declarator;
@@ -2542,7 +2602,7 @@ c_parser_declaration_or_fndef (c_parser *parser, bool fndef_ok,
 	 should diagnose if there were no declaration specifiers) or a
 	 function definition (in which case the diagnostic for
 	 implicit int suffices).  */
-      declarator = c_parser_declarator (parser, 
+      declarator = c_parser_declarator (parser,
 					specs->typespec_kind != ctsk_none,
 					C_DTR_NORMAL, &dummy);
       if (declarator == NULL)
@@ -2552,8 +2612,10 @@ c_parser_declaration_or_fndef (c_parser *parser, bool fndef_ok,
 				       omp_declare_simd_clauses);
 	  if (oacc_routine_data)
 	    c_finish_oacc_routine (oacc_routine_data, NULL_TREE, false);
-	  c_parser_skip_to_end_of_block_or_statement (parser);
-	  return;
+	  /* This check is here purely to improve the diagnostic.  */
+	  if (!simple_ok)
+	    c_parser_skip_to_end_of_block_or_statement (parser);
+	  return result;
 	}
       if (flag_openmp || flag_openmp_simd)
 	{
@@ -2570,7 +2632,7 @@ c_parser_declaration_or_fndef (c_parser *parser, bool fndef_ok,
 		    "%<__auto_type%> requires a plain identifier"
 		    " as declarator");
 	  c_parser_skip_to_end_of_block_or_statement (parser);
-	  return;
+	  return result;
 	}
       if (std_auto_type_p)
 	{
@@ -2583,7 +2645,7 @@ c_parser_declaration_or_fndef (c_parser *parser, bool fndef_ok,
 			"%<auto%> requires a plain identifier, possibly with"
 			" attributes, as declarator");
 	      c_parser_skip_to_end_of_block_or_statement (parser);
-	      return;
+	      return result;
 	    }
 	  underspec_name = d->u.id.id;
 	}
@@ -2624,7 +2686,7 @@ c_parser_declaration_or_fndef (c_parser *parser, bool fndef_ok,
 		  error_at (here, "attributes should be specified before the "
 			    "declarator in a function definition");
 		  c_parser_skip_to_end_of_block_or_statement (parser);
-		  return;
+		  return result;
 		}
 	    }
 	  if (c_parser_next_token_is (parser, CPP_EQ))
@@ -2764,6 +2826,7 @@ c_parser_declaration_or_fndef (c_parser *parser, bool fndef_ok,
 		  maybe_warn_string_init (init_loc, TREE_TYPE (d), init);
 		  finish_decl (d, init_loc, init.value,
 			       init.original_type, asm_name);
+		  result = d;
 		}
 	    }
 	  else
@@ -2774,7 +2837,7 @@ c_parser_declaration_or_fndef (c_parser *parser, bool fndef_ok,
 			    "%qs requires an initialized data declaration",
 			    any_auto_type_p ? auto_type_keyword : "constexpr");
 		  c_parser_skip_to_end_of_block_or_statement (parser);
-		  return;
+		  return result;
 		}
 
 	      location_t lastloc = UNKNOWN_LOCATION;
@@ -2862,18 +2925,19 @@ c_parser_declaration_or_fndef (c_parser *parser, bool fndef_ok,
 		  if (d)
 		    *objc_foreach_object_declaration = d;
 		  else
-		    *objc_foreach_object_declaration = error_mark_node;		    
+		    *objc_foreach_object_declaration = error_mark_node;
 		}
 	    }
 	  if (c_parser_next_token_is (parser, CPP_COMMA))
 	    {
+	      more_than_one_decl = true;
 	      if (any_auto_type_p || specs->constexpr_p)
 		{
 		  error_at (here,
 			    "%qs may only be used with a single declarator",
 			    any_auto_type_p ? auto_type_keyword : "constexpr");
 		  c_parser_skip_to_end_of_block_or_statement (parser);
-		  return;
+		  return result;
 		}
 	      c_parser_consume_token (parser);
 	      if (c_parser_next_token_is_keyword (parser, RID_ATTRIBUTE))
@@ -2885,8 +2949,9 @@ c_parser_declaration_or_fndef (c_parser *parser, bool fndef_ok,
 	    }
 	  else if (c_parser_next_token_is (parser, CPP_SEMICOLON))
 	    {
-	      c_parser_consume_token (parser);
-	      return;
+	      if (!simple_ok)
+		c_parser_consume_token (parser);
+	      return result;
 	    }
 	  else if (c_parser_next_token_is_keyword (parser, RID_IN))
 	    {
@@ -2895,13 +2960,20 @@ c_parser_declaration_or_fndef (c_parser *parser, bool fndef_ok,
 		 Objective-C foreach statement.  Do not consume the
 		 token, so that the caller can use it to determine
 		 that this indeed is a foreach context.  */
-	      return;
+	      return result;
 	    }
 	  else
 	    {
-	      c_parser_error (parser, "expected %<,%> or %<;%>");
-	      c_parser_skip_to_end_of_block_or_statement (parser);
-	      return;
+	      if (!simple_ok)
+		{
+		  c_parser_error (parser, "expected %<,%> or %<;%>");
+		  c_parser_skip_to_end_of_block_or_statement (parser);
+		}
+	      /* It's not valid to use if (int i = 2, j = 3).  */
+	      else if (more_than_one_decl)
+		error_at (here, "declaration in condition can only declare "
+			  "a single object");
+	      return result;
 	    }
 	}
       else if (any_auto_type_p || specs->constexpr_p)
@@ -2910,14 +2982,19 @@ c_parser_declaration_or_fndef (c_parser *parser, bool fndef_ok,
 		    "%qs requires an initialized data declaration",
 		    any_auto_type_p ? auto_type_keyword : "constexpr");
 	  c_parser_skip_to_end_of_block_or_statement (parser);
-	  return;
+	  return result;
 	}
       else if (!fndef_ok)
 	{
-	  c_parser_error (parser, "expected %<=%>, %<,%>, %<;%>, "
-			  "%<asm%> or %<__attribute__%>");
-	  c_parser_skip_to_end_of_block_or_statement (parser);
-	  return;
+	  if (simple_ok && c_parser_next_token_is (parser, CPP_CLOSE_PAREN))
+	    /* Let c_parser_selection_header emit the error.  */;
+	  else
+	    {
+	      c_parser_error (parser, "expected %<=%>, %<,%>, %<;%>, "
+			      "%<asm%> or %<__attribute__%>");
+	      c_parser_skip_to_end_of_block_or_statement (parser);
+	    }
+	  return result;
 	}
       /* Function definition (nested or otherwise).  */
       if (nested)
@@ -2983,10 +3060,11 @@ c_parser_declaration_or_fndef (c_parser *parser, bool fndef_ok,
 	 function definitions either.  */
       int save_debug_nonbind_markers_p = debug_nonbind_markers_p;
       debug_nonbind_markers_p = 0;
+      c_parser_maybe_reclassify_token (parser);
       while (c_parser_next_token_is_not (parser, CPP_EOF)
 	     && c_parser_next_token_is_not (parser, CPP_OPEN_BRACE))
 	c_parser_declaration_or_fndef (parser, false, false, false,
-				       true, false);
+				       true, false, false);
       debug_nonbind_markers_p = save_debug_nonbind_markers_p;
       store_parm_decls ();
       if (omp_declare_simd_clauses)
@@ -3016,7 +3094,7 @@ c_parser_declaration_or_fndef (c_parser *parser, bool fndef_ok,
 	  pop_scope ();
 
 	  finish_function (endloc);
-	  return;
+	  return result;
 	}
       /* If the definition was marked with __GIMPLE then parse the
          function body as GIMPLE.  */
@@ -3057,6 +3135,8 @@ c_parser_declaration_or_fndef (c_parser *parser, bool fndef_ok,
 
       break;
     }
+
+  return result;
 }
 
 /* Parse an asm-definition (asm() outside a function body).  This is a
@@ -3064,12 +3144,74 @@ c_parser_declaration_or_fndef (c_parser *parser, bool fndef_ok,
 
    asm-definition:
      simple-asm-expr ;
-*/
+     asm ( toplevel-asm-argument ) ;
+
+   toplevel-asm-argument:
+     asm-string-literal
+     asm-string-literal : asm-operands[opt]
+     asm-string-literal : asm-operands[opt] : asm-operands[opt]
+
+   The :: token is considered equivalent to two consecutive : tokens.  */
 
 static void
 c_parser_asm_definition (c_parser *parser)
 {
-  tree asm_str = c_parser_simple_asm_expr (parser);
+  location_t asm_loc = c_parser_peek_token (parser)->location;
+  gcc_assert (c_parser_next_token_is_keyword (parser, RID_ASM));
+  c_parser_consume_token (parser);
+  matching_parens parens;
+  tree asm_str = NULL_TREE;
+  tree outputs = NULL_TREE, inputs = NULL_TREE;
+  if (!parens.require_open (parser))
+    goto done;
+  asm_str = c_parser_asm_string_literal (parser);
+  if (c_parser_next_token_is (parser, CPP_CLOSE_PAREN))
+    {
+      parens.require_close (parser);
+      goto done;
+    }
+  for (int section = 0; section < 2; ++section)
+    {
+      if (c_parser_next_token_is (parser, CPP_SCOPE))
+	{
+	  ++section;
+	  if (section == 2)
+	    {
+	      c_parser_error (parser, "expected %<)%>");
+	    error_close_paren:
+	      c_parser_skip_until_found (parser, CPP_CLOSE_PAREN, NULL);
+	      asm_str = NULL_TREE;
+	      goto done;
+	    }
+	  c_parser_consume_token (parser);
+	}
+      else if (!c_parser_require (parser, CPP_COLON,
+				  "expected %<:%> or %<)%>",
+				  UNKNOWN_LOCATION, false))
+	goto error_close_paren;
+      if (!c_parser_next_token_is (parser, CPP_COLON)
+	  && !c_parser_next_token_is (parser, CPP_SCOPE)
+	  && !c_parser_next_token_is (parser, CPP_CLOSE_PAREN))
+	{
+	  if (section)
+	    inputs = c_parser_asm_operands (parser);
+	  else
+	    outputs = c_parser_asm_operands (parser);
+	}
+      if (c_parser_next_token_is (parser, CPP_CLOSE_PAREN))
+	break;
+    }
+
+  if (!parens.require_close (parser))
+    {
+      c_parser_skip_until_found (parser, CPP_CLOSE_PAREN, NULL);
+      asm_str = NULL_TREE;
+    }
+
+  if (asm_str)
+    asm_str = build_asm_expr (asm_loc, asm_str, outputs, inputs,
+			      NULL_TREE, NULL_TREE, false, false);
+done:
   if (asm_str)
     symtab->finalize_toplevel_asm (asm_str);
   c_parser_skip_until_found (parser, CPP_SEMICOLON, "expected %<;%>");
@@ -3469,6 +3611,7 @@ c_parser_declspecs (c_parser *parser, struct c_declspecs *specs,
 	case RID_DFLOAT32:
 	case RID_DFLOAT64:
 	case RID_DFLOAT128:
+	case RID_DFLOAT64X:
 	CASE_RID_FLOATN_NX:
 	case RID_BOOL:
 	case RID_FRACT:
@@ -4402,8 +4545,19 @@ c_parser_typeof_specifier (c_parser *parser)
   parens.skip_until_found_close (parser);
   if (ret.spec != error_mark_node)
     {
-      if (is_unqual && TYPE_QUALS (ret.spec) != TYPE_UNQUALIFIED)
-	ret.spec = TYPE_MAIN_VARIANT (ret.spec);
+      if (is_unqual)
+	{
+	  bool is_array = TREE_CODE (ret.spec) == ARRAY_TYPE;
+	  int quals = TYPE_QUALS (strip_array_types (ret.spec));
+	  if ((is_array ? quals & ~TYPE_QUAL_ATOMIC : quals)
+	      != TYPE_UNQUALIFIED)
+	    {
+	      ret.spec = TYPE_MAIN_VARIANT (ret.spec);
+	      if (quals & TYPE_QUAL_ATOMIC && is_array)
+		ret.spec = c_build_qualified_type (ret.spec,
+						   TYPE_QUAL_ATOMIC);
+	    }
+	}
       if (is_std)
 	{
 	  /* In ISO C terms, _Noreturn is not part of the type of
@@ -4415,7 +4569,7 @@ c_parser_typeof_specifier (c_parser *parser)
 	  else if (FUNCTION_POINTER_TYPE_P (ret.spec)
 		   && TYPE_QUALS (TREE_TYPE (ret.spec)) != TYPE_UNQUALIFIED)
 	    ret.spec
-	      = build_pointer_type (TYPE_MAIN_VARIANT (TREE_TYPE (ret.spec)));
+	      = c_build_pointer_type (TYPE_MAIN_VARIANT (TREE_TYPE (ret.spec)));
 	}
     }
   return ret;
@@ -4848,7 +5002,7 @@ c_parser_parms_declarator (c_parser *parser, bool id_list_ok, tree attrs,
       && !attrs
       && c_parser_next_token_is (parser, CPP_NAME)
       && c_parser_peek_token (parser)->id_kind == C_ID_ID
-      
+
       /* Look ahead to detect typos in type names.  */
       && c_parser_peek_2nd_token (parser)->type != CPP_NAME
       && c_parser_peek_2nd_token (parser)->type != CPP_MULT
@@ -5193,6 +5347,7 @@ c_parser_gnu_attribute_any_word (c_parser *parser)
 	case RID_DFLOAT32:
 	case RID_DFLOAT64:
 	case RID_DFLOAT128:
+	case RID_DFLOAT64X:
 	CASE_RID_FLOATN_NX:
 	case RID_BOOL:
 	case RID_BITINT:
@@ -6190,6 +6345,7 @@ c_parser_braced_init (c_parser *parser, tree type, bool nested_p,
   gcc_assert (c_parser_next_token_is (parser, CPP_OPEN_BRACE));
   bool save_c_omp_array_section_p = c_omp_array_section_p;
   c_omp_array_section_p = false;
+  bool zero_init_padding_bits = false;
   matching_braces braces;
   braces.consume_open (parser);
   if (nested_p)
@@ -6203,6 +6359,8 @@ c_parser_braced_init (c_parser *parser, tree type, bool nested_p,
     {
       pedwarn_c11 (brace_loc, OPT_Wpedantic,
 		   "ISO C forbids empty initializer braces before C23");
+      if (flag_isoc23)
+	zero_init_padding_bits = true;
     }
   else
     {
@@ -6262,6 +6420,10 @@ c_parser_braced_init (c_parser *parser, tree type, bool nested_p,
   location_t close_loc = next_tok->location;
   c_parser_consume_token (parser);
   ret = pop_init_level (brace_loc, 0, &braced_init_obstack, close_loc);
+  if (zero_init_padding_bits
+      && ret.value
+      && TREE_CODE (ret.value) == CONSTRUCTOR)
+    CONSTRUCTOR_ZERO_PADDING_BITS (ret.value) = 1;
   obstack_free (&braced_init_obstack, NULL);
   set_c_expr_source_range (&ret, brace_loc, close_loc);
   return ret;
@@ -7363,7 +7525,7 @@ c_parser_compound_statement_nostart (c_parser *parser)
 		   && (have_std_attrs = true)))
 	{
 	  if (last_label)
-	    pedwarn_c11 (c_parser_peek_token (parser)->location, OPT_Wpedantic,
+	    pedwarn_c11 (c_parser_peek_token (parser)->location, OPT_Wfree_labels,
 			 "a label can only be part of a statement and "
 			 "a declaration is not a statement");
 	  /* It's unlikely we'll see a nested loop in a declaration in
@@ -7376,7 +7538,7 @@ c_parser_compound_statement_nostart (c_parser *parser)
 	  mark_valid_location_for_stdc_pragma (false);
 	  bool fallthru_attr_p = false;
 	  c_parser_declaration_or_fndef (parser, true, !have_std_attrs,
-					 true, true, true, NULL,
+					 true, true, true, false, NULL,
 					 NULL, have_std_attrs, std_attrs,
 					 NULL, &fallthru_attr_p);
 
@@ -7419,7 +7581,7 @@ c_parser_compound_statement_nostart (c_parser *parser)
 		}
 	      mark_valid_location_for_stdc_pragma (false);
 	      c_parser_declaration_or_fndef (parser, true, true, true, true,
-					     true);
+					     true, false);
 	      if (in_omp_loop_block)
 		omp_for_parse_state->want_nested_loop = want_nested_loop;
 	      /* Following the old parser, __extension__ does not
@@ -7510,7 +7672,8 @@ c_parser_compound_statement_nostart (c_parser *parser)
       parser->error = false;
     }
   if (last_label)
-    pedwarn_c11 (label_loc, OPT_Wpedantic, "label at end of compound statement");
+    pedwarn_c11 (label_loc, OPT_Wfree_labels,
+		 "label at end of compound statement");
   location_t endloc = c_parser_peek_token (parser)->location;
   c_parser_consume_token (parser);
 
@@ -7985,6 +8148,7 @@ c_parser_statement_after_labels (c_parser *parser, bool *if_p,
 		  attrs = handle_assume_attribute (loc, attrs, true);
 		else
 		  {
+		    auto_urlify_attributes sentinel;
 		    warning_at (loc, OPT_Wattributes,
 				"%<assume%> attribute not followed by %<;%>");
 		    has_assume = false;
@@ -8002,17 +8166,23 @@ c_parser_statement_after_labels (c_parser *parser, bool *if_p,
 		    c_parser_consume_token (parser);
 		  }
 		else
-		  warning_at (loc, OPT_Wattributes,
-			      "%<fallthrough%> attribute not followed "
-			      "by %<;%>");
+		  {
+		    auto_urlify_attributes sentinel;
+		    warning_at (loc, OPT_Wattributes,
+				"%<fallthrough%> attribute not followed "
+				"by %<;%>");
+		  }
 	      }
 	    else if (has_assume)
 	      /* Eat the ';'.  */
 	      c_parser_consume_token (parser);
 	    else if (attrs != NULL_TREE)
-	      warning_at (loc, OPT_Wattributes,
-			  "only attribute %<fallthrough%> or %<assume%> can "
-			  "be applied to a null statement");
+	      {
+		auto_urlify_attributes sentinel;
+		warning_at (loc, OPT_Wattributes,
+			    "only attribute %<fallthrough%> or %<assume%> can "
+			    "be applied to a null statement");
+	      }
 	    break;
 	  }
 	default:
@@ -8073,11 +8243,12 @@ c_parser_condition (c_parser *parser)
   return cond;
 }
 
-/* Parse a parenthesized condition from an if, do or while statement.
+/* Parse a parenthesized condition from a do or while statement.
 
    condition:
      ( expression )
 */
+
 static tree
 c_parser_paren_condition (c_parser *parser)
 {
@@ -8086,6 +8257,108 @@ c_parser_paren_condition (c_parser *parser)
   if (!parens.require_open (parser))
     return error_mark_node;
   cond = c_parser_condition (parser);
+  parens.skip_until_found_close (parser);
+  return cond;
+}
+
+/* Parse a selection-header:
+
+   selection-header:
+     expression
+     declaration expression
+     simple-declaration
+
+   simple-declaration:
+     attribute-specifier-sequence[opt] declaration-specifiers declarator
+       = initializer
+
+  SWITCH_P is true if we are called from c_parser_switch_statement; in
+  that case, don't perform the truthvalue conversion.  */
+
+static c_expr
+c_parser_selection_header (c_parser *parser, bool switch_p)
+{
+  location_t loc = c_parser_peek_token (parser)->location;
+  c_expr expr;
+  bool parse_expr = true;
+  tree std_attrs;
+  bool have_std_attrs = c_parser_nth_token_starts_std_attributes (parser, 1);
+  if (have_std_attrs)
+    std_attrs = c_parser_std_attribute_specifier_sequence (parser);
+  else
+    std_attrs = NULL_TREE;
+  if (c_parser_next_tokens_start_declaration (parser))
+    {
+      pedwarn_c23 (loc, OPT_Wpedantic,
+		   "ISO C does not support if declarations before C2Y");
+      expr.value
+	= c_parser_declaration_or_fndef (parser,
+					 /*fndef_ok=*/false,
+					 /*static_assert_ok=*/false,
+					 /*empty_ok=*/false,
+					 /*nested=*/true,
+					 /*start_attr_ok=*/true,
+					 /*simple_ok=*/true,
+					 /*objc_foreach_object_decl=*/nullptr,
+					 /*omp_declare_simd_clauses=*/nullptr,
+					 have_std_attrs,
+					 std_attrs);
+      if (c_parser_next_token_is (parser, CPP_SEMICOLON))
+	c_parser_consume_token (parser);
+      else
+	{
+	  /* A simple-declaration is a declaration that can appear in
+	     place of the controlling expression of a selection statement.
+	     In that case, there shall be an initializer.  */
+	  if (!expr.value)
+	    {
+	      error_at (loc, "declaration in the controlling expression must "
+			"have an initializer");
+	      expr.original_type = error_mark_node;
+	      expr.set_error ();
+	      return expr;
+	    }
+	  parse_expr = false;
+	}
+      if (expr.value)
+	{
+	  expr.original_type = TREE_TYPE (expr.value);
+	  expr = convert_lvalue_to_rvalue (loc, expr, /*convert_p=*/true,
+					   /*read_p=*/true);
+	}
+    }
+  else if (have_std_attrs)
+    {
+      c_parser_error (parser, "expected declaration");
+      expr.original_type = error_mark_node;
+      expr.set_error ();
+      return expr;
+    }
+
+  if (parse_expr)
+    expr = c_parser_expression_conv (parser);
+  if (!switch_p)
+    {
+      expr.value = c_objc_common_truthvalue_conversion (loc, expr.value);
+      expr.value = c_fully_fold (expr.value, false, NULL);
+      if (warn_sequence_point)
+	verify_sequence_points (expr.value);
+    }
+  return expr;
+}
+
+/* Parse a selection-header enclosed in parentheses:
+
+   ( selection-header )
+*/
+
+static tree
+c_parser_paren_selection_header (c_parser *parser)
+{
+  matching_parens parens;
+  if (!parens.require_open (parser))
+    return error_mark_node;
+  tree cond = c_parser_selection_header (parser, /*switch_p=*/false).value;
   parens.skip_until_found_close (parser);
   return cond;
 }
@@ -8202,48 +8475,11 @@ c_parser_else_body (c_parser *parser, const token_indent_info &else_tinfo,
   return c_end_compound_stmt (body_loc, block, flag_isoc99);
 }
 
-/* We might need to reclassify any previously-lexed identifier, e.g.
-   when we've left a for loop with an if-statement without else in the
-   body - we might have used a wrong scope for the token.  See PR67784.  */
-
-static void
-c_parser_maybe_reclassify_token (c_parser *parser)
-{
-  if (c_parser_next_token_is (parser, CPP_NAME))
-    {
-      c_token *token = c_parser_peek_token (parser);
-
-      if (token->id_kind != C_ID_CLASSNAME)
-	{
-	  tree decl = lookup_name (token->value);
-
-	  token->id_kind = C_ID_ID;
-	  if (decl)
-	    {
-	      if (TREE_CODE (decl) == TYPE_DECL)
-		token->id_kind = C_ID_TYPENAME;
-	    }
-	  else if (c_dialect_objc ())
-	    {
-	      tree objc_interface_decl = objc_is_class_name (token->value);
-	      /* Objective-C class names are in the same namespace as
-		 variables and typedefs, and hence are shadowed by local
-		 declarations.  */
-	      if (objc_interface_decl)
-		{
-		  token->value = objc_interface_decl;
-		  token->id_kind = C_ID_CLASSNAME;
-		}
-	    }
-	}
-    }
-}
-
 /* Parse an if statement (C90 6.6.4, C99 6.8.4, C11 6.8.4).
 
    if-statement:
-     if ( expression ) statement
-     if ( expression ) statement else statement
+     if ( selection-header ) statement
+     if ( selection-header ) statement else statement
 
    CHAIN is a vector of if-else-if conditions.
    IF_P is used to track whether there's a (possibly labeled) if statement
@@ -8266,7 +8502,7 @@ c_parser_if_statement (c_parser *parser, bool *if_p, vec<tree> *chain)
   c_parser_consume_token (parser);
   block = c_begin_compound_stmt (flag_isoc99);
   loc = c_parser_peek_token (parser)->location;
-  cond = c_parser_paren_condition (parser);
+  cond = c_parser_paren_selection_header (parser);
   in_if_block = parser->in_if_block;
   parser->in_if_block = true;
   first_body = c_parser_if_body (parser, &nested_if, if_tinfo);
@@ -8353,7 +8589,10 @@ c_parser_switch_statement (c_parser *parser, bool *if_p, tree before_labels)
       if (c_parser_next_token_is (parser, CPP_OPEN_PAREN)
 	  && c_token_starts_typename (c_parser_peek_2nd_token (parser)))
 	explicit_cast_p = true;
-      ce = c_parser_expression (parser);
+      ce = c_parser_selection_header (parser, /*switch_p=*/true);
+      /* The call above already performed convert_lvalue_to_rvalue, but
+	 if it parsed an expression, read_p was false.  Make sure we mark
+	 the expression as read.  */
       ce = convert_lvalue_to_rvalue (switch_cond_loc, ce, true, true);
       expr = ce.value;
       /* ??? expr has no valid location?  */
@@ -8583,7 +8822,7 @@ c_parser_do_statement (c_parser *parser, bool ivdep, unsigned short unroll,
 
    Here is the canonical example of the first variant:
     for (object in array)    { do something with object }
-   we call the first expression ("object") the "object_expression" and 
+   we call the first expression ("object") the "object_expression" and
    the second expression ("array") the "collection_expression".
    object_expression must be an lvalue of type "id" (a generic Objective-C
    object) because the loop works by assigning to object_expression the
@@ -8664,10 +8903,10 @@ c_parser_for_statement (c_parser *parser, bool ivdep, unsigned short unroll,
       else if (c_parser_next_tokens_start_declaration (parser)
 	       || c_parser_nth_token_starts_std_attributes (parser, 1))
 	{
-	  c_parser_declaration_or_fndef (parser, true, true, true, true, true, 
-					 &object_expression);
+	  c_parser_declaration_or_fndef (parser, true, true, true, true, true,
+					 false, &object_expression);
 	  parser->objc_could_be_foreach_context = false;
-	  
+
 	  if (c_parser_next_token_is_keyword (parser, RID_IN))
 	    {
 	      c_parser_consume_token (parser);
@@ -8696,9 +8935,9 @@ c_parser_for_statement (c_parser *parser, bool ivdep, unsigned short unroll,
 	      ext = disable_extension_diagnostics ();
 	      c_parser_consume_token (parser);
 	      c_parser_declaration_or_fndef (parser, true, true, true, true,
-					     true, &object_expression);
+					     true, false, &object_expression);
 	      parser->objc_could_be_foreach_context = false;
-	      
+
 	      restore_extension_diagnostics (ext);
 	      if (c_parser_next_token_is_keyword (parser, RID_IN))
 		{
@@ -9477,7 +9716,7 @@ c_parser_expr_no_commas (c_parser *parser, struct c_expr *after,
   exp_location = c_parser_peek_token (parser)->location;
   rhs = c_parser_expr_no_commas (parser, NULL);
   rhs = convert_lvalue_to_rvalue (exp_location, rhs, true, true);
-  
+
   ret.value = build_modify_expr (op_location, lhs.value, lhs.original_type,
 				 code, exp_location, rhs.value,
 				 rhs.original_type);
@@ -10116,7 +10355,7 @@ c_parser_unary_expression (c_parser *parser)
       c_parser_consume_token (parser);
       exp_loc = c_parser_peek_token (parser)->location;
       op = c_parser_cast_expression (parser, NULL);
-      
+
       op = default_function_array_read_conversion (exp_loc, op);
       return parser_build_unary_op (op_loc, PREDECREMENT_EXPR, op);
     case CPP_AND:
@@ -10256,13 +10495,11 @@ c_parser_sizeof_expression (c_parser *parser)
       finish = parser->tokens_buf[0].location;
       if (type_name == NULL)
 	{
-	  struct c_expr ret;
-	  c_inhibit_evaluation_warnings--;
-	  in_sizeof--;
-	  ret.set_error ();
-	  ret.original_code = ERROR_MARK;
-	  ret.original_type = NULL;
-	  return ret;
+	  /* Let c_expr_sizeof_expr call pop_maybe_used and fill in c_expr
+	     for parsing error; the parsing of the expression could have
+	     called record_maybe_used_decl.  */
+	  expr.set_error ();
+	  goto sizeof_expr;
 	}
       if (c_parser_next_token_is (parser, CPP_OPEN_BRACE))
 	{
@@ -10582,8 +10819,7 @@ c_parser_get_builtin_args (c_parser *parser, const char *bname,
 	  for (unsigned int i = 0; i < (unsigned) RAW_DATA_LENGTH (value); i++)
 	    {
 	      expr.value = build_int_cst (integer_type_node,
-					  ((const unsigned char *)
-					   RAW_DATA_POINTER (value))[i]);
+					  RAW_DATA_UCHAR_ELT (value, i));
 	      vec_safe_push (cexpr_list, expr);
 	    }
 	  c_parser_consume_token (parser);
@@ -10614,7 +10850,7 @@ struct c_generic_association
 };
 
 /* Parse a generic-selection.  (C11 6.5.1.1).
-   
+
    generic-selection:
      _Generic ( generic-controlling-operand , generic-assoc-list )
 
@@ -10627,7 +10863,7 @@ struct c_generic_association
    generic-assoc-list:
      generic-association
      generic-assoc-list , generic-association
-   
+
    generic-association:
      type-name : assignment-expression
      default : assignment-expression
@@ -10698,7 +10934,7 @@ c_parser_generic_selection (c_parser *parser)
       if (FUNCTION_POINTER_TYPE_P (selector_type)
 	  && TYPE_QUALS (TREE_TYPE (selector_type)) != TYPE_UNQUALIFIED)
 	selector_type
-	  = build_pointer_type (TYPE_MAIN_VARIANT (TREE_TYPE (selector_type)));
+	  = c_build_pointer_type (TYPE_MAIN_VARIANT (TREE_TYPE (selector_type)));
     }
 
   if (!c_parser_require (parser, CPP_COMMA, "expected %<,%>"))
@@ -11127,7 +11363,7 @@ c_parser_postfix_expression (c_parser *parser)
 	    component = component_tok->value;
 	    location_t end_loc = component_tok->get_finish ();
 	    c_parser_consume_token (parser);
-	    expr.value = objc_build_class_component_ref (class_name, 
+	    expr.value = objc_build_class_component_ref (class_name,
 							 component);
 	    set_c_expr_source_range (&expr, loc, end_loc);
 	    break;
@@ -11249,6 +11485,101 @@ c_parser_postfix_expression (c_parser *parser)
 	      }
 	  }
 	  break;
+	case RID_C23_VA_START:
+	  {
+	    c_parser_consume_token (parser);
+	    matching_parens parens;
+	    if (!parens.require_open (parser))
+	      {
+		expr.set_error ();
+		break;
+	      }
+	    e1 = c_parser_expr_no_commas (parser, NULL);
+	    e1 = convert_lvalue_to_rvalue (e1.get_location (), e1, true, true);
+	    if (!c_parser_next_token_is (parser, CPP_CLOSE_PAREN))
+	      {
+		location_t cloc = c_parser_peek_token (parser)->location;
+		if (!c_parser_require (parser, CPP_COMMA, "expected %<,%>"))
+		  {
+		    c_parser_skip_until_found (parser, CPP_CLOSE_PAREN, NULL);
+		    expr.set_error ();
+		    break;
+		  }
+		if (c_parser_next_token_is (parser, CPP_NAME)
+		    && c_parser_peek_token (parser)->id_kind == C_ID_ID
+		    && (c_parser_peek_2nd_token (parser)->type
+			== CPP_CLOSE_PAREN))
+		  {
+		    tree name = c_parser_peek_token (parser)->value;
+		    location_t nloc = c_parser_peek_token (parser)->location;
+		    tree decl = lookup_name (name);
+		    tree last_parm
+		      = tree_last (DECL_ARGUMENTS (current_function_decl));
+		    if (!last_parm || decl != last_parm)
+		      warning_at (nloc, OPT_Wvarargs,
+				  "optional second parameter of %<va_start%> "
+				  "not last named argument");
+		    else if (DECL_REGISTER (decl))
+		      warning_at (nloc, OPT_Wvarargs,
+				  "undefined behavior when second parameter "
+				  "of %<va_start%> is declared with "
+				  "%<register%> storage");
+		    c_parser_consume_token (parser);
+		  }
+		else
+		  {
+		    unsigned nesting_depth = 0;
+		    location_t sloc = c_parser_peek_token (parser)->location;
+		    location_t eloc = sloc;
+
+		    /* For va_start (ap,) the ) comes from stdarg.h.
+		       Use location of , in that case, otherwise without
+		       -Wsystem-headers nothing is reported.  After all,
+		       the problematic token is the comma in that case.  */
+		    if (c_parser_next_token_is (parser, CPP_CLOSE_PAREN))
+		      sloc = eloc = cloc;
+		    while (true)
+		      {
+			c_token *token = c_parser_peek_token (parser);
+			if (token->type == CPP_CLOSE_PAREN && !nesting_depth)
+			  break;
+
+			if (token->type == CPP_EOF)
+			  break;
+			if (token->type == CPP_OPEN_PAREN)
+			  ++nesting_depth;
+			else if (token->type == CPP_CLOSE_PAREN)
+			  --nesting_depth;
+			eloc = token->location;
+			c_parser_consume_token (parser);
+		      }
+		    if (sloc != eloc)
+		      sloc = make_location (sloc, sloc, eloc);
+		    warning_at (sloc, OPT_Wvarargs,
+				"%<va_start%> macro used with additional "
+				"arguments other than identifier of the "
+				"last named argument");
+		  }
+	      }
+	    parens.skip_until_found_close (parser);
+	    tree fndecl = builtin_decl_explicit (BUILT_IN_VA_START);
+	    vec<tree, va_gc> *params;
+	    vec_alloc (params, 2);
+	    params->quick_push (e1.value);
+	    params->quick_push (integer_zero_node);
+	    auto_vec<location_t> arg_loc (2);
+	    arg_loc.quick_push (e1.get_location ());
+	    arg_loc.quick_push (UNKNOWN_LOCATION);
+	    expr.value = c_build_function_call_vec (loc, arg_loc, fndecl,
+						    params, NULL);
+	    set_c_expr_source_range (&expr, loc,
+				     parser->tokens_buf[0].get_finish ());
+	    expr.m_decimal = 0;
+	    expr.original_code = ERROR_MARK;
+	    expr.original_type = NULL;
+	    release_tree_vector (params);
+	    break;
+	  }
 	case RID_OFFSETOF:
 	  {
 	    c_parser_consume_token (parser);
@@ -11755,6 +12086,7 @@ c_parser_postfix_expression (c_parser *parser)
 	    bool arg_binary = all_binary;
 	    bool arg_int_decimal = all_decimal;
 	    bool arg_int_floatnx = false;
+	    bool arg_int_decimalx = false;
 	    for (unsigned int j = 1; j <= nargs; j++)
 	      {
 		if (parm_kind[j] == tgmath_fixed)
@@ -11859,6 +12191,8 @@ c_parser_postfix_expression (c_parser *parser)
 			arg_int_floatnx = true;
 			break;
 		      }
+		if (rtype == dfloat64x_type_node)
+		  arg_int_decimalx = true;
 	      }
 	    tree arg_real = NULL_TREE;
 	    for (unsigned int j = 1; j <= nargs; j++)
@@ -11870,10 +12204,12 @@ c_parser_postfix_expression (c_parser *parser)
 		if (TREE_CODE (type) == COMPLEX_TYPE)
 		  type = TREE_TYPE (type);
 		if (INTEGRAL_TYPE_P (type))
-		  type = (arg_int_decimal
-			  ? dfloat64_type_node
+		  type = (arg_int_decimalx
+			  ? dfloat64x_type_node
 			  : arg_int_floatnx
 			  ? float32x_type_node
+			  : arg_int_decimal
+			  ? dfloat64_type_node
 			  : double_type_node);
 		if (arg_real == NULL_TREE)
 		  arg_real = type;
@@ -12262,12 +12598,15 @@ c_parser_postfix_expression (c_parser *parser)
 	      C_BUILTIN_STDC_HAS_SINGLE_BIT,
 	      C_BUILTIN_STDC_LEADING_ONES,
 	      C_BUILTIN_STDC_LEADING_ZEROS,
+	      C_BUILTIN_STDC_ROTATE_LEFT,
+	      C_BUILTIN_STDC_ROTATE_RIGHT,
 	      C_BUILTIN_STDC_TRAILING_ONES,
 	      C_BUILTIN_STDC_TRAILING_ZEROS,
 	      C_BUILTIN_STDC_MAX
 	    } stdc_rid = C_BUILTIN_STDC_MAX;
 	    const char *name
 	      = IDENTIFIER_POINTER (c_parser_peek_token (parser)->value);
+	    unsigned num_args = 1;
 	    switch (name[sizeof ("__builtin_stdc_") - 1])
 	      {
 	      case 'b':
@@ -12316,6 +12655,13 @@ c_parser_postfix_expression (c_parser *parser)
 		else
 		  stdc_rid = C_BUILTIN_STDC_LEADING_ZEROS;
 		break;
+	      case 'r':
+		if (name[sizeof ("__builtin_stdc_rotate_") - 1] == 'l')
+		  stdc_rid = C_BUILTIN_STDC_ROTATE_LEFT;
+		else
+		  stdc_rid = C_BUILTIN_STDC_ROTATE_RIGHT;
+		num_args = 2;
+		break;
 	      case 't':
 		if (name[sizeof ("__builtin_stdc_trailing_") - 1] == 'o')
 		  stdc_rid = C_BUILTIN_STDC_TRAILING_ONES;
@@ -12334,7 +12680,7 @@ c_parser_postfix_expression (c_parser *parser)
 		break;
 	      }
 
-	    if (vec_safe_length (cexpr_list) != 1)
+	    if (vec_safe_length (cexpr_list) != num_args)
 	      {
 		error_at (loc, "wrong number of arguments to %qs", name);
 		expr.set_error ();
@@ -12367,6 +12713,14 @@ c_parser_postfix_expression (c_parser *parser)
 	      {
 		error_at (loc, "argument 1 in call to function "
 			  "%qs has signed type", name);
+		expr.set_error ();
+		break;
+	      }
+	    if (TYPE_MAIN_VARIANT (TREE_TYPE (arg_p->value))
+		== char_type_node)
+	      {
+		error_at (loc, "argument 1 in call to function "
+			  "%qs has %<char%> type", name);
 		expr.set_error ();
 		break;
 	      }
@@ -12406,6 +12760,107 @@ c_parser_postfix_expression (c_parser *parser)
 	       without evaluating arg multiple times, type being
 	       __typeof (arg) and prec __builtin_popcountg ((type) ~0)).  */
 	    int prec = TYPE_PRECISION (type);
+	    if (num_args == 2)
+	      {
+		/* Expand:
+		   __builtin_stdc_rotate_left (arg1, arg2) as
+		   arg1 r<< (arg2 % prec)
+		   __builtin_stdc_rotate_right (arg1, arg2) as
+		   arg1 r>> (arg2 % prec).  */
+		arg_p = &(*cexpr_list)[1];
+		*arg_p = convert_lvalue_to_rvalue (loc, *arg_p, true, true);
+		if (!INTEGRAL_TYPE_P (TREE_TYPE (arg_p->value)))
+		  {
+		    error_at (loc, "%qs operand not an integral type", name);
+		    expr.set_error ();
+		    break;
+		  }
+		if (TREE_CODE (TREE_TYPE (arg_p->value)) == ENUMERAL_TYPE)
+		  {
+		    error_at (loc, "argument %u in call to function "
+				   "%qs has enumerated type", 2, name);
+		    expr.set_error ();
+		    break;
+		  }
+		tree arg1 = save_expr (arg);
+		tree arg2 = save_expr (arg_p->value);
+		tree_code code;
+		if (stdc_rid == C_BUILTIN_STDC_ROTATE_LEFT)
+		  code = LROTATE_EXPR;
+		else
+		  code = RROTATE_EXPR;
+
+		if (TREE_CODE (arg2) == INTEGER_CST
+		    && tree_int_cst_sgn (arg2) < 0)
+		  warning_at (loc, OPT_Wshift_count_negative,
+			      "rotate count is negative");
+
+		tree instrument_expr = NULL_TREE;
+		if (sanitize_flags_p (SANITIZE_SHIFT))
+		  instrument_expr = ubsan_instrument_shift (loc, code,
+							    arg1, arg2);
+
+		/* Promote arg2 to unsigned just so that we don't
+		   need to deal with arg2 type not being able to represent
+		   prec.  In the end gimplification uses unsigned int
+		   for all shifts/rotates anyway.  */
+		if (TYPE_PRECISION (TREE_TYPE (arg2))
+		    < TYPE_PRECISION (integer_type_node))
+		  arg2 = fold_convert (unsigned_type_node, arg2);
+
+		if (TYPE_UNSIGNED (TREE_TYPE (arg2)))
+		  arg2 = build2_loc (loc, TRUNC_MOD_EXPR, TREE_TYPE (arg2),
+				     arg2, build_int_cst (TREE_TYPE (arg2),
+							  prec));
+		else
+		  {
+		    /* When second argument is signed, just do the modulo in
+		       unsigned type, that results in better generated code
+		       (for power of 2 precisions bitwise AND).  */
+		    tree utype = c_common_unsigned_type (TREE_TYPE (arg2));
+		    arg2 = build2_loc (loc, TRUNC_MOD_EXPR, utype,
+				       fold_convert (utype, arg2),
+				       build_int_cst (utype, prec));
+		  }
+
+		/* The middle-end isn't prepared to handle {L,R}ROTATE_EXPR
+		   on types without mode precision, except for large/huge
+		   _BitInt types.  */
+		if (type_has_mode_precision_p (TREE_TYPE (arg1))
+		    || (TREE_CODE (TREE_TYPE (arg1)) == BITINT_TYPE
+			&& prec > MAX_FIXED_MODE_SIZE))
+		  expr.value = build2_loc (loc, code, TREE_TYPE (arg1), arg1,
+					   arg2);
+		else
+		  {
+		    arg2 = save_expr (arg2);
+		    tree t1 = build2_loc (loc, (code == LROTATE_EXPR
+						? LSHIFT_EXPR : RSHIFT_EXPR),
+					  TREE_TYPE (arg1), arg1, arg2);
+		    tree t2 = build2_loc (loc, MINUS_EXPR,
+					  TREE_TYPE (arg2),
+					  build_int_cst (TREE_TYPE (arg2),
+							 prec), arg2);
+		    t2 = build2_loc (loc, (code == LROTATE_EXPR
+					   ? RSHIFT_EXPR : LSHIFT_EXPR),
+				     TREE_TYPE (arg1), arg1, t2);
+		    suppress_warning (t2, OPT_Wshift_count_overflow);
+		    tree t3 = build2_loc (loc, BIT_IOR_EXPR,
+					  TREE_TYPE (arg1), t1, t2);
+		    tree t4 = build2_loc (loc, NE_EXPR, boolean_type_node,
+					  arg2,
+					  build_zero_cst (TREE_TYPE (arg2)));
+		    t4 = build2_loc (loc, COMPOUND_EXPR, boolean_type_node,
+				     arg1, t4);
+		    expr.value = build3_loc (loc, COND_EXPR,
+					     TREE_TYPE (arg1), t4, t3, arg1);
+		  }
+		if (instrument_expr)
+		  expr.value = build2_loc (loc, COMPOUND_EXPR,
+					   TREE_TYPE (expr.value),
+					   instrument_expr, expr.value);
+		break;
+	      }
 	    tree barg1 = arg;
 	    switch (stdc_rid)
 	      {
@@ -12942,6 +13397,7 @@ warn_for_abs (location_t loc, tree fndecl, tree arg)
     case BUILT_IN_FABSD32:
     case BUILT_IN_FABSD64:
     case BUILT_IN_FABSD128:
+    case BUILT_IN_FABSD64X:
       if (!DECIMAL_FLOAT_TYPE_P (atype))
 	{
 	  if (INTEGRAL_TYPE_P (atype))
@@ -13302,8 +13758,7 @@ c_parser_expression (c_parser *parser)
 	  tree val = embed->value;
 	  unsigned last = RAW_DATA_LENGTH (val) - 1;
 	  next.value = build_int_cst (TREE_TYPE (val),
-				      ((const unsigned char *)
-				       RAW_DATA_POINTER (val))[last]);
+				      RAW_DATA_UCHAR_ELT (val, last));
 	  next.original_type = integer_type_node;
 	  c_parser_consume_token (parser);
 	}
@@ -13432,8 +13887,7 @@ c_parser_expr_list (c_parser *parser, bool convert_p, bool fold_p,
 		  && RAW_DATA_POINTER (value)[i] == 0)
 		*literal_zero_mask |= 1U << (idx + 1);
 	      expr.value = build_int_cst (integer_type_node,
-					  ((const unsigned char *)
-					   RAW_DATA_POINTER (value))[i]);
+					  RAW_DATA_UCHAR_ELT (value, i));
 	      vec_safe_push (ret, expr.value);
 	      if (orig_types)
 		vec_safe_push (orig_types, expr.original_type);
@@ -13678,7 +14132,7 @@ c_parser_objc_class_instance_variables (c_parser *parser)
 	  /* There is a syntax error.  We want to skip the offending
 	     tokens up to the next ';' (included) or '}'
 	     (excluded).  */
-	  
+
 	  /* First, skip manually a ')' or ']'.  This is because they
 	     reduce the nesting level, so c_parser_skip_until_found()
 	     wouldn't be able to skip past them.  */
@@ -13959,7 +14413,7 @@ c_parser_objc_methodprotolist (c_parser *parser)
 	    }
 	  else
 	    c_parser_declaration_or_fndef (parser, false, false, true,
-					   false, true);
+					   false, true, false);
 	  break;
 	}
     }
@@ -13984,32 +14438,32 @@ c_parser_objc_methodproto (c_parser *parser)
   /* Forget protocol qualifiers now.  */
   parser->objc_pq_context = false;
 
-  /* Do not allow the presence of attributes to hide an erroneous 
+  /* Do not allow the presence of attributes to hide an erroneous
      method implementation in the interface section.  */
   if (!c_parser_next_token_is (parser, CPP_SEMICOLON))
     {
       c_parser_error (parser, "expected %<;%>");
       return;
     }
-  
+
   if (decl != error_mark_node)
     objc_add_method_declaration (is_class_method, decl, attributes);
 
   c_parser_skip_until_found (parser, CPP_SEMICOLON, "expected %<;%>");
 }
 
-/* If we are at a position that method attributes may be present, check that 
-   there are not any parsed already (a syntax error) and then collect any 
+/* If we are at a position that method attributes may be present, check that
+   there are not any parsed already (a syntax error) and then collect any
    specified at the current location.  Finally, if new attributes were present,
    check that the next token is legal ( ';' for decls and '{' for defs).  */
-   
-static bool 
+
+static bool
 c_parser_objc_maybe_method_attributes (c_parser* parser, tree* attributes)
 {
   bool bad = false;
   if (*attributes)
     {
-      c_parser_error (parser, 
+      c_parser_error (parser,
 		    "method attributes must be specified at the end only");
       *attributes = NULL_TREE;
       bad = true;
@@ -14029,7 +14483,7 @@ c_parser_objc_maybe_method_attributes (c_parser* parser, tree* attributes)
     return bad;
 
   /* We've got attributes, but not at the end.  */
-  c_parser_error (parser, 
+  c_parser_error (parser,
 		  "expected %<;%> or %<{%> after method attribute definition");
   return true;
 }
@@ -14135,7 +14589,7 @@ c_parser_objc_method_decl (c_parser *parser, bool is_class_method,
 	    {
 	      ellipsis = true;
 	      c_parser_consume_token (parser);
-	      attr_err |= c_parser_objc_maybe_method_attributes 
+	      attr_err |= c_parser_objc_maybe_method_attributes
 						(parser, attributes) ;
 	      break;
 	    }
@@ -14265,7 +14719,7 @@ c_parser_objc_protocol_refs (c_parser *parser)
    where '...' is to be interpreted literally, that is, it means CPP_ELLIPSIS.
 
    PS: This function is identical to cp_parser_objc_try_catch_finally_statement
-   for C++.  Keep them in sync.  */   
+   for C++.  Keep them in sync.  */
 
 static void
 c_parser_objc_try_catch_finally_statement (c_parser *parser)
@@ -14324,7 +14778,7 @@ c_parser_objc_try_catch_finally_statement (c_parser *parser)
 	     going.  */
 	  if (c_parser_next_token_is (parser, CPP_CLOSE_PAREN))
 	    c_parser_consume_token (parser);
-	  
+
 	  /* If these is no immediate closing parenthesis, the user
 	     probably doesn't know that parenthesis are required at
 	     all (ie, they typed "@catch NSException *e").  So, just
@@ -14597,13 +15051,13 @@ c_parser_objc_keywordexpr (c_parser *parser)
 /* A check, needed in several places, that ObjC interface, implementation or
    method definitions are not prefixed by incorrect items.  */
 static bool
-c_parser_objc_diagnose_bad_element_prefix (c_parser *parser, 
+c_parser_objc_diagnose_bad_element_prefix (c_parser *parser,
 					   struct c_declspecs *specs)
 {
   if (!specs->declspecs_seen_p || specs->non_sc_seen_p
       || specs->typespec_kind != ctsk_none)
     {
-      c_parser_error (parser, 
+      c_parser_error (parser,
       		      "no type or storage class may be specified here,");
       c_parser_skip_to_end_of_block_or_statement (parser);
       return true;
@@ -15112,6 +15566,15 @@ c_parser_pragma (c_parser *parser, enum pragma_context context, bool *if_p,
       c_parser_omp_flush (parser);
       return false;
 
+    case PRAGMA_OMP_INTEROP:
+      if (context != pragma_compound)
+	{
+	  construct = "omp interop";
+	  goto in_compound;
+	}
+      c_parser_omp_interop (parser);
+      return false;
+
     case PRAGMA_OMP_TASKWAIT:
       if (context != pragma_compound)
 	{
@@ -15439,6 +15902,8 @@ c_parser_omp_clause_name (c_parser *parser)
 	    result = PRAGMA_OACC_CLAUSE_DELETE;
 	  else if (!strcmp ("depend", p))
 	    result = PRAGMA_OMP_CLAUSE_DEPEND;
+	  else if (!strcmp ("destroy", p))
+	    result = PRAGMA_OMP_CLAUSE_DESTROY;
 	  else if (!strcmp ("detach", p))
 	    result = PRAGMA_OACC_CLAUSE_DETACH;
 	  else if (!strcmp ("device", p))
@@ -15497,8 +15962,12 @@ c_parser_omp_clause_name (c_parser *parser)
 	    result = PRAGMA_OACC_CLAUSE_INDEPENDENT;
 	  else if (!strcmp ("indirect", p))
 	    result = PRAGMA_OMP_CLAUSE_INDIRECT;
+	  else if (!strcmp ("init", p))
+	    result = PRAGMA_OMP_CLAUSE_INIT;
 	  else if (!strcmp ("is_device_ptr", p))
 	    result = PRAGMA_OMP_CLAUSE_IS_DEVICE_PTR;
+	  else if (!strcmp ("interop", p))
+	    result = PRAGMA_OMP_CLAUSE_INTEROP;
 	  break;
 	case 'l':
 	  if (!strcmp ("lastprivate", p))
@@ -15517,6 +15986,8 @@ c_parser_omp_clause_name (c_parser *parser)
 	case 'n':
 	  if (!strcmp ("no_create", p))
 	    result = PRAGMA_OACC_CLAUSE_NO_CREATE;
+	  else if (!strcmp ("nocontext", p))
+	    result = PRAGMA_OMP_CLAUSE_NOCONTEXT;
 	  else if (!strcmp ("nogroup", p))
 	    result = PRAGMA_OMP_CLAUSE_NOGROUP;
 	  else if (!strcmp ("nohost", p))
@@ -15525,6 +15996,8 @@ c_parser_omp_clause_name (c_parser *parser)
 	    result = PRAGMA_OMP_CLAUSE_NONTEMPORAL;
 	  else if (!strcmp ("notinbranch", p))
 	    result = PRAGMA_OMP_CLAUSE_NOTINBRANCH;
+	  else if (!strcmp ("novariants", p))
+	    result = PRAGMA_OMP_CLAUSE_NOVARIANTS;
 	  else if (!strcmp ("nowait", p))
 	    result = PRAGMA_OMP_CLAUSE_NOWAIT;
 	  else if (!strcmp ("num_gangs", p))
@@ -15613,6 +16086,8 @@ c_parser_omp_clause_name (c_parser *parser)
 	    result = PRAGMA_OMP_CLAUSE_UNIFORM;
 	  else if (!strcmp ("untied", p))
 	    result = PRAGMA_OMP_CLAUSE_UNTIED;
+	  else if (!strcmp ("use", p))
+	    result = PRAGMA_OMP_CLAUSE_USE;
 	  else if (!strcmp ("use_device", p))
 	    result = PRAGMA_OACC_CLAUSE_USE_DEVICE;
 	  else if (!strcmp ("use_device_addr", p))
@@ -17825,7 +18300,7 @@ c_parser_omp_clause_private (c_parser *parser, tree list)
      One of: + * - & ^ | && ||
 
    OpenMP 3.1:
-   
+
    reduction-operator:
      One of: + * - & ^ | && || max min
 
@@ -19792,6 +20267,60 @@ c_parser_omp_clause_partial (c_parser *parser, tree list)
   return c;
 }
 
+/* OpenMP 5.1
+   novariants ( scalar-expression ) */
+
+static tree
+c_parser_omp_clause_novariants (c_parser *parser, tree list)
+{
+  matching_parens parens;
+  if (!parens.require_open (parser))
+    return list;
+
+  location_t loc = c_parser_peek_token (parser)->location;
+  c_expr expr = c_parser_expr_no_commas (parser, NULL);
+  tree t = convert_lvalue_to_rvalue (loc, expr, true, true).value;
+  t = c_objc_common_truthvalue_conversion (loc, t);
+  t = c_fully_fold (t, false, NULL);
+  parens.skip_until_found_close (parser);
+
+  check_no_duplicate_clause (list, OMP_CLAUSE_NOVARIANTS, "novariants");
+
+  tree c = build_omp_clause (loc, OMP_CLAUSE_NOVARIANTS);
+  OMP_CLAUSE_NOVARIANTS_EXPR (c) = t;
+  OMP_CLAUSE_CHAIN (c) = list;
+  list = c;
+
+  return list;
+}
+
+/* OpenMP 5.1
+   nocontext ( scalar-expression ) */
+
+static tree
+c_parser_omp_clause_nocontext (c_parser *parser, tree list)
+{
+  matching_parens parens;
+  if (!parens.require_open (parser))
+    return list;
+
+  location_t loc = c_parser_peek_token (parser)->location;
+  c_expr expr = c_parser_expr_no_commas (parser, NULL);
+  tree t = convert_lvalue_to_rvalue (loc, expr, true, true).value;
+  t = c_objc_common_truthvalue_conversion (loc, t);
+  t = c_fully_fold (t, false, NULL);
+  parens.skip_until_found_close (parser);
+
+  check_no_duplicate_clause (list, OMP_CLAUSE_NOCONTEXT, "nocontext");
+
+  tree c = build_omp_clause (loc, OMP_CLAUSE_NOCONTEXT);
+  OMP_CLAUSE_NOCONTEXT_EXPR (c) = t;
+  OMP_CLAUSE_CHAIN (c) = list;
+  list = c;
+
+  return list;
+}
+
 /* OpenMP 5.0:
    detach ( event-handle ) */
 
@@ -19840,6 +20369,429 @@ c_parser_omp_clause_detach (c_parser *parser, tree list)
   OMP_CLAUSE_CHAIN (u) = list;
   parens.skip_until_found_close (parser);
   return u;
+}
+
+/* OpenMP 5.0:
+   destroy ( variable-list ) */
+
+static tree
+c_parser_omp_clause_destroy (c_parser *parser, tree list)
+{
+  return c_parser_omp_var_list_parens (parser, OMP_CLAUSE_DESTROY, list);
+}
+
+/* OpenMP 5.1:
+     prefer_type ( const-int-expr-or-string-literal-list )
+
+   OpenMP 6.0:
+     prefer_type ( { preference-selector-list }, { ... } )
+
+   with preference-selector being:
+     fr ( identifier-or-string-literal-list )
+     attr ( string-list )
+
+   Data format:
+    For the foreign runtime identifiers, string values are converted to
+    their integer value; unknown string or integer values are set to
+    GOMP_INTEROP_IFR_KNOWN.
+
+    Each item (a) GOMP_INTEROP_IFR_SEPARATOR
+	      (b) for any 'fr', its integer value.
+		  Note: Spec only permits 1 'fr' entry (6.0; changed after TR13)
+	      (c) GOMP_INTEROP_IFR_SEPARATOR
+	      (d) list of \0-terminated non-empty strings for 'attr'
+	      (e) '\0'
+    Tailing '\0'.  */
+
+static tree
+c_parser_omp_modifier_prefer_type (c_parser *parser)
+{
+  if (!c_parser_require (parser, CPP_OPEN_PAREN, "expected %<(%>"))
+    return error_mark_node;
+
+  std::string str;
+
+  /* Old Format: const-int-expr-or-string-literal-list */
+  if (!c_parser_next_token_is (parser, CPP_OPEN_BRACE))
+    while (true)
+      {
+	str += (char) GOMP_INTEROP_IFR_SEPARATOR;
+	if (c_parser_next_token_is (parser, CPP_STRING))
+	  {
+	    c_expr cval = c_parser_string_literal (parser, false, false);
+	    if (cval.value == error_mark_node)
+	      return error_mark_node;
+	    if ((size_t) TREE_STRING_LENGTH (cval.value)
+		!= strlen (TREE_STRING_POINTER (cval.value)) + 1)
+	      {
+		error_at (cval.get_location (), "string literal must "
+						"not contain %<\\0%>");
+		parser->error = true;
+		return error_mark_node;
+	      }
+
+	    char c = omp_get_fr_id_from_name (TREE_STRING_POINTER (cval.value));
+	    if (c == GOMP_INTEROP_IFR_UNKNOWN)
+	      warning_at (cval.get_location (), OPT_Wopenmp,
+			  "unknown foreign runtime identifier %qs",
+			  TREE_STRING_POINTER (cval.value));
+	    str += c;
+	  }
+	else
+	  {
+	    c_expr cval = c_parser_expr_no_commas (parser, NULL);
+	    tree value = c_fully_fold (cval.value, false, NULL);
+	    if (INTEGRAL_TYPE_P (TREE_TYPE (value))
+		&& TREE_CODE (value) != INTEGER_CST)
+	      value = convert_lvalue_to_rvalue (cval.get_start (), cval,
+						false, true).value;
+	    if (TREE_CODE (value) != INTEGER_CST
+		|| !tree_fits_shwi_p (value))
+	      {
+		c_parser_error (parser, "expected string literal or constant "
+					"integer expression");
+		return error_mark_node;
+	      }
+	    HOST_WIDE_INT n = tree_to_shwi (value);
+	    if (n < 1 || n > GOMP_INTEROP_IFR_LAST)
+	      {
+		warning_at (cval.get_location (), OPT_Wopenmp,
+			    "unknown foreign runtime identifier %qwd", n);
+		n = GOMP_INTEROP_IFR_UNKNOWN;
+	      }
+	    str += (char) n;
+	  }
+	str += (char) GOMP_INTEROP_IFR_SEPARATOR;
+	str += '\0';
+	if (c_parser_next_token_is (parser, CPP_COMMA))
+	  {
+	    c_parser_consume_token (parser);
+	    continue;
+	  }
+	if (!c_parser_require (parser, CPP_CLOSE_PAREN,
+			       "expected %<,%> or %<)%>"))
+	  return error_mark_node;
+	str += '\0';
+	tree res = build_string (str.length (), str.data ());
+	TREE_TYPE (res) = build_array_type_nelts (unsigned_char_type_node,
+						  str.length ());
+	return res;
+      }
+
+  /* New format. */
+  std::string str2;
+  while (true)
+    {
+      if (!c_parser_require (parser, CPP_OPEN_BRACE, "expected %<{%>"))
+	return error_mark_node;
+      str += (char) GOMP_INTEROP_IFR_SEPARATOR;
+      str2.clear ();
+      bool has_fr = false;
+      while (true)
+	{
+	  c_token *tok = c_parser_peek_token (parser);
+	  if (tok->type != CPP_NAME
+	      || (strcmp("fr", IDENTIFIER_POINTER (tok->value)) != 0
+		  && strcmp("attr", IDENTIFIER_POINTER (tok->value)) != 0))
+	    {
+	      c_parser_error (parser, "expected %<fr%> or %<attr%> preference "
+				      "selector");
+	      return error_mark_node;
+	    }
+	  c_parser_consume_token (parser);
+	  bool is_fr = IDENTIFIER_POINTER (tok->value)[0] == 'f';
+	  if (is_fr && has_fr)
+	    {
+	      c_parser_error (parser, "duplicated %<fr%> preference selector");
+	      return error_mark_node;
+	    }
+	  if (!c_parser_require (parser, CPP_OPEN_PAREN, "expected %<(%>"))
+	    return error_mark_node;
+	  while (true)
+	    {
+	      if (c_parser_next_token_is (parser, CPP_STRING))
+		{
+		  c_expr cval = c_parser_string_literal (parser, false, false);
+		  tree value = cval.value;
+		  if (value == error_mark_node)
+		    return error_mark_node;
+		  if ((size_t) TREE_STRING_LENGTH (value)
+		      != strlen (TREE_STRING_POINTER (value)) + 1)
+		    {
+		      error_at (cval.get_location (), "string literal must "
+						      "not contain %<\\0%>");
+		      parser->error = true;
+		      return error_mark_node;
+		    }
+		  if (!is_fr)
+		    {
+		      if (!startswith (TREE_STRING_POINTER (value), "ompx_"))
+			{
+			  error_at (cval.get_location (),
+				    "%<attr%> string literal must start with "
+				    "%<ompx_%>");
+			  parser->error = true;
+			  return error_mark_node;
+			}
+		      if (strchr (TREE_STRING_POINTER (value), ','))
+			{
+			  error_at (cval.get_location (),
+				    "%<attr%> string literal must not contain "
+				    "a comma");
+			  parser->error = true;
+			  return error_mark_node;
+			}
+		      str2 += TREE_STRING_POINTER (value);
+		      str2 += '\0';
+		    }
+		  else
+		    {
+		      if (*TREE_STRING_POINTER (value) == '\0')
+			{
+			  c_parser_error (parser, "non-empty string literal expected");
+			  return error_mark_node;
+			}
+		      char c = omp_get_fr_id_from_name (TREE_STRING_POINTER (value));
+		      if (c == GOMP_INTEROP_IFR_UNKNOWN)
+			warning_at (cval.get_location (), OPT_Wopenmp,
+				    "unknown foreign runtime identifier %qs",
+				    TREE_STRING_POINTER (value));
+		     str += c;
+		     has_fr = true;
+		    }
+		}
+	      else if (!is_fr)
+		{
+		  c_parser_error (parser, "expected string literal");
+		  return error_mark_node;
+		}
+	      else
+		{
+		  c_expr cval = c_parser_expr_no_commas (parser, NULL);
+		  tree value = c_fully_fold (cval.value, false, NULL);
+		  if (INTEGRAL_TYPE_P (TREE_TYPE (value))
+		      && TREE_CODE (value) != INTEGER_CST)
+		    value = convert_lvalue_to_rvalue (cval.get_start (), cval,
+						      false, true).value;
+
+		  if (TREE_CODE (value) != INTEGER_CST
+		      || !tree_fits_shwi_p (value))
+		    {
+		      c_parser_error (parser, "expected string literal or "
+					      "constant integer expression");
+		      return error_mark_node;
+		    }
+		  HOST_WIDE_INT n = tree_to_shwi (value);
+		  if (n < 1 || n > GOMP_INTEROP_IFR_LAST)
+		    {
+		      warning_at (cval.get_location (), OPT_Wopenmp,
+				  "unknown foreign runtime identifier %qwd", n);
+		      n = GOMP_INTEROP_IFR_UNKNOWN;
+		    }
+		  str += (char) n;
+		  has_fr = true;
+		}
+	      if (!is_fr
+		  && c_parser_next_token_is (parser, CPP_COMMA))
+		{
+		  c_parser_consume_token (parser);
+		  continue;
+		}
+	      if (!c_parser_require (parser, CPP_CLOSE_PAREN,
+				     is_fr ? G_("expected %<)%>")
+					   : G_("expected %<)%> or %<,%>")))
+		return error_mark_node;
+	      break;
+	    }
+	  if (c_parser_next_token_is (parser, CPP_COMMA))
+	    {
+	      c_parser_consume_token (parser);
+	      continue;
+	    }
+	  if (c_parser_next_token_is (parser, CPP_CLOSE_BRACE))
+	    break;
+	  c_parser_error (parser, "expected %<,%> or %<}%>");
+	  return error_mark_node;
+	}
+      str += (char) GOMP_INTEROP_IFR_SEPARATOR;
+      str += str2;
+      str += '\0';
+      c_parser_consume_token (parser);
+      if (c_parser_next_token_is (parser, CPP_CLOSE_PAREN))
+	break;
+      if (!c_parser_require (parser, CPP_COMMA, "expected %<)%> or %<,%>"))
+	return error_mark_node;
+    }
+  c_parser_consume_token (parser);
+  str += '\0';
+  tree res = build_string (str.length (), str.data ());
+  TREE_TYPE (res) = build_array_type_nelts (unsigned_char_type_node,
+						  str.length ());
+  return res;
+}
+
+/* OpenMP 5.1
+     modifiers of the 'init' clause, used by the 'init' and the
+     'append_args' clauses.
+
+   Modifiers:
+     target
+     targetsync
+     prefer_type (preference-specification)
+
+  Returns 'false' if an error has been issued.  */
+
+static bool
+c_parser_omp_clause_init_modifiers (c_parser *parser, bool *target,
+				    bool *targetsync, tree *prefer_type_tree)
+{
+  *target = false;
+  *targetsync = false;
+  *prefer_type_tree = NULL_TREE;
+
+  do
+    {
+      c_token *tok = c_parser_peek_token (parser);
+      if (tok->type != CPP_NAME)
+	goto fail;
+      const char *p = IDENTIFIER_POINTER (tok->value);
+      if (strcmp ("targetsync", p) == 0)
+	{
+	  if (*targetsync)
+	    error_at (tok->location, "duplicate %<targetsync%> modifier");
+	  *targetsync = true;
+	  c_parser_consume_token (parser);
+	}
+      else if (strcmp ("target", p) == 0)
+	{
+	  if (*target)
+	    error_at (tok->location, "duplicate %<target%> modifier");
+	  *target = true;
+	  c_parser_consume_token (parser);
+	}
+      else if (strcmp ("prefer_type", p) == 0)
+	{
+	  if (*prefer_type_tree != NULL_TREE)
+	    error_at (tok->location, "duplicate %<prefer_type%> modifier");
+	  c_parser_consume_token (parser);
+	  *prefer_type_tree = c_parser_omp_modifier_prefer_type (parser);
+	  if (*prefer_type_tree == error_mark_node)
+	    return false;
+	}
+      else
+	goto fail;
+      tok = c_parser_peek_token (parser);
+      if (tok->type == CPP_COMMA)
+	{
+	  c_parser_consume_token (parser);
+	  continue;
+	}
+      /* Unknown token - either done or an error; handle it in the caller.  */
+      return true;
+    }
+  while (true);
+
+fail:
+  c_parser_error (parser, "%<init%> clause with modifier other than "
+			  "%<prefer_type%>, %<target%> or %<targetsync%>");
+  return false;
+}
+
+/* OpenMP 5.1:
+   init ( [init-modifier-list : ] variable-list )
+
+   Modifiers:
+     target
+     targetsync
+     prefer_type (preference-specification) */
+
+static tree
+c_parser_omp_clause_init (c_parser *parser, tree list)
+{
+  location_t loc = c_parser_peek_token (parser)->location;
+
+  matching_parens parens;
+  if (!parens.require_open (parser))
+    return list;
+
+  unsigned raw_pos = 1;
+  while (c_parser_peek_nth_token_raw (parser, raw_pos)->type == CPP_NAME)
+    {
+      raw_pos++;
+      if (c_parser_peek_nth_token_raw (parser, raw_pos)->type == CPP_OPEN_PAREN)
+	{
+	  raw_pos++;
+	  c_parser_check_balanced_raw_token_sequence (parser, &raw_pos);
+	  if (c_parser_peek_nth_token_raw (parser, raw_pos)->type != CPP_CLOSE_PAREN)
+	    {
+	      raw_pos = 0;
+	      break;
+	    }
+	  raw_pos++;
+	}
+      if (c_parser_peek_nth_token_raw (parser, raw_pos)->type == CPP_COLON)
+	break;
+      if (c_parser_peek_nth_token_raw (parser, raw_pos)->type != CPP_COMMA)
+	{
+	  raw_pos = 0;
+	  break;
+	}
+      raw_pos++;
+    }
+
+  bool target = false;
+  bool targetsync = false;
+  tree prefer_type_tree = NULL_TREE;
+
+  if (raw_pos > 1
+      && (!c_parser_omp_clause_init_modifiers (parser, &target, &targetsync,
+					       &prefer_type_tree)
+	  || !c_parser_require (parser, CPP_COLON, "expected %<:%>")))
+    {
+      if (prefer_type_tree != error_mark_node)
+	parens.skip_until_found_close (parser);
+      return list;
+    }
+
+  tree nl = c_parser_omp_variable_list (parser, loc, OMP_CLAUSE_INIT, list,
+					false);
+  parens.skip_until_found_close (parser);
+
+  for (tree c = nl; c != list; c = OMP_CLAUSE_CHAIN (c))
+    {
+      if (target)
+	OMP_CLAUSE_INIT_TARGET (c) = 1;
+      if (targetsync)
+	OMP_CLAUSE_INIT_TARGETSYNC (c) = 1;
+      if (prefer_type_tree)
+	OMP_CLAUSE_INIT_PREFER_TYPE (c) = prefer_type_tree;
+    }
+  return nl;
+}
+
+/* OpenMP 5.0:
+   use ( variable-list ) */
+
+static tree
+c_parser_omp_clause_use (c_parser *parser, tree list)
+{
+  return c_parser_omp_var_list_parens (parser, OMP_CLAUSE_USE, list);
+}
+
+/* OpenMP 6.0:
+   interop ( variable-list ) */
+
+static tree
+c_parser_omp_clause_interop (c_parser *parser, tree list)
+{
+  check_no_duplicate_clause (list, OMP_CLAUSE_INTEROP, "interop");
+  tree nl = c_parser_omp_var_list_parens (parser, OMP_CLAUSE_INTEROP, list);
+  for (tree c = nl; c != list; c = OMP_CLAUSE_CHAIN (c))
+    {
+      TREE_USED (OMP_CLAUSE_DECL (c)) = 1;
+      DECL_READ_P (OMP_CLAUSE_DECL (c)) = 1;
+    }
+  return nl;
 }
 
 /* Parse all OpenACC clauses.  The set clauses allowed by the directive
@@ -20321,8 +21273,8 @@ c_parser_omp_all_clauses (c_parser *parser, omp_clause_mask mask,
 	  clauses = c_parser_omp_clause_allocate (parser, clauses);
 	  c_name = "allocate";
 	  break;
-	case PRAGMA_OMP_CLAUSE_LINEAR: 
-	  clauses = c_parser_omp_clause_linear (parser, clauses); 
+	case PRAGMA_OMP_CLAUSE_LINEAR:
+	  clauses = c_parser_omp_clause_linear (parser, clauses);
 	  c_name = "linear";
 	  break;
 	case PRAGMA_OMP_CLAUSE_AFFINITY:
@@ -20336,6 +21288,22 @@ c_parser_omp_all_clauses (c_parser *parser, omp_clause_mask mask,
 	case PRAGMA_OMP_CLAUSE_DOACROSS:
 	  clauses = c_parser_omp_clause_doacross (parser, clauses);
 	  c_name = "doacross";
+	  break;
+	case PRAGMA_OMP_CLAUSE_DESTROY:
+	  clauses = c_parser_omp_clause_destroy (parser, clauses);
+	  c_name = "destroy";
+	  break;
+	case PRAGMA_OMP_CLAUSE_INIT:
+	  clauses = c_parser_omp_clause_init (parser, clauses);
+	  c_name = "init";
+	  break;
+	case PRAGMA_OMP_CLAUSE_USE:
+	  clauses = c_parser_omp_clause_use (parser, clauses);
+	  c_name = "use";
+	  break;
+	case PRAGMA_OMP_CLAUSE_INTEROP:
+	  clauses = c_parser_omp_clause_interop (parser, clauses);
+	  c_name = "interop";
 	  break;
 	case PRAGMA_OMP_CLAUSE_MAP:
 	  clauses = c_parser_omp_clause_map (parser, clauses);
@@ -20411,6 +21379,14 @@ c_parser_omp_all_clauses (c_parser *parser, omp_clause_mask mask,
 	  c_name = "partial";
 	  clauses = c_parser_omp_clause_partial (parser, clauses);
 	  break;
+	case PRAGMA_OMP_CLAUSE_NOVARIANTS:
+	  c_name = "novariants";
+	  clauses = c_parser_omp_clause_novariants (parser, clauses);
+	  break;
+	case PRAGMA_OMP_CLAUSE_NOCONTEXT:
+	  c_name = "nocontext";
+	  clauses = c_parser_omp_clause_nocontext (parser, clauses);
+	  break;
 	default:
 	  c_parser_error (parser, "expected an OpenMP clause");
 	  goto saw_error;
@@ -20435,6 +21411,8 @@ c_parser_omp_all_clauses (c_parser *parser, omp_clause_mask mask,
     {
       if ((mask & (OMP_CLAUSE_MASK_1 << PRAGMA_OMP_CLAUSE_UNIFORM)) != 0)
 	return c_finish_omp_clauses (clauses, C_ORT_OMP_DECLARE_SIMD);
+      if ((mask & (OMP_CLAUSE_MASK_1 << PRAGMA_OMP_CLAUSE_USE)) != 0)
+	return c_finish_omp_clauses (clauses, C_ORT_OMP_INTEROP);
       return c_finish_omp_clauses (clauses, C_ORT_OMP);
     }
 
@@ -21079,12 +22057,12 @@ c_parser_oacc_routine (c_parser *parser, enum pragma_context context)
 	  while (c_parser_next_token_is (parser, CPP_KEYWORD)
 		 && c_parser_peek_token (parser)->keyword == RID_EXTENSION);
 	  c_parser_declaration_or_fndef (parser, true, true, true, false, true,
-					 NULL, NULL, false, NULL, &data);
+					 false, NULL, NULL, false, NULL, &data);
 	  restore_extension_diagnostics (ext);
 	}
       else
 	c_parser_declaration_or_fndef (parser, true, true, true, false, true,
-				       NULL, NULL, false, NULL, &data);
+				       false, NULL, NULL, false, NULL, &data);
     }
 }
 
@@ -21376,7 +22354,7 @@ c_parser_omp_allocate (c_parser *parser)
 		    "%<allocate%> directive", var);
 	  continue;
 	}
-      if (!c_check_in_current_scope (var))
+      if (!parser->in_omp_decl_attribute && !c_check_in_current_scope (var))
 	{
 	  error_at (OMP_CLAUSE_LOCATION (nl),
 		    "%<allocate%> directive must be in the same scope as %qD",
@@ -21417,9 +22395,6 @@ c_parser_omp_allocate (c_parser *parser)
 	    = {EXPR_LOC_OR_LOC (allocator, OMP_CLAUSE_LOCATION (nl)), var};
 	  walk_tree (&allocator, c_check_omp_allocate_allocator_r, &data, NULL);
 	}
-      if (alignment)
-	SET_DECL_ALIGN (var, BITS_PER_UNIT * MAX (tree_to_uhwi (alignment),
-						  DECL_ALIGN_UNIT (var)));
       DECL_ATTRIBUTES (var) = tree_cons (get_identifier ("omp allocate"),
 					 build_tree_list (allocator, alignment),
 					 DECL_ATTRIBUTES (var));
@@ -23045,7 +24020,8 @@ c_parser_omp_loop_nest (c_parser *parser, bool *if_p)
       /* This is a declaration, which must be added to the pre_body code.  */
       tree this_pre_body = push_stmt_list ();
       c_in_omp_for = true;
-      c_parser_declaration_or_fndef (parser, true, true, true, true, true);
+      c_parser_declaration_or_fndef (parser, true, true, true, true, true,
+				     false);
       c_in_omp_for = false;
       this_pre_body = pop_stmt_list (this_pre_body);
       append_to_statement_list_force (this_pre_body,
@@ -23770,6 +24746,32 @@ c_parser_omp_masked (location_t loc, c_parser *parser,
 			      clauses);
 }
 
+/* OpenMP 5.1:
+   # pragma omp interop clauses[opt] new-line */
+
+#define OMP_INTEROP_CLAUSE_MASK					\
+	( (OMP_CLAUSE_MASK_1 << PRAGMA_OMP_CLAUSE_DEPEND)	\
+	| (OMP_CLAUSE_MASK_1 << PRAGMA_OMP_CLAUSE_DESTROY)	\
+	| (OMP_CLAUSE_MASK_1 << PRAGMA_OMP_CLAUSE_DEVICE)	\
+	| (OMP_CLAUSE_MASK_1 << PRAGMA_OMP_CLAUSE_INIT)		\
+	| (OMP_CLAUSE_MASK_1 << PRAGMA_OMP_CLAUSE_NOWAIT)	\
+	| (OMP_CLAUSE_MASK_1 << PRAGMA_OMP_CLAUSE_USE))
+
+static void
+c_parser_omp_interop (c_parser *parser)
+{
+  location_t loc = c_parser_peek_token (parser)->location;
+  c_parser_consume_pragma (parser);
+  tree clauses = c_parser_omp_all_clauses (parser,
+					   OMP_INTEROP_CLAUSE_MASK,
+					   "#pragma omp interop");
+  tree stmt = make_node (OMP_INTEROP);
+  TREE_TYPE (stmt) = void_type_node;
+  OMP_INTEROP_CLAUSES (stmt) = clauses;
+  SET_EXPR_LOCATION (stmt, loc);
+  add_stmt (stmt);
+}
+
 /* OpenMP 2.5:
    # pragma omp ordered new-line
      structured-block
@@ -24222,6 +25224,150 @@ c_parser_omp_scope (location_t loc, c_parser *parser, bool *if_p)
     = c_parser_omp_all_clauses (parser, OMP_SCOPE_CLAUSE_MASK,
 				"#pragma omp scope");
   OMP_SCOPE_BODY (stmt) = c_parser_omp_structured_block (parser, if_p);
+
+  return add_stmt (stmt);
+}
+
+/* Parse a function dispatch structured block:
+
+    lvalue-expression = target-call ( [expression-list] );
+    or
+    target-call ( [expression-list] );
+
+   Adapted from c_parser_expr_no_commas and c_parser_postfix_expression
+   (CPP_NAME/C_ID_ID) for the function name.
+*/
+static tree
+c_parser_omp_dispatch_body (c_parser *parser)
+{
+  struct c_expr lhs, rhs, ret;
+  location_t expr_loc = c_parser_peek_token (parser)->location;
+  source_range tok_range = c_parser_peek_token (parser)->get_range ();
+
+  lhs = c_parser_conditional_expression (parser, NULL, NULL);
+  if (TREE_CODE (lhs.value) == CALL_EXPR)
+    return lhs.value;
+
+  location_t op_location = c_parser_peek_token (parser)->location;
+  if (!c_parser_require (parser, CPP_EQ, "expected %<=%>"))
+    return error_mark_node;
+
+  /* Parse function name.  */
+  if (!c_parser_next_token_is (parser, CPP_NAME))
+    {
+      c_parser_error (parser, "expected a function name");
+      return error_mark_node;
+    }
+  expr_loc = c_parser_peek_token (parser)->location;
+  tree id = c_parser_peek_token (parser)->value;
+  c_parser_consume_token (parser);
+  if (!c_parser_next_token_is (parser, CPP_OPEN_PAREN))
+    {
+      c_parser_error (parser, "expected a function name");
+      return error_mark_node;
+    }
+
+  rhs.value = build_external_ref (expr_loc, id, true, &rhs.original_type);
+  set_c_expr_source_range (&rhs, tok_range);
+
+  /* Parse argument list.  */
+  rhs = c_parser_postfix_expression_after_primary (
+    parser, EXPR_LOC_OR_LOC (rhs.value, expr_loc), rhs);
+  if (TREE_CODE (rhs.value) != CALL_EXPR)
+    {
+      error_at (EXPR_LOC_OR_LOC (rhs.value, expr_loc),
+		"expected target-function call");
+      return error_mark_node;
+    }
+
+  /* Build assignment. */
+  rhs = convert_lvalue_to_rvalue (expr_loc, rhs, true, true);
+  ret.value
+    = build_modify_expr (op_location, lhs.value, lhs.original_type, NOP_EXPR,
+			 expr_loc, rhs.value, rhs.original_type);
+  ret.m_decimal = 0;
+  set_c_expr_source_range (&ret, lhs.get_start (), rhs.get_finish ());
+  ret.original_code = MODIFY_EXPR;
+  ret.original_type = NULL;
+  return ret.value;
+}
+
+/* OpenMP 5.1:
+   # pragma omp dispatch dispatch-clause[optseq] new-line
+     expression-stmt
+
+   LOC is the location of the #pragma.
+*/
+
+#define OMP_DISPATCH_CLAUSE_MASK                                               \
+  ((OMP_CLAUSE_MASK_1 << PRAGMA_OMP_CLAUSE_DEVICE)                             \
+   | (OMP_CLAUSE_MASK_1 << PRAGMA_OMP_CLAUSE_DEPEND)                           \
+   | (OMP_CLAUSE_MASK_1 << PRAGMA_OMP_CLAUSE_NOVARIANTS)                       \
+   | (OMP_CLAUSE_MASK_1 << PRAGMA_OMP_CLAUSE_NOCONTEXT)                        \
+   | (OMP_CLAUSE_MASK_1 << PRAGMA_OMP_CLAUSE_HAS_DEVICE_ADDR)                  \
+   | (OMP_CLAUSE_MASK_1 << PRAGMA_OMP_CLAUSE_INTEROP)                          \
+   | (OMP_CLAUSE_MASK_1 << PRAGMA_OMP_CLAUSE_IS_DEVICE_PTR)                    \
+   | (OMP_CLAUSE_MASK_1 << PRAGMA_OMP_CLAUSE_NOWAIT))
+
+static tree
+c_parser_omp_dispatch (location_t loc, c_parser *parser)
+{
+  tree stmt = make_node (OMP_DISPATCH);
+  SET_EXPR_LOCATION (stmt, loc);
+  TREE_TYPE (stmt) = void_type_node;
+
+  OMP_DISPATCH_CLAUSES (stmt)
+    = c_parser_omp_all_clauses (parser, OMP_DISPATCH_CLAUSE_MASK,
+				"#pragma omp dispatch");
+
+  // Extract depend clauses and create taskwait
+  tree depend_clauses = NULL_TREE;
+  tree *depend_clauses_ptr = &depend_clauses;
+  for (tree c = OMP_DISPATCH_CLAUSES (stmt); c; c = OMP_CLAUSE_CHAIN (c))
+    {
+      if (OMP_CLAUSE_CODE (c) == OMP_CLAUSE_DEPEND)
+	{
+	  *depend_clauses_ptr = c;
+	  depend_clauses_ptr = &OMP_CLAUSE_CHAIN (c);
+	}
+    }
+  if (depend_clauses != NULL_TREE)
+    {
+      tree stmt = make_node (OMP_TASK);
+      TREE_TYPE (stmt) = void_node;
+      OMP_TASK_CLAUSES (stmt) = depend_clauses;
+      OMP_TASK_BODY (stmt) = NULL_TREE;
+      SET_EXPR_LOCATION (stmt, loc);
+      add_stmt (stmt);
+    }
+
+  // Parse body as expression statement
+  loc = c_parser_peek_token (parser)->location;
+  tree dispatch_body = c_parser_omp_dispatch_body (parser);
+  if (dispatch_body == error_mark_node)
+    {
+      inform (loc, "%<#pragma omp dispatch%> must be followed by a function "
+		   "call with optional assignment");
+      c_parser_skip_to_end_of_block_or_statement (parser);
+      return NULL_TREE;
+    }
+
+  // Walk the tree to find the dispatch function call and wrap it into an IFN
+  gcc_assert (TREE_CODE (dispatch_body) == CALL_EXPR
+	      || TREE_CODE (dispatch_body) == MODIFY_EXPR);
+  tree *dispatch_call = TREE_CODE (dispatch_body) == MODIFY_EXPR
+			  ? &TREE_OPERAND (dispatch_body, 1)
+			  : &dispatch_body;
+  while (TREE_CODE (*dispatch_call) == FLOAT_EXPR
+	 || TREE_CODE (*dispatch_call) == CONVERT_EXPR
+	 || TREE_CODE (*dispatch_call) == NOP_EXPR)
+    dispatch_call = &TREE_OPERAND (*dispatch_call, 0);
+  *dispatch_call = build_call_expr_internal_loc (
+    loc, IFN_GOMP_DISPATCH,
+    TREE_TYPE (TREE_TYPE (CALL_EXPR_FN (*dispatch_call))), 1, *dispatch_call);
+
+  c_parser_skip_until_found (parser, CPP_SEMICOLON, "expected %<;%>");
+  OMP_DISPATCH_BODY (stmt) = dispatch_body;
 
   return add_stmt (stmt);
 }
@@ -25206,6 +26352,10 @@ check_clauses:
 
    OpenMP 5.0:
    # pragma omp declare variant (identifier) match(context-selector) new-line
+
+   OpenMP 5.1
+   # pragma omp declare variant (identifier) match(context-selector) \
+      adjust_args(adjust-op:argument-list) append_args(interop-list) new-line
    */
 
 #define OMP_DECLARE_SIMD_CLAUSE_MASK				\
@@ -25287,12 +26437,12 @@ c_parser_omp_declare_simd (c_parser *parser, enum pragma_context context)
 	  while (c_parser_next_token_is (parser, CPP_KEYWORD)
 		 && c_parser_peek_token (parser)->keyword == RID_EXTENSION);
 	  c_parser_declaration_or_fndef (parser, true, true, true, false, true,
-					 NULL, &clauses);
+					 false, NULL, &clauses);
 	  restore_extension_diagnostics (ext);
 	}
       else
 	c_parser_declaration_or_fndef (parser, true, true, true, false, true,
-				       NULL, &clauses);
+				       false, NULL, &clauses);
       break;
     case pragma_struct:
     case pragma_param:
@@ -25321,7 +26471,7 @@ c_parser_omp_declare_simd (c_parser *parser, enum pragma_context context)
 	      || c_parser_nth_token_starts_std_attributes (parser, 1))
 	    {
 	      c_parser_declaration_or_fndef (parser, true, true, true, true,
-					     true, NULL, &clauses,
+					     true, false, NULL, &clauses,
 					     have_std_attrs, std_attrs);
 	      restore_extension_diagnostics (ext);
 	      break;
@@ -25331,7 +26481,7 @@ c_parser_omp_declare_simd (c_parser *parser, enum pragma_context context)
       else if (c_parser_next_tokens_start_declaration (parser))
 	{
 	  c_parser_declaration_or_fndef (parser, true, true, true, true, true,
-					 NULL, &clauses, have_std_attrs,
+					 false, NULL, &clauses, have_std_attrs,
 					 std_attrs);
 	  break;
 	}
@@ -25669,77 +26819,380 @@ c_finish_omp_declare_variant (c_parser *parser, tree fndecl, tree parms)
 
   parens.require_close (parser);
 
-  if (c_parser_next_token_is (parser, CPP_COMMA)
-      && c_parser_peek_2nd_token (parser)->type == CPP_NAME)
-    c_parser_consume_token (parser);
+  tree append_args_tree = NULL_TREE;
+  tree append_args_last;
+  vec<tree> adjust_args_list = vNULL;
+  bool has_match = false, has_adjust_args = false;
+  location_t adjust_args_loc = UNKNOWN_LOCATION;
+  location_t append_args_loc = UNKNOWN_LOCATION;
+  location_t match_loc = UNKNOWN_LOCATION;
+  tree need_device_ptr_list = NULL_TREE;
+  tree ctx = error_mark_node;
 
-  const char *clause = "";
-  location_t match_loc = c_parser_peek_token (parser)->location;
-  if (c_parser_next_token_is (parser, CPP_NAME))
-    clause = IDENTIFIER_POINTER (c_parser_peek_token (parser)->value);
-  if (strcmp (clause, "match"))
+  do
     {
-      c_parser_error (parser, "expected %<match%>");
-      goto fail;
+      if (c_parser_next_token_is (parser, CPP_COMMA)
+	  && c_parser_peek_2nd_token (parser)->type == CPP_NAME)
+	c_parser_consume_token (parser);
+
+      const char *clause = "";
+      location_t loc = c_parser_peek_token (parser)->location;
+      if (c_parser_next_token_is (parser, CPP_NAME))
+	clause = IDENTIFIER_POINTER (c_parser_peek_token (parser)->value);
+
+      enum clause
+      {
+	match,
+	adjust_args,
+	append_args
+      } ccode;
+
+      if (strcmp (clause, "match") == 0)
+	{
+	  ccode = match;
+	  match_loc = loc;
+	}
+      else if (strcmp (clause, "adjust_args") == 0)
+	{
+	  ccode = adjust_args;
+	  adjust_args_loc = loc;
+	}
+      else if (strcmp (clause, "append_args") == 0)
+	{
+	  ccode = append_args;
+	  append_args_loc = loc;
+	}
+      else
+	{
+	  c_parser_error (parser, "expected %<match%>, %<adjust_args%> or "
+				  "%<append_args%> clause");
+	  goto fail;
+	}
+
+      c_parser_consume_token (parser);
+
+      if (!parens.require_open (parser))
+	goto fail;
+
+      if (parms == NULL_TREE)
+	parms = error_mark_node;
+
+      if (ccode == match)
+	{
+	  if (has_match)
+	    error_at (match_loc, "too many %<match%> clauses");
+	  has_match = true;
+	  ctx  = c_parser_omp_context_selector_specification (parser, parms);
+	  if (ctx == error_mark_node)
+	    goto fail;
+	  ctx = omp_check_context_selector (match_loc, ctx);
+	  if (ctx != error_mark_node && variant != error_mark_node)
+	    {
+	      if (TREE_CODE (variant) != FUNCTION_DECL)
+		{
+		  error_at (token->location, "variant %qD is not a function",
+			    variant);
+		  variant = error_mark_node;
+		}
+	      else if (fndecl_built_in_p (variant)
+		       && (strncmp (IDENTIFIER_POINTER (DECL_NAME (variant)),
+				    "__builtin_", strlen ("__builtin_"))
+			     == 0
+			   || strncmp (IDENTIFIER_POINTER (DECL_NAME (variant)),
+				       "__sync_", strlen ("__sync_"))
+				== 0
+			   || strncmp (IDENTIFIER_POINTER (DECL_NAME (variant)),
+				       "__atomic_", strlen ("__atomic_"))
+				== 0))
+		{
+		  error_at (token->location, "variant %qD is a built-in",
+			    variant);
+		  variant = error_mark_node;
+		}
+	    }
+	}
+      else if (ccode == adjust_args)
+	{
+	  has_adjust_args = true;
+	  if (c_parser_next_token_is (parser, CPP_NAME)
+	      && c_parser_peek_2nd_token (parser)->type == CPP_COLON)
+	    {
+	      const char *p
+		= IDENTIFIER_POINTER (c_parser_peek_token (parser)->value);
+	      if (strcmp (p, "need_device_ptr") == 0
+		  || strcmp (p, "nothing") == 0)
+		{
+		  c_parser_consume_token (parser); // need_device_ptr
+		  c_parser_consume_token (parser); // :
+
+		  loc = c_parser_peek_token (parser)->location;
+		  tree list
+		    = c_parser_omp_variable_list (parser, loc, OMP_CLAUSE_ERROR,
+						  NULL_TREE);
+
+		  tree arg;
+		  if (variant != error_mark_node)
+		    for (tree c = list; c != NULL_TREE; c = TREE_CHAIN (c))
+		      {
+			tree decl = TREE_PURPOSE (c);
+			int idx;
+			for (arg = parms, idx = 0; arg != NULL;
+			     arg = TREE_CHAIN (arg), idx++)
+			  if (arg == decl)
+			    break;
+			if (arg == NULL_TREE)
+			  {
+			    error_at (loc, "%qD is not a function argument",
+				      decl);
+			    goto fail;
+			  }
+			if (adjust_args_list.contains (arg))
+			  {
+			    // TODO fix location
+			    error_at (loc, "%qD is specified more than once",
+				      decl);
+			    goto fail;
+			  }
+			if (strcmp (p, "need_device_ptr") == 0
+			    && TREE_CODE (TREE_TYPE (arg)) != POINTER_TYPE)
+			  {
+			    error_at (loc, "%qD is not of pointer type", decl);
+			    goto fail;
+			  }
+			adjust_args_list.safe_push (arg);
+			if (strcmp (p, "need_device_ptr") == 0)
+			  {
+			    need_device_ptr_list = chainon (
+			      need_device_ptr_list,
+			      build_tree_list (
+				NULL_TREE,
+				build_int_cst (
+				  integer_type_node,
+				  idx))); // Store 0-based argument index,
+					  // as in gimplify_call_expr
+			  }
+		      }
+		}
+	      else
+		{
+		  error_at (c_parser_peek_token (parser)->location,
+			    "expected %<nothing%> or %<need_device_ptr%>");
+		  if (strcmp (p, "need_device_addr") == 0)
+		    inform (c_parser_peek_token (parser)->location,
+			    "%<need_device_addr%> is not valid for C");
+		  goto fail;
+		}
+	    }
+	  else
+	    {
+	      error_at (c_parser_peek_token (parser)->location,
+			"expected %<nothing%> or %<need_device_ptr%> "
+			"followed by %<:%>");
+	      goto fail;
+	    }
+	}
+      else if (ccode == append_args)
+	{
+	  if (append_args_tree)
+	    error_at (append_args_loc, "too many %qs clauses", "append_args");
+	  do
+	    {
+	      location_t loc = c_parser_peek_token (parser)->location;
+	      if (!c_parser_next_token_is (parser, CPP_NAME)
+		  || strcmp ("interop",
+			     IDENTIFIER_POINTER (
+			       c_parser_peek_token (parser)->value)))
+		{
+		  error_at (loc, "expected %<interop%>");
+		  goto fail;
+		}
+	      c_parser_consume_token (parser);
+
+	      if (!c_parser_require (parser, CPP_OPEN_PAREN, "expected %<(%>"))
+		goto fail;
+	      bool target = false;
+	      bool targetsync = false;
+	      tree prefer_type_tree = NULL_TREE;
+	      if (!c_parser_omp_clause_init_modifiers (parser, &target,
+						       &targetsync,
+						       &prefer_type_tree)
+		  || !c_parser_require (parser, CPP_CLOSE_PAREN,
+					"expected %<)%> or %<,%>"))
+		goto fail;
+	      tree t = build_omp_clause (loc, OMP_CLAUSE_INIT);
+	      if (append_args_tree)
+		OMP_CLAUSE_CHAIN (append_args_last) = t;
+	      else
+		append_args_tree = append_args_last = t;
+	      if (target)
+		OMP_CLAUSE_INIT_TARGET (t) = 1;
+	      if (targetsync)
+		OMP_CLAUSE_INIT_TARGETSYNC (t) = 1;
+	      if (prefer_type_tree)
+		OMP_CLAUSE_INIT_PREFER_TYPE (t) = prefer_type_tree;
+	      if (c_parser_next_token_is (parser, CPP_CLOSE_PAREN))
+		break;
+	      if (!c_parser_require (parser, CPP_COMMA, "expected %<)%> or %<,%>"))
+		goto fail;
+	    }
+	  while (true);
+	}
+
+      parens.require_close (parser);
+  } while (c_parser_next_token_is_not (parser, CPP_PRAGMA_EOL));
+  c_parser_skip_to_pragma_eol (parser);
+
+  if ((ctx != error_mark_node && variant != error_mark_node)
+      && !omp_get_context_selector (ctx, OMP_TRAIT_SET_CONSTRUCT,
+				    OMP_TRAIT_CONSTRUCT_SIMD))
+    {
+      bool fail = false;
+      if (append_args_tree
+	  && TYPE_ARG_TYPES (TREE_TYPE (fndecl)) != NULL_TREE
+	  && TYPE_ARG_TYPES (TREE_TYPE (variant)) != NULL_TREE)
+	{
+	  int nappend_args = 0;
+	  int nbase_args = 0;
+	  for (tree t = TYPE_ARG_TYPES (TREE_TYPE (fndecl));
+	       t && TREE_VALUE (t) != void_type_node; t = TREE_CHAIN (t))
+	    nbase_args++;
+	  for (tree t = append_args_tree; t; t = TREE_CHAIN (t))
+	    nappend_args++;
+
+	  tree args, arg;
+	  args = arg = TYPE_ARG_TYPES (TREE_TYPE (variant));
+	  for (int j = 0; j < nbase_args && arg; j++, arg = TREE_CHAIN (arg))
+	    args = arg;
+	  for (int i = 0; i < nappend_args && arg; i++)
+	    arg = TREE_CHAIN (arg);
+	  tree saved_args;
+	  if (nbase_args)
+	    {
+	      saved_args = TREE_CHAIN (args);
+	      TREE_CHAIN (args) = arg;
+	    }
+	  else
+	    {
+	      saved_args = args;
+	      TYPE_ARG_TYPES (TREE_TYPE (variant)) = arg;
+	    }
+	  if (!comptypes (TREE_TYPE (fndecl), TREE_TYPE (variant)))
+	    fail = true;
+	  if (nbase_args)
+	    TREE_CHAIN (args) = saved_args;
+	  else
+	    TYPE_ARG_TYPES (TREE_TYPE (variant)) = saved_args;
+	  arg = saved_args;
+	  if (!fail)
+	    for (int i = 0; i < nappend_args; i++, arg = TREE_CHAIN (arg))
+	      if (!arg || !c_omp_interop_t_p (TREE_VALUE (arg)))
+		{
+		  error_at (DECL_SOURCE_LOCATION (variant),
+			    "argument %d of %qD must be of %<omp_interop_t%>",
+			    nbase_args + i + 1, variant);
+		  inform (append_args_loc, "%<append_args%> specified here");
+		  break;
+		}
+	}
+      else
+	{
+	  if (comptypes (TREE_TYPE (fndecl), TREE_TYPE (variant)))
+	    {
+	      if (TYPE_ARG_TYPES (TREE_TYPE (variant)) == NULL_TREE
+		  && TYPE_ARG_TYPES (TREE_TYPE (fndecl)) != NULL_TREE)
+		{
+		  if (!append_args_tree)
+		    TYPE_ARG_TYPES (TREE_TYPE (variant))
+		      = TYPE_ARG_TYPES (TREE_TYPE (fndecl));
+		  else
+		    {
+		      tree new_args = NULL_TREE;
+		      tree arg, last_arg = NULL_TREE;
+		      for (arg = TYPE_ARG_TYPES (TREE_TYPE (fndecl));
+			   arg && arg != void_type_node; arg = TREE_CHAIN (arg))
+			{
+			  if (new_args == NULL_TREE)
+			    new_args = last_arg = copy_node (arg);
+			  else
+			    {
+			      TREE_CHAIN (last_arg) = copy_node (arg);
+			      last_arg = TREE_CHAIN (last_arg);
+			    }
+			}
+		      for (tree t3 = append_args_tree; t3; t3 = TREE_CHAIN (t3))
+			{
+			  tree type = lookup_name (get_identifier ("omp_interop_t"));
+			  type = type ? TREE_TYPE (type) : ptr_type_node;
+			  last_arg = tree_cons (NULL_TREE, type, last_arg);
+			}
+		      TREE_CHAIN (last_arg) = arg;
+		      TYPE_ARG_TYPES (TREE_TYPE (variant)) = new_args;
+		    }
+		}
+	    }
+	  else
+	    fail = true;
+	}
+      if (fail)
+	{
+	  error_at (token->location,
+		    "variant %qD and base %qD have incompatible types",
+		    variant, fndecl);
+	  variant = error_mark_node;
+	}
     }
-
-  c_parser_consume_token (parser);
-
-  if (!parens.require_open (parser))
-    goto fail;
-
-  if (parms == NULL_TREE)
-    parms = error_mark_node;
-
-  tree ctx = c_parser_omp_context_selector_specification (parser, parms);
-  if (ctx == error_mark_node)
-    goto fail;
-  ctx = omp_check_context_selector (match_loc, ctx);
   if (ctx != error_mark_node && variant != error_mark_node)
     {
-      if (TREE_CODE (variant) != FUNCTION_DECL)
+      C_DECL_USED (variant) = 1;
+      tree construct = omp_get_context_selector_list (ctx,
+						      OMP_TRAIT_SET_CONSTRUCT);
+      omp_mark_declare_variant (match_loc, variant, construct);
+      if (omp_context_selector_matches (ctx))
 	{
-	  error_at (token->location, "variant %qD is not a function", variant);
-	  variant = error_mark_node;
+	  tree attr = tree_cons (get_identifier ("omp declare variant base"),
+				 build_tree_list (variant, ctx),
+				 DECL_ATTRIBUTES (fndecl));
+	  DECL_ATTRIBUTES (fndecl) = attr;
 	}
-      else if (!omp_get_context_selector (ctx, OMP_TRAIT_SET_CONSTRUCT,
-					  OMP_TRAIT_CONSTRUCT_SIMD)
-	       && !comptypes (TREE_TYPE (fndecl), TREE_TYPE (variant)))
+    }
+
+  if (has_adjust_args || append_args_tree)
+    {
+      if (!has_match)
 	{
-	  error_at (token->location, "variant %qD and base %qD have "
-				     "incompatible types", variant, fndecl);
-	  variant = error_mark_node;
+	  error_at (has_adjust_args ? adjust_args_loc : append_args_loc,
+		    "an %qs clause requires a %<match%> clause",
+		    has_adjust_args ? "adjust_args" : "append_args");
 	}
-      else if (fndecl_built_in_p (variant)
-	       && (strncmp (IDENTIFIER_POINTER (DECL_NAME (variant)),
-			    "__builtin_", strlen ("__builtin_")) == 0
-		   || strncmp (IDENTIFIER_POINTER (DECL_NAME (variant)),
-			       "__sync_", strlen ("__sync_")) == 0
-		   || strncmp (IDENTIFIER_POINTER (DECL_NAME (variant)),
-			       "__atomic_", strlen ("__atomic_")) == 0))
+      else if (ctx != error_mark_node && variant != error_mark_node)
 	{
-	  error_at (token->location, "variant %qD is a built-in", variant);
-	  variant = error_mark_node;
-	}
-      if (variant != error_mark_node)
-	{
-	  C_DECL_USED (variant) = 1;
-	  tree construct
-	    = omp_get_context_selector_list (ctx, OMP_TRAIT_SET_CONSTRUCT);
-	  omp_mark_declare_variant (match_loc, variant, construct);
-	  if (omp_context_selector_matches (ctx))
+	  tree attr = lookup_attribute ("omp declare variant base",
+					DECL_ATTRIBUTES (fndecl));
+	  if (attr != NULL_TREE)
 	    {
-	      tree attr
-		= tree_cons (get_identifier ("omp declare variant base"),
-			     build_tree_list (variant, ctx),
-			     DECL_ATTRIBUTES (fndecl));
-	      DECL_ATTRIBUTES (fndecl) = attr;
+	      tree ctx = TREE_VALUE (TREE_VALUE (attr));
+	      if (!omp_get_context_selector (ctx, OMP_TRAIT_SET_CONSTRUCT,
+					     OMP_TRAIT_CONSTRUCT_DISPATCH))
+		error_at (has_adjust_args ? adjust_args_loc : append_args_loc,
+			  "an %qs clause can only be specified if the "
+			  "%<dispatch%> selector of the %<construct%> selector "
+			  "set appears in the %<match%> clause",
+			  has_adjust_args ? "adjust_args" : "append_args");
 	    }
 	}
     }
 
-  parens.require_close (parser);
-  c_parser_skip_to_pragma_eol (parser);
+  if ((ctx != error_mark_node && variant != error_mark_node)
+      && (need_device_ptr_list || append_args_tree))
+    {
+      tree variant_decl = tree_strip_nop_conversions (variant);
+      tree t = build_tree_list (need_device_ptr_list,
+				NULL_TREE /* need_device_addr */);
+      TREE_CHAIN (t) = append_args_tree;
+      DECL_ATTRIBUTES (variant_decl)
+	= tree_cons (get_identifier ("omp declare variant variant args"), t,
+		     DECL_ATTRIBUTES (variant_decl));
+    }
 }
 
 /* Finalize #pragma omp declare simd or #pragma omp declare variant
@@ -25786,7 +27239,7 @@ c_finish_omp_declare_simd (c_parser *parser, tree fndecl, tree parms,
 
   parser->tokens = clauses.address ();
   parser->tokens_avail = clauses.length ();
-  
+
   /* c_parser_omp_declare_simd pushed 2 extra CPP_EOF tokens at the end.  */
   while (parser->tokens_avail > 3)
     {
@@ -26559,7 +28012,6 @@ c_parser_omp_declare_reduction (c_parser *parser, enum pragma_context context)
   types.release ();
 }
 
-
 /* OpenMP 4.0
    #pragma omp declare simd declare-simd-clauses[optseq] new-line
    #pragma omp declare reduction (reduction-id : typename-list : expression) \
@@ -26567,7 +28019,11 @@ c_parser_omp_declare_reduction (c_parser *parser, enum pragma_context context)
    #pragma omp declare target new-line
 
    OpenMP 5.0
-   #pragma omp declare variant (identifier) match (context-selector)  */
+   #pragma omp declare variant (identifier) match (context-selector)
+
+   OpenMP 5.1
+   #pragma omp declare variant (identifier) match (context-selector) \
+      adjust_args(adjust-op:argument-list)  */
 
 static bool
 c_parser_omp_declare (c_parser *parser, enum pragma_context context)
@@ -27484,6 +28940,9 @@ c_parser_omp_construct (c_parser *parser, bool *if_p)
       break;
     case PRAGMA_OMP_UNROLL:
       stmt = c_parser_omp_unroll (loc, parser, if_p);
+      break;
+    case PRAGMA_OMP_DISPATCH:
+      stmt = c_parser_omp_dispatch (loc, parser);
       break;
     default:
       gcc_unreachable ();

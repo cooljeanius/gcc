@@ -4228,7 +4228,7 @@ enum arc_shift_alg
 {
   SHIFT_MOVE,		/* Register-to-register move.  */
   SHIFT_LOOP,		/* Zero-overhead loop implementation.  */
-  SHIFT_INLINE,		/* Mmultiple LSHIFTs and LSHIFT-PLUSs.  */ 
+  SHIFT_INLINE,		/* Mmultiple LSHIFTs and LSHIFT-PLUSs.  */
   SHIFT_AND_ROT,        /* Bitwise AND, then ROTATERTs.  */
   SHIFT_SWAP,		/* SWAP then multiple LSHIFTs/LSHIFT-PLUSs.  */
   SHIFT_AND_SWAP_ROT	/* Bitwise AND, then SWAP, then ROTATERTs.  */
@@ -11572,6 +11572,9 @@ arc_libm_function_max_error (unsigned cfn, machine_mode mode,
 
 #undef  TARGET_LIBM_FUNCTION_MAX_ERROR
 #define TARGET_LIBM_FUNCTION_MAX_ERROR arc_libm_function_max_error
+
+#undef TARGET_DOCUMENTATION_NAME
+#define TARGET_DOCUMENTATION_NAME "ARC"
 
 struct gcc_target targetm = TARGET_INITIALIZER;
 

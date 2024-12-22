@@ -584,6 +584,138 @@ diag_vfprintf (FILE *f, int err_no, const char *msg, va_list *ap)
   fprintf (f, "%s", q);
 }
 
+#if defined(GENMATCH_SELFTESTS) && HAVE_DECL_FMEMOPEN
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wsuggest-attribute=format"
+
+static void
+test_diag_vfprintf (const char *expected, const char *msg, ...)
+{
+  char buf[256];
+  va_list ap;
+  FILE *f = fmemopen (buf, 256, "w");
+  gcc_assert (f != NULL);
+  va_start (ap, msg);
+  diag_vfprintf (f, 0, msg, &ap);
+  va_end (ap);
+  fclose (f);
+  gcc_assert (strcmp (buf, expected) == 0);
+}
+
+#pragma GCC diagnostic pop
+
+static void
+genmatch_diag_selftests (void)
+{
+  /* Verify that plain text is passed through unchanged.  */
+  test_diag_vfprintf ("unformatted", "unformatted");
+
+  /* Verify various individual format codes, in the order listed in the
+     comment for pp_format above.  For each code, we append a second
+     argument with a known bit pattern (0x12345678), to ensure that we
+     are consuming arguments correctly.  */
+  test_diag_vfprintf ("-27 12345678", "%d %x", -27, 0x12345678);
+  test_diag_vfprintf ("-5 12345678", "%i %x", -5, 0x12345678);
+  test_diag_vfprintf ("10 12345678", "%u %x", 10, 0x12345678);
+  test_diag_vfprintf ("17 12345678", "%o %x", 15, 0x12345678);
+  test_diag_vfprintf ("cafebabe 12345678", "%x %x", 0xcafebabe, 0x12345678);
+  test_diag_vfprintf ("-27 12345678", "%ld %x", (long)-27, 0x12345678);
+  test_diag_vfprintf ("-5 12345678", "%li %x", (long)-5, 0x12345678);
+  test_diag_vfprintf ("10 12345678", "%lu %x", (long)10, 0x12345678);
+  test_diag_vfprintf ("17 12345678", "%lo %x", (long)15, 0x12345678);
+  test_diag_vfprintf ("cafebabe 12345678", "%lx %x", (long)0xcafebabe,
+		      0x12345678);
+  test_diag_vfprintf ("-27 12345678", "%lld %x", (long long)-27, 0x12345678);
+  test_diag_vfprintf ("-5 12345678", "%lli %x", (long long)-5, 0x12345678);
+  test_diag_vfprintf ("10 12345678", "%llu %x", (long long)10, 0x12345678);
+  test_diag_vfprintf ("17 12345678", "%llo %x", (long long)15, 0x12345678);
+  test_diag_vfprintf ("cafebabe 12345678", "%llx %x", (long long)0xcafebabe,
+		      0x12345678);
+  test_diag_vfprintf ("-27 12345678", "%wd %x", HOST_WIDE_INT_C (-27),
+		      0x12345678);
+  test_diag_vfprintf ("-5 12345678", "%wi %x", HOST_WIDE_INT_C (-5),
+		      0x12345678);
+  test_diag_vfprintf ("10 12345678", "%wu %x", HOST_WIDE_INT_UC (10),
+		      0x12345678);
+  test_diag_vfprintf ("17 12345678", "%wo %x", HOST_WIDE_INT_C (15),
+		      0x12345678);
+  test_diag_vfprintf ("0xcafebabe 12345678", "%wx %x",
+		      HOST_WIDE_INT_C (0xcafebabe), 0x12345678);
+  test_diag_vfprintf ("-27 12345678", "%zd %x", (ssize_t)-27, 0x12345678);
+  test_diag_vfprintf ("-5 12345678", "%zi %x", (ssize_t)-5, 0x12345678);
+  test_diag_vfprintf ("10 12345678", "%zu %x", (size_t)10, 0x12345678);
+  test_diag_vfprintf ("17 12345678", "%zo %x", (size_t)15, 0x12345678);
+  test_diag_vfprintf ("cafebabe 12345678", "%zx %x", (size_t)0xcafebabe,
+		      0x12345678);
+  test_diag_vfprintf ("-27 12345678", "%td %x", (ptrdiff_t)-27, 0x12345678);
+  test_diag_vfprintf ("-5 12345678", "%ti %x", (ptrdiff_t)-5, 0x12345678);
+  test_diag_vfprintf ("10 12345678", "%tu %x", (ptrdiff_t)10, 0x12345678);
+  test_diag_vfprintf ("17 12345678", "%to %x", (ptrdiff_t)15, 0x12345678);
+  test_diag_vfprintf ("1afebabe 12345678", "%tx %x", (ptrdiff_t)0x1afebabe,
+		      0x12345678);
+  test_diag_vfprintf ("1.000000 12345678", "%f %x", 1.0, 0x12345678);
+  test_diag_vfprintf ("A 12345678", "%c %x", 'A', 0x12345678);
+  test_diag_vfprintf ("hello world 12345678", "%s %x", "hello world",
+		      0x12345678);
+
+  /* Not nul-terminated.  */
+  char arr[5] = { '1', '2', '3', '4', '5' };
+  test_diag_vfprintf ("123 12345678", "%.*s %x", 3, arr, 0x12345678);
+  test_diag_vfprintf ("1234 12345678", "%.*s %x", -1, "1234", 0x12345678);
+  test_diag_vfprintf ("12345 12345678", "%.*s %x", 7, "12345", 0x12345678);
+
+  /* We can't test for %p; the pointer is printed in an implementation-defined
+     manner.  */
+  test_diag_vfprintf ("normal colored normal 12345678",
+		      "normal %rcolored%R normal %x",
+		      "error", 0x12345678);
+
+  /* TODO:
+     %m: strerror(text->err_no) - does not consume a value *ap.  */
+  test_diag_vfprintf ("% 12345678", "%% %x", 0x12345678);
+  test_diag_vfprintf ("' 12345678", "%< %x", 0x12345678);
+  test_diag_vfprintf ("' 12345678", "%> %x", 0x12345678);
+  test_diag_vfprintf ("' 12345678", "%' %x", 0x12345678);
+  test_diag_vfprintf ("abc 12345678", "%.*s %x", 3, "abcdef", 0x12345678);
+  test_diag_vfprintf ("abc 12345678", "%.3s %x", "abcdef", 0x12345678);
+
+  /* Verify flag 'q'.  */
+  test_diag_vfprintf ("'foo' 12345678", "%qs %x", "foo", 0x12345678);
+
+  /* Verify %Z.  */
+  int v[] = { 1, 2, 3 }; 
+  test_diag_vfprintf ("1, 2, 3 12345678", "%Z %x", v, 3, 0x12345678);
+
+  int v2[] = { 0 }; 
+  test_diag_vfprintf ("0 12345678", "%Z %x", v2, 1, 0x12345678);
+
+  /* Verify that combinations work, along with unformatted text.  */
+  test_diag_vfprintf ("the quick brown fox jumps over the lazy dog",
+		      "the %s %s %s jumps over the %s %s",
+		      "quick", "brown", "fox", "lazy", "dog");
+  test_diag_vfprintf ("item 3 of 7", "item %i of %i", 3, 7);
+  test_diag_vfprintf ("problem with 'bar' at line 10",
+		      "problem with %qs at line %i", "bar", 10);
+
+  /* Verified numbered args.  */
+  test_diag_vfprintf ("foo: second bar: first",
+		      "foo: %2$s bar: %1$s", "first", "second");
+  test_diag_vfprintf ("foo: 1066 bar: 1776",
+		      "foo: %2$i bar: %1$i", 1776, 1066);
+  test_diag_vfprintf ("foo: second bar: 1776",
+		      "foo: %2$s bar: %1$i", 1776, "second");
+  test_diag_vfprintf ("foo: sec bar: 3360",
+		      "foo: %3$.*2$s bar: %1$o", 1776, 3, "second");
+  test_diag_vfprintf ("foo: seco bar: 3360",
+		      "foo: %2$.4s bar: %1$o", 1776, "second");
+}
+#else
+static void
+genmatch_diag_selftests (void)
+{
+}
+#endif
+
 static bool
 #if GCC_VERSION >= 4001
 __attribute__((format (gcc_diag, 5, 0)))
@@ -1106,12 +1238,13 @@ is_a_helper <user_id *>::test (id_base *id)
    index of the first, otherwise return -1.  */
 
 static int
-commutative_op (id_base *id)
+commutative_op (id_base *id, bool compares_are_commutative = false)
 {
   if (operator_id *code = dyn_cast <operator_id *> (id))
     {
       if (commutative_tree_code (code->code)
-	  || commutative_ternary_tree_code (code->code))
+	  || commutative_ternary_tree_code (code->code)
+	  || (compares_are_commutative && comparison_code_p (code->code)))
 	return 0;
       return -1;
     }
@@ -1119,9 +1252,12 @@ commutative_op (id_base *id)
     switch (fn->fn)
       {
       CASE_CFN_FMA:
+      CASE_CFN_HYPOT:
       case CFN_FMS:
       case CFN_FNMA:
       case CFN_FNMS:
+      case CFN_ADD_OVERFLOW:
+      case CFN_MUL_OVERFLOW:
 	return 0;
 
       case CFN_COND_ADD:
@@ -1157,11 +1293,13 @@ commutative_op (id_base *id)
       }
   if (user_id *uid = dyn_cast<user_id *> (id))
     {
-      int res = commutative_op (uid->substitutes[0]);
+      int res = commutative_op (uid->substitutes[0],
+				compares_are_commutative);
       if (res < 0)
 	return -1;
       for (unsigned i = 1; i < uid->substitutes.length (); ++i)
-	if (res != commutative_op (uid->substitutes[i]))
+	if (res != commutative_op (uid->substitutes[i],
+				   compares_are_commutative))
 	  return -1;
       return res;
     }
@@ -1798,7 +1936,7 @@ lower_opt (operand *o, unsigned char grp, bool strip)
   return ne;
 }
 
-/* Determine whether O or its children uses the conditional operation 
+/* Determine whether O or its children uses the conditional operation
    group GRP.  */
 
 static bool
@@ -4612,7 +4750,7 @@ decision_tree::gen (vec <FILE *> &files, bool gimple)
 
   fprintf (stderr, "%s decision tree has %u leafs, maximum depth %u and "
 	   "a total number of %u nodes\n",
-	   gimple ? "GIMPLE" : "GENERIC", 
+	   gimple ? "GIMPLE" : "GENERIC",
 	   root->num_leafs, root->max_level, root->total_size);
 
   /* First split out the transform part of equal leafs.  */
@@ -5213,27 +5351,11 @@ parser::parse_expr ()
 		{
 		  if (*sp == 'c')
 		    {
-		      if (operator_id *o
-			    = dyn_cast<operator_id *> (e->operation))
-			{
-			  if (!commutative_tree_code (o->code)
-			      && !comparison_code_p (o->code))
-			    fatal_at (token, "operation is not commutative");
-			}
-		      else if (user_id *p = dyn_cast<user_id *> (e->operation))
-			for (unsigned i = 0;
-			     i < p->substitutes.length (); ++i)
-			  {
-			    if (operator_id *q
-				  = dyn_cast<operator_id *> (p->substitutes[i]))
-			      {
-				if (!commutative_tree_code (q->code)
-				    && !comparison_code_p (q->code))
-				  fatal_at (token, "operation %s is not "
-					    "commutative", q->id);
-			      }
-			  }
-		      is_commutative = true;
+		      if (commutative_op (e->operation, true) != -1)
+			is_commutative = true;
+		      else
+			fatal_at (token, "operation %s is not known "
+				  "commutative", e->operation->id);
 		    }
 		  else if (*sp == 'C')
 		    is_commutative = true;
@@ -5692,7 +5814,7 @@ parser::parse_for (location_t)
 	      else
 		fatal_at (token, "iterator cannot be used as operator-list");
 	    }
-	  else 
+	  else
 	    op->substitutes.safe_push (idb);
 	}
       op->nargs = arity;
@@ -5755,7 +5877,7 @@ parser::parse_for (location_t)
 void
 parser::parse_operator_list (location_t)
 {
-  const cpp_token *token = peek (); 
+  const cpp_token *token = peek ();
   const char *id = get_ident ();
 
   if (get_operator (id, true) != 0)
@@ -5763,13 +5885,13 @@ parser::parse_operator_list (location_t)
 
   user_id *op = new user_id (id, true);
   int arity = -1;
-  
+
   while ((token = peek_ident ()) != 0)
     {
-      token = peek (); 
+      token = peek ();
       const char *oper = get_ident ();
       id_base *idb = get_operator (oper, true);
-      
+
       if (idb == 0)
 	fatal_at (token, "no such operator '%s'", oper);
 
@@ -6090,6 +6212,8 @@ main (int argc, char **argv)
       usage ();
       return 1;
     }
+
+  genmatch_diag_selftests ();
 
   if (!s_include_file)
     s_include_file = s_header_file;

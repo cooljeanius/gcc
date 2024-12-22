@@ -38,6 +38,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "pretty-print-markup.h"
 #include "tree-pretty-print.h"
 #include "intl.h"
+#include "gcc-urlifier.h"
 
 /* Table of the tables of attributes (common, language, format, machine)
    searched.  */
@@ -631,6 +632,8 @@ decl_attributes (tree *node, tree attributes, int flags,
   if (!attributes_initialized)
     init_attributes ();
 
+  auto_urlify_attributes sentinel;
+
   /* If this is a function and the user used #pragma GCC optimize, add the
      options to the attribute((optimize(...))) list.  */
   if (TREE_CODE (*node) == FUNCTION_DECL && current_optimize_pragma)
@@ -1102,9 +1105,10 @@ attr_strcmp (const void *v1, const void *v2)
 }
 
 /* ARGLIST is the argument to target attribute.  This function tokenizes
-   the comma separated arguments, sorts them and returns a string which
-   is a unique identifier for the comma separated arguments.   It also
-   replaces non-identifier characters "=,-" with "_".  */
+   the TARGET_CLONES_ATTR_SEPARATOR separated arguments, sorts them and
+   returns a string which is a unique identifier for the
+   TARGET_CLONES_ATTR_SEPARATOR separated arguments.  It also replaces
+   non-identifier characters "=,-" with "_".  */
 
 char *
 sorted_attr_string (tree arglist)
@@ -1116,6 +1120,7 @@ sorted_attr_string (tree arglist)
   char *attr = NULL;
   unsigned int argnum = 1;
   unsigned int i;
+  static const char separator_str[] = { TARGET_CLONES_ATTR_SEPARATOR, 0 };
 
   for (arg = arglist; arg; arg = TREE_CHAIN (arg))
     {
@@ -1125,7 +1130,7 @@ sorted_attr_string (tree arglist)
       if (arg != arglist)
 	argnum++;
       for (i = 0; i < strlen (str); i++)
-	if (str[i] == ',')
+	if (str[i] == TARGET_CLONES_ATTR_SEPARATOR)
 	  argnum++;
     }
 
@@ -1136,7 +1141,8 @@ sorted_attr_string (tree arglist)
       const char *str = TREE_STRING_POINTER (TREE_VALUE (arg));
       size_t len = strlen (str);
       memcpy (attr_str + str_len_sum, str, len);
-      attr_str[str_len_sum + len] = TREE_CHAIN (arg) ? ',' : '\0';
+      attr_str[str_len_sum + len]
+	= TREE_CHAIN (arg) ? TARGET_CLONES_ATTR_SEPARATOR : '\0';
       str_len_sum += len + 1;
     }
 
@@ -1151,12 +1157,12 @@ sorted_attr_string (tree arglist)
   args = XNEWVEC (char *, argnum);
 
   i = 0;
-  attr = strtok (attr_str, ",");
+  attr = strtok (attr_str, separator_str);
   while (attr != NULL)
     {
       args[i] = attr;
       i++;
-      attr = strtok (NULL, ",");
+      attr = strtok (NULL, separator_str);
     }
 
   qsort (args, argnum, sizeof (char *), attr_strcmp);
@@ -1257,7 +1263,7 @@ make_dispatcher_decl (const tree decl)
   fn_type = TREE_TYPE (decl);
   func_type = build_function_type (TREE_TYPE (fn_type),
 				   TYPE_ARG_TYPES (fn_type));
-  
+
   func_decl = build_fn_decl (func_name, func_type);
   XDELETEVEC (func_name);
   TREE_USED (func_decl) = 1;
@@ -1270,7 +1276,7 @@ make_dispatcher_decl (const tree decl)
   /* This will be of type IFUNCs have to be externally visible.  */
   TREE_PUBLIC (func_decl) = 1;
 
-  return func_decl;  
+  return func_decl;
 }
 
 /* Returns true if DECL is multi-versioned using the target attribute, and this
@@ -2673,10 +2679,9 @@ attr_access::array_as_string (tree type) const
 
   /* Format the type using the current pretty printer.  The generic tree
      printer does a terrible job.  */
-  pretty_printer *pp = global_dc->m_printer->clone ();
-  pp_printf (pp, "%qT", type);
-  typstr = pp_formatted_text (pp);
-  delete pp;
+  std::unique_ptr<pretty_printer> pp (global_dc->clone_printer ());
+  pp_printf (pp.get (), "%qT", type);
+  typstr = pp_formatted_text (pp.get ());
 
   return typstr;
 }

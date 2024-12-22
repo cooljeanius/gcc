@@ -385,7 +385,7 @@ add_comma_separated_to_vector (void **pvec, const char *arg)
   char *w;
   char *token_start;
   vec<char_p> *v = (vec<char_p> *) *pvec;
-  
+
   vec_check_alloc (v, 1);
 
   /* We never free this string.  */
@@ -444,9 +444,6 @@ init_options_struct (struct gcc_options *opts, struct gcc_options *opts_set)
 
   /* Initialize whether `char' is signed.  */
   opts->x_flag_signed_char = DEFAULT_SIGNED_CHAR;
-  /* Set this to a special "uninitialized" value.  The actual default
-     is set after target options have been processed.  */
-  opts->x_flag_short_enums = 2;
 
   /* Initialize target_flags before default_options_optimization
      so the latter can modify it.  */
@@ -610,6 +607,7 @@ static const struct default_options default_options_table[] =
     { OPT_LEVELS_1_PLUS, OPT_fvar_tracking, NULL, 1 },
 
     /* -O1 (and not -Og) optimizations.  */
+    { OPT_LEVELS_1_PLUS_NOT_DEBUG, OPT_fbit_tests, NULL, 1 },
     { OPT_LEVELS_1_PLUS_NOT_DEBUG, OPT_fbranch_count_reg, NULL, 1 },
 #if DELAY_SLOTS
     { OPT_LEVELS_1_PLUS_NOT_DEBUG, OPT_fdelayed_branch, NULL, 1 },
@@ -618,6 +616,7 @@ static const struct default_options default_options_table[] =
     { OPT_LEVELS_1_PLUS_NOT_DEBUG, OPT_fif_conversion, NULL, 1 },
     { OPT_LEVELS_1_PLUS_NOT_DEBUG, OPT_fif_conversion2, NULL, 1 },
     { OPT_LEVELS_1_PLUS_NOT_DEBUG, OPT_finline_functions_called_once, NULL, 1 },
+    { OPT_LEVELS_1_PLUS_NOT_DEBUG, OPT_fjump_tables, NULL, 1 },
     { OPT_LEVELS_1_PLUS_NOT_DEBUG, OPT_fmove_loop_invariants, NULL, 1 },
     { OPT_LEVELS_1_PLUS_NOT_DEBUG, OPT_fmove_loop_stores, NULL, 1 },
     { OPT_LEVELS_1_PLUS_NOT_DEBUG, OPT_fssa_phiopt, NULL, 1 },
@@ -666,6 +665,7 @@ static const struct default_options default_options_table[] =
       VECT_COST_MODEL_VERY_CHEAP },
     { OPT_LEVELS_2_PLUS, OPT_finline_functions, NULL, 1 },
     { OPT_LEVELS_2_PLUS, OPT_ftree_loop_distribute_patterns, NULL, 1 },
+    { OPT_LEVELS_2_PLUS, OPT_foptimize_crc, NULL, 1 },
     { OPT_LEVELS_2_PLUS, OPT_flate_combine_instructions, NULL, 1 },
 
     /* -O2 and above optimizations, but not -Os or -Og.  */
@@ -2097,6 +2097,7 @@ enable_fdo_optimizations (struct gcc_options *opts,
   SET_OPTION_IF_UNSET (opts, opts_set, flag_loop_interchange, value);
   SET_OPTION_IF_UNSET (opts, opts_set, flag_unroll_jam, value);
   SET_OPTION_IF_UNSET (opts, opts_set, flag_tree_loop_distribution, value);
+  SET_OPTION_IF_UNSET (opts, opts_set, flag_optimize_crc, value);
 }
 
 /* -f{,no-}sanitize{,-recover}= suboptions.  */
@@ -2933,9 +2934,9 @@ common_handle_option (struct gcc_options *opts,
       break;
 
     case OPT_fdiagnostics_show_location_:
-      diagnostic_prefixing_rule (dc) = (diagnostic_prefixing_rule_t) value;
+      dc->set_prefixing_rule ((diagnostic_prefixing_rule_t) value);
       break;
- 
+
     case OPT_fdiagnostics_show_caret:
       dc->m_source_printing.enabled = value;
       break;
@@ -2971,6 +2972,14 @@ common_handle_option (struct gcc_options *opts,
 					 opts->x_flag_diagnostics_json_formatting);
 	  break;
 	}
+
+    case OPT_fdiagnostics_add_output_:
+      handle_OPT_fdiagnostics_add_output_ (*opts, *dc, arg, loc);
+      break;
+
+    case OPT_fdiagnostics_set_output_:
+      handle_OPT_fdiagnostics_set_output_ (*opts, *dc, arg, loc);
+      break;
 
     case OPT_fdiagnostics_text_art_charset_:
       dc->set_text_art_charset ((enum diagnostic_text_art_charset)value);
@@ -3056,7 +3065,7 @@ common_handle_option (struct gcc_options *opts,
       break;
 
     case OPT_fmessage_length_:
-      pp_set_line_maximum_length (dc->m_printer, value);
+      pp_set_line_maximum_length (dc->get_reference_printer (), value);
       diagnostic_set_caret_max_width (dc, value);
       break;
 
@@ -3264,7 +3273,7 @@ common_handle_option (struct gcc_options *opts,
         }
       else
         value = opts->x_dwarf_version;
-      
+
       /* FALLTHRU */
     case OPT_gdwarf_:
       if (value < 2 || value > 5)

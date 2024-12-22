@@ -205,7 +205,6 @@ along with GCC; see the file COPYING3.  If not see
    i * i with ii_last + 2 * i + 1), to generalize strength reduction.  */
 
 #include "config.h"
-#define INCLUDE_MEMORY
 #include "system.h"
 #include "coretypes.h"
 #include "backend.h"
@@ -3213,7 +3212,7 @@ pcom_worker::prepare_initializers_chain (chain_p chain)
 	continue;
 
       gcc_assert (laref->distance > 0);
-      chain->inits[n - laref->distance] 
+      chain->inits[n - laref->distance]
 	= PHI_ARG_DEF_FROM_EDGE (laref->stmt, entry);
     }
 

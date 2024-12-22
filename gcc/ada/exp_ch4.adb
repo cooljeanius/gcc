@@ -657,6 +657,7 @@ package body Exp_Ch4 is
 
       Adj_Call          : Node_Id;
       Aggr_In_Place     : Boolean;
+      Container_Aggr    : Boolean;
       Delayed_Cond_Expr : Boolean;
       Node              : Node_Id;
       Temp              : Entity_Id;
@@ -667,6 +668,8 @@ package body Exp_Ch4 is
 
       TagR : Node_Id := Empty;
       --  Target reference for tag assignment
+
+   --  Start of processing for Expand_Allocator_Expression
 
    begin
       --  Handle call to C++ constructor
@@ -689,14 +692,19 @@ package body Exp_Ch4 is
 
       Aggr_In_Place     := Is_Delayed_Aggregate (Exp);
       Delayed_Cond_Expr := Is_Delayed_Conditional_Expression (Exp);
+      Container_Aggr    := Nkind (Exp) = N_Aggregate
+                             and then Has_Aspect (T, Aspect_Aggregate);
 
       --  If the expression is an aggregate to be built in place, then we need
       --  to delay applying predicate checks, because this would result in the
       --  creation of a temporary, which is illegal for limited types and just
       --  inefficient in the other cases. Likewise for a conditional expression
-      --  whose expansion has been delayed.
+      --  whose expansion has been delayed and for container aggregates.
 
-      if not Aggr_In_Place and then not Delayed_Cond_Expr then
+      if not Aggr_In_Place
+        and then not Delayed_Cond_Expr
+        and then not Container_Aggr
+      then
          Apply_Predicate_Check (Exp, T);
       end if;
 
@@ -759,9 +767,26 @@ package body Exp_Ch4 is
          return;
       end if;
 
+      --  An allocator with a container aggregate as qualified expression must
+      --  be rewritten into the form expected by Expand_Container_Aggregate.
+
+      if Container_Aggr then
+         Temp := Make_Temporary (Loc, 'P', N);
+         Temp_Decl :=
+           Make_Object_Declaration (Loc,
+             Defining_Identifier => Temp,
+             Object_Definition   => New_Occurrence_Of (PtrT, Loc),
+             Expression          => Relocate_Node (N));
+
+         Set_Analyzed (Exp, False);
+         Insert_Action (N, Temp_Decl);
+         Rewrite (N, New_Occurrence_Of (Temp, Loc));
+         Analyze_And_Resolve (N, PtrT);
+         Apply_Predicate_Check (N, T, Deref => True);
+
       --  Case of tagged type or type requiring finalization
 
-      if Is_Tagged_Type (T) or else Needs_Finalization (T) then
+      elsif Is_Tagged_Type (T) or else Needs_Finalization (T) then
 
          --  Ada 2005 (AI-318-02): If the initialization expression is a call
          --  to a build-in-place function, then access to the allocated object
@@ -794,19 +819,6 @@ package body Exp_Ch4 is
 
          --  We analyze by hand the new internal allocator to avoid any
          --  recursion and inappropriate call to Initialize.
-
-         --  We don't want to remove side effects when the expression must be
-         --  built in place and we don't need it when there is no storage pool
-         --  or this is a return/secondary stack allocation.
-
-         if not Aggr_In_Place
-           and then not Delayed_Cond_Expr
-           and then Present (Storage_Pool (N))
-           and then not Is_RTE (Storage_Pool (N), RE_RS_Pool)
-           and then not Is_RTE (Storage_Pool (N), RE_SS_Pool)
-         then
-            Remove_Side_Effects (Exp);
-         end if;
 
          Temp := Make_Temporary (Loc, 'P', N);
 
@@ -1054,6 +1066,8 @@ package body Exp_Ch4 is
             Displace_Allocator_Pointer (N);
          end if;
 
+      --  Case of aggregate built in place
+
       elsif Aggr_In_Place then
          Temp := Make_Temporary (Loc, 'P', N);
          Build_Aggregate_In_Place (Temp, PtrT);
@@ -1072,29 +1086,31 @@ package body Exp_Ch4 is
          Build_Allocate_Deallocate_Proc (Declaration_Node (Temp), Mark => N);
          Rewrite (N, New_Occurrence_Of (Temp, Loc));
          Analyze_And_Resolve (N, PtrT);
-
          Apply_Predicate_Check (N, T, Deref => True);
 
-      elsif Is_Access_Type (T) and then Can_Never_Be_Null (T) then
-         Install_Null_Excluding_Check (Exp);
-
-      elsif Is_Access_Type (DesigT)
-        and then Nkind (Exp) = N_Allocator
-        and then Nkind (Expression (Exp)) /= N_Qualified_Expression
-      then
-         --  Apply constraint to designated subtype indication
-
-         Apply_Constraint_Check
-           (Expression (Exp), Designated_Type (DesigT), No_Sliding => True);
-
-         if Nkind (Expression (Exp)) = N_Raise_Constraint_Error then
-
-            --  Propagate constraint_error to enclosing allocator
-
-            Rewrite (Exp, New_Copy (Expression (Exp)));
-         end if;
+      --  Default case
 
       else
+         if Is_Access_Type (T) and then Can_Never_Be_Null (T) then
+            Install_Null_Excluding_Check (Exp);
+         end if;
+
+         if Is_Access_Type (DesigT)
+           and then Nkind (Exp) = N_Allocator
+           and then Nkind (Expression (Exp)) /= N_Qualified_Expression
+         then
+            --  Apply constraint to designated subtype indication
+
+            Apply_Constraint_Check
+              (Expression (Exp), Designated_Type (DesigT), No_Sliding => True);
+
+            --  Propagate Constraint_Error to enclosing allocator
+
+            if Nkind (Expression (Exp)) = N_Raise_Constraint_Error then
+               Rewrite (Exp, New_Copy (Expression (Exp)));
+            end if;
+         end if;
+
          Build_Allocate_Deallocate_Proc (N);
 
          --  For an access-to-unconstrained-packed-array type, build an
@@ -4965,31 +4981,10 @@ package body Exp_Ch4 is
    ------------------------------
 
    procedure Expand_N_Case_Expression (N : Node_Id) is
-      Loc : constant Source_Ptr := Sloc (N);
-      Par : constant Node_Id    := Parent (N);
-      Typ : constant Entity_Id  := Etype (N);
-
-      In_Predicate : constant Boolean :=
-        Ekind (Current_Scope) in E_Function | E_Procedure
-          and then Is_Predicate_Function (Current_Scope);
-      --  Flag set when the case expression appears within a predicate
-
-      Optimize_Return_Stmt : constant Boolean :=
-        Nkind (Par) = N_Simple_Return_Statement and then not In_Predicate;
-      --  Small optimization: when the case expression appears in the context
-      --  of a simple return statement, expand into
-
-      --    case X is
-      --       when A =>
-      --          return AX;
-      --       when B =>
-      --          return BX;
-      --       ...
-      --    end case;
-
-      --  This makes the expansion much easier when expressions are calls to
-      --  a BIP function. But do not perform it when the return statement is
-      --  within a predicate function, as this causes spurious errors.
+      Loc  : constant Source_Ptr := Sloc (N);
+      Par  : constant Node_Id    := Parent (N);
+      Scop : constant Entity_Id  := Current_Scope;
+      Typ  : constant Entity_Id  := Etype (N);
 
       function Is_Copy_Type (Typ : Entity_Id) return Boolean;
       --  Return True if we can copy objects of this type when expanding a case
@@ -5028,9 +5023,39 @@ package body Exp_Ch4 is
       --  This makes the expansion much more efficient in the context of an
       --  aggregate converted into assignments.
 
+      Optimize_Return_Stmt : Boolean := False;
+      --  Small optimization: when the case expression appears in the context
+      --  of a simple return statement, expand into
+
+      --    case X is
+      --       when A =>
+      --          return AX;
+      --       when B =>
+      --          return BX;
+      --       ...
+      --    end case;
+
+      --  This makes the expansion much easier when expressions are calls to
+      --  build-in-place functions.
+
    --  Start of processing for Expand_N_Case_Expression
 
    begin
+      --  If the expression is in the context of a simple return statement,
+      --  possibly through intermediate conditional expressions, we delay
+      --  expansion until the (immediate) parent is rewritten as a return
+      --  statement (or is already the return statement).
+
+      if not Expansion_Delayed (N) then
+         declare
+            Uncond_Par : constant Node_Id := Unconditional_Parent (N);
+         begin
+            if Nkind (Uncond_Par) = N_Simple_Return_Statement then
+               Delay_Conditional_Expressions_Between (N, Uncond_Par);
+            end if;
+         end;
+      end if;
+
       --  If the expansion of the expression has been delayed, we wait for the
       --  rewriting of its parent as an assignment or return statement; when
       --  that's done, we optimize the assignment or the return statement (the
@@ -5040,8 +5065,8 @@ package body Exp_Ch4 is
          if Nkind (Par) = N_Assignment_Statement then
             Optimize_Assignment_Stmt := True;
 
-         elsif Optimize_Return_Stmt then
-            null;
+         elsif Nkind (Par) = N_Simple_Return_Statement then
+            Optimize_Return_Stmt := True;
 
          else
             return;
@@ -5057,13 +5082,17 @@ package body Exp_Ch4 is
          return;
       end if;
 
-      --  If the case expression is a predicate specification, and the type
-      --  to which it applies has a static predicate aspect, do not expand,
-      --  because it will be converted to the proper predicate form later.
+      --  If the case expression is a predicate specification, do not expand
+      --  because it will need to be recognized and converted to the canonical
+      --  predicate form later if it it happens to be static.
 
-      if In_Predicate
-        and then
-          Has_Static_Predicate_Aspect (Etype (First_Entity (Current_Scope)))
+      if Ekind (Scop) in E_Function | E_Procedure
+        and then Is_Predicate_Function (Scop)
+        and then Is_Entity_Name (Expression (N))
+        and then Entity (Expression (N)) = First_Entity (Scop)
+        and then (Is_Scalar_Type (Etype (Expression (N)))
+                   or else Is_String_Type (Etype (Expression (N))))
+        and then not Has_Dynamic_Predicate_Aspect (Etype (Expression (N)))
       then
          return;
       end if;
@@ -5078,8 +5107,10 @@ package body Exp_Ch4 is
       --       Target : Typ;
       --       case X is
       --          when A =>
+      --             <<actions>>
       --             Target := AX;
       --          when B =>
+      --             <<actions>>
       --             Target := BX;
       --          ...
       --       end case;
@@ -5087,12 +5118,14 @@ package body Exp_Ch4 is
 
       --  In all other cases expand into
 
-      --       type Ptr_Typ is access all Typ;
+      --       type Ptr_Typ is not null access all Typ;
       --       Target : Ptr_Typ;
       --       case X is
       --          when A =>
+      --             <<actions>>
       --             Target := AX'Unrestricted_Access;
       --          when B =>
+      --             <<actions>>
       --             Target := BX'Unrestricted_Access;
       --          ...
       --       end case;
@@ -5101,9 +5134,6 @@ package body Exp_Ch4 is
 
       --  This approach avoids extra copies of potentially large objects. It
       --  also allows handling of values of limited or unconstrained types.
-      --  Note that we do the copy also for constrained, nonlimited types
-      --  when minimizing expressions with actions (e.g. when generating C
-      --  code) since it allows us to do the optimization below in more cases.
 
       Case_Stmt :=
         Make_Case_Statement (Loc,
@@ -5118,16 +5148,21 @@ package body Exp_Ch4 is
       Set_From_Conditional_Expression (Case_Stmt);
       Acts := New_List;
 
+      --  No need for Target_Typ in the case of statements
+
+      if Optimize_Assignment_Stmt or else Optimize_Return_Stmt then
+         null;
+
       --  Scalar/Copy case
 
-      if Is_Copy_Type (Typ) then
+      elsif Is_Copy_Type (Typ) then
          Target_Typ := Typ;
 
       --  Otherwise create an access type to handle the general case using
       --  'Unrestricted_Access.
 
       --  Generate:
-      --    type Ptr_Typ is access all Typ;
+      --    type Ptr_Typ is not null access all Typ;
 
       else
          Target_Typ := Make_Temporary (Loc, 'P');
@@ -5137,8 +5172,9 @@ package body Exp_Ch4 is
              Defining_Identifier => Target_Typ,
              Type_Definition     =>
                Make_Access_To_Object_Definition (Loc,
-                 All_Present        => True,
-                 Subtype_Indication => New_Occurrence_Of (Typ, Loc))));
+                 All_Present            => True,
+                 Null_Exclusion_Present => True,
+                 Subtype_Indication     => New_Occurrence_Of (Typ, Loc))));
       end if;
 
       --  Create the declaration of the target which captures the value of the
@@ -5167,8 +5203,9 @@ package body Exp_Ch4 is
       Alt := First (Alternatives (N));
       while Present (Alt) loop
          declare
-            Alt_Expr : Node_Id             := Relocate_Node (Expression (Alt));
-            Alt_Loc  : constant Source_Ptr := Sloc (Alt_Expr);
+            Alt_Loc  : constant Source_Ptr := Sloc (Expression (Alt));
+
+            Alt_Expr : Node_Id := Relocate_Node (Expression (Alt));
             LHS      : Node_Id;
             Stmts    : List_Id;
 
@@ -5188,7 +5225,7 @@ package body Exp_Ch4 is
                --  expansion has been delayed, analyze it again and expand it.
 
                if Is_Delayed_Conditional_Expression (Alt_Expr) then
-                  Set_Analyzed (Alt_Expr, False);
+                  Unanalyze_Delayed_Conditional_Expression (Alt_Expr);
                end if;
 
             --  Generate:
@@ -5203,7 +5240,7 @@ package body Exp_Ch4 is
                --  expansion has been delayed, analyze it again and expand it.
 
                if Is_Delayed_Conditional_Expression (Alt_Expr) then
-                  Set_Analyzed (Alt_Expr, False);
+                  Unanalyze_Delayed_Conditional_Expression (Alt_Expr);
                end if;
 
             --  Take the unrestricted access of the expression value for non-
@@ -5447,26 +5484,6 @@ package body Exp_Ch4 is
       Par   : constant Node_Id    := Parent (N);
       Typ   : constant Entity_Id  := Etype (N);
 
-      In_Predicate : constant Boolean :=
-        Ekind (Current_Scope) in E_Function | E_Procedure
-          and then Is_Predicate_Function (Current_Scope);
-      --  Flag set when the if expression appears within a predicate
-
-      Optimize_Return_Stmt : constant Boolean :=
-        Nkind (Par) = N_Simple_Return_Statement and then not In_Predicate;
-      --  Small optimization: when the if expression appears in the context of
-      --  a simple return statement, expand into
-
-      --    if cond then
-      --       return then-expr
-      --    else
-      --       return else-expr;
-      --    end if;
-
-      --  This makes the expansion much easier when expressions are calls to
-      --  a BIP function. But do not perform it when the return statement is
-      --  within a predicate function, as this causes spurious errors.
-
       Force_Expand : constant Boolean := Is_Anonymous_Access_Actual (N);
       --  Determine if we are dealing with a special case of a conditional
       --  expression used as an actual for an anonymous access type which
@@ -5499,11 +5516,11 @@ package body Exp_Ch4 is
 
       --  Local variables
 
-      Actions : List_Id;
+      Actions  : List_Id;
       Decl     : Node_Id;
       Expr     : Node_Id;
+      If_Stmt  : Node_Id;
       New_Else : Node_Id;
-      New_If   : Node_Id;
       New_N    : Node_Id;
       New_Then : Node_Id;
 
@@ -5520,9 +5537,38 @@ package body Exp_Ch4 is
       --  This makes the expansion much more efficient in the context of an
       --  aggregate converted into assignments.
 
+      Optimize_Return_Stmt : Boolean := False;
+      --  Small optimization: when the if expression appears in the context of
+      --  a simple return statement, expand into
+
+      --    if cond then
+      --       return then-expr
+      --    else
+      --       return else-expr;
+      --    end if;
+
+      --  This makes the expansion much easier when expressions are calls to
+      --  build-in-place functions.
+
    --  Start of processing for Expand_N_If_Expression
 
    begin
+      --  If the expression is in the context of a simple return statement,
+      --  possibly through intermediate conditional expressions, we delay
+      --  expansion until the (immediate) parent is rewritten as a return
+      --  statement (or is already the return statement). Note that this
+      --  deals with the case of the elsif part of the if expression.
+
+      if not Expansion_Delayed (N) then
+         declare
+            Uncond_Par : constant Node_Id := Unconditional_Parent (N);
+         begin
+            if Nkind (Uncond_Par) = N_Simple_Return_Statement then
+               Delay_Conditional_Expressions_Between (N, Uncond_Par);
+            end if;
+         end;
+      end if;
+
       --  If the expansion of the expression has been delayed, we wait for the
       --  rewriting of its parent as an assignment or return statement; when
       --  that's done, we optimize the assignment or the return statement (the
@@ -5532,8 +5578,8 @@ package body Exp_Ch4 is
          if Nkind (Par) = N_Assignment_Statement then
             Optimize_Assignment_Stmt := True;
 
-         elsif Optimize_Return_Stmt then
-            null;
+         elsif Nkind (Par) = N_Simple_Return_Statement then
+            Optimize_Return_Stmt := True;
 
          else
             return;
@@ -5568,53 +5614,42 @@ package body Exp_Ch4 is
       --  expression, and Sem_Elab circuitry removing it repeatedly.
 
       if Compile_Time_Known_Value (Cond) then
-         declare
-            function Fold_Known_Value (Cond : Node_Id) return Boolean;
-            --  Fold at compile time. Assumes condition known. Return True if
-            --  folding occurred, meaning we're done.
+         if Is_True (Expr_Value (Cond)) then
+            Expr    := Relocate_Node (Thenx);
+            Actions := Then_Actions (N);
+         else
+            Expr    := Relocate_Node (Elsex);
+            Actions := Else_Actions (N);
+         end if;
 
-            ----------------------
-            -- Fold_Known_Value --
-            ----------------------
+         --  When the "then" or "else" expressions involve controlled function
+         --  calls, generated temporaries are chained on the corresponding list
+         --  of actions. These temporaries need to be finalized after the if
+         --  expression is evaluated.
 
-            function Fold_Known_Value (Cond : Node_Id) return Boolean is
-            begin
-               if Is_True (Expr_Value (Cond)) then
-                  Expr    := Thenx;
-                  Actions := Then_Actions (N);
-               else
-                  Expr    := Elsex;
-                  Actions := Else_Actions (N);
-               end if;
+         Process_Transients_In_Expression (N, Actions);
 
-               Remove (Expr);
+         --  If the expression is itself a conditional expression whose
+         --  expansion has been delayed, analyze it again and expand it.
 
-               if Present (Actions) then
-                  Rewrite (N,
-                    Make_Expression_With_Actions (Loc,
-                      Expression => Relocate_Node (Expr),
-                      Actions    => Actions));
-                  Analyze_And_Resolve (N, Typ);
+         if Is_Delayed_Conditional_Expression (Expr) then
+            Unanalyze_Delayed_Conditional_Expression (Expr);
+         end if;
 
-               else
-                  Rewrite (N, Relocate_Node (Expr));
-               end if;
+         Insert_Actions (N, Actions);
+         Rewrite (N, Expr);
+         Analyze_And_Resolve (N, Typ);
 
-               --  Note that the result is never static (legitimate cases of
-               --  static if expressions were folded in Sem_Eval).
+         --  Note that the result is never static (legitimate cases of
+         --  static if expressions were folded in Sem_Eval).
 
-               Set_Is_Static_Expression (N, False);
-               return True;
-            end Fold_Known_Value;
+         Set_Is_Static_Expression (N, False);
+         return;
 
-         begin
-            if Fold_Known_Value (Cond) then
-               return;
-            end if;
-         end;
-      end if;
+      --  Build an if statement assigning each dependent expression to the
+      --  target separately. The (main) use case is aggregate elaboration.
 
-      if Optimize_Assignment_Stmt then
+      elsif Optimize_Assignment_Stmt then
          Remove_Side_Effects (Name (Par), Name_Req => True);
 
          --  When the "then" or "else" expressions involve controlled function
@@ -5636,7 +5671,7 @@ package body Exp_Ch4 is
          --  expansion has been delayed, analyze it again and expand it.
 
          if Is_Delayed_Conditional_Expression (Expression (New_Then)) then
-            Set_Analyzed (Expression (New_Then), False);
+            Unanalyze_Delayed_Conditional_Expression (Expression (New_Then));
          end if;
 
          New_Else := New_Copy (Par);
@@ -5645,10 +5680,10 @@ package body Exp_Ch4 is
          Set_Expression (New_Else, Relocate_Node (Elsex));
 
          if Is_Delayed_Conditional_Expression (Expression (New_Else)) then
-            Set_Analyzed (Expression (New_Else), False);
+            Unanalyze_Delayed_Conditional_Expression (Expression (New_Else));
          end if;
 
-         New_If :=
+         If_Stmt :=
            Make_Implicit_If_Statement (N,
              Condition       => Relocate_Node (Cond),
              Then_Statements => New_List (New_Then),
@@ -5659,7 +5694,10 @@ package body Exp_Ch4 is
          --  to prevent the premature finalization of controlled objects
          --  found within the if statement.
 
-         Set_From_Conditional_Expression (New_If);
+         Set_From_Conditional_Expression (If_Stmt);
+
+      --  Build an if statement returning each dependent expression from the
+      --  function separately. The main use case is expression function.
 
       elsif Optimize_Return_Stmt then
          --  When the "then" or "else" expressions involve controlled function
@@ -5676,7 +5714,7 @@ package body Exp_Ch4 is
          --  expansion has been delayed, analyze it again and expand it.
 
          if Is_Delayed_Conditional_Expression (New_Then) then
-            Set_Analyzed (New_Then, False);
+            Unanalyze_Delayed_Conditional_Expression (New_Then);
          end if;
 
          New_Else := Relocate_Node (Elsex);
@@ -5685,10 +5723,10 @@ package body Exp_Ch4 is
          --  expansion has been delayed, analyze it again and expand it.
 
          if Is_Delayed_Conditional_Expression (New_Else) then
-            Set_Analyzed (New_Else, False);
+            Unanalyze_Delayed_Conditional_Expression (New_Else);
          end if;
 
-         New_If :=
+         If_Stmt :=
            Make_Implicit_If_Statement (N,
              Condition       => Relocate_Node (Cond),
              Then_Statements => New_List (
@@ -5703,94 +5741,7 @@ package body Exp_Ch4 is
          --  to prevent the premature finalization of controlled objects
          --  found within the if statement.
 
-         Set_From_Conditional_Expression (New_If);
-
-      --  If the type is by reference, then we expand as follows to avoid the
-      --  possibility of improper copying.
-
-      --      type Ptr is access all Typ;
-      --      Cnn : Ptr;
-      --      if cond then
-      --         <<then actions>>
-      --         Cnn := then-expr'Unrestricted_Access;
-      --      else
-      --         <<else actions>>
-      --         Cnn := else-expr'Unrestricted_Access;
-      --      end if;
-
-      --  and replace the if expression by a reference to Cnn.all.
-
-      elsif Is_By_Reference_Type (Typ) then
-         --  When the "then" or "else" expressions involve controlled function
-         --  calls, generated temporaries are chained on the corresponding list
-         --  of actions. These temporaries need to be finalized after the if
-         --  expression is evaluated.
-
-         Process_Transients_In_Expression (N, Then_Actions (N));
-         Process_Transients_In_Expression (N, Else_Actions (N));
-
-         declare
-            Cnn     : constant Entity_Id := Make_Temporary (Loc, 'C', N);
-            Ptr_Typ : constant Entity_Id := Make_Temporary (Loc, 'A');
-
-         begin
-            --  Generate:
-            --    type Ann is access all Typ;
-
-            Insert_Action (N,
-              Make_Full_Type_Declaration (Loc,
-                Defining_Identifier => Ptr_Typ,
-                Type_Definition     =>
-                  Make_Access_To_Object_Definition (Loc,
-                    All_Present        => True,
-                    Subtype_Indication => New_Occurrence_Of (Typ, Loc))));
-
-            --  Generate:
-            --    Cnn : Ann;
-
-            Decl :=
-              Make_Object_Declaration (Loc,
-                Defining_Identifier => Cnn,
-                Object_Definition   => New_Occurrence_Of (Ptr_Typ, Loc));
-            Set_No_Initialization (Decl);
-
-            --  Generate:
-            --    if Cond then
-            --       Cnn := <Thenx>'Unrestricted_Access;
-            --    else
-            --       Cnn := <Elsex>'Unrestricted_Access;
-            --    end if;
-
-            New_If :=
-              Make_Implicit_If_Statement (N,
-                Condition       => Relocate_Node (Cond),
-                Then_Statements => New_List (
-                  Make_Assignment_Statement (Sloc (Thenx),
-                    Name       => New_Occurrence_Of (Cnn, Sloc (Thenx)),
-                    Expression =>
-                      Make_Attribute_Reference (Loc,
-                        Prefix         => Relocate_Node (Thenx),
-                        Attribute_Name => Name_Unrestricted_Access))),
-
-                Else_Statements => New_List (
-                  Make_Assignment_Statement (Sloc (Elsex),
-                    Name       => New_Occurrence_Of (Cnn, Sloc (Elsex)),
-                    Expression =>
-                      Make_Attribute_Reference (Loc,
-                        Prefix         => Relocate_Node (Elsex),
-                        Attribute_Name => Name_Unrestricted_Access))));
-
-            --  Preserve the original context for which the if statement is
-            --  being generated. This is needed by the finalization machinery
-            --  to prevent the premature finalization of controlled objects
-            --  found within the if statement.
-
-            Set_From_Conditional_Expression (New_If);
-
-            New_N :=
-              Make_Explicit_Dereference (Loc,
-                Prefix => New_Occurrence_Of (Cnn, Loc));
-         end;
+         Set_From_Conditional_Expression (If_Stmt);
 
       --  If the result is a unidimensional unconstrained array but the two
       --  dependent expressions have constrained subtypes with known bounds,
@@ -5821,6 +5772,7 @@ package body Exp_Ch4 is
       elsif Is_Array_Type (Typ)
         and then Number_Dimensions (Typ) = 1
         and then not Is_Constrained (Typ)
+        and then not Is_By_Reference_Type (Typ)
         and then Is_Constrained (Etype (Thenx))
         and then Compile_Time_Known_Bounds (Etype (Thenx))
         and then
@@ -6021,7 +5973,7 @@ package body Exp_Ch4 is
 
             Set_Suppress_Assignment_Checks (Last (Else_List));
 
-            New_If :=
+            If_Stmt :=
               Make_Implicit_If_Statement (N,
                 Condition       => Duplicate_Subexpr (Cond),
                 Then_Statements => Then_List,
@@ -6035,38 +5987,94 @@ package body Exp_Ch4 is
                   High_Bound => Build_New_Bound (Then_Hi, Else_Hi, Slice_Hi)));
          end;
 
-      --  If the result is an unconstrained array and the if expression is in a
-      --  context other than the initializing expression of the declaration of
-      --  an object, then we pull out the if expression as follows:
+      --  If the type is by reference or else not definite, then we expand as
+      --  follows to avoid the possibility of improper copying.
 
-      --     Cnn : constant typ := if-expression
+      --      type Ptr_Typ is not null access all Typ;
+      --      Target : Ptr;
+      --      if cond then
+      --         <<then actions>>
+      --         Target := then-expr'Unrestricted_Access;
+      --      else
+      --         <<else actions>>
+      --         Target := else-expr'Unrestricted_Access;
+      --      end if;
 
-      --  and then replace the if expression with an occurrence of Cnn. This
-      --  avoids the need in the back end to create on-the-fly variable length
-      --  temporaries (which it cannot do!)
+      --  and replace the if expression by a reference to Target.all.
 
-      --  Note that the test for being in an object declaration avoids doing an
-      --  unnecessary expansion, and also avoids infinite recursion.
-
-      elsif Is_Array_Type (Typ)
-        and then not Is_Constrained (Typ)
-        and then not (Nkind (Par) = N_Object_Declaration
-                       and then Expression (Par) = N)
+      elsif Is_By_Reference_Type (Typ)
+        or else not Is_Definite_Subtype (Typ)
       then
+         --  When the "then" or "else" expressions involve controlled function
+         --  calls, generated temporaries are chained on the corresponding list
+         --  of actions. These temporaries need to be finalized after the if
+         --  expression is evaluated.
+
+         Process_Transients_In_Expression (N, Then_Actions (N));
+         Process_Transients_In_Expression (N, Else_Actions (N));
+
          declare
-            Cnn : constant Node_Id := Make_Temporary (Loc, 'C', N);
+            Ptr_Typ : constant Entity_Id := Make_Temporary (Loc, 'A');
+            Target  : constant Entity_Id := Make_Temporary (Loc, 'C', N);
 
          begin
-            Insert_Action (N,
-              Make_Object_Declaration (Loc,
-                Defining_Identifier => Cnn,
-                Constant_Present    => True,
-                Object_Definition   => New_Occurrence_Of (Typ, Loc),
-                Expression          => Relocate_Node (N),
-                Has_Init_Expression => True));
+            --  Generate:
+            --    type Ptr_Typ is not null access all Typ;
 
-            Rewrite (N, New_Occurrence_Of (Cnn, Loc));
-            return;
+            Insert_Action (N,
+              Make_Full_Type_Declaration (Loc,
+                Defining_Identifier => Ptr_Typ,
+                Type_Definition     =>
+                  Make_Access_To_Object_Definition (Loc,
+                    All_Present            => True,
+                    Null_Exclusion_Present => True,
+                    Subtype_Indication     => New_Occurrence_Of (Typ, Loc))));
+
+            --  Generate:
+            --    Target : Ptr_Typ;
+
+            Decl :=
+              Make_Object_Declaration (Loc,
+                Defining_Identifier => Target,
+                Object_Definition   => New_Occurrence_Of (Ptr_Typ, Loc));
+            Set_No_Initialization (Decl);
+
+            --  Generate:
+            --    if Cond then
+            --       Target := <Thenx>'Unrestricted_Access;
+            --    else
+            --       Target := <Elsex>'Unrestricted_Access;
+            --    end if;
+
+            If_Stmt :=
+              Make_Implicit_If_Statement (N,
+                Condition       => Relocate_Node (Cond),
+                Then_Statements => New_List (
+                  Make_Assignment_Statement (Sloc (Thenx),
+                    Name       => New_Occurrence_Of (Target, Sloc (Thenx)),
+                    Expression =>
+                      Make_Attribute_Reference (Loc,
+                        Prefix         => Relocate_Node (Thenx),
+                        Attribute_Name => Name_Unrestricted_Access))),
+
+                Else_Statements => New_List (
+                  Make_Assignment_Statement (Sloc (Elsex),
+                    Name       => New_Occurrence_Of (Target, Sloc (Elsex)),
+                    Expression =>
+                      Make_Attribute_Reference (Loc,
+                        Prefix         => Relocate_Node (Elsex),
+                        Attribute_Name => Name_Unrestricted_Access))));
+
+            --  Preserve the original context for which the if statement is
+            --  being generated. This is needed by the finalization machinery
+            --  to prevent the premature finalization of controlled objects
+            --  found within the if statement.
+
+            Set_From_Conditional_Expression (If_Stmt);
+
+            New_N :=
+              Make_Explicit_Dereference (Loc,
+                Prefix => New_Occurrence_Of (Target, Loc));
          end;
 
       --  For other types, we only need to expand if there are other actions
@@ -6132,7 +6140,7 @@ package body Exp_Ch4 is
                --       Cnn := <Elsex>;
                --    end if;
 
-               New_If :=
+               If_Stmt :=
                  Make_Implicit_If_Statement (N,
                    Condition       => Relocate_Node (Cond),
                    Then_Statements => New_List (
@@ -6144,7 +6152,7 @@ package body Exp_Ch4 is
                      Make_Assignment_Statement (Sloc (Elsex),
                        Name       => New_Occurrence_Of (Cnn, Sloc (Elsex)),
                        Expression => Relocate_Node (Elsex))));
-               Append_To (Acts, New_If);
+               Append_To (Acts, If_Stmt);
 
                --  Generate:
                --    do
@@ -6215,31 +6223,31 @@ package body Exp_Ch4 is
       --  correspond to what is being evaluated.
 
       if Present (Par) and then Nkind (Par) = N_If_Statement then
-         Set_Sloc (New_If, Sloc (Par));
+         Set_Sloc (If_Stmt, Sloc (Par));
          Set_Sloc (Par, Loc);
       end if;
 
       --  Move Then_Actions and Else_Actions, if any, to the new if statement
 
       if Present (Then_Actions (N)) then
-         Prepend_List (Then_Actions (N), Then_Statements (New_If));
+         Prepend_List (Then_Actions (N), Then_Statements (If_Stmt));
       end if;
 
       if Present (Else_Actions (N)) then
-         Prepend_List (Else_Actions (N), Else_Statements (New_If));
+         Prepend_List (Else_Actions (N), Else_Statements (If_Stmt));
       end if;
 
       --  Rewrite the parent statement as an if statement
 
       if Optimize_Assignment_Stmt or else Optimize_Return_Stmt then
-         Rewrite (Par, New_If);
+         Rewrite (Par, If_Stmt);
          Analyze (Par);
 
       --  Otherwise rewrite the if expression itself
 
       else
          Insert_Action (N, Decl);
-         Insert_Action (N, New_If);
+         Insert_Action (N, If_Stmt);
          Rewrite (N, New_N);
          Analyze_And_Resolve (N, Typ);
       end if;
@@ -7283,10 +7291,7 @@ package body Exp_Ch4 is
 
       begin
          loop
-            if Nkind (Parnt) = N_Unchecked_Expression then
-               null;
-
-            elsif Nkind (Parnt) = N_Object_Renaming_Declaration then
+            if Nkind (Parnt) = N_Object_Renaming_Declaration then
                return;
 
             elsif Nkind (Parnt) in N_Subprogram_Call
@@ -9271,9 +9276,9 @@ package body Exp_Ch4 is
       Rp2 : constant Boolean :=
               Nkind (Rop) = N_Op_Expon and then Is_Power_Of_2_For_Shift (Rop);
 
-      Ltyp : constant Entity_Id  := Etype (Lop);
-      Rtyp : constant Entity_Id  := Etype (Rop);
-      Typ  : Entity_Id           := Etype (N);
+      Ltyp : constant Entity_Id := Etype (Lop);
+      Rtyp : constant Entity_Id := Etype (Rop);
+      Typ  : Entity_Id          := Etype (N);
 
    begin
       Binary_Op_Validity_Checks (N);
@@ -10031,7 +10036,7 @@ package body Exp_Ch4 is
 
       if Is_Integer_Type (Typ)
         and then Compile_Time_Known_Value (Right_Opnd (N))
-        and then Expr_Value (Right_Opnd (N)) = 0
+        and then Expr_Value (Right_Opnd (N)) = Uint_0
       then
          Rewrite (N, Left_Opnd (N));
          return;
@@ -10088,10 +10093,91 @@ package body Exp_Ch4 is
    -----------------------------------
 
    procedure Expand_N_Qualified_Expression (N : Node_Id) is
-      Operand     : constant Node_Id   := Expression (N);
-      Target_Type : constant Entity_Id := Entity (Subtype_Mark (N));
+      Loc         : constant Source_Ptr := Sloc (N);
+      Operand     : constant Node_Id    := Expression (N);
+      Target_Type : constant Entity_Id  := Entity (Subtype_Mark (N));
 
    begin
+      --  Nothing to do if the operand is an identical qualified expression
+
+      if Nkind (Operand) = N_Qualified_Expression
+        and then Entity (Subtype_Mark (Operand)) = Target_Type
+      then
+         Rewrite (N, Relocate_Node (Operand));
+         return;
+
+      --  An allocator expects a qualified expression in all cases
+
+      elsif Nkind (Parent (N)) = N_Allocator then
+         null;
+
+      --  Distribute the qualified expression into the dependent expressions
+      --  of a delayed conditional expression. The goal is to enable further
+      --  optimizations, for example within a return statement, by exposing
+      --  the conditional expression.
+
+      elsif Nkind (Operand) = N_Case_Expression
+        and then Expansion_Delayed (Operand)
+      then
+         declare
+            New_Alts : constant List_Id := New_List;
+            New_Case : constant Node_Id :=
+              Make_Case_Expression (Loc,
+                Expression   => Relocate_Node (Expression (Operand)),
+                Alternatives => New_Alts);
+
+            Alt     : Node_Id;
+            New_Alt : Node_Id;
+
+         begin
+            Alt := First (Alternatives (Operand));
+            while Present (Alt) loop
+               New_Alt :=
+                 Make_Case_Expression_Alternative (Sloc (Alt),
+                   Discrete_Choices => Discrete_Choices (Alt),
+                   Expression       =>
+                     Make_Qualified_Expression (Loc,
+                       Subtype_Mark => New_Occurrence_Of (Target_Type, Loc),
+                       Expression   => Relocate_Node (Expression (Alt))));
+               Append_To (New_Alts, New_Alt);
+               Set_Actions (New_Alt, Actions (Alt));
+
+               Next (Alt);
+            end loop;
+
+            Rewrite (N, New_Case);
+            Analyze_And_Resolve (N);
+            return;
+         end;
+
+      elsif Nkind (Operand) = N_If_Expression
+        and then Expansion_Delayed (Operand)
+      then
+         declare
+            Cond   : constant Node_Id := First (Expressions (Operand));
+            Thenx  : constant Node_Id := Next (Cond);
+            Elsex  : constant Node_Id := Next (Thenx);
+            New_If : constant Node_Id :=
+              Make_If_Expression (Loc,
+                Expressions => New_List (
+                  Relocate_Node (Cond),
+                  Make_Qualified_Expression (Loc,
+                    Subtype_Mark => New_Occurrence_Of (Target_Type, Loc),
+                    Expression   => Relocate_Node (Thenx)),
+                  Make_Qualified_Expression (Loc,
+                    Subtype_Mark => New_Occurrence_Of (Target_Type, Loc),
+                    Expression   => Relocate_Node (Elsex))));
+
+         begin
+            Set_Then_Actions (New_If, Then_Actions (Operand));
+            Set_Else_Actions (New_If, Else_Actions (Operand));
+
+            Rewrite (N, New_If);
+            Analyze_And_Resolve (N);
+            return;
+         end;
+      end if;
+
       --  Do validity check if validity checking operands
 
       if Validity_Checks_On and Validity_Check_Operands then
@@ -11660,6 +11746,34 @@ package body Exp_Ch4 is
          end if;
       end if;
 
+      --  Generate a tag check for view conversions of mutably tagged objects,
+      --  which are special in nature and require selecting the tag component
+      --  from the class-wide equivalent type.
+
+      --  Possibly this could be combined with the logic below for better code
+      --  reuse ???
+
+      if Is_View_Conversion (N)
+        and then Is_Variable (Operand)
+        and then Is_Class_Wide_Equivalent_Type (Etype (Operand))
+      then
+         --  Generate:
+         --    [Constraint_Error when Operand.Tag /= Root_Type]
+
+         Insert_Action (N,
+           Make_Raise_Constraint_Error (Loc,
+             Condition =>
+               Make_Op_Ne (Loc,
+                 Left_Opnd  =>
+                   Make_Selected_Component (Loc,
+                     Prefix        => Duplicate_Subexpr_No_Checks (Operand),
+                     Selector_Name => Make_Identifier (Loc, Name_uTag)),
+                 Right_Opnd =>
+                   Make_Attribute_Reference (Loc,
+                     Prefix         => New_Occurrence_Of (Target_Type, Loc),
+                     Attribute_Name => Name_Tag)),
+             Reason   => CE_Tag_Check_Failed));
+
       --  Case of conversions of tagged types and access to tagged types
 
       --  When needed, that is to say when the expression is class-wide, Add
@@ -11675,8 +11789,8 @@ package body Exp_Ch4 is
       --          and then Operand.all not in
       --            Designated_Type (Target_Type)'Class]
 
-      if (Is_Access_Type (Target_Type)
-           and then Is_Tagged_Type (Designated_Type (Target_Type)))
+      elsif (Is_Access_Type (Target_Type)
+              and then Is_Tagged_Type (Designated_Type (Target_Type)))
         or else Is_Tagged_Type (Target_Type)
       then
          --  Do not do any expansion in the access type case if the parent is a
@@ -12064,22 +12178,6 @@ package body Exp_Ch4 is
       end if;
    end Expand_N_Type_Conversion;
 
-   -----------------------------------
-   -- Expand_N_Unchecked_Expression --
-   -----------------------------------
-
-   --  Remove the unchecked expression node from the tree. Its job was simply
-   --  to make sure that its constituent expression was handled with checks
-   --  off, and now that is done, we can remove it from the tree, and indeed
-   --  must, since Gigi does not expect to see these nodes.
-
-   procedure Expand_N_Unchecked_Expression (N : Node_Id) is
-      Exp : constant Node_Id := Expression (N);
-   begin
-      Set_Assignment_OK (Exp, Assignment_OK (N) or else Assignment_OK (Exp));
-      Rewrite (N, Exp);
-   end Expand_N_Unchecked_Expression;
-
    ----------------------------------------
    -- Expand_N_Unchecked_Type_Conversion --
    ----------------------------------------
@@ -12098,7 +12196,11 @@ package body Exp_Ch4 is
       --  an Assignment_OK indication which must be propagated to the operand.
 
       if Operand_Type = Target_Type then
-         Expand_N_Unchecked_Expression (N);
+         if Assignment_OK (N) then
+            Set_Assignment_OK (Operand);
+         end if;
+
+         Rewrite (N, Operand);
          return;
       end if;
 
@@ -14306,7 +14408,9 @@ package body Exp_Ch4 is
          --  insert the finalization call after the return statement as
          --  this will render it unreachable.
 
-         if Nkind (Fin_Context) = N_Simple_Return_Statement then
+         if Nkind (Fin_Context) = N_Simple_Return_Statement
+           or else Nkind (Parent (Expr)) = N_Simple_Return_Statement
+         then
             null;
 
          --  Finalize the object after the context has been evaluated

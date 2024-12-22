@@ -20,7 +20,6 @@ along with GCC; see the file COPYING3.  If not see
 
 
 #include "config.h"
-#define INCLUDE_MEMORY
 #define INCLUDE_VECTOR
 #include "system.h"
 #include "coretypes.h"
@@ -72,9 +71,10 @@ public:
     diagnostic_output_format::dump (out, indent);
   }
 
-  diagnostic_per_format_buffer *make_per_format_buffer () final override
+  std::unique_ptr<diagnostic_per_format_buffer>
+  make_per_format_buffer () final override
   {
-    return new diagnostic_json_format_buffer (*this);
+    return ::make_unique<diagnostic_json_format_buffer> (*this);
   }
   void set_buffer (diagnostic_per_format_buffer *base_buffer) final override
   {
@@ -102,6 +102,15 @@ public:
   void after_diagnostic (const diagnostic_info &) final override
   {
     /* No-op.  */
+  }
+  void update_printer () final override
+  {
+    m_printer = m_context.clone_printer ();
+    pp_show_color (m_printer.get ()) = false;
+  }
+  bool follows_reference_printer_p () const final override
+  {
+    return false;
   }
 
 protected:
@@ -248,6 +257,7 @@ json_from_metadata (const diagnostic_metadata *metadata)
 
 static std::unique_ptr<json::array>
 make_json_for_path (diagnostic_context &context,
+		    pretty_printer *ref_pp,
 		    const diagnostic_path *path)
 {
   std::unique_ptr<json::array> path_array = ::make_unique<json::array> ();
@@ -260,8 +270,9 @@ make_json_for_path (diagnostic_context &context,
 	event_obj->set ("location",
 			json_from_expanded_location (context,
 						     event.get_location ()));
-      label_text event_text (event.get_desc (false));
-      event_obj->set_string ("description", event_text.get ());
+      auto pp = ref_pp->clone ();
+      event.print_desc (*pp.get ());
+      event_obj->set_string ("description", pp_formatted_text (pp.get ()));
       if (const logical_location *logical_loc = event.get_logical_location ())
 	{
 	  label_text name (logical_loc->get_name_for_path_output ());
@@ -430,7 +441,7 @@ json_output_format::on_report_diagnostic (const diagnostic_info &diagnostic,
 
   const diagnostic_path *path = richloc->get_path ();
   if (path)
-    diag_obj->set ("path", make_json_for_path (m_context, path));
+    diag_obj->set ("path", make_json_for_path (m_context, get_printer (), path));
 
   diag_obj->set_bool ("escape-source", richloc->escape_on_output_p ());
 }
@@ -498,14 +509,11 @@ static void
 diagnostic_output_format_init_json (diagnostic_context &context,
 				    std::unique_ptr<json_output_format> fmt)
 {
-  /* Suppress normal textual path output.  */
-  context.set_path_format (DPF_NONE);
-
   /* Don't colorize the text.  */
   pp_show_color (fmt->get_printer ()) = false;
   context.set_show_highlight_colors (false);
 
-  context.set_output_format (fmt.release ());
+  context.set_output_format (std::move (fmt));
 }
 
 /* Populate CONTEXT in preparation for JSON output to stderr.  */

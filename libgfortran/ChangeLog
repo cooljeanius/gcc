@@ -1,3 +1,36 @@
+2024-12-20  Andre Vehreschild  <vehre@gcc.gnu.org>
+
+	PR fortran/57598
+	* caf/single.c (_gfortran_caf_stop_numeric): Report exceptions
+	on stop. And fix send_by_ref.
+	(_gfortran_caf_stop_str): Same.
+	(_gfortran_caf_error_stop_str): Same.
+	(_gfortran_caf_error_stop): Same.
+	* gfortran.map: Add report_exception for export.
+	* libgfortran.h (report_exception): Add to internal export.
+	* runtime/stop.c (report_exception): Same.
+
+2024-12-10  Jerry DeLisle  <jvdelisle@gcc.gnu.org>
+
+	PR fortran/117819
+	* io/read.c (read_decimal): If the read value is short of the
+	specified width and pad mode is PAD yes, check for BLANK ZERO
+	and adjust the value accordingly.
+	(read_decimal_unsigned): Likewise.
+	(read_radix): Likewise.
+
+2024-12-04  Jerry DeLisle  <jvdelisle@gcc.gnu.org>
+
+	PR fortran/117820
+	* io/write.c (write_b): Add test for zero needed by write_boz.
+
+2024-11-23  Jerry DeLisle  <jvdelisle@gcc.gnu.org>
+
+	PR fortran/88052
+	* io/format.c (parse_format_list): Reject missing comma in
+	format strings by default or if -std=f95 or higher. This is
+	a runtime error.
+
 2024-10-07  Thomas Koenig  <tkoenig@gcc.gnu.org>
 
 	* Makefile.am: Add files for unsigned MINLOC and MAXLOC.

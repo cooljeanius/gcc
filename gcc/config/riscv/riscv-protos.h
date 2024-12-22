@@ -139,6 +139,7 @@ extern void riscv_expand_ussub (rtx, rtx, rtx);
 extern void riscv_expand_sssub (rtx, rtx, rtx);
 extern void riscv_expand_ustrunc (rtx, rtx);
 extern void riscv_expand_sstrunc (rtx, rtx);
+extern int riscv_register_move_cost (machine_mode, reg_class_t, reg_class_t);
 
 #ifdef RTX_CODE
 extern void riscv_expand_int_scc (rtx, enum rtx_code, rtx, rtx, bool *invert_ptr = 0);
@@ -175,6 +176,9 @@ extern bool riscv_reg_frame_related (rtx);
 extern void riscv_split_sum_of_two_s12 (HOST_WIDE_INT, HOST_WIDE_INT *,
 					HOST_WIDE_INT *);
 extern bool riscv_vector_float_type_p (const_tree type);
+extern void generate_reflecting_code_using_brev (rtx *);
+extern void expand_crc_using_clmul (scalar_mode, scalar_mode, rtx *);
+extern void expand_reversed_crc_using_clmul (scalar_mode, scalar_mode, rtx *);
 
 /* Routines implemented in riscv-c.cc.  */
 void riscv_cpu_cpp_builtins (cpp_reader *);
@@ -505,9 +509,9 @@ enum insn_type : unsigned int
 
   /* For vcompress.vm */
   COMPRESS_OP = __NORMAL_OP_TA2 | BINARY_OP_P,
-  /* has merge operand but use ta.  */
+  /* has merge operand but use tu.  */
   COMPRESS_OP_MERGE
-  = HAS_DEST_P | HAS_MERGE_P | TDEFAULT_POLICY_P | BINARY_OP_P,
+  = HAS_DEST_P | HAS_MERGE_P | TU_POLICY_P | BINARY_OP_P,
 
   /* For vslideup.up has merge operand but use ta.  */
   SLIDEUP_OP_MERGE = HAS_DEST_P | HAS_MASK_P | USE_ALL_TRUES_MASK_P
@@ -700,6 +704,8 @@ bool expand_strcmp (rtx, rtx, rtx, rtx, unsigned HOST_WIDE_INT, bool);
 void emit_vec_extract (rtx, rtx, rtx);
 bool expand_vec_setmem (rtx, rtx, rtx);
 bool expand_vec_cmpmem (rtx, rtx, rtx, rtx);
+void expand_strided_load (machine_mode, rtx *);
+void expand_strided_store (machine_mode, rtx *);
 
 /* Rounding mode bitfield for fixed point VXRM.  */
 enum fixed_point_rounding_mode
@@ -803,6 +809,10 @@ extern bool riscv_use_divmod_expander (void);
 void riscv_init_cumulative_args (CUMULATIVE_ARGS *, tree, rtx, tree, int);
 extern bool
 riscv_option_valid_attribute_p (tree, tree, tree, int);
+extern bool
+riscv_option_valid_version_attribute_p (tree, tree, tree, int);
+extern bool
+riscv_process_target_version_attr (tree, location_t);
 extern void
 riscv_override_options_internal (struct gcc_options *);
 extern void riscv_option_override (void);

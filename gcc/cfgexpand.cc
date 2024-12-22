@@ -702,6 +702,11 @@ add_scope_conflicts_1 (basic_block bb, bitmap work, bool for_conflict)
 static void
 add_scope_conflicts (void)
 {
+  /* If there is only one variable, there is nothing to be done as
+     there is only possible partition.  */
+  if (stack_vars_num == 1)
+    return;
+
   basic_block bb;
   bool changed;
   bitmap work = BITMAP_ALLOC (NULL);
@@ -2187,7 +2192,7 @@ static bool
 stack_protect_return_slot_p ()
 {
   basic_block bb;
-  
+
   FOR_ALL_BB_FN (bb, cfun)
     for (gimple_stmt_iterator gsi = gsi_start_bb (bb);
 	 !gsi_end_p (gsi); gsi_next (&gsi))
@@ -2843,6 +2848,7 @@ expand_call_stmt (gcall *stmt)
       if (builtin_p
 	  && TREE_CODE (arg) == SSA_NAME
 	  && (def = get_gimple_for_ssa_name (arg))
+	  && is_gimple_assign (def)
 	  && gimple_assign_rhs_code (def) == ADDR_EXPR)
 	arg = gimple_assign_rhs1 (def);
       CALL_EXPR_ARG (exp, i) = arg;
@@ -3203,6 +3209,12 @@ expand_asm_stmt (gasm *stmt)
 		{
 		  rtx x = gen_rtx_MEM (BLKmode, gen_rtx_SCRATCH (VOIDmode));
 		  clobber_rvec.safe_push (x);
+		}
+	      else if (j == -5)
+		{
+		  if (targetm.redzone_clobber)
+		    if (rtx x = targetm.redzone_clobber ())
+		      clobber_rvec.safe_push (x);
 		}
 	      else
 		{
@@ -3612,7 +3624,7 @@ expand_asm_stmt (gasm *stmt)
       ASM_OPERANDS_OUTPUT_CONSTRAINT (body) = constraints[0];
       if (nlabels > 0)
 	emit_jump_insn (gen_rtx_SET (output_rvec[0], body));
-      else 
+      else
 	emit_insn (gen_rtx_SET (output_rvec[0], body));
     }
   else
@@ -4067,8 +4079,13 @@ expand_gimple_stmt_1 (gimple *stmt)
 	    else
 	      {
 		temp = force_operand (temp, target);
-		if (temp != target)
+		if (temp == target)
+		  ;
+		else if (GET_MODE (target) != BLKmode)
 		  emit_move_insn (target, temp);
+		else
+		  emit_block_move (target, temp, expr_size (lhs),
+				   BLOCK_OP_NORMAL);
 	      }
 	  }
       }
@@ -4398,7 +4415,7 @@ avoid_deep_ter_for_debug (gimple *stmt, int depth)
       gimple *g = get_gimple_for_ssa_name (use);
       if (g == NULL)
 	continue;
-      if (depth > 6 && !stmt_ends_bb_p (g))
+      if ((depth > 6 || !is_gimple_assign (g)) && !stmt_ends_bb_p (g))
 	{
 	  if (deep_ter_debug_map == NULL)
 	    deep_ter_debug_map = new hash_map<tree, tree>;
@@ -5372,7 +5389,13 @@ expand_debug_expr (tree exp)
 		  t = *slot;
 	      }
 	    if (t == NULL_TREE)
-	      t = gimple_assign_rhs_to_tree (g);
+	      {
+		if (is_gimple_assign (g))
+		  t = gimple_assign_rhs_to_tree (g);
+		else
+		  /* expand_debug_expr doesn't handle CALL_EXPR right now.  */
+		  return NULL;
+	      }
 	    op0 = expand_debug_expr (t);
 	    if (!op0)
 	      return NULL;
@@ -5948,7 +5971,8 @@ expand_gimple_basic_block (basic_block bb, bool disable_tail_calls)
 	  /* Look for SSA names that have their last use here (TERed
 	     names always have only one real use).  */
 	  FOR_EACH_SSA_TREE_OPERAND (op, stmt, iter, SSA_OP_USE)
-	    if ((def = get_gimple_for_ssa_name (op)))
+	    if ((def = get_gimple_for_ssa_name (op))
+		&& is_gimple_assign (def))
 	      {
 		imm_use_iterator imm_iter;
 		use_operand_p use_p;

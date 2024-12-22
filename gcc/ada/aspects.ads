@@ -197,6 +197,7 @@ package Aspects is
       Aspect_Effective_Writes,              -- GNAT
       Aspect_Exclusive_Functions,
       Aspect_Export,
+      Aspect_Extended_Access,               -- GNAT
       Aspect_Extensions_Visible,            -- GNAT
       Aspect_Favor_Top_Level,               -- GNAT
       Aspect_First_Controlling_Parameter,   -- GNAT
@@ -293,6 +294,7 @@ package Aspects is
       Aspect_Effective_Reads            => True,
       Aspect_Effective_Writes           => True,
       Aspect_Exceptional_Cases          => True,
+      Aspect_Extended_Access            => True,
       Aspect_Extensions_Visible         => True,
       Aspect_External_Initialization    => True,
       Aspect_Favor_Top_Level            => True,
@@ -539,8 +541,9 @@ package Aspects is
       Aspect_Dynamic_Predicate            => False,
       Aspect_Exceptional_Cases            => False,
       Aspect_Exclusive_Functions          => False,
+      Aspect_Extended_Access              => True,
       Aspect_External_Initialization      => False,
-      Aspect_External_Name                => False,
+      Aspect_External_Name                => True,
       Aspect_External_Tag                 => False,
       Aspect_Finalizable                  => False,
       Aspect_First_Controlling_Parameter  => False,
@@ -714,6 +717,7 @@ package Aspects is
       Aspect_Exceptional_Cases            => Name_Exceptional_Cases,
       Aspect_Exclusive_Functions          => Name_Exclusive_Functions,
       Aspect_Export                       => Name_Export,
+      Aspect_Extended_Access              => Name_Extended_Access,
       Aspect_Extensions_Visible           => Name_Extensions_Visible,
       Aspect_External_Initialization      => Name_External_Initialization,
       Aspect_External_Name                => Name_External_Name,
@@ -969,7 +973,6 @@ package Aspects is
       Aspect_Dynamic_Predicate            => Always_Delay,
       Aspect_Elaborate_Body               => Always_Delay,
       Aspect_Exclusive_Functions          => Always_Delay,
-      Aspect_External_Name                => Always_Delay,
       Aspect_External_Tag                 => Always_Delay,
       Aspect_Favor_Top_Level              => Always_Delay,
       Aspect_Finalizable                  => Always_Delay,
@@ -986,8 +989,6 @@ package Aspects is
       Aspect_Invariant                    => Always_Delay,
       Aspect_Iterable                     => Always_Delay,
       Aspect_Iterator_Element             => Always_Delay,
-      Aspect_Link_Name                    => Always_Delay,
-      Aspect_Linker_Section               => Always_Delay,
       Aspect_Lock_Free                    => Always_Delay,
       Aspect_No_Inline                    => Always_Delay,
       Aspect_No_Raise                     => Always_Delay,
@@ -1095,7 +1096,11 @@ package Aspects is
       Aspect_Atomic_Components            => Rep_Aspect,
       Aspect_Bit_Order                    => Rep_Aspect,
       Aspect_Component_Size               => Rep_Aspect,
+      Aspect_Extended_Access              => Rep_Aspect,
+      Aspect_External_Name                => Rep_Aspect,
       Aspect_Full_Access_Only             => Rep_Aspect,
+      Aspect_Link_Name                    => Rep_Aspect,
+      Aspect_Linker_Section               => Rep_Aspect,
       Aspect_Machine_Radix                => Rep_Aspect,
       Aspect_Object_Size                  => Rep_Aspect,
       Aspect_Pack                         => Rep_Aspect,

@@ -81,7 +81,6 @@ along with GCC; see the file COPYING3.  If not see
 */
 
 #include "config.h"
-#define INCLUDE_MEMORY
 #include "system.h"
 #include "coretypes.h"
 #include "backend.h"
@@ -525,7 +524,7 @@ fold_build_cond_expr (tree type, tree cond, tree rhs, tree lhs)
 
 /* Add condition NC to the predicate list of basic block BB.  LOOP is
    the loop to be if-converted. Use predicate of cd-equivalent block
-   for join bb if it exists: we call basic blocks bb1 and bb2 
+   for join bb if it exists: we call basic blocks bb1 and bb2
    cd-equivalent if they are executed under the same condition.  */
 
 static inline void
@@ -2555,9 +2554,17 @@ predicate_load_or_store (gimple_stmt_iterator *gsi, gassign *stmt, tree mask)
 		   ref);
   if (TREE_CODE (lhs) == SSA_NAME)
     {
+      /* Get a zero else value.  This might not be what a target actually uses
+	 but we cannot be sure about which vector mode the vectorizer will
+	 choose.  Therefore, leave the decision whether we need to force the
+	 inactive elements to zero to the vectorizer.  */
+      tree els = vect_get_mask_load_else (MASK_LOAD_ELSE_ZERO,
+					  TREE_TYPE (lhs));
+
       new_stmt
-	= gimple_build_call_internal (IFN_MASK_LOAD, 3, addr,
-				      ptr, mask);
+	= gimple_build_call_internal (IFN_MASK_LOAD, 4, addr,
+				      ptr, mask, els);
+
       gimple_call_set_lhs (new_stmt, lhs);
       gimple_set_vuse (new_stmt, gimple_vuse (stmt));
     }
@@ -3090,7 +3097,7 @@ combine_blocks (class loop *loop, bool loop_versioned)
 	    }
 	  if (SSA_NAME_OCCURS_IN_ABNORMAL_PHI (gimple_phi_result (vphi)))
 	    SSA_NAME_OCCURS_IN_ABNORMAL_PHI (last_vdef) = 1;
-	  gsi = gsi_for_stmt (vphi); 
+	  gsi = gsi_for_stmt (vphi);
 	  remove_phi_node (&gsi, true);
 	}
 
@@ -3148,7 +3155,7 @@ combine_blocks (class loop *loop, bool loop_versioned)
 	    }
 	  if (SSA_NAME_OCCURS_IN_ABNORMAL_PHI (gimple_phi_result (vphi)))
 	    SSA_NAME_OCCURS_IN_ABNORMAL_PHI (last_vdef) = 1;
-	  gimple_stmt_iterator gsi = gsi_for_stmt (vphi); 
+	  gimple_stmt_iterator gsi = gsi_for_stmt (vphi);
 	  remove_phi_node (&gsi, true);
 	}
     }
@@ -3221,7 +3228,7 @@ combine_blocks (class loop *loop, bool loop_versioned)
    will be if-converted, the new copy of the loop will not,
    and the LOOP_VECTORIZED internal call will be guarding which
    loop to execute.  The vectorizer pass will fold this
-   internal call into either true or false. 
+   internal call into either true or false.
 
    Note that this function intentionally invalidates profile.  Both edges
    out of LOOP_VECTORIZED must have 100% probability so the profile remains
