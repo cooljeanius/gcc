@@ -283,7 +283,7 @@ gnat_post_options (const char **pfilename ATTRIBUTE_UNUSED)
   /* Unfortunately the post_options hook is called before the value of
      flag_short_enums is autodetected, if need be.  Mimic the process
      for our private flag_short_enums.  */
-  if (flag_short_enums == 2)
+  if (!OPTION_SET_P (flag_short_enums))
     flag_short_enums = targetm.default_short_enums ();
 
   return false;
@@ -307,14 +307,14 @@ internal_error_function (diagnostic_context *context, const char *msgid,
   emergency_dump_function ();
 
   /* Reset the pretty-printer.  */
-  pp_clear_output_area (context->m_printer);
+  pp_clear_output_area (context->get_reference_printer ());
 
   /* Format the message into the pretty-printer.  */
   text_info tinfo (msgid, ap, errno);
-  pp_format_verbatim (context->m_printer, &tinfo);
+  pp_format_verbatim (context->get_reference_printer (), &tinfo);
 
   /* Extract a (writable) pointer to the formatted text.  */
-  buffer = xstrdup (pp_formatted_text (context->m_printer));
+  buffer = xstrdup (pp_formatted_text (context->get_reference_printer ()));
 
   /* Go up to the first newline.  */
   for (p = buffer; *p; p++)

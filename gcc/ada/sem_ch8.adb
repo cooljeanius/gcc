@@ -2343,6 +2343,11 @@ package body Sem_Ch8 is
                      elsif From_Limited_With (Etype (F)) then
                         null;
 
+                     --  Incomplete types are never frozen (AI12-0155-1)
+
+                     elsif Is_Incomplete_Type (Etype (F)) then
+                        null;
+
                      else
                         Error_Msg_NE
                           ("type& must be frozen before this point",
@@ -4916,17 +4921,21 @@ package body Sem_Ch8 is
          then
             null;
 
-         --  Don't replace a non-qualified discriminant in strict preanalysis
-         --  mode since it can lead to errors during full analysis when the
-         --  discriminant gets referenced later.
+         --  Don't replace a non-qualified discriminant in preanalysis mode
+         --  since we may be preanalyzing a subtree that it is still not
+         --  placed in its final position in the tree, and therefore it can
+         --  lead to errors during full analysis when the discriminant gets
+         --  referenced later. We exclude preanalysis of pragma expressions
+         --  because they will not be moved.
 
          --  This can occur in situations where a protected type contains
          --  an expression function which references a non-prefixed
-         --  discriminant.
+         --  discriminant, or a task type sets the size of its secondary
+         --  stack with a value provided in a discriminant.
 
          elsif No (P)
            and then Preanalysis_Active
-           and then Inside_Preanalysis_Without_Freezing = 0
+           and then not In_Pragma_Expression (N)
          then
             null;
 
@@ -8530,7 +8539,7 @@ package body Sem_Ch8 is
                         Current_Entity (Selector_Name (N));
                begin
                   if Present (F)
-                    and then Is_Overloadable (F)
+                    and then Is_Subprogram (F)
                     and then Present (First_Entity (F))
                     and then not Is_Tagged_Type (Etype (First_Entity (F)))
                   then
@@ -9993,7 +10002,8 @@ package body Sem_Ch8 is
                or else (Nkind (The_Unit) = N_Subprogram_Body
                          and then not Acts_As_Spec (Cunit (Current_Sem_Unit))))
          then
-            With_Sys := Find_System (Library_Unit (Cunit (Current_Sem_Unit)));
+            With_Sys :=
+              Find_System (Spec_Or_Body_Lib_Unit (Cunit (Current_Sem_Unit)));
          end if;
 
          if No (With_Sys) and then Present (N) then
@@ -10049,8 +10059,8 @@ package body Sem_Ch8 is
 
             Set_Corresponding_Spec (Withn, System_Aux_Id);
             Set_First_Name         (Withn);
-            Set_Implicit_With      (Withn);
-            Set_Library_Unit       (Withn, Cunit (Unum));
+            Set_Is_Implicit_With   (Withn);
+            Set_Withed_Lib_Unit    (Withn, Cunit (Unum));
 
             Insert_After (With_Sys, Withn);
             Mark_Rewrite_Insertion (Withn);

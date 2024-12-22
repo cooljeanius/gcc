@@ -70,6 +70,8 @@ std_headers = \
 	${std_srcdir}/deque \
 	${std_srcdir}/execution \
 	${std_srcdir}/filesystem \
+	${std_srcdir}/flat_map \
+	${std_srcdir}/flat_set \
 	${std_srcdir}/format \
 	${std_srcdir}/forward_list \
 	${std_srcdir}/fstream \
@@ -133,6 +135,7 @@ bits_freestanding = \
 	${bits_srcdir}/iterator_concepts.h \
 	${bits_srcdir}/max_size_type.h \
 	${bits_srcdir}/memoryfwd.h \
+	${bits_srcdir}/monostate.h \
 	${bits_srcdir}/move.h \
 	${bits_srcdir}/out_ptr.h \
 	${bits_srcdir}/predefined_ops.h \

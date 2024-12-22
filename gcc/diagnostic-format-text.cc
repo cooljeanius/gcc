@@ -32,7 +32,100 @@ along with GCC; see the file COPYING3.  If not see
 #include "diagnostic-client-data-hooks.h"
 #include "diagnostic-diagram.h"
 #include "diagnostic-format-text.h"
+#include "diagnostic-buffer.h"
 #include "text-art/theme.h"
+#include "make-unique.h"
+
+/* Disable warnings about quoting issues in the pp_xxx calls below
+   that (intentionally) don't follow GCC diagnostic conventions.  */
+#if __GNUC__ >= 10
+#  pragma GCC diagnostic push
+#  pragma GCC diagnostic ignored "-Wformat-diag"
+#endif
+
+/* Concrete buffering implementation subclass for JSON output.  */
+
+class diagnostic_text_format_buffer : public diagnostic_per_format_buffer
+{
+public:
+  friend class diagnostic_text_output_format;
+
+  diagnostic_text_format_buffer (diagnostic_output_format &format);
+
+  void dump (FILE *out, int indent) const final override;
+
+  bool empty_p () const final override;
+  void move_to (diagnostic_per_format_buffer &dest) final override;
+  void clear () final override;
+  void flush () final override;
+
+private:
+  diagnostic_output_format &m_format;
+  output_buffer m_output_buffer;
+};
+
+/* class diagnostic_text_format_buffer : public diagnostic_per_format_buffer.  */
+
+diagnostic_text_format_buffer::
+diagnostic_text_format_buffer (diagnostic_output_format &format)
+: m_format (format)
+{
+  m_output_buffer.m_flush_p = false;
+}
+
+void
+diagnostic_text_format_buffer::dump (FILE *out, int indent) const
+{
+  fprintf (out, "%*sdiagnostic_text_format_buffer:\n", indent, "");
+  m_output_buffer.dump (out, indent + 2);
+}
+
+bool
+diagnostic_text_format_buffer::empty_p () const
+{
+  return output_buffer_last_position_in_text (&m_output_buffer) == nullptr;
+}
+
+void
+diagnostic_text_format_buffer::move_to (diagnostic_per_format_buffer &base_dest)
+{
+  diagnostic_text_format_buffer &dest
+    = static_cast<diagnostic_text_format_buffer &> (base_dest);
+  const char *str = output_buffer_formatted_text (&m_output_buffer);
+  output_buffer_append_r (&dest.m_output_buffer, str, strlen (str));
+
+  obstack_free (m_output_buffer.m_obstack,
+		obstack_base (m_output_buffer.m_obstack));
+  m_output_buffer.m_line_length = 0;
+}
+
+void
+diagnostic_text_format_buffer::clear ()
+{
+  pretty_printer *const pp = m_format.get_printer ();
+  output_buffer *const old_output_buffer = pp_buffer (pp);
+
+  pp_buffer (pp) = &m_output_buffer;
+
+  pp_clear_output_area (pp);
+  gcc_assert (empty_p ());
+
+  pp_buffer (pp) = old_output_buffer;
+}
+
+void
+diagnostic_text_format_buffer::flush ()
+{
+  pretty_printer *const pp = m_format.get_printer ();
+  output_buffer *const old_output_buffer = pp_buffer (pp);
+
+  pp_buffer (pp) = &m_output_buffer;
+
+  pp_really_flush (pp);
+  gcc_assert (empty_p ());
+
+  pp_buffer (pp) = old_output_buffer;
+}
 
 /* class diagnostic_text_output_format : public diagnostic_output_format.  */
 
@@ -41,7 +134,7 @@ diagnostic_text_output_format::~diagnostic_text_output_format ()
   /* Some of the errors may actually have been warnings.  */
   if (m_context.diagnostic_count (DK_WERROR))
     {
-      pretty_printer *pp = m_context.m_printer;
+      pretty_printer *pp = get_printer ();
       /* -Werror was given.  */
       if (m_context.warning_as_error_requested_p ())
 	pp_verbatim (pp,
@@ -54,6 +147,53 @@ diagnostic_text_output_format::~diagnostic_text_output_format ()
 		     progname);
       pp_newline_and_flush (pp);
     }
+
+  if (m_includes_seen)
+    {
+      delete m_includes_seen;
+      m_includes_seen = nullptr;
+    }
+}
+
+void
+diagnostic_text_output_format::dump (FILE *out, int indent) const
+{
+  fprintf (out, "%*sdiagnostic_text_output_format\n", indent, "");
+  fprintf (out, "%*sm_follows_reference_printer: %s\n",
+	   indent, "",
+	   m_follows_reference_printer ? "true" : "false");
+  diagnostic_output_format::dump (out, indent);
+  fprintf (out, "%*ssaved_output_buffer:\n", indent + 2, "");
+  if (m_saved_output_buffer)
+    m_saved_output_buffer->dump (out, indent + 4);
+  else
+    fprintf (out, "%*s(none):\n", indent + 4, "");
+}
+
+void
+diagnostic_text_output_format::set_buffer (diagnostic_per_format_buffer *base)
+{
+  diagnostic_text_format_buffer * const buffer
+    = static_cast<diagnostic_text_format_buffer *> (base);
+
+  pretty_printer *const pp = get_printer ();
+
+  if (!m_saved_output_buffer)
+    m_saved_output_buffer = pp_buffer (pp);
+
+  if (buffer)
+    pp_buffer (pp) = &buffer->m_output_buffer;
+  else
+    {
+      gcc_assert (m_saved_output_buffer);
+      pp_buffer (pp) = m_saved_output_buffer;
+    }
+}
+
+std::unique_ptr<diagnostic_per_format_buffer>
+diagnostic_text_output_format::make_per_format_buffer ()
+{
+  return ::make_unique<diagnostic_text_format_buffer> (*this);
 }
 
 /* Implementation of diagnostic_output_format::on_report_diagnostic vfunc
@@ -64,9 +204,9 @@ diagnostic_text_output_format::
 on_report_diagnostic (const diagnostic_info &diagnostic,
 		      diagnostic_t orig_diag_kind)
 {
-  pretty_printer *pp = m_context.m_printer;
+  pretty_printer *pp = get_printer ();
 
-  (*diagnostic_starter (&m_context)) (&m_context, &diagnostic);
+  (*diagnostic_text_starter (&m_context)) (*this, &diagnostic);
 
   pp_output_formatted_text (pp, m_context.get_urlifier ());
 
@@ -79,9 +219,43 @@ on_report_diagnostic (const diagnostic_info &diagnostic,
   if (m_context.m_show_option_requested)
     print_option_information (diagnostic, orig_diag_kind);
 
-  (*diagnostic_finalizer (&m_context)) (&m_context,
-					&diagnostic,
-					orig_diag_kind);
+  /* If we're showing nested diagnostics, then print the location
+     on a new line, indented.  */
+  if (m_show_nesting && m_show_locations_in_nesting)
+    {
+      const int nesting_level = get_context ().get_diagnostic_nesting_level ();
+      if (nesting_level > 0)
+	{
+	  location_t loc = diagnostic_location (&diagnostic);
+	  pp_set_prefix (pp, nullptr);
+	  char *indent_prefix = build_indent_prefix (false);
+	  /* Only print changes of location.  */
+	  if (loc != get_context ().m_last_location
+	      && loc > BUILTINS_LOCATION)
+	    {
+	      const expanded_location s
+		= diagnostic_expand_location (&diagnostic);
+	      label_text location_text = get_location_text (s);
+	      pp_newline (pp);
+	      pp_printf (pp, "%s%s", indent_prefix, location_text.get ());
+	    }
+	  pp_set_prefix (pp, indent_prefix);
+	}
+    }
+
+  (*diagnostic_text_finalizer (&m_context)) (*this,
+					     &diagnostic,
+					     orig_diag_kind);
+
+  if (m_show_nesting && m_show_locations_in_nesting)
+    get_context ().m_last_location = diagnostic_location (&diagnostic);
+}
+
+void
+diagnostic_text_output_format::on_report_verbatim (text_info &text)
+{
+  pp_format_verbatim (get_printer (), &text);
+  pp_newline_and_flush (get_printer ());
 }
 
 void
@@ -98,6 +272,195 @@ diagnostic_text_output_format::on_diagram (const diagnostic_diagram &diagram)
   pp_newline (pp);
   pp_set_prefix (pp, saved_prefix);
   pp_flush (pp);
+}
+
+void
+diagnostic_text_output_format::
+after_diagnostic (const diagnostic_info &diagnostic)
+{
+  if (const diagnostic_path *path = diagnostic.richloc->get_path ())
+    print_path (*path);
+}
+
+/* Return a malloc'd string describing a location and the severity of the
+   diagnostic, e.g. "foo.c:42:10: error: ".
+
+   If m_show_nesting, then the above will be preceded by indentation to show
+   the level, and a bullet point.
+
+   The caller is responsible for freeing the memory.  */
+char *
+diagnostic_text_output_format::
+build_prefix (const diagnostic_info &diagnostic) const
+{
+  gcc_assert (diagnostic.kind < DK_LAST_DIAGNOSTIC_KIND);
+
+  const char *text = _(get_diagnostic_kind_text (diagnostic.kind));
+  const char *text_cs = "", *text_ce = "";
+  pretty_printer *pp = get_printer ();
+
+  if (const char *color_name = diagnostic_get_color_for_kind (diagnostic.kind))
+    {
+      text_cs = colorize_start (pp_show_color (pp), color_name);
+      text_ce = colorize_stop (pp_show_color (pp));
+    }
+
+  const int nesting_level = get_context ().get_diagnostic_nesting_level ();
+  if (m_show_nesting && nesting_level > 0)
+    {
+      char *indent_prefix = build_indent_prefix (true);
+
+      /* Reduce verbosity of nested diagnostics by not printing "note: "
+	 all the time.  */
+      if (diagnostic.kind == DK_NOTE)
+	return indent_prefix;
+
+      char *result = build_message_string ("%s%s%s%s", indent_prefix,
+					   text_cs, text, text_ce);
+      free (indent_prefix);
+      return result;
+    }
+  else
+    {
+      const expanded_location s = diagnostic_expand_location (&diagnostic);
+      label_text location_text = get_location_text (s);
+      return build_message_string ("%s %s%s%s", location_text.get (),
+				   text_cs, text, text_ce);
+    }
+}
+
+/* Same as build_prefix, but only the source FILE is given.  */
+char *
+diagnostic_text_output_format::file_name_as_prefix (const char *f) const
+{
+  pretty_printer *const pp = get_printer ();
+  const char *locus_cs
+    = colorize_start (pp_show_color (pp), "locus");
+  const char *locus_ce = colorize_stop (pp_show_color (pp));
+  return build_message_string ("%s%s:%s ", locus_cs, f, locus_ce);
+}
+
+/* Get the unicode code point for bullet points when showing
+   nested diagnostics.  */
+
+static unsigned
+get_bullet_point_unichar (bool unicode)
+{
+  if (unicode)
+    return 0x2022; /* U+2022: Bullet */
+  else
+    return '*';
+}
+
+/* Return true if DC's theme supports unicode characters.  */
+
+static bool
+use_unicode_p (const diagnostic_context &dc)
+{
+  if (text_art::theme *theme = dc.get_diagram_theme ())
+    return theme->unicode_p ();
+  else
+    return false;
+}
+
+/* Get the unicode code point for bullet points when showing
+   nested diagnostics.  */
+
+static unsigned
+get_bullet_point_unichar (diagnostic_context &dc)
+{
+  return get_bullet_point_unichar (use_unicode_p (dc));
+}
+
+/* Return a malloc'd string for use as a prefix to show indentation.
+   If m_show_nesting is false, or we're at the top-level, then the
+   result will be the empty string.
+
+   If m_show_nesting, then the result will contain indentation to show
+   the nesting level, then either a bullet point (if WITH_BULLET is true),
+   or a space.
+
+   The caller is responsible for freeing the memory.  */
+
+char *
+diagnostic_text_output_format::build_indent_prefix (bool with_bullet) const
+{
+  if (!m_show_nesting)
+    return xstrdup ("");
+
+  const int nesting_level = get_context ().get_diagnostic_nesting_level ();
+  if (nesting_level == 0)
+    return xstrdup ("");
+
+  pretty_printer pp;
+  for (int i = 0; i < nesting_level; i++)
+    pp_string (&pp, "  ");
+  if (with_bullet)
+    pp_unicode_character (&pp, get_bullet_point_unichar (get_context ()));
+  else
+    pp_space (&pp);
+  pp_space (&pp);
+  if (m_show_nesting_levels)
+    pp_printf (&pp, "(level %i):", nesting_level);
+  return xstrdup (pp_formatted_text (&pp));
+}
+
+/* Add a purely textual note with text GMSGID and with LOCATION.  */
+
+void
+diagnostic_text_output_format::append_note (location_t location,
+					    const char * gmsgid, ...)
+{
+  diagnostic_context *context = &get_context ();
+
+  diagnostic_info diagnostic;
+  va_list ap;
+  rich_location richloc (line_table, location);
+
+  va_start (ap, gmsgid);
+  diagnostic_set_info (&diagnostic, gmsgid, &ap, &richloc, DK_NOTE);
+  if (context->m_inhibit_notes_p)
+    {
+      va_end (ap);
+      return;
+    }
+  pretty_printer *pp = get_printer ();
+  char *saved_prefix = pp_take_prefix (pp);
+  pp_set_prefix (pp, build_prefix (diagnostic));
+  pp_format (pp, &diagnostic.message);
+  pp_output_formatted_text (pp);
+  pp_destroy_prefix (pp);
+  pp_set_prefix (pp, saved_prefix);
+  pp_newline (pp);
+  diagnostic_show_locus (context, get_source_printing_options (),
+			 &richloc, DK_NOTE, pp);
+  va_end (ap);
+}
+
+bool
+diagnostic_text_output_format::follows_reference_printer_p () const
+{
+  return m_follows_reference_printer;
+}
+
+void
+diagnostic_text_output_format::
+update_printer ()
+{
+  pretty_printer *copy_from_pp
+    = (m_follows_reference_printer
+       ? get_context ().get_reference_printer ()
+       : m_printer.get ());
+  const bool show_color = pp_show_color (copy_from_pp);
+  const diagnostic_url_format url_format = copy_from_pp->get_url_format ();
+
+  m_printer = get_context ().clone_printer ();
+
+  pp_show_color (m_printer.get ()) = show_color;
+  m_printer->set_url_format (url_format);
+  // ...etc
+
+  m_source_printing = get_context ().m_source_printing;
 }
 
 /* If DIAGNOSTIC has a CWE identifier, print it.
@@ -213,3 +576,159 @@ print_option_information (const diagnostic_info &diagnostic,
       free (option_text);
     }
 }
+
+/* Only dump the "In file included from..." stack once for each file.  */
+
+bool
+diagnostic_text_output_format::includes_seen_p (const line_map_ordinary *map)
+{
+  /* No include path for main.  */
+  if (MAIN_FILE_P (map))
+    return true;
+
+  /* Always identify C++ modules, at least for now.  */
+  auto probe = map;
+  if (linemap_check_ordinary (map)->reason == LC_RENAME)
+    /* The module source file shows up as LC_RENAME inside LC_MODULE.  */
+    probe = linemap_included_from_linemap (line_table, map);
+  if (MAP_MODULE_P (probe))
+    return false;
+
+  if (!m_includes_seen)
+    m_includes_seen = new hash_set<location_t, false, location_hash>;
+
+  /* Hash the location of the #include directive to better handle files
+     that are included multiple times with different macros defined.  */
+  return m_includes_seen->add (linemap_included_from (map));
+}
+
+label_text
+diagnostic_text_output_format::
+get_location_text (const expanded_location &s) const
+{
+  diagnostic_column_policy column_policy (get_context ());
+  return column_policy.get_location_text (s,
+					  show_column_p (),
+					  pp_show_color (get_printer ()));
+}
+
+/* Helpers for writing lang-specific starters/finalizers for text output.  */
+
+/* Return a formatted line and column ':%line:%column'.  Elided if
+   line == 0 or col < 0.  (A column of 0 may be valid due to the
+   -fdiagnostics-column-origin option.)
+   The result is a statically allocated buffer.  */
+
+const char *
+maybe_line_and_column (int line, int col)
+{
+  static char result[32];
+
+  if (line)
+    {
+      size_t l
+	= snprintf (result, sizeof (result),
+		    col >= 0 ? ":%d:%d" : ":%d", line, col);
+      gcc_checking_assert (l < sizeof (result));
+    }
+  else
+    result[0] = 0;
+  return result;
+}
+
+void
+diagnostic_text_output_format::report_current_module (location_t where)
+{
+  pretty_printer *pp = get_printer ();
+  const line_map_ordinary *map = NULL;
+
+  if (pp_needs_newline (pp))
+    {
+      pp_newline (pp);
+      pp_needs_newline (pp) = false;
+    }
+
+  if (where <= BUILTINS_LOCATION)
+    return;
+
+  linemap_resolve_location (line_table, where,
+			    LRK_MACRO_DEFINITION_LOCATION,
+			    &map);
+
+  if (map && m_last_module != map)
+    {
+      m_last_module = map;
+      if (!includes_seen_p (map))
+	{
+	  bool first = true, need_inc = true, was_module = MAP_MODULE_P (map);
+	  expanded_location s = {};
+	  do
+	    {
+	      where = linemap_included_from (map);
+	      map = linemap_included_from_linemap (line_table, map);
+	      bool is_module = MAP_MODULE_P (map);
+	      s.file = LINEMAP_FILE (map);
+	      s.line = SOURCE_LINE (map, where);
+	      int col = -1;
+	      if (first && show_column_p ())
+		{
+		  s.column = SOURCE_COLUMN (map, where);
+		  col = get_column_policy ().converted_column (s);
+		}
+	      const char *line_col = maybe_line_and_column (s.line, col);
+	      static const char *const msgs[] =
+		{
+		 NULL,
+		 N_("                 from"),
+		 N_("In file included from"),	/* 2 */
+		 N_("        included from"),
+		 N_("In module"),		/* 4 */
+		 N_("of module"),
+		 N_("In module imported at"),	/* 6 */
+		 N_("imported at"),
+		};
+
+	      unsigned index = (was_module ? 6 : is_module ? 4
+				: need_inc ? 2 : 0) + !first;
+
+	      pp_verbatim (pp, "%s%s %r%s%s%R",
+			   first ? "" : was_module ? ", " : ",\n",
+			   _(msgs[index]),
+			   "locus", s.file, line_col);
+	      first = false, need_inc = was_module, was_module = is_module;
+	    }
+	  while (!includes_seen_p (map));
+	  pp_verbatim (pp, ":");
+	  pp_newline (pp);
+	}
+    }
+}
+
+void
+default_diagnostic_text_starter (diagnostic_text_output_format &text_output,
+				 const diagnostic_info *diagnostic)
+{
+  text_output.report_current_module (diagnostic_location (diagnostic));
+  pretty_printer *const pp = text_output.get_printer ();
+  pp_set_prefix (pp, text_output.build_prefix (*diagnostic));
+}
+
+void
+default_diagnostic_text_finalizer (diagnostic_text_output_format &text_output,
+				   const diagnostic_info *diagnostic,
+				   diagnostic_t)
+{
+  pretty_printer *const pp = text_output.get_printer ();
+  char *saved_prefix = pp_take_prefix (pp);
+  pp_set_prefix (pp, NULL);
+  pp_newline (pp);
+  diagnostic_show_locus (&text_output.get_context (),
+			 text_output.get_source_printing_options (),
+			 diagnostic->richloc, diagnostic->kind, pp);
+  pp_set_prefix (pp, saved_prefix);
+  pp_flush (pp);
+}
+
+#if __GNUC__ >= 10
+#  pragma GCC diagnostic pop
+#endif

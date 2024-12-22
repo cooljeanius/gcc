@@ -1859,7 +1859,7 @@ s390_canonicalize_comparison (int *code, rtx *op0, rtx *op1,
       && CONST_INT_P (XEXP (*op0, 1))
       && CONST_INT_P (*op1)
       && INTVAL (XEXP (*op0, 1)) == -3
-      && *code == EQ)
+      && (*code == EQ || *code == NE))
     {
       if (INTVAL (*op1) == 0)
 	{
@@ -11342,13 +11342,6 @@ s390_can_change_mode_class (machine_mode from_mode,
   return true;
 }
 
-/* Return true if we use LRA instead of reload pass.  */
-static bool
-s390_lra_p (void)
-{
-  return s390_lra_flag;
-}
-
 /* Return true if register FROM can be eliminated via register TO.  */
 
 static bool
@@ -18444,9 +18437,6 @@ s390_c_mode_for_floating_type (enum tree_index ti)
 #undef TARGET_LEGITIMATE_CONSTANT_P
 #define TARGET_LEGITIMATE_CONSTANT_P s390_legitimate_constant_p
 
-#undef TARGET_LRA_P
-#define TARGET_LRA_P s390_lra_p
-
 #undef TARGET_CAN_ELIMINATE
 #define TARGET_CAN_ELIMINATE s390_can_eliminate
 
@@ -18576,6 +18566,9 @@ s390_c_mode_for_floating_type (enum tree_index ti)
 
 #undef TARGET_C_MODE_FOR_FLOATING_TYPE
 #define TARGET_C_MODE_FOR_FLOATING_TYPE s390_c_mode_for_floating_type
+
+#undef TARGET_DOCUMENTATION_NAME
+#define TARGET_DOCUMENTATION_NAME "S/390"
 
 struct gcc_target targetm = TARGET_INITIALIZER;
 

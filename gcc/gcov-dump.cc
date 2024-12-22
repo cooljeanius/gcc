@@ -299,8 +299,8 @@ dump_gcov_file (const char *filename)
       gcov_sync (base, length);
       if ((error = gcov_is_error ()))
 	{
-	  printf (error < 0 ? "%s:counter overflow at %lu\n" :
-		  "%s:read error at %lu\n", filename,
+	  printf (error < 0 ? "%s:counter overflow at %lu\n"
+		  : "%s:read error at %lu\n", filename,
 		  (long unsigned) gcov_position ());
 	  break;
 	}
@@ -326,7 +326,7 @@ tag_function (const char *filename ATTRIBUTE_UNUSED,
       if (gcov_position () - pos < (gcov_position_t) length)
 	{
 	  const char *name;
-	  
+
 	  name = gcov_read_string ();
 	  printf (", `%s'", name ? name : "NULL");
 	  unsigned artificial = gcov_read_unsigned ();
@@ -381,7 +381,7 @@ tag_arcs (const char *filename ATTRIBUTE_UNUSED,
 	  if (flags)
 	    {
 	      char c = '(';
-	      
+
 	      if (flags & GCOV_ARC_ON_TREE)
 		printf ("%ctree", c), c = ',';
 	      if (flags & GCOV_ARC_FAKE)

@@ -119,6 +119,7 @@ int gfc_default_character_kind;
 int gfc_default_logical_kind;
 int gfc_default_complex_kind;
 int gfc_c_int_kind;
+int gfc_c_uint_kind;
 int gfc_c_intptr_kind;
 int gfc_atomic_int_kind;
 int gfc_atomic_logical_kind;
@@ -226,6 +227,26 @@ get_int_kind_from_name (const char *name)
   return get_int_kind_from_node (get_typenode_from_name (name));
 }
 
+static int
+get_unsigned_kind_from_node (tree type)
+{
+  int i;
+
+  if (!type)
+    return -2;
+
+  for (i = 0; gfc_unsigned_kinds[i].kind != 0; i++)
+    if (gfc_unsigned_kinds[i].bit_size == TYPE_PRECISION (type))
+      return gfc_unsigned_kinds[i].kind;
+
+  return -1;
+}
+
+static int
+get_uint_kind_from_name (const char *name)
+{
+  return get_unsigned_kind_from_node (get_typenode_from_name (name));
+}
 
 /* Get the kind number corresponding to an integer of given size,
    following the required return values for ISO_FORTRAN_ENV INT* constants:
@@ -243,6 +264,26 @@ gfc_get_int_kind_from_width_isofortranenv (int size)
   /* Look for a kind with larger storage size.  */
   for (i = 0; gfc_integer_kinds[i].kind != 0; i++)
     if (gfc_integer_kinds[i].bit_size > size)
+      return -2;
+
+  return -1;
+}
+
+/* Same, but for unsigned.  */
+
+int
+gfc_get_uint_kind_from_width_isofortranenv (int size)
+{
+  int i;
+
+  /* Look for a kind with matching storage size.  */
+  for (i = 0; gfc_unsigned_kinds[i].kind != 0; i++)
+    if (gfc_unsigned_kinds[i].bit_size == size)
+      return gfc_unsigned_kinds[i].kind;
+
+  /* Look for a kind with larger storage size.  */
+  for (i = 0; gfc_unsigned_kinds[i].kind != 0; i++)
+    if (gfc_unsigned_kinds[i].bit_size > size)
       return -2;
 
   return -1;
@@ -312,6 +353,18 @@ get_int_kind_from_minimal_width (int size)
   return -2;
 }
 
+static int
+get_uint_kind_from_width (int size)
+{
+  int i;
+
+  for (i = 0; gfc_unsigned_kinds[i].kind != 0; i++)
+    if (gfc_integer_kinds[i].bit_size == size)
+      return gfc_integer_kinds[i].kind;
+
+  return -2;
+}
+
 
 /* Generate the CInteropKind_t objects for the C interoperable
    kinds.  */
@@ -333,6 +386,10 @@ gfc_init_c_interop_kinds (void)
 #define NAMED_INTCST(a,b,c,d) \
   strncpy (c_interop_kinds_table[a].name, b, strlen(b) + 1); \
   c_interop_kinds_table[a].f90_type = BT_INTEGER; \
+  c_interop_kinds_table[a].value = c;
+#define NAMED_UINTCST(a,b,c,d) \
+  strncpy (c_interop_kinds_table[a].name, b, strlen(b) + 1); \
+  c_interop_kinds_table[a].f90_type = BT_UNSIGNED; \
   c_interop_kinds_table[a].value = c;
 #define NAMED_REALCST(a,b,c,d) \
   strncpy (c_interop_kinds_table[a].name, b, strlen(b) + 1); \
@@ -745,6 +802,9 @@ gfc_init_kinds (void)
 
   /* Pick a kind the same size as the C "int" type.  */
   gfc_c_int_kind = INT_TYPE_SIZE / 8;
+
+  /* UNSIGNED has the same as INT.  */
+  gfc_c_uint_kind = gfc_c_int_kind;
 
   /* Choose atomic kinds to match C's int.  */
   gfc_atomic_int_kind = gfc_c_int_kind;
@@ -1651,7 +1711,12 @@ gfc_get_dtype_rank_type (int rank, tree etype)
 	  && TYPE_STRING_FLAG (ptype))
 	n = BT_CHARACTER;
       else
-	n = BT_INTEGER;
+	{
+	  if (TYPE_UNSIGNED (etype))
+	    n = BT_UNSIGNED;
+	  else
+	    n = BT_INTEGER;
+	}
       break;
 
     case BOOLEAN_TYPE:
@@ -2671,10 +2736,10 @@ gfc_get_union_type (gfc_symbol *un)
         /* The map field's declaration. */
         map_field = gfc_add_field_to_struct(typenode, get_identifier(map->name),
                                             map_type, &chain);
-        if (map->loc.lb)
-          gfc_set_decl_location (map_field, &map->loc);
-        else if (un->declared_at.lb)
-          gfc_set_decl_location (map_field, &un->declared_at);
+	if (GFC_LOCUS_IS_SET (map->loc))
+	  gfc_set_decl_location (map_field, &map->loc);
+	else if (GFC_LOCUS_IS_SET (un->declared_at))
+	  gfc_set_decl_location (map_field, &un->declared_at);
 
         DECL_PACKED (map_field) |= TYPE_PACKED (typenode);
         DECL_NAMELESS(map_field) = true;
@@ -2752,7 +2817,7 @@ gfc_get_derived_type (gfc_symbol * derived, int codimen)
   tree *chain = NULL;
   bool got_canonical = false;
   bool unlimited_entity = false;
-  gfc_component *c, *last_c = nullptr;
+  gfc_component *c;
   gfc_namespace *ns;
   tree tmp;
   bool coarray_flag, class_coarray_flag;
@@ -3050,9 +3115,9 @@ gfc_get_derived_type (gfc_symbol * derived, int codimen)
       field = gfc_add_field_to_struct (typenode,
 				       get_identifier (c->name),
 				       field_type, &chain);
-      if (c->loc.lb)
+      if (GFC_LOCUS_IS_SET (c->loc))
 	gfc_set_decl_location (field, &c->loc);
-      else if (derived->declared_at.lb)
+      else if (GFC_LOCUS_IS_SET (derived->declared_at))
 	gfc_set_decl_location (field, &derived->declared_at);
 
       gfc_finish_decl_attrs (field, &c->attr);
@@ -3062,16 +3127,12 @@ gfc_get_derived_type (gfc_symbol * derived, int codimen)
       gcc_assert (field);
       /* Overwrite for class array to supply different bounds for different
 	 types.  */
-      if (class_coarray_flag || !c->backend_decl)
+      if (class_coarray_flag || !c->backend_decl || c->attr.caf_token)
 	c->backend_decl = field;
-      if (c->attr.caf_token && last_c)
-	last_c->caf_token = field;
 
       if (c->attr.pointer && (c->attr.dimension || c->attr.codimension)
 	  && !(c->ts.type == BT_DERIVED && strcmp (c->name, "_data") == 0))
 	GFC_DECL_PTR_ARRAY_P (c->backend_decl) = 1;
-
-      last_c = c;
     }
 
   /* Now lay out the derived type, including the fields.  */
@@ -3097,24 +3158,24 @@ gfc_get_derived_type (gfc_symbol * derived, int codimen)
 
 copy_derived_types:
 
-  for (c = derived->components; c; c = c->next)
-    {
-      /* Do not add a caf_token field for class container components.  */
-      if ((codimen || coarray_flag)
-	  && !c->attr.dimension && !c->attr.codimension
-	  && (c->attr.allocatable || c->attr.pointer)
-	  && !derived->attr.is_class)
-	{
-	  /* Provide sufficient space to hold "_caf_symbol".  */
-	  char caf_name[GFC_MAX_SYMBOL_LEN + 6];
-	  gfc_component *token;
-	  snprintf (caf_name, sizeof (caf_name), "_caf_%s", c->name);
-	  token = gfc_find_component (derived, caf_name, true, true, NULL);
-	  gcc_assert (token);
-	  c->caf_token = token->backend_decl;
-	  suppress_warning (c->caf_token);
-	}
-    }
+  if (!derived->attr.vtype)
+    for (c = derived->components; c; c = c->next)
+      {
+	/* Do not add a caf_token field for class container components.  */
+	if ((codimen || coarray_flag) && !c->attr.dimension
+	    && !c->attr.codimension && (c->attr.allocatable || c->attr.pointer)
+	    && !derived->attr.is_class)
+	  {
+	    /* Provide sufficient space to hold "_caf_symbol".  */
+	    char caf_name[GFC_MAX_SYMBOL_LEN + 6];
+	    gfc_component *token;
+	    snprintf (caf_name, sizeof (caf_name), "_caf_%s", c->name);
+	    token = gfc_find_component (derived, caf_name, true, true, NULL);
+	    gcc_assert (token);
+	    gfc_comp_caf_token (c) = token->backend_decl;
+	    suppress_warning (gfc_comp_caf_token (c));
+	  }
+      }
 
   for (gfc_symbol *dt = gfc_derived_types; dt; dt = dt->dt_next)
     {

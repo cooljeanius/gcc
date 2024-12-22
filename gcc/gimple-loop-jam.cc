@@ -18,7 +18,6 @@ along with GCC; see the file COPYING3.  If not see
 <http://www.gnu.org/licenses/>.  */
 
 #include "config.h"
-#define INCLUDE_MEMORY
 #include "system.h"
 #include "coretypes.h"
 #include "tree-pass.h"
@@ -43,7 +42,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "tree-cfgcleanup.h"
 
 /* Unroll and Jam transformation
-   
+
    This is a combination of two transformations, where the second
    is not always valid.  It's applicable if a loop nest has redundancies
    over the iterations of an outer loop while not having that with
@@ -452,7 +451,7 @@ adjust_unroll_factor (class loop *inner, struct data_dependence_relation *ddr,
 		       1 0 0 w a[0][0] b[0][0]
 		       4 1 0 r a[2][0] b[2][0]
 		       5 1 0 w a[1][0] b[1][0]
-		       2 0 1 r a[1][0] b[1][1]  
+		       2 0 1 r a[1][0] b[1][1]
 		       3 0 1 w a[0][0] b[0][1]
 		     Note how access 2 accesses the same element as access 5
 		     for array 'a' but not for array 'b'.  */

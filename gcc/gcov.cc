@@ -32,7 +32,6 @@ along with Gcov; see the file COPYING3.  If not see
 
 #include "config.h"
 #define INCLUDE_ALGORITHM
-#define INCLUDE_MEMORY
 #define INCLUDE_VECTOR
 #define INCLUDE_STRING
 #define INCLUDE_MAP
@@ -2733,7 +2732,7 @@ format_gcov (gcov_type top, gcov_type bottom, int decimal_places)
 
   if (decimal_places >= 0)
     {
-      float ratio = bottom ? 100.0f * top / bottom: 0;
+      float ratio = bottom ? 100.0f * top / bottom : 0;
 
       /* Round up to 1% if there's a small non-zero value.  */
       if (ratio > 0.0f && ratio < 0.5f && decimal_places == 0)

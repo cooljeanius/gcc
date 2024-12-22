@@ -365,12 +365,14 @@
 (define_insn "nop"
   [(const_int 0)]
   ""
-  "nop")
+  "nop"
+  [(set_attr "dest_regfile" "unknown")])
 
 (define_insn "nop_count"
   [(unspec [(match_operand 0 "const_int_operand" "n")] UNSPEC_NOP)]
   ""
-  "%|%.\\tnop\\t%0")
+  "%|%.\\tnop\\t%0"
+  [(set_attr "dest_regfile" "unknown")])
 
 ;; -------------------------------------------------------------------------
 ;; Move instructions
@@ -3082,7 +3084,7 @@
 ;; Widening vector multiply and dot product.
 ;; See c6x-mult.md.in for the define_insn patterns
 
-(define_expand "sdot_prodv2hi"
+(define_expand "sdot_prodsiv2hi"
   [(match_operand:SI 0 "register_operand" "")
    (match_operand:V2HI 1 "register_operand" "")
    (match_operand:V2HI 2 "register_operand" "")

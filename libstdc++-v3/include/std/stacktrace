@@ -24,7 +24,9 @@
 #ifndef _GLIBCXX_STACKTRACE
 #define _GLIBCXX_STACKTRACE 1
 
+#ifdef _GLIBCXX_SYSHDR
 #pragma GCC system_header
+#endif
 
 #include <bits/requires_hosted.h> // std::string bound
 
@@ -293,7 +295,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 		       const allocator_type& __alloc) noexcept
       : _M_alloc(__alloc)
       {
-	if constexpr (_Allocator::is_always_equal::value)
+	if constexpr (_AllocTraits::is_always_equal::value)
 	  _M_impl = std::__exchange(__other._M_impl, {});
 	else if (_M_alloc == __other._M_alloc)
 	  _M_impl = std::__exchange(__other._M_impl, {});
@@ -558,7 +560,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	      if constexpr (is_same_v<allocator_type, allocator<value_type>>)
 		{
 		  // For std::allocator we use nothrow-new directly so we
-		  // don't need to handle bad_alloc exceptions.
+		  // don't need to handle exceptions from __alloc.allocate(n).
 		  auto __p = __detail::__get_temporary_buffer<value_type>(__n);
 		  if (__p == nullptr) [[unlikely]]
 		    return nullptr;
@@ -570,7 +572,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 		    {
 		      _M_frames = __alloc.allocate(__n);
 		    }
-		  __catch (const std::bad_alloc&)
+		  __catch (...)
 		    {
 		      return nullptr;
 		    }
@@ -599,8 +601,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	void
 	_M_resize(size_type __n, allocator_type& __alloc) noexcept
 	{
-	  for (size_type __i = __n; __i < _M_size; ++__i)
-	    _AllocTraits::destroy(__alloc, &_M_frames[__i]);
+	  std::_Destroy(_M_frames + __n, _M_frames + _M_size, __alloc);
 	  _M_size = __n;
 	}
 

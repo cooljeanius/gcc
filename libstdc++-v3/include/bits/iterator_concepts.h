@@ -30,7 +30,9 @@
 #ifndef _ITERATOR_CONCEPTS_H
 #define _ITERATOR_CONCEPTS_H 1
 
+#ifdef _GLIBCXX_SYSHDR
 #pragma GCC system_header
+#endif
 
 #if __cplusplus >= 202002L
 #include <concepts>
@@ -331,10 +333,12 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	    typename incrementable_traits<_Iter>::difference_type>;
 	};
 
+    // _GLIBCXX_RESOLVE_LIB_DEFECTS
+    // 3798. Rvalue reference and iterator_category
     template<typename _Iter>
       concept __cpp17_fwd_iterator = __cpp17_input_iterator<_Iter>
 	&& constructible_from<_Iter>
-	&& is_lvalue_reference_v<iter_reference_t<_Iter>>
+	&& is_reference_v<iter_reference_t<_Iter>>
 	&& same_as<remove_cvref_t<iter_reference_t<_Iter>>,
 		   typename indirectly_readable_traits<_Iter>::value_type>
 	&& requires(_Iter __it)
@@ -828,6 +832,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       using _Proj = typename _Tp::__projected_Proj;
       using type = invoke_result_t<_Proj&, __indirect_value_t<_Iter>>;
     };
+
+#if __glibcxx_algorithm_default_value_type // C++ >= 26
+  template<indirectly_readable _Iter,
+	   indirectly_regular_unary_invocable<_Iter> _Proj>
+    using projected_value_t
+	= remove_cvref_t<invoke_result_t<_Proj&, iter_value_t<_Iter>&>>;
+#endif
 
   // [alg.req], common algorithm requirements
 

@@ -403,6 +403,13 @@ typedef GFC_ARRAY_DESCRIPTOR (index_type) gfc_array_index_type;
 #ifdef HAVE_GFC_INTEGER_16
 typedef GFC_ARRAY_DESCRIPTOR (GFC_INTEGER_16) gfc_array_i16;
 #endif
+typedef GFC_ARRAY_DESCRIPTOR (GFC_UINTEGER_1) gfc_array_m1;
+typedef GFC_ARRAY_DESCRIPTOR (GFC_UINTEGER_2) gfc_array_m2;
+typedef GFC_ARRAY_DESCRIPTOR (GFC_UINTEGER_4) gfc_array_m4;
+typedef GFC_ARRAY_DESCRIPTOR (GFC_UINTEGER_8) gfc_array_m8;
+#ifdef HAVE_GFC_UINTEGER_16
+typedef GFC_ARRAY_DESCRIPTOR (GFC_UINTEGER_16) gfc_array_m16;
+#endif
 typedef GFC_ARRAY_DESCRIPTOR (GFC_REAL_4) gfc_array_r4;
 typedef GFC_ARRAY_DESCRIPTOR (GFC_REAL_8) gfc_array_r8;
 #ifdef HAVE_GFC_REAL_10
@@ -978,6 +985,9 @@ extern char * filename_from_unit (int);
 internal_proto(filename_from_unit);
 
 /* stop.c */
+
+extern void report_exception (void);
+iexport_proto (report_exception);
 
 extern _Noreturn void stop_string (const char *, size_t, bool);
 export_proto(stop_string);

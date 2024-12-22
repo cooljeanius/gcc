@@ -1,3 +1,1602 @@
+2024-12-20  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c++/110345
+	* tree.cc (handle_maybe_unused_attribute): New function.
+	(std_attributes): Use handle_maybe_unused_attribute instead
+	of handle_unused_attribute for maybe_unused attribute.
+
+2024-12-20  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c++/110345
+	* parser.cc (cp_parser_std_attribute): Don't transform
+	[[deprecated]] into [[gnu::deprecated]].
+	* tree.cc (handle_std_deprecated_attribute): New function.
+	(std_attributes): Add deprecated entry.
+
+2024-12-20  Nathaniel Shead  <nathanieloshead@gmail.com>
+
+	PR c++/116401
+	* decl.cc (grokfndecl): Mark deduction guides as 'inline'.
+	* module.cc (check_module_decl_linkage): Implement checks for
+	non-inline external linkage definitions in headers.
+
+2024-12-20  Nathaniel Shead  <nathanieloshead@gmail.com>
+
+	* cp-tree.h (check_module_decl_linkage): Declare.
+	* decl2.cc (finish_static_data_member_decl): Check linkage.
+	* module.cc (set_originating_module): Adjust comment.
+	(check_module_decl_linkage): New function.
+	* name-lookup.cc (do_namespace_alias): Build alias with
+	specified location, check linkage.
+	(pushtag): Check linkage.
+	(push_namespace): Slightly clarify error message.
+	* name-lookup.h (do_namespace_alias): Add location parameter.
+	* parser.cc (cp_parser_namespace_alias_definition): Pass
+	identifier location to do_namespace_alias.
+	(cp_parser_alias_declaration): Check linkage.
+	(cp_parser_init_declarator): Check linkage.
+	(cp_parser_function_definition_after_declarator): Check linkage.
+	(cp_parser_save_member_function_body): Check linkage.
+	* pt.cc (finish_concept_definition): Mark as public, check
+	linkage.
+
+2024-12-20  Nathaniel Shead  <nathanieloshead@gmail.com>
+
+	* module.cc (depset::hash::add_binding_entity): Also walk
+	unnamed namespaces.
+	(module_state::write_namespaces): Adjust assertion.
+	* name-lookup.cc (push_namespace): Move anon using-directive
+	handling to...
+	(make_namespace_finish): ...here.
+
+2024-12-20  Nathaniel Shead  <nathanieloshead@gmail.com>
+
+	* cp-objcp-common.cc (cp_tree_size): Add TU_LOCAL_ENTITY.
+	* cp-tree.def (TU_LOCAL_ENTITY): New tree code.
+	* cp-tree.h (DECL_TEMPLATE_INSTANTIATIONS): Update comment.
+	(struct tree_tu_local_entity): New type.
+	(TU_LOCAL_ENTITY_NAME): New accessor.
+	(TU_LOCAL_ENTITY_LOCATION): New accessor.
+	(enum cp_tree_node_structure_enum): Add TS_CP_TU_LOCAL_ENTITY.
+	(union GTY): Add tu_local_entity field.
+	* module.cc (enum tree_tag): New flag DB_REFS_TU_LOCAL_BIT.
+	(depset::has_defn): Override for TU-local entities.
+	(depset::refs_tu_local): New accessor.
+	(depset::hash::ignore_tu_local): New field.
+	(depset::hash::hash): Initialize it.
+	(trees_out::tree_tag::tt_tu_local): New flag.
+	(trees_out::writing_local_entities): New field.
+	(trees_out::is_initial_scan): New function.
+	(trees_out::tu_local_count): New counter.
+	(trees_out::trees_out): Initialize writing_local_entities.
+	(dumper::impl::nested_name): Handle TU_LOCAL_ENTITY.
+	(trees_out::instrument): Report TU-local entity counts.
+	(trees_out::decl_value): Early exit for TU-local entities.
+	(trees_in::decl_value): Handle typedefs of TU-local entities.
+	(trees_out::decl_node): Adjust assertion to cope with early exit
+	of TU-local deps.  Always write TU-local entities by value.
+	(trees_out::type_node): Handle TU-local types.
+	(trees_out::has_tu_local_dep): New function.
+	(trees_out::find_tu_local_decl): New function.
+	(trees_out::tree_node): Intercept TU-local entities and write
+	placeholder values for them instead of normal streaming.
+	(trees_in::tree_node): Handle TU-local entities and TU-local
+	template results.
+	(trees_out::write_function_def): Ignore exposures in non-inline
+	function bodies.
+	(trees_out::write_var_def): Ignore exposures in initializers.
+	(trees_out::write_class_def): Ignore exposures in friend decls.
+	(trees_in::read_class_def): Skip TU-local friends.
+	(trees_out::write_definition): Record whether we're writing a
+	decl which refers to TU-local entities.
+	(depset::hash::add_dependency): Only mark as exposure if we're not
+	ignoring TU-local entities.
+	(depset::hash::find_dependencies): Use depset's own is_key_order
+	function rather than delegating via walker.  Pass whether the
+	decl has ignored TU-local entities in its definition.
+	(template_has_explicit_inst): New function.
+	(depset::hash::finalize_dependencies): Implement new warning
+	Wtemplate-names-tu-local.
+	(module_state::intercluster_seed): Don't seed TU-local deps.
+	(module_state::write_cluster): Pass whether the decl has ignored
+	TU-local entities in its definition.
+	* pt.cc (register_specialization): Always register in a module.
+	(complain_about_tu_local_entity): New function.
+	(expr_contains_tu_local_entity): New function.
+	(function_contains_tu_local_entity): New function.
+	(instantiate_class_template): Skip TU-local friends.
+	(tsubst_decl): Handle typedefs of TU-local entities.
+	(tsubst): Complain about TU-local entities.
+	(dependent_operand_p): Early exit for TU-local entities so we
+	don't attempt to constant-evaluate them.
+	(tsubst_expr): Detect and complain about TU-local entities.
+
+2024-12-20  Nathaniel Shead  <nathanieloshead@gmail.com>
+
+	* tree.cc (decl_linkage): Treat DECL_SELF_REFERENCE_P like
+	DECL_IMPLICIT_TYPEDEF_P.
+	* name-lookup.cc (do_namespace_alias): Fix linkage.
+	* module.cc (DB_IS_INTERNAL_BIT): Rename to...
+	(DB_TU_LOCAL_BIT): ...this.
+	(DB_REFS_INTERNAL_BIT): Rename to...
+	(DB_EXPOSURE_BIT): ...this.
+	(depset::hash::is_internal): Rename to...
+	(depset::hash::is_tu_local): ...this.
+	(depset::hash::refs_internal): Rename to...
+	(depset::hash::is_exposure): ...this.
+	(depset::hash::is_tu_local_entity): New function.
+	(depset::hash::has_tu_local_tmpl_arg): New function.
+	(depset::hash::is_tu_local_value): New function.
+	(depset::hash::make_dependency): Check for TU-local entities.
+	(depset::hash::add_dependency): Make current an exposure
+	whenever it references a TU-local entity.
+	(depset::hash::add_binding_entity): Don't create bindings for
+	any TU-local entity.
+	(depset::hash::finalize_dependencies): Rename flags and adjust
+	diagnostic messages to report exposures of TU-local entities.
+	(depset::tarjan::connect): Don't include any TU-local depsets.
+	(depset::hash::connect): Likewise.
+
+2024-12-19  Patrick Palka  <ppalka@redhat.com>
+
+	PR c++/118069
+	* constraint.cc (atom_hasher): Define here, instead of ...
+	* cp-tree.h (atom_hasher): ... here.
+	* logic.cc (clause::m_set): Use pointer instead of structural
+	hashing.
+
+2024-12-19  Patrick Palka  <ppalka@redhat.com>
+
+	PR c++/118069
+	* logic.cc (dnf_size_r): Use HOST_WIDE_INT instead of int, and
+	handle overflow gracefully via add_sat_hwi and mul_sat_hwi.
+	(cnf_size_r): Likewise.
+	(dnf_size): Use HOST_WIDE_INT instead of int.
+	(cnf_size): Likewise.
+
+2024-12-19  Marek Polacek  <polacek@redhat.com>
+	    Jason Merrill  <jason@redhat.com>
+
+	PR c++/117980
+	* constexpr.cc (cxx_eval_outermost_constant_expr): If there's
+	an object to initialize, take its type.  Don't set the type
+	in the constexpr dtor case.
+
+2024-12-18  Jakub Jelinek  <jakub@redhat.com>
+
+	* parser.cc (cp_lexer_new_main): Attempt to optimize large sequences
+	of CPP_NUMBER with int type and values 0-255 separated by CPP_COMMA
+	into CPP_EMBED with RAW_DATA_CST u.value.
+
+2024-12-18  Tobias Burnus  <tburnus@baylibre.com>
+
+	* decl.cc (omp_declare_variant_finalize_one): Handle
+	append_args.
+	* parser.cc (cp_parser_omp_clause_init_modifiers): New;
+	split of from ...
+	(cp_parser_omp_clause_init):  ... here; call it.
+	(cp_parser_omp_all_clauses): Replace interop parsing by
+	a call to ...
+	(cp_parser_omp_clause_interop): ... this new function;
+	set tree used/read.
+	(cp_finish_omp_declare_variant): Parse 'append_args' clause.
+	(cp_parser_omp_declare): Update comment.
+	* pt.cc (tsubst_attribute, tsubst_omp_clauses): Handle template
+	substitution also for declare variant's append_args clause,
+	using for 'init' the same code as for interop's init clause.
+
+2024-12-18  Jakub Jelinek  <jakub@redhat.com>
+
+	* parser.cc (cp_parser_postfix_expression): Use
+	type_id_in_expr_sentinel instead of manually saving+setting/restoring
+	parser->in_type_id_in_expr_p around cp_parser_type_id calls.
+	(cp_parser_has_attribute_expression): Likewise.
+	(cp_parser_cast_expression): Likewise.
+	(cp_parser_sizeof_operand): Likewise.
+
+2024-12-18  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c++/110345
+	* cp-tree.h (enum cp_tree_index): Add CPTI_INTERNAL_IDENTIFIER.
+	(internal_identifier): Define.
+	(internal_attribute_table): Declare.
+	* parser.cc (cp_parser_exception_declaration): Error on alignas
+	on exception declaration.
+	(cp_parser_std_attribute_spec): Turn alignas into internal
+	ns aligned attribute rather than gnu.
+	* decl.cc (initialize_predefined_identifiers): Initialize
+	internal_identifier.
+	* tree.cc (handle_alignas_attribute): New function.
+	(internal_attributes): New variable.
+	(internal_attribute_table): Likewise.
+	* cp-objcp-common.h (cp_objcp_attribute_table): Add
+	internal_attribute_table entry.
+
+2024-12-18  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c++/110345
+	* parser.cc (cp_parser_type_specifier_seq): Chain cxx11_attribute_p
+	attributes after any type specifier in the is_declaration case
+	to std_attributes rather than attributes.  Set also ds_attribute
+	or ds_std_attribute locations if not yet set.
+	(cp_parser_exception_declaration): Pass &type_specifiers.attributes
+	instead of NULL as last argument, call cp_decl_attributes.
+
+2024-12-18  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c++/110345
+	* decl.cc (check_tag_decl): Diagnose std_attributes.
+
+2024-12-18  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c++/110345
+	* parser.cc (cp_parser_decl_specifier_seq): Call
+	warn_misplaced_attr_for_class_type for all OVERLOAD_TYPE_P
+	types, not just CLASS_TYPE_P.  When not calling
+	warn_misplaced_attr_for_class_type, don't clear attrs and
+	add it to decl_specs->std_attributes instead.
+
+2024-12-18  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c/41045
+	* semantics.cc (finish_asm_stmt): Reject - constraint modifier inside
+	of a function.
+
+2024-12-18  Jakub Jelinek  <jakub@redhat.com>
+
+	* semantics.cc (finish_asm_stmt): Diagnose invalid ":" constraint
+	uses.
+
+2024-12-18  Lewis Hyatt  <lhyatt@gmail.com>
+
+	PR c++/117970
+	* module.cc (module_state::read_ordinary_maps): Change argument to
+	line_map_uint_t instead of unsigned int.
+
+2024-12-17  Marek Polacek  <polacek@redhat.com>
+
+	PR c++/118073
+	* error.cc (dump_expr) <case NONTYPE_ARGUMENT_PACK>: New case.
+
+2024-12-17  Marek Polacek  <polacek@redhat.com>
+
+	PR c++/117985
+	* init.cc (build_vec_init): Pop CLEANUP_FLAGS if we're not
+	generating the loop.
+
+2024-12-17  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c++/116108
+	* decl.cc (grokdeclarator): Pass TYYPE_MAIN_VARIANT (type)
+	rather than type to same_type_p when checking if the non-static
+	data member doesn't have current class type.
+
+2024-12-16  David Malcolm  <dmalcolm@redhat.com>
+
+	PR sarif-replay/117943
+	* error.cc (auto_context_line::~auto_context_line): Use
+	source-printing options from text_output.
+
+2024-12-15  Iain Sandoe  <iain@sandoe.co.uk>
+
+	* coroutines.cc
+	(cp_coroutine_transform::wrap_original_function_body): Use
+	finish_if_stmt instead of manually applying the same process.
+
+2024-12-15  Iain Sandoe  <iain@sandoe.co.uk>
+
+	* coroutines.cc (expand_one_await_expression): Update the
+	resume index before checking if the coroutine is ready.
+
+2024-12-15  Iain Sandoe  <iain@sandoe.co.uk>
+
+	PR c++/98935
+	* coroutines.cc (register_local_var_uses): Add a pset to the
+	tree walk to avoid visiting the same BIND_EXPR twice.  Make
+	an early exit for cases that the callback does not apply.
+	(cp_coroutine_transform::apply_transforms): Add a pset to the
+	tree walk for register_local_vars.
+
+2024-12-14  Nathaniel Shead  <nathanieloshead@gmail.com>
+
+	PR c++/90321
+	* decl.cc (find_decomp_class_base): Check for decomposing a
+	lambda closure type.  Report base class chains if needed.
+	(cp_finish_decomp): Remove no-longer-needed check.
+
+2024-12-13  Tobias Burnus  <tburnus@baylibre.com>
+
+	* parser.cc (cp_parser_omp_construct, cp_parser_pragma): Reject
+	OpenMP expressions in constexpr functions.
+
+2024-12-12  Tobias Burnus  <tburnus@baylibre.com>
+
+	* parser.cc (OMP_DISPATCH_CLAUSE_MASK): Add has_device_addr clause.
+
+2024-12-11  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c++/117614
+	* constexpr.cc (cxx_eval_store_expression): For stores to
+	DECL_ANON_UNION_VAR_P vars just continue with DECL_VALUE_EXPR
+	of it, without setting evaluated to true or full
+	cxx_eval_constant_expression.
+
+2024-12-11  David Malcolm  <dmalcolm@redhat.com>
+
+	* decl.cc: Add #include "diagnostic-highlight-colors.h"
+	and #include "pretty-print-markup.h".
+	(complain_about_incompatible_declspecs): New.
+	(grokdeclarator): Use it when complaining about both 'signed' and
+	'unsigned', and both 'long' and 'short'.
+
+2024-12-11  David Malcolm  <dmalcolm@redhat.com>
+
+	* call.cc (print_z_candidates): Count the number of
+	candidates and issue a note stating the count at an
+	intermediate nesting level.  Number the individual
+	candidates.
+
+2024-12-10  Arsen Arsenović  <arsen@aarsen.me>
+	    Iain Sandoe  <iain@sandoe.co.uk>
+
+	* coroutines.cc (dump_record_fields): New helper.  Iterates a
+	RECORD_TYPEs TYPE_FIELDS and pretty-prints them.
+	(dmp_str): New.  The lang-coro dump stream.
+	(coro_dump_id): New.  ID of the lang-coro dump.
+	(coro_dump_flags): New.  Flags passed to the lang-coro dump.
+	(coro_maybe_dump_initial_function): New helper.  Prints, if
+	dumping is enabled, the fndecl passed to it as the original
+	function.
+	(coro_maybe_dump_ramp): New.  Prints the ramp function passed to
+	it, if dumping is enabled.
+	(coro_maybe_dump_transformed_functions): New.
+	(cp_coroutine_transform::apply_transforms): Initialize the
+	lang-coro dump.  Call coro_maybe_dump_initial_function on the
+	original function, as well as coro_maybe_dump_ramp, after the
+	transformation into the ramp is finished.
+	(cp_coroutine_transform::finish_transforms): Call
+	coro_maybe_dump_transformed_functions on the built actor and
+	destroy.
+	* cp-objcp-common.cc (cp_register_dumps): Register the coroutine
+	dump.
+	* cp-tree.h (coro_dump_id): Declare as extern.
+	* cxx-pretty-print.cc (pp_cxx_template_parameter): Don't call
+	TREE_TYPE on a TREE_LIST cell.
+	(cxx_pretty_printer::declaration): Handle FIELD_DECL similar to
+	VAR_DECL.
+
+2024-12-10  Marek Polacek  <polacek@redhat.com>
+
+	PR c++/117788
+	* typeck.cc (cp_build_binary_op) <case EQ_EXPR>: Don't check
+	warn_array_compare.  Check tf_warning_or_error instead of just
+	tf_warning.  Maybe return an error_mark_node in C++26.
+	<case LE_EXPR>: Likewise.
+
+2024-12-09  Marek Polacek  <polacek@redhat.com>
+	    Patrick Palka  <ppalka@redhat.com>
+
+	PR c++/116416
+	* cp-gimplify.cc (cp_fold_r) <case TARGET_EXPR>: Try to fold
+	TARGET_EXPR_INITIAL and replace it with the folded result if
+	it's TREE_CONSTANT.
+
+2024-12-09  Matthew Malcomson  <mmalcomson@nvidia.com>
+
+	* call.cc (build_cxx_call):  Pass `complain` parameter to
+	check_builtin_function_arguments.  Take its value from the
+	`tsubst_flags_t` type `complain & tf_error`.
+	* semantics.cc (finish_call_expr):  Pass `complain` parameter to
+	resolve_overloaded_builtin.  Take its value from the
+	`tsubst_flags_t` type `complain & tf_error`.
+
+2024-12-06  David Malcolm  <dmalcolm@redhat.com>
+
+	PR other/116253
+	* call.cc (print_conversion_rejection): Remove leading space from
+	diagnostic messages.
+	(print_conversion_rejection): Likewise.
+	(print_arity_information): Likewise.
+	(print_z_candidate): Likewise.  Add auto_diagnostic_nesting_level
+	before calls to fn_type_unification and diagnose_constraints.
+	(print_z_candidates): Add auto_diagnostic_nesting_level before
+	looping over candidates.
+	(conversion_null_warnings): Remove leading space from
+	diagnostic messages.
+	(maybe_inform_about_fndecl_for_bogus_argument_init): Likewise.
+	* constraint.cc (tsubst_valid_expression_requirement): Add
+	auto_diagnostic_nesting_level when showing why the expression is
+	invalid.
+	(satisfy_disjunction): Likewise when showing operans, and again
+	when replaying each branch of the disjunction.
+	(diagnose_constraints): Likewise when replaying satisfaction.
+	* error.cc (cp_diagnostic_text_starter): Set prefix.
+	(print_instantiation_full_context): Only show the file
+	if we're not showing nesting or the user has opted in to
+	showing location information in nested diagnostics.
+	(class auto_context_line): New.
+	(print_instantiation_partial_context_line): Replace calls to
+	print_location and to diagnostic_show_locus with an
+	auto_context_line.
+	(print_instantiation_partial_context): Replace calls to
+	print_location with an auto_context_line.
+	(maybe_print_constexpr_context): Likewise.
+	(print_constrained_decl_info): Likewise.
+	(print_concept_check_info): Likewise.
+	(print_constraint_context_head): Likewise.
+	(print_requires_expression_info): Likewise.
+
+2024-12-06  David Malcolm  <dmalcolm@redhat.com>
+
+	* cp-gimplify.cc: Include "gcc-urlifier.h".
+	(process_stmt_hotness_attribute): Use auto_urlify_attributes with
+	OPT_Wattributes.
+	* cvt.cc: Include "gcc-urlifier.h".
+	(maybe_warn_nodiscard): Use auto_urlify_attributes with
+	OPT_Wunused_result.
+	* decl.cc: Include "gcc-urlifier.h".
+	(start_decl): Use auto_urlify_attributes.
+	(start_preparsed_function): Likewise.
+
+2024-12-06  David Malcolm  <dmalcolm@redhat.com>
+
+	* name-lookup.cc (suggest_alternative_in_explicit_scope):
+	Gracefully handle non-namespaces, such as scoped enums.
+	* parser.cc (cp_parser_name_lookup_error): Provide
+	a name_hint for the case where we're in an explicit scope.
+	* std-name-hint.gperf: Add <concepts>.
+	* std-name-hint.h: Regenerate.
+
+2024-12-06  David Malcolm  <dmalcolm@redhat.com>
+
+	PR other/116253
+	* error.cc (print_location): Move to earlier in the file.
+	(print_instantiation_partial_context_line): Replace
+	location-printing logic with a call to print_location.
+	(print_instantiation_partial_context): Likewise, splitting up
+	pp_verbatim calls.
+	(maybe_print_constexpr_context): Likewise.
+
+2024-12-06  Jakub Jelinek  <jakub@redhat.com>
+
+	* cp-tree.h (class raw_data_iterator): New type.
+	(class raw_data_range): New type.
+	* parser.cc (cp_parser_postfix_open_square_expression): Handle
+	parsing of CPP_EMBED.
+	(cp_parser_parenthesized_expression_list): Likewise.  Use
+	cp_lexer_next_token_is.
+	(cp_parser_expression): Handle parsing of CPP_EMBED.
+	(cp_parser_template_argument_list): Likewise.
+	(cp_parser_initializer_list): Likewise.
+	(cp_parser_oacc_clause_tile): Likewise.
+	(cp_parser_omp_tile_sizes): Likewise.
+	* pt.cc (tsubst_expr): Handle RAW_DATA_CST.
+	* constexpr.cc (reduced_constant_expression_p): Likewise.
+	(raw_data_cst_elt): New function.
+	(find_array_ctor_elt): Handle RAW_DATA_CST.
+	(cxx_eval_array_reference): Likewise.
+	* typeck2.cc (digest_init_r): Emit -Wnarrowing and/or -Wconversion
+	diagnostics.
+	(process_init_constructor_array): Handle RAW_DATA_CST.
+	* decl.cc (maybe_deduce_size_from_array_init): Likewise.
+	(is_direct_enum_init): Fail for RAW_DATA_CST.
+	(cp_maybe_split_raw_data): New function.
+	(consume_init): New function.
+	(reshape_init_array_1): Add VECTOR_P argument.  Handle RAW_DATA_CST.
+	(reshape_init_array): Adjust reshape_init_array_1 caller.
+	(reshape_init_vector): Likewise.
+	(reshape_init_class): Handle RAW_DATA_CST.
+	(reshape_init_r): Likewise.
+
+2024-12-06  Marek Polacek  <polacek@redhat.com>
+
+	PR c++/117898
+	* pt.cc (tsubst_pack_index): Detect indexing an empty pack.
+
+2024-12-05  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c/41045
+	* cp-tree.h (finish_asm_stmt): Add TOPLEV_P argument.
+	* parser.cc (cp_parser_asm_definition): Parse also extended asm
+	without clobbers/labels outside of functions.
+	* semantics.cc (finish_asm_stmt): Add TOPLEV_P argument, if set,
+	check extra restrictions for extended asm outside of functions.
+	* pt.cc (tsubst_stmt): Adjust finish_asm_stmt caller.
+
+2024-12-04  David Malcolm  <dmalcolm@redhat.com>
+
+	PR c++/116771
+	* parser.cc (cp_parser_name_lookup_error): Provide suggestions for
+	the case of complete failure where there is no scope.
+
+2024-12-04  Simon Martin  <simon@nasilyan.com>
+
+	PR c++/117615
+	* constexpr.cc (cxx_eval_constant_expression): Don't reject
+	INTEGER_CSTs with type POINTER_TYPE to METHOD_TYPE.
+
+2024-12-04  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c++/117826
+	* cp-tree.h (struct decl_location_traits): New type.
+	(erroneous_templates_t): Change using into typedef.
+	(erroneous_templates): Add GTY((cache)).
+	* error.cc (cp_adjust_diagnostic_info): Use
+	hash_map_safe_get_or_insert<true> rather than
+	hash_map_safe_get_or_insert<false> for erroneous_templates.
+
+2024-12-03  Nina Ranns  <dinka.ranns@googlemail.com>
+
+	PR c++/117579
+	* parser.cc (cp_parser_statement): Replace assertion with a
+	conditional check that the statement containing a contract assert
+	is empty.
+
+2024-12-02  Patrick Palka  <ppalka@redhat.com>
+
+	* constraint.cc (resolve_concept_check): Remove.
+	(deduce_constrained_parameter): Remove.
+	(finish_type_constraints): Inline into its only caller
+	cp_parser_placeholder_type_specifier and remove.
+	(build_concept_check_arguments): Coding style tweaks.
+	(build_standard_check): Inline into its only caller ...
+	(build_concept_check): ... here.
+	(build_type_constraint): Use the prototype parameter as the
+	first template argument.
+	(finish_shorthand_constraint): Remove function concept
+	handling.  Use concept_prototype_parameter.
+	(placeholder_extract_concept_and_args): Inline into its
+	callers and remove.
+	(equivalent_placeholder_constraints): Adjust after
+	placeholder_extract_concept_and_args removal.
+	(iterative_hash_placeholder_constraint): Likewise.
+	* cp-objcp-common.cc (cp_common_init_ts): Remove WILDCARD_DECL
+	handling.
+	* cp-tree.def (WILDCARD_DECL): Remove.
+	* cp-tree.h (WILDCARD_PACK_P): Remove.
+	(type_uses_auto_or_concept): Remove declaration of nonexistent
+	function.
+	(append_type_to_template_for_access_check): Likewise.
+	(finish_type_constraints): Remove declaration.
+	(placeholder_extract_concept_and_args): Remove declaration.
+	(deduce_constrained_parameter): Remove declaration.
+	(resolve_constraint_check): Remove declaration.
+	(valid_requirements_p): Remove declaration of nonexistent
+	function.
+	(finish_concept_name): Likewise.
+	(concept_definition_p): Remove redundant overload.
+	(concept_prototype_parameter): Define.
+	* cxx-pretty-print.cc (pp_cxx_constrained_type_spec): Adjust
+	after placeholder_extract_concept_and_args.
+	* error.cc (dump_decl) <case WILDCARD_DECL>: Remove.
+	(dump_expr) <case WILDCARD_DECL>: Likewise.
+	* parser.cc (is_constrained_parameter): Inline into
+	declares_constrained_type_template_parameter and remove.
+	(cp_parser_check_constrained_type_parm): Declare static.
+	(finish_constrained_template_template_parm): Remove.
+	(cp_parser_constrained_template_template_parm): Remove.
+	(finish_constrained_parameter): Remove dead code guarded by
+	cp_parser_constrained_template_template_parm.
+	(declares_constrained_type_template_parameter): Adjust after
+	is_constrained_parameter removal.
+	(declares_constrained_template_template_parameter): Remove.
+	(cp_parser_placeholder_type_specifier): Adjust after
+	finish_type_constraints removal.  Check the prototype parameter
+	earlier, before build_type_constraint.
+	Use concept_prototype_parameter.
+	(cp_parser_parameter_declaration): Remove dead code guarded by
+	declares_constrained_template_template_parameter.
+	* pt.cc (convert_wildcard_argument): Remove.
+	(convert_template_argument): Remove WILDCARD_DECL handling.
+	(coerce_template_parameter_pack): Likewise.
+	(tsubst) <case TEMPLATE_TYPE_PARM>: Likewise.
+	(type_dependent_expression_p): Likewise.
+	(make_constrained_placeholder_type): Remove function concept
+	handling.
+	(placeholder_type_constraint_dependent_p): Remove WILDCARD_DECL
+	handling.
+
+2024-11-30  Jakub Jelinek  <jakub@redhat.com>
+
+	* parser.cc: Implement C++26 P3176R1 - The Oxford variadic comma.
+	(cp_parser_parameter_declaration_clause): Emit
+	-Wdeprecated-variadic-comma-omission warnings.
+
+2024-11-29  Tejas Belagod  <tejas.belagod@arm.com>
+
+	* decl.cc (reshape_init_array_1): Handle poly indices.
+
+2024-11-28  Marek Polacek  <polacek@redhat.com>
+
+	PR c++/113798
+	* constexpr.cc (potential_constant_expression_1) <case PACK_INDEX_EXPR>:
+	New case.
+	* cp-objcp-common.cc (cp_common_init_ts): Mark PACK_INDEX_TYPE and
+	PACK_INDEX_EXPR.
+	* cp-tree.def (PACK_INDEX_TYPE): New.
+	(PACK_INDEX_EXPR): New.
+	* cp-tree.h (WILDCARD_TYPE_P): Also check PACK_INDEX_TYPE.
+	(PACK_INDEX_CHECK): Define.
+	(PACK_INDEX_P): Define.
+	(PACK_INDEX_PACK): Define.
+	(PACK_INDEX_INDEX): Define.
+	(PACK_INDEX_PARENTHESIZED_P): Define.
+	(make_pack_index): Declare.
+	(pack_index_element): Declare.
+	* cxx-pretty-print.cc (cxx_pretty_printer::expression) <case
+	PACK_INDEX_EXPR>: New case.
+	(cxx_pretty_printer::type_id) <case PACK_INDEX_TYPE>: New case.
+	* error.cc (dump_type) <case PACK_INDEX_TYPE>: New case.
+	(dump_type_prefix): Handle PACK_INDEX_TYPE.
+	(dump_type_suffix): Likewise.
+	(dump_expr) <case PACK_INDEX_EXPR>: New case.
+	* mangle.cc (write_type) <case PACK_INDEX_TYPE>: New case.
+	* module.cc (trees_out::type_node) <case PACK_INDEX_TYPE>: New case.
+	(trees_in::tree_node) <case PACK_INDEX_TYPE>: New case.
+	* parser.cc (cp_parser_next_tokens_are_pack_index_p): New.
+	(cp_parser_pack_index): New.
+	(cp_parser_primary_expression): Handle a C++26 pack-index-expression.
+	(cp_parser_unqualified_id): Handle a C++26 pack-index-specifier.
+	(cp_parser_nested_name_specifier_opt): See if a pack-index-specifier
+	follows.
+	(cp_parser_qualifying_entity): Handle a C++26 pack-index-specifier.
+	(cp_parser_decltype_expr): Set id_expression_or_member_access_p for
+	pack indexing.
+	(cp_parser_mem_initializer_id): Handle a C++26 pack-index-specifier.
+	(cp_parser_simple_type_specifier): Likewise.
+	(cp_parser_base_specifier): Likewise.
+	* pt.cc (iterative_hash_template_arg) <case PACK_INDEX_TYPE,
+	PACK_INDEX_EXPR>: New case.
+	(find_parameter_packs_r) <case PACK_INDEX_TYPE, PACK_INDEX_EXPR>: New
+	case.
+	(make_pack_index): New.
+	(tsubst_pack_index): New.
+	(tsubst): Avoid tsubst on PACK_INDEX_TYPE.
+	<case TYPENAME_TYPE>: Add a call to error.
+	<case PACK_INDEX_TYPE>: New case.
+	(tsubst_expr) <case PACK_INDEX_EXPR>: New case.
+	(dependent_type_p_r): Return true for PACK_INDEX_TYPE.
+	(type_dependent_expression_p): Recurse on PACK_INDEX_PACK for
+	PACK_INDEX_EXPR.
+	* ptree.cc (cxx_print_type) <case PACK_INDEX_TYPE>: New case.
+	* semantics.cc (finish_parenthesized_expr): Set
+	PACK_INDEX_PARENTHESIZED_P for PACK_INDEX_EXPR.
+	(finish_type_pack_element): Adjust error messages.
+	(pack_index_element): New.
+	* tree.cc (cp_tree_equal) <case PACK_INDEX_EXPR>: New case.
+	(cp_walk_subtrees) <case PACK_INDEX_TYPE, PACK_INDEX_EXPR>: New case.
+	* typeck.cc (structural_comptypes) <case PACK_INDEX_TYPE>: New case.
+
+2024-11-28  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c++/78620
+	PR c++/117256
+	* init.cc (build_zero_init_1): Set CONSTRUCTOR_ZERO_PADDING_BITS.
+	(build_value_init_noctor): Likewise.
+	* constexpr.cc (cxx_eval_store_expression): Propagate
+	CONSTRUCTOR_ZERO_PADDING_BITS flag.
+
+2024-11-28  David Malcolm  <dmalcolm@redhat.com>
+
+	PR c/82892
+	* name-lookup.cc (suggest_alternatives_for_1): Provide hints for
+	missing command-line options.
+
+2024-11-28  David Malcolm  <dmalcolm@redhat.com>
+
+	PR c++/87850
+	* call.cc (convert_like_real): Call maybe_emit_indirection_note
+	for "invalid conversion" diagnostic.
+	* typeck.cc (compatible_types_for_indirection_note_p): New
+	function.
+
+2024-11-28  David Malcolm  <dmalcolm@redhat.com>
+
+	PR c/104896
+	* cvt.cc (maybe_warn_nodiscard): Replace "%<%s%>" with "%qs" in
+	message wording.
+
+2024-11-27  Jason Merrill  <jason@redhat.com>
+
+	* module.cc (trees_out::core_bools): Check vague_linkage_p.
+	(has_definition): Likewise.
+
+2024-11-23  Lewis Hyatt  <lhyatt@gmail.com>
+
+	* module.cc (bytes_out::loc): New function.
+	(bytes_in::loc): New function.
+	(struct span): Change int fields to location_diff_t.
+	(range_t): Change from "unsigned int" to "line_map_uint_t".
+	(struct ord_loc_info): Likewise.
+	(struct macro_loc_info): Likewise.
+	(class module_state): Likewise.
+	(dumper::operator()): Add new code 'K' for dumping a location_t.
+	(loc_spans::init): Use %K instead of %u for location_t dumps.
+	(loc_spans::open): Likewise.
+	(loc_spans::close): Likewise. Adjust bitwise expressions to support
+	64-bit location_t as well.
+	(struct module_state_config): Change ordinary_locs and macro_locs
+	from "unsigned int" to "line_map_uint_t".  Reorder fields to improve
+	packing.  Rather than changing the constructor initializer list to
+	match the new order, switch to NSDMI instead.
+	(module_state::note_location): Adjust to support 64-bit location_t.
+	(module_state::write_location): Use %K instead of %u for location_t
+	dumps. Use loc() instead of u() for streaming location_t.
+	(module_state::read_location): Likewise.
+	(module_state::write_ordinary_maps): Likewise.
+	(module_state::write_macro_maps): Likewise.
+	(module_state::write_config): Likewise.
+	(module_state::read_config): Likewise.
+	(module_state::write_prepare_maps): Use %K instead of %u for
+	location_t dumps. Adjust variable types and bitwise expressions to
+	support 64-bit location_t.
+	(module_state::read_ordinary_maps): Likewise.
+	(module_state::read_macro_maps): Likewise.
+	(preprocess_module): Adjust data types to support 64-bit number of
+	line maps.
+
+2024-11-22  Andrew Pinski  <quic_apinski@quicinc.com>
+
+	PR bootstrap/117737
+	* call.cc (INCLUDE_MEMORY): Remove.
+	* class.cc (INCLUDE_MEMORY): Remove.
+	* constexpr.cc (INCLUDE_MEMORY): Remove.
+	* constraint.cc (INCLUDE_MEMORY): Remove.
+	* contracts.cc (INCLUDE_MEMORY): Remove.
+	* coroutines.cc (INCLUDE_MEMORY): Remove.
+	* cp-gimplify.cc (INCLUDE_MEMORY): Remove.
+	* cp-lang.cc (INCLUDE_MEMORY): Remove.
+	* cp-objcp-common.cc (INCLUDE_MEMORY): Remove.
+	* cp-ubsan.cc (INCLUDE_MEMORY): Remove.
+	* cvt.cc (INCLUDE_MEMORY): Remove.
+	* cxx-pretty-print.cc (INCLUDE_MEMORY): Remove.
+	* decl.cc (INCLUDE_MEMORY): Remove.
+	* decl2.cc (INCLUDE_MEMORY): Remove.
+	* dump.cc (INCLUDE_MEMORY): Remove.
+	* error.cc (INCLUDE_MEMORY): Remove.
+	* except.cc (INCLUDE_MEMORY): Remove.
+	* expr.cc (INCLUDE_MEMORY): Remove.
+	* friend.cc (INCLUDE_MEMORY): Remove.
+	* init.cc (INCLUDE_MEMORY): Remove.
+	* lambda.cc (INCLUDE_MEMORY): Remove.
+	* lex.cc (INCLUDE_MEMORY): Remove.
+	* logic.cc (INCLUDE_MEMORY): Remove.
+	* mangle.cc (INCLUDE_MEMORY): Remove.
+	* mapper-client.cc (INCLUDE_MEMORY): Remove.
+	* mapper-resolver.cc (INCLUDE_MEMORY): Remove.
+	* method.cc (INCLUDE_MEMORY): Remove.
+	* module.cc (INCLUDE_MEMORY): Remove.
+	* name-lookup.cc (INCLUDE_MEMORY): Remove.
+	* optimize.cc (INCLUDE_MEMORY): Remove.
+	* parser.cc (INCLUDE_MEMORY): Remove.
+	* pt.cc (INCLUDE_MEMORY): Remove.
+	* ptree.cc (INCLUDE_MEMORY): Remove.
+	* rtti.cc (INCLUDE_MEMORY): Remove.
+	* search.cc (INCLUDE_MEMORY): Remove.
+	* semantics.cc (INCLUDE_MEMORY): Remove.
+	* tree.cc (INCLUDE_MEMORY): Remove.
+	* typeck.cc (INCLUDE_MEMORY): Remove.
+	* typeck2.cc (INCLUDE_MEMORY): Remove.
+	* vtable-class-hierarchy.cc (INCLUDE_MEMORY): Remove.
+
+2024-11-22  Tobias Burnus  <tburnus@baylibre.com>
+
+	* parser.cc (cp_parser_omp_clause_name, cp_parser_omp_all_clauses,
+	cp_parser_omp_dispatch_body): Handle 'interop' clause.
+	* pt.cc (tsubst_omp_clauses): Likewise.
+	* semantics.cc (finish_omp_clauses): Likewise.
+
+2024-11-22  Tobias Burnus  <tburnus@baylibre.com>
+
+	* parser.cc (INCLUDE_STRING): Define.
+	(cp_parser_omp_clause_name): Handle init, use, and destroy clauses.
+	(cp_parser_omp_all_clauses): Likewise; use C_ORT_OMP_INTEROP, if
+	'use' is permitted, for c_finish_omp_clauses.
+	(cp_parser_omp_modifier_prefer_type, cp_parser_omp_clause_init,
+	OMP_INTEROP_CLAUSE_MASK, cp_parser_omp_interop): New.
+	(cp_parser_pragma): Handle 'interop' directive.
+	* pt.cc (tsubst_omp_clauses): Handle init, use, and destroy clauses.
+	(tsubst_stmt): Handle OMP_INTEROP.
+	* semantics.cc (cp_omp_init_prefer_type_update): New.
+	(finish_omp_clauses): Handle  init, use, and destroy clauses
+	and add clause check for 'depend' on 'interop'.
+
+2024-11-21  Jason Merrill  <jason@redhat.com>
+
+	* module.cc (has_definition): Also true for inline vars.
+
+2024-11-21  Jason Merrill  <jason@redhat.com>
+
+	* module.cc (trees_in::core_vals) [STATEMENT_LIST]: Skip
+	DEBUG_BEGIN_STMT if !MAY_HAVE_DEBUG_MARKER_STMTS.
+
+2024-11-21  Jason Merrill  <jason@redhat.com>
+
+	* name-lookup.cc (lookup_imported_hidden_friend): Call
+	lazy_load_pendings.
+
+2024-11-20  Paul-Antoine Arras  <parras@baylibre.com>
+
+	* decl.cc (omp_declare_variant_finalize_one): Set adjust_args
+	need_device_ptr attribute.
+	* parser.cc (cp_parser_direct_declarator): Update call to
+	cp_parser_late_return_type_opt.
+	(cp_parser_late_return_type_opt): Add 'tree parms' parameter. Update
+	call to cp_parser_late_parsing_omp_declare_simd.
+	(cp_parser_omp_clause_name): Handle nocontext and novariants clauses.
+	(cp_parser_omp_clause_novariants): New function.
+	(cp_parser_omp_clause_nocontext): Likewise.
+	(cp_parser_omp_all_clauses): Handle PRAGMA_OMP_CLAUSE_NOVARIANTS and
+	PRAGMA_OMP_CLAUSE_NOCONTEXT.
+	(cp_parser_omp_dispatch_body): New function, inspired from
+	cp_parser_assignment_expression and cp_parser_postfix_expression.
+	(OMP_DISPATCH_CLAUSE_MASK): Define.
+	(cp_parser_omp_dispatch): New function.
+	(cp_finish_omp_declare_variant): Add parameter. Handle adjust_args
+	clause.
+	(cp_parser_late_parsing_omp_declare_simd): Add parameter. Update calls
+	to cp_finish_omp_declare_variant and cp_finish_omp_declare_variant.
+	(cp_parser_omp_construct): Handle PRAGMA_OMP_DISPATCH.
+	(cp_parser_pragma): Likewise.
+	* semantics.cc (finish_omp_clauses): Handle OMP_CLAUSE_NOCONTEXT and
+	OMP_CLAUSE_NOVARIANTS.
+	* pt.cc (tsubst_omp_clauses): Handle OMP_CLAUSE_NOCONTEXT and
+	OMP_CLAUSE_NOVARIANTS.
+	(tsubst_stmt): Handle OMP_DISPATCH.
+	(tsubst_expr): Handle IFN_GOMP_DISPATCH.
+
+2024-11-19  Jason Merrill  <jason@redhat.com>
+
+	* decl2.cc (cp_handle_deprecated_or_unavailable): Avoid redundant
+	warning.
+	* call.cc (build_over_call): Set TREE_NO_WARNING for calls
+	to deprecated functions.
+	* semantics.cc (finish_call_expr): Propagate TREE_NO_WARNING.
+
+2024-11-17  Jason Merrill  <jason@redhat.com>
+
+	* module.cc (module_preprocess_options): Set directives_only here.
+
+2024-11-17  Jason Merrill  <jason@redhat.com>
+
+	* module.cc (module_preprocess_options): Don't override it.
+
+2024-11-16  Jan Hubicka  <hubicka@ucw.cz>
+
+	* decl.cc (cxx_build_operator_new): Break out from ...
+	(cxx_build_operator_delete): Break out from ...
+	(cxx_init_operator_new_delete_decls): Break out from ...
+	(cxx_init_decl_processing): ... here.
+
+2024-11-14  Jason Merrill  <jason@redhat.com>
+
+	* name-lookup.cc (do_namespace_alias): set_originating_module after
+	pushdecl.
+
+2024-11-14  Jason Merrill  <jason@redhat.com>
+
+	* module.cc (module_state_config::get_dialect): Expect coroutines in
+	C++20.
+
+2024-11-11  Jason Merrill  <jason@redhat.com>
+
+	* Make-lang.in: Also collect tags from libcody and c++tools.
+
+2024-11-11  Jason Merrill  <jason@redhat.com>
+
+	* lang-specs.h: Check fmodules* instead of fmodules-ts.
+
+2024-11-11  Simon Martin  <simon@nasilyan.com>
+
+	PR c++/117463
+	* constexpr.cc (cxx_placement_new_fn): Implement in terms of
+	std_placement_new_fn_p.
+	* cp-tree.h (std_placement_new_fn_p): Declare.
+	* init.cc (std_placement_new_fn_p): Add missing checks to ensure
+	that fndecl is a non-replaceable ::operator new.
+
+2024-11-11  Jakub Jelinek  <jakub@redhat.com>
+
+	* parser.cc (cp_parser_postfix_expression): Handle
+	RID_BUILTIN_OPERATOR_NEW and RID_BUILTIN_OPERATOR_DELETE.
+	* cp-objcp-common.cc (names_builtin_p): Change return type from
+	bool to int, adjust return statments.  Handle
+	RID_BUILTIN_OPERATOR_NEW and RID_BUILTIN_OPERATOR_DELETE.
+	* pt.cc (tsubst_expr) <case CALL_EXPR>: Handle
+	CALL_FROM_NEW_OR_DELETE_P.
+
+2024-11-11  Jason Merrill  <jason@redhat.com>
+
+	* cp-tree.h (struct ptrmem_cst): Change tree_common to tree_typed.
+	(struct tree_trait_expr): Likewise.
+	(struct tree_static_assert): Change tree_common to tree_base.
+	(struct tree_argument_pack_select): Likewise.
+
+2024-11-10  Lewis Hyatt  <lhyatt@gmail.com>
+
+	* cp-objcp-common.cc (cp_common_init_ts): Change TRAIT_EXPR from
+	TS_EXP to TS_TYPED.
+
+2024-11-08  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c++/117317
+	* semantics.cc (emit_associated_thunks): Do nothing for
+	!DECL_INTERFACE_KNOWN && DECL_DEFER_OUTPUT fns.
+
+2024-11-05  Jason Merrill  <jason@redhat.com>
+
+	PR c++/116634
+	* init.cc (can_init_array_with_p): Allow PR59465 case with
+	permerror.
+
+2024-11-05  Simon Martin  <simon@nasilyan.com>
+
+	PR c++/117099
+	PR c++/117129
+	* typeck.cc (check_return_expr): Upon error, set
+	current_function_return_value to error_mark_node.
+
+2024-11-05  Simon Martin  <simon@nasilyan.com>
+
+	PR c++/117101
+	* init.cc (std_placement_new_fn_p): Check first_arg against
+	NULL_TREE.
+
+2024-11-05  Simon Martin  <simon@nasilyan.com>
+
+	PR c++/117158
+	* typeck.cc (cp_build_array_ref): Only wrap array expression
+	into a SAVE_EXPR at template instantiation time.
+
+2024-11-05  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c++/117370
+	* cp-tree.h (is_std_class): Declare.
+	* constexpr.cc (is_std_class): New function.
+	(is_std_allocator): Use it.
+	* decl.cc (grok_op_properties): Mark global replaceable
+	operator new/delete operators with const std::nothrow_t & last
+	argument with DECL_IS_REPLACEABLE_OPERATOR.
+
+2024-11-05  Nathaniel Shead  <nathanieloshead@gmail.com>
+
+	PR c++/99274
+	* module.cc (trees_in::is_matching_decl): Merge default
+	arguments.
+	* tree.cc (cp_tree_equal) <AGGR_INIT_EXPR>: Handle unification
+	of AGGR_INIT_EXPRs with new VAR_DECL slots.
+
+2024-11-05  Nathaniel Shead  <nathanieloshead@gmail.com>
+
+	PR c++/105443
+	* module.cc (loc_spans::locs_exhausted_p): New field.
+	(loc_spans::loc_spans): Initialise it.
+	(loc_spans::locations_exhausted_p): New function.
+	(module_state::read_prepare_maps): Move inform into...
+	(loc_spans::report_location_exhaustion): ...this new function.
+	(module_state::write_location): Check for writing module
+	locations stored due to resource exhaustion.
+
+2024-11-02  Nathaniel Shead  <nathanieloshead@gmail.com>
+	    Jason Merrill  <jason@redhat.com>
+
+	PR c++/113814
+	* pt.cc (add_mergeable_specialization): Propagate
+	TYPE_CANONICAL.
+
+2024-11-02  Nathaniel Shead  <nathanieloshead@gmail.com>
+
+	PR c++/116317
+	* module.cc
+	(depset::DB_MAYBE_RECURSIVE_BIT): New flag.
+	(depset::DB_ENTRY_BIT): New flag.
+	(depset::is_maybe_recursive): New accessor.
+	(depset::is_entry): New accessor.
+	(depset::hash::writing_merge_key): New field.
+	(trees_out::decl_value): Inform dep_hash while we're writing the
+	merge key information for a decl.
+	(depset::hash::add_dependency): Find recursive deps and mark the
+	entry point.
+	(sort_cluster): Ensure that the entry dep is streamed first.
+
+2024-11-01  David Malcolm  <dmalcolm@redhat.com>
+
+	PR bootstrap/117361
+	* Make-lang.in (s-selftest-c++): Use GCC_FOR_SELFTESTS.
+	(selftest-c++-gdb): Likewise.
+	(selftest-c++-valgrind): Likewise.
+
+2024-11-01  Jakub Jelinek  <jakub@redhat.com>
+
+	* pt.cc (tsubst_attribute): For "omp declare variant base" attribute
+	if varid is error_mark_node, set val to error_mark_node rather than
+	creating a TREE_LIST with error_mark_node TREE_PURPOSE.
+
+2024-10-31  Tobias Burnus  <tburnus@baylibre.com>
+
+	* decl.cc (omp_declare_variant_finalize_one): Use STRIP_REFERENCE_REF
+	instead of doing it manually.
+
+2024-10-31  Tobias Burnus  <tburnus@baylibre.com>
+
+	* decl.cc (omp_declare_variant_finalize_one): Strip indirect ref
+	around variant-function call when processing a variant.
+
+2024-10-30  Iain Sandoe  <iain@sandoe.co.uk>
+
+	PR c++/116607
+	* contracts.cc (has_active_contract_condition): Use the
+	CONTRACT_CHAIN macro to advance through the attribute list.
+
+2024-10-29  David Malcolm  <dmalcolm@redhat.com>
+
+	PR other/116613
+	* error.cc (cxx_initialize_diagnostics): Use unique_ptr for
+	pretty_printer.  Use context->set_format_decoder.
+	* module.cc (noisy_p): Update for global_dc's m_printer becoming
+	reference printer.
+
+2024-10-29  Jason Merrill  <jason@redhat.com>
+
+	PR c++/30854
+	PR c++/116634
+	* error.cc (dump_aggr_init_expr_args): Remove.
+	(dump_call_expr_args): Handle AGGR_INIT_EXPR.
+	(dump_expr): Combine AGGR_INIT_EXPR and CALL_EXPR cases.
+
+2024-10-25  Jakub Jelinek  <jakub@redhat.com>
+
+	* vtable-class-hierarchy.cc: Remove trailing whitespace.
+	* typeck2.cc: Likewise.
+	* decl.cc: Likewise.
+	* init.cc: Likewise.
+	* semantics.cc: Likewise.
+	* module.cc: Likewise.
+	* rtti.cc: Likewise.
+	* cxx-pretty-print.cc: Likewise.
+	* cvt.cc: Likewise.
+	* mangle.cc: Likewise.
+	* name-lookup.h: Likewise.
+	* coroutines.cc: Likewise.
+	* error.cc: Likewise.
+	* lambda.cc: Likewise.
+	* tree.cc: Likewise.
+	* g++spec.cc: Likewise.
+	* decl2.cc: Likewise.
+	* cp-tree.h: Likewise.
+	* parser.cc: Likewise.
+	* pt.cc: Likewise.
+	* call.cc: Likewise.
+	* lex.cc: Likewise.
+	* cp-lang.cc: Likewise.
+	* cp-tree.def: Likewise.
+	* constexpr.cc: Likewise.
+	* typeck.cc: Likewise.
+	* name-lookup.cc: Likewise.
+	* optimize.cc: Likewise.
+	* search.cc: Likewise.
+	* mapper-client.cc: Likewise.
+	* ptree.cc: Likewise.
+	* class.cc: Likewise.
+
+2024-10-24  Nathaniel Shead  <nathanieloshead@gmail.com>
+
+	* module.cc (trees_in::read_class_def): Propagate some missing
+	flags from the streamed-in definition.
+
+2024-10-24  Nathaniel Shead  <nathanieloshead@gmail.com>
+
+	* module.cc (post_load_processing): Mark COMDAT as needed, emit
+	declarations if maybe_clone_body fails.
+
+2024-10-24  Nathaniel Shead  <nathanieloshead@gmail.com>
+
+	PR c++/115007
+	* module.cc (module_state::read_cluster): Replace
+	DECL_ABSTRACT_P with DECL_MAYBE_IN_CHARGE_CDTOR_P.
+	(post_load_processing): Check and mark TREE_ASM_WRITTEN.
+	* semantics.cc (expand_or_defer_fn_1): Use the more specific
+	module_maybe_has_cmi_p instead of modules_p.
+
+2024-10-24  Nathaniel Shead  <nathanieloshead@gmail.com>
+
+	* decl2.cc (import_export_class): Use TYPE_CONTAINS_VPTR_P
+	instead of TYPE_POLYMORPHIC_P.
+	(import_export_decl): Likewise.
+
+2024-10-24  David Malcolm  <dmalcolm@redhat.com>
+	    Gaius Mulley  <gaiusmod2@gmail.com>
+
+	PR other/116613
+	* call.cc: Add #define INCLUDE_MEMORY.
+	* class.cc: Likewise.
+	* constexpr.cc: Likewise.
+	* constraint.cc: Likewise.
+	* contracts.cc: Likewise.
+	* coroutines.cc: Likewise.
+	* cp-gimplify.cc: Likewise.
+	* cp-lang.cc: Likewise.
+	* cp-objcp-common.cc: Likewise.
+	* cp-ubsan.cc: Likewise.
+	* cvt.cc: Likewise.
+	* cxx-pretty-print.cc: Likewise.  Add #include "cp-tree.h".
+	(cxx_pretty_printer::clone): Use std::unique_ptr and
+	::make_unique.
+	* cxx-pretty-print.h (cxx_pretty_printer::clone): Use
+	std::unique_ptr.
+	* decl2.cc: Add #define INCLUDE_MEMORY.
+	* dump.cc: Likewise.
+	* except.cc: Likewise.
+	* expr.cc: Likewise.
+	* friend.cc: Likewise.
+	* init.cc: Likewise.
+	* lambda.cc: Likewise.
+	* logic.cc: Likewise.
+	* mangle.cc: Likewise.
+	* method.cc: Likewise.
+	* optimize.cc: Likewise.
+	* pt.cc: Likewise.
+	* ptree.cc: Likewise.
+	* rtti.cc: Likewise.
+	* search.cc: Likewise.
+	* semantics.cc: Likewise.
+	* tree.cc: Likewise.
+	* typeck.cc: Likewise.
+	* typeck2.cc: Likewise.
+	* vtable-class-hierarchy.cc: Likewise.
+
+2024-10-24  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c++/117259
+	* typeck.cc (get_member_function_from_ptrfunc): Use force_target_expr
+	rather than save_expr for instance_ptr and function.  Don't call it
+	for TREE_CONSTANT.
+
+2024-10-22  Jason Merrill  <jason@redhat.com>
+
+	PR c++/117107
+	PR c++/92687
+	* decl.cc (lookup_decomp_type): Handle null table.
+
+2024-10-22  Patrick Palka  <ppalka@redhat.com>
+
+	* pt.cc (register_specialization): Set elt.hash.
+
+2024-10-22  Nathaniel Shead  <nathanieloshead@gmail.com>
+
+	* module.cc (depset::DB_IS_MEMBER_BIT): Rename to...
+	(depset::DB_IS_PENDING_BIT): ...this.
+	(depset::is_member): Remove.
+	(depset::is_pending_entity): New function.
+	(depset::hash::make_dependency): Mark definitions of
+	namespace-scope types as maybe-pending entities.
+	(depset::hash::add_class_entities): Rename DB_IS_MEMBER_BIT to
+	DB_IS_PENDING_BIT.
+	(depset::hash::find_dependencies): Use is_pending_entity
+	instead of is_member.
+	(module_state::write_pendings): Likewise; adjust comment.
+
+2024-10-18  Alejandro Colomar  <alx@kernel.org>
+
+	* cp-tree.h (array_type_nelts_top)
+	* tree.cc (array_type_nelts_top):
+	Remove function (move to gcc/).
+
+2024-10-18  Alejandro Colomar  <alx@kernel.org>
+
+	* decl.cc (reshape_init_array)
+	* init.cc
+	(build_zero_init_1)
+	(build_value_init_noctor)
+	(build_vec_init)
+	(build_delete)
+	* lambda.cc (add_capture)
+	* tree.cc (array_type_nelts_top):
+	Rename array_type_nelts => array_type_nelts_minus_one
+
+2024-10-16  Jakub Jelinek  <jakub@redhat.com>
+
+	* search.cc (lookup_member): ?: operator formatting fixes.
+	* typeck.cc (cp_build_modify_expr): Likewise.
+
+2024-10-15  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c/117022
+	* semantics.cc (begin_while_stmt, begin_do_stmt, begin_for_stmt,
+	finish_break_stmt, finish_continue_stmt, begin_switch_stmt): Pass
+	another NULL_TREE to build_stmt calls.
+
+2024-10-15  Patrick Palka  <ppalka@redhat.com>
+
+	PR c++/116710
+	* pt.cc (unify) <case REFERENCE_TYPE>: Compare rvalueness.
+
+2024-10-15  Patrick Palka  <ppalka@redhat.com>
+
+	PR c++/117054
+	* pt.cc (extract_locals_r): Disable tree_extra_args assert
+	for LAMBDA_EXPR.
+
+2024-10-14  Jason Merrill  <jason@redhat.com>
+
+	* cp-tree.h (most_constrained_function): Declare..
+	* class.cc (resolve_address_of_overloaded_function): Call it.
+	* pt.cc (get_template_for_ordering): Handle list from
+	resolve_address_of_overloaded_function.
+	(most_constrained_function): No longer static.
+	(resolve_overloaded_unification): Always compare type rather
+	than decl.
+
+2024-10-13  Simon Martin  <simon@nasilyan.com>
+
+	Revert:
+	2024-10-12  Simon Martin  <simon@nasilyan.com>
+
+	PR c++/109918
+	* class.cc (warn_hidden): Keep track of overloaded and of hidden
+	base methods. Mention the actual hiding function in the warning,
+	not the first overload.
+	* error.cc (location_of): Skip over conv_op_marker.
+
+2024-10-12  Simon Martin  <simon@nasilyan.com>
+
+	PR c++/109918
+	* class.cc (warn_hidden): Keep track of overloaded and of hidden
+	base methods. Mention the actual hiding function in the warning,
+	not the first overload.
+	* error.cc (location_of): Skip over conv_op_marker.
+
+2024-10-07  Jason Merrill  <jason@redhat.com>
+
+	* decl.cc (duplicate_decls): Only check PURVIEW_P if
+	DECL_LANG_SPECIFIC.
+
+2024-10-07  Jason Merrill  <jason@redhat.com>
+
+	* decl2.cc (mark_used): Always check require_deduced_type.
+
+2024-10-07  Jason Merrill  <jason@redhat.com>
+
+	* module.cc (init_modules): Don't warn about -M.
+
+2024-10-04  Nathaniel Shead  <nathanieloshead@gmail.com>
+
+	PR c++/113266
+	PR c++/116911
+	* parser.cc (cp_parser_template_argument): Allow
+	internal-linkage variables since C++11.
+
+2024-10-04  Nathaniel Shead  <nathanieloshead@gmail.com>
+
+	PR c++/116913
+	* name-lookup.cc (update_binding): Return the strip_using'd old
+	decl rather than the binding.
+
+2024-10-04  Jason Merrill  <jason@redhat.com>
+	    Richard Biener  <rguenther@suse.de>
+
+	* cp-tree.h (spec_entry::hash): New member.
+	* pt.cc (spec_hasher::hash): Set it and return it.
+	(maybe_process_partial_specialization): Clear it when
+	changing tmpl/args.
+	(lookup_template_class): Likewise, don't pass hash to find.
+	(retrieve_specialization): Set it, don't pass hash to find.
+	(register_specialization): Don't pass hash to find.
+	(reregister_specialization): Likewise.
+	(match_mergeable_specialization): Likewise.
+	(add_mergeable_specialization): Likewise.
+
+2024-10-03  Jason Merrill  <jason@redhat.com>
+	    Richard Biener  <rguenther@suse.de>
+
+	* pt.cc (coerce_template_parms): Free garbage vecs.
+
+2024-10-03  Jason Merrill  <jason@redhat.com>
+
+	Revert:
+	2024-10-03  Jason Merrill  <jason@redhat.com>
+		    Richard Biener   <rguenther@suse.de>
+
+	* pt.cc (struct free_if_changed_proxy): New.
+	(coerce_template_parms): Use it.
+
+2024-10-03  Jason Merrill  <jason@redhat.com>
+
+	* parser.cc (location_between): New.
+	(cp_parser_operator): Handle -Wdeprecated-literal-operator.
+
+2024-10-03  Jason Merrill  <jason@redhat.com>
+	    Richard Biener   <rguenther@suse.de>
+
+	* pt.cc (struct free_if_changed_proxy): New.
+	(coerce_template_parms): Use it.
+
+2024-10-02  Simon Martin  <simon@nasilyan.com>
+
+	PR c++/116722
+	* constexpr.cc (cxx_bind_parameters_in_call): When !ctx->quiet,
+	emit error before bailing out due to a call to {con,de}structor
+	for a class with virtual bases.
+
+2024-10-02  Richard Biener  <rguenther@suse.de>
+
+	* pt.cc (iterative_hash_template_arg): Use iterative_hash_hashval_t
+	to hash TYPE_HASH.
+
+2024-10-02  Richard Biener  <rguenther@suse.de>
+
+	* pt.cc (iterative_hash_template_arg): Avoid using
+	iterative_hash_object.
+
+2024-10-01  Giuseppe D'Angelo  <giuseppe.dangelo@kdab.com>
+
+	* constraint.cc (diagnose_trait_expr): New diagnostic.
+	* cp-trait.def (IS_VIRTUAL_BASE_OF): New builtin.
+	* cp-tree.h (enum base_access_flags): Add a new flag to be
+	able to request a search for a virtual base class.
+	* cxx-pretty-print.cc (pp_cxx_userdef_literal): Update the
+	list of GNU extensions to the grammar.
+	* search.cc (struct lookup_base_data_s): Add a field to
+	request searching for a virtual base class.
+	(dfs_lookup_base): Add the ability to look for a virtual
+	base class.
+	(lookup_base): Forward the flag to dfs_lookup_base.
+	* semantics.cc (trait_expr_value): Implement the builtin
+	by calling lookup_base with the new flag.
+	(finish_trait_expr): Handle the new builtin.
+
+2024-09-30  Marek Polacek  <polacek@redhat.com>
+
+	PR c++/109859
+	* parser.cc (cp_parser_lambda_declarator_opt): Temporarily clear
+	local_variables_forbidden_p.
+	(cp_parser_placeholder_type_specifier): Turn an assert into an
+	error.
+
+2024-09-30  David Malcolm  <dmalcolm@redhat.com>
+
+	PR other/116613
+	* pt.cc: Include "pretty-print-markup.h".
+	(warn_spec_missing_attributes): Defer colorization choices by
+	replacing printing to a pretty_printer * param with appending
+	to a vec of strings.  Replace pretty_printer with usage of
+	pp_markup::comma_separated_quoted_strings and "%e".
+
+2024-09-27  Nathaniel Shead  <nathanieloshead@gmail.com>
+
+	PR c++/116160
+	* name-lookup.cc (supplement_binding): Allow redeclaration via
+	USING_DECL if not in class scope.
+	(do_nonmember_using_decl): Remove function-scope exemption.
+	(push_using_decl_bindings): Remove outdated comment.
+
+2024-09-27  Nathaniel Shead  <nathanieloshead@gmail.com>
+
+	PR c++/116748
+	* name-lookup.cc (update_binding): Maintain USING_DECLs in the
+	binding slots.
+
+2024-09-27  Nathaniel Shead  <nathanieloshead@gmail.com>
+
+	PR c++/116803
+	* decl.cc (duplicate_decls): Propagate DECL_MODULE_PURVIEW_P and
+	DECL_MODULE_IMPORT_P for template redeclarations.
+
+2024-09-27  Marek Polacek  <polacek@redhat.com>
+
+	PR c++/102594
+	* init.cc (build_vec_init): Build up a CONSTRUCTOR to signal
+	direct-initialization rather than a TREE_LIST.
+
+2024-09-27  Arsen Arsenović  <arsen@aarsen.me>
+
+	PR c++/116793
+	* coroutines.cc (await_statement_expander): Just process
+	subtrees if encountering a CLEANUP_POINT_EXPR.
+
+2024-09-27  Arsen Arsenović  <arsen@aarsen.me>
+
+	* coroutines.cc (co_await_get_resume_call): Return a tree
+	directly, rather than a tree pointer.
+	* cp-tree.h (co_await_get_resume_call): Adjust signature
+	accordingly.
+	* cvt.cc (convert_to_void): Do not alter CO_AWAIT_EXPRs when
+	discarding them.  Simplify handling implicit INDIRECT_REFs.
+
+2024-09-27  Arsen Arsenović  <arsen@aarsen.me>
+
+	PR c++/116502
+	* coroutines.cc (maybe_promote_temps): Convert temporary
+	initializers to void without complaining.
+
+2024-09-27  Nathaniel Shead  <nathanieloshead@gmail.com>
+
+	* module.cc (has_definition): Use decl_maybe_constant_var
+	instead of TREE_CONSTANT.
+
+2024-09-27  Nathaniel Shead  <nathanieloshead@gmail.com>
+
+	* name-lookup.cc (check_can_export_using_decl): Handle internal
+	linkage GM entities (but ignore in header units); use linkage
+	of entity ultimately referred to by aliases.
+
+2024-09-27  Nathaniel Shead  <nathanieloshead@gmail.com>
+
+	* name-lookup.cc (maybe_record_mergeable_decl): Use decl_linkage
+	instead of ad-hoc checks.
+
+2024-09-27  Nathaniel Shead  <nathanieloshead@gmail.com>
+
+	* name-lookup.cc (do_namespace_alias): Propagate TREE_PUBLIC for
+	namespace aliases.
+	* tree.cc (decl_linkage): Update rules for C++11.
+
+2024-09-26  Marek Polacek  <polacek@redhat.com>
+
+	PR c++/116731
+	* parser.cc (warn_for_range_copy): Check if TYPE is trivially
+	constructible, not copyable.
+
+2024-09-25  Marek Polacek  <polacek@redhat.com>
+
+	* coroutines.cc (build_co_await): Use TARGET_EXPR accessors.
+	(finish_co_yield_expr): Likewise.
+	(register_awaits): Likewise.
+	(tmp_target_expr_p): Likewise.
+	(flatten_await_stmt): Likewise.
+	* error.cc (dump_expr): Likewise.
+	* semantics.cc (finish_omp_target_clauses): Likewise.
+	* tree.cc (bot_manip): Likewise.
+	(cp_tree_equal): Likewise.
+	* typeck.cc (cxx_mark_addressable): Likewise.
+	(cp_build_compound_expr): Likewise.
+	(cp_build_modify_expr): Likewise.
+	(check_return_expr): Likewise.
+
+2024-09-25  Tobias Burnus  <tburnus@baylibre.com>
+
+	* parser.cc (cp_parser_omp_declare_target): Set target-used bit
+	in omp_requires_mask.
+
+2024-09-24  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c++/107637
+	* cp-tree.h: Implement C++23 P2718R0 - Wording for P2644R1 Fix for
+	Range-based for Loop.
+	(cp_convert_omp_range_for): Add bool tmpl_p argument.
+	(find_range_for_decls): Declare.
+	* parser.cc (cp_convert_range_for): For flag_range_for_ext_temps call
+	push_stmt_list () before cp_finish_decl for range_temp and save it
+	temporarily to FOR_INIT_STMT.
+	(cp_convert_omp_range_for): Add tmpl_p argument.  If set, remember
+	DECL_NAME of range_temp and for cp_finish_decl call restore it before
+	clearing it again, if unset, don't adjust DECL_NAME of range_temp at
+	all.
+	(cp_parser_omp_loop_nest): For flag_range_for_ext_temps range for add
+	CLEANUP_POINT_EXPR around sl.  Call find_range_for_decls and adjust
+	DECL_NAMEs for range fors if not processing_template_decl.  Adjust
+	cp_convert_omp_range_for caller.  Remove superfluous backslash at the
+	end of line.
+	* decl.cc (initialize_local_var): For flag_range_for_ext_temps
+	temporarily clear stmts_are_full_exprs_p rather than set for
+	for_range__identifier decls.
+	* call.cc (extend_ref_init_temps): For flag_range_for_ext_temps return
+	init early for for_range__identifier decls.
+	* semantics.cc (find_range_for_decls): New function.
+	(finish_for_stmt): Use it.  For flag_range_for_ext_temps if
+	cp_convert_range_for set FOR_INIT_STMT, pop_stmt_list it and wrap
+	into CLEANUP_POINT_EXPR.
+	* pt.cc (tsubst_omp_for_iterator): Adjust tsubst_omp_for_iterator
+	caller.
+	(tsubst_stmt) <case OMP_FOR>: For flag_range_for_ext_temps if there
+	are any range fors in the loop nest, add push_stmt_list starting
+	before the initializations, pop_stmt_list it after the body and wrap
+	into CLEANUP_POINT_EXPR.  Change DECL_NAME of range for temps from
+	NULL to for_range_identifier.
+
+2024-09-24  Nina Dinka Ranns  <dinka.ranns@googlemail.com>
+
+	PR c++/116490
+	* contracts.cc (build_contract_condition_function): added
+	a check for comdat group of the guarded function. If set,
+	the condition check function is added to the same comdat
+	group.
+
+2024-09-24  Tobias Burnus  <tburnus@baylibre.com>
+
+	* parser.cc (cp_parser_omp_requires): Handle self_maps clause.
+
+2024-09-23  Marek Polacek  <polacek@redhat.com>
+
+	PR c++/116798
+	* parser.cc (cp_parser_parameter_declaration): Detect an explicit
+	object parameter in a requires expression.
+
+2024-09-23  Simon Martin  <simon@nasilyan.com>
+
+	PR c++/109790
+	PR c++/100632
+	* mangle.cc (write_member_name): Handle members whose type is an
+	anonymous union member. Write missing "on" marker for operators
+	when ABI version is at least 16.
+
+2024-09-23  Simon Martin  <simon@nasilyan.com>
+
+	PR c++/116722
+	* constexpr.cc (cxx_bind_parameters_in_call): Leave early for
+	{con,de}structors of classes with virtual bases.
+
+2024-09-20  David Malcolm  <dmalcolm@redhat.com>
+
+	PR other/116613
+	* cp-tree.h (cxx_print_error_function): Convert first param
+	from diagnostic_context * to diagnostic_text_output_format &.
+	* error.cc: Include "diagnostic-format-text.h".
+	(cxx_initialize_diagnostics): Update for renamings.
+	(cxx_print_error_function): Convert first param from
+	diagnostic_context * to diagnostic_text_output_format & and update
+	accordingly
+	(cp_diagnostic_starter): Rename to...
+	(cp_diagnostic_text_starter): ...this.  Convert first
+	param from diagnostic_context * to diagnostic_text_output_format &
+	and update accordingly.
+	(cp_print_error_function): Likewise.
+	(print_instantiation_full_context): Likewise.
+	(print_instantiation_partial_context_line): Likewise.
+	(print_instantiation_partial_context): Likewise.
+	(maybe_print_instantiation_context): Likewise.
+	(maybe_print_constexpr_context): Likewise.
+	(print_location): Likewise.
+	(print_constrained_decl_info): Likewise.
+	(print_concept_check_info): Likewise.
+	(print_constraint_context_head): Likewise.
+	(print_requires_expression_info): Likewise.
+	(maybe_print_single_constraint_context): Likewise.
+
+2024-09-20  Patrick Palka  <ppalka@redhat.com>
+
+	DR 2789
+	* call.cc (cand_parms_match): Check for matching class contexts
+	even in the reversed case.
+
+2024-09-20  Patrick Palka  <ppalka@redhat.com>
+
+	PR c++/116492
+	DR 2789
+	* call.cc (object_parms_correspond): Remove.
+	(cand_parms_match): Return false for member functions that come
+	from different classes.  Adjust call to object_parms_correspond.
+	(joust): Update comment for the non-template "more constrained"
+	case.
+
+2024-09-20  Patrick Palka  <ppalka@redhat.com>
+
+	DR 2273
+	* call.cc (joust): Restrict inheritedness tiebreaker to
+	constructors.
+
+2024-09-20  Iain Sandoe  <iain@sandoe.co.uk>
+
+	* coroutines.cc (coro_build_artificial_var_with_dve): New.
+	(coro_build_and_push_artificial_var): New.
+	(coro_build_and_push_artificial_var_with_dve): New.
+	(analyze_fn_parms): Ensure that frame entries cannot clash
+	with local variables.
+	(build_coroutine_frame_delete_expr): Amend comment.
+	(cp_coroutine_transform::build_ramp_function): Rework to
+	avoid manual management of variables and scopes.
+
+2024-09-19  Marek Polacek  <polacek@redhat.com>
+
+	PR c++/116162
+	* class.cc (check_bases_and_members): Don't set DECL_DELETED_FN here,
+	leave it to defaulted_late_check.
+	* cp-tree.h (maybe_delete_defaulted_fn): Declare.
+	(defaulted_late_check): Add a tristate parameter.
+	* method.cc (maybe_delete_defaulted_fn): New.
+	(defaulted_late_check): Add a tristate parameter.  Call
+	maybe_delete_defaulted_fn instead of giving an error.
+
 2024-09-18  Patrick Palka  <ppalka@redhat.com>
 
 	PR c++/116714

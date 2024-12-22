@@ -30,7 +30,9 @@
 #ifndef _GLIBCXX_REFWRAP_H
 #define _GLIBCXX_REFWRAP_H 1
 
+#ifdef _GLIBCXX_SYSHDR
 #pragma GCC system_header
+#endif
 
 #if __cplusplus >= 201103L
 
@@ -92,7 +94,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       using __vararg = false_type;					\
     };									\
   template<typename _Res, typename _Class, typename... _ArgTypes>	\
-    struct _Mem_fn_traits<_Res (_Class::*)(_ArgTypes... ...) _CV _REF>	\
+    struct _Mem_fn_traits<_Res (_Class::*)(_ArgTypes..., ...) _CV _REF>	\
     : _Mem_fn_traits_base<_Res, _CV _Class, _ArgTypes...>		\
     {									\
       using __vararg = true_type;					\
@@ -143,7 +145,8 @@ _GLIBCXX_MEM_FN_TRAITS(&& noexcept, false_type, true_type)
 
   /// Retrieve the result type for a varargs function type.
   template<typename _Res, typename... _ArgTypes _GLIBCXX_NOEXCEPT_PARM>
-    struct _Weak_result_type_impl<_Res(_ArgTypes......) _GLIBCXX_NOEXCEPT_QUAL>
+    struct _Weak_result_type_impl<_Res(_ArgTypes...,
+				       ...) _GLIBCXX_NOEXCEPT_QUAL>
     { typedef _Res result_type; };
 
   /// Retrieve the result type for a function pointer.
@@ -154,7 +157,7 @@ _GLIBCXX_MEM_FN_TRAITS(&& noexcept, false_type, true_type)
   /// Retrieve the result type for a varargs function pointer.
   template<typename _Res, typename... _ArgTypes _GLIBCXX_NOEXCEPT_PARM>
     struct
-    _Weak_result_type_impl<_Res(*)(_ArgTypes......) _GLIBCXX_NOEXCEPT_QUAL>
+    _Weak_result_type_impl<_Res(*)(_ArgTypes..., ...) _GLIBCXX_NOEXCEPT_QUAL>
     { typedef _Res result_type; };
 
   // Let _Weak_result_type_impl perform the real work.

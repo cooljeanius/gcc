@@ -70,6 +70,48 @@ private:
   DISABLE_COPY_AND_ASSIGN (element);
 };
 
+/* Concrete subclass: handle "%e" by printing a comma-separated list
+   of quoted strings.  */
+
+class comma_separated_quoted_strings : public element
+{
+public:
+  comma_separated_quoted_strings (const auto_vec<const char *> &strings)
+  : m_strings (strings)
+  {
+  }
+
+  void add_to_phase_2 (context &ctxt) final override;
+
+private:
+  const auto_vec<const char *> &m_strings;
+};
+
 } // namespace pp_markup
+
+class pp_element_quoted_string : public pp_element
+{
+public:
+  pp_element_quoted_string (const char *text,
+			    const char *highlight_color = nullptr)
+  : m_text (text),
+    m_highlight_color (highlight_color)
+  {}
+
+  void add_to_phase_2 (pp_markup::context &ctxt) final override
+  {
+    ctxt.begin_quote ();
+    if (m_highlight_color)
+      ctxt.begin_highlight_color (m_highlight_color);
+    pp_string (&ctxt.m_pp, m_text);
+    if (m_highlight_color)
+      ctxt.end_highlight_color ();
+    ctxt.end_quote ();
+  }
+
+private:
+  const char *m_text;
+  const char *m_highlight_color;
+};
 
 #endif /* GCC_PRETTY_PRINT_MARKUP_H */

@@ -1050,9 +1050,7 @@ io_result (stmtblock_t * block, tree var, gfc_st_label * err_label,
 static void
 set_error_locus (stmtblock_t * block, tree var, locus * where)
 {
-  gfc_file *f;
   tree str, locus_file;
-  int line;
   gfc_st_parameter_field *p = &st_parameter_field[IOPARM_common_filename];
 
   locus_file = fold_build3_loc (input_location, COMPONENT_REF,
@@ -1061,14 +1059,12 @@ set_error_locus (stmtblock_t * block, tree var, locus * where)
   locus_file = fold_build3_loc (input_location, COMPONENT_REF,
 				TREE_TYPE (p->field), locus_file,
 				p->field, NULL_TREE);
-  f = where->lb->file;
-  str = gfc_build_cstring_const (f->filename);
-
+  location_t loc = gfc_get_location (where);
+  str = gfc_build_cstring_const (LOCATION_FILE (loc));
   str = gfc_build_addr_expr (pchar_type_node, str);
   gfc_add_modify (block, locus_file, str);
 
-  line = LOCATION_LINE (where->lb->location);
-  set_parameter_const (block, var, IOPARM_common_line, line);
+  set_parameter_const (block, var, IOPARM_common_line, LOCATION_LINE (loc));
 }
 
 
@@ -2651,6 +2647,28 @@ gfc_trans_transfer (gfc_code * code)
 		 && expr->symtree->n.sym->assoc->variable)
 	     || gfc_expr_attr (expr).pointer))
 	goto scalarize;
+
+      /* With array-bounds checking enabled, force scalarization in some
+	 situations, e.g., when an array index depends on a function
+	 evaluation or an expression and possibly has side-effects.  */
+      if ((gfc_option.rtcheck & GFC_RTCHECK_BOUNDS)
+	  && ref
+	  && ref->u.ar.type == AR_SECTION)
+	{
+	  for (n = 0; n < ref->u.ar.dimen; n++)
+	    if (ref->u.ar.dimen_type[n] == DIMEN_ELEMENT
+		&& ref->u.ar.start[n])
+	      {
+		switch (ref->u.ar.start[n]->expr_type)
+		  {
+		  case EXPR_FUNCTION:
+		  case EXPR_OP:
+		    goto scalarize;
+		  default:
+		    break;
+		  }
+	      }
+	}
 
       if (!(gfc_bt_struct (expr->ts.type)
 	      || expr->ts.type == BT_CLASS)
