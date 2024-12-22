@@ -262,6 +262,7 @@ int flag_isoc94;
 int flag_isoc99;
 int flag_isoc11;
 int flag_isoc23;
+int flag_isoc2y;
 
 /* Attribute handlers.  */
 
@@ -502,7 +503,7 @@ handle_type_generic_attribute (tree *node, tree ARG_UNUSED (name),
 {
   /* Ensure we have a function type.  */
   gcc_assert (TREE_CODE (*node) == FUNCTION_TYPE);
-  
+
   /* Ensure we have a variadic function.  */
   gcc_assert (!prototype_p (*node) || stdarg_p (*node));
 

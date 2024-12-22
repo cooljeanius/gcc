@@ -3253,7 +3253,8 @@ add_location_if_nearby (const diagnostic_context &dc,
 			bool restrict_to_current_line_spans,
 			const range_label *label)
 {
-  diagnostic_source_print_policy source_policy (dc);
+  diagnostic_source_print_policy source_policy (dc,
+						dc.m_source_printing);
   return add_location_if_nearby (source_policy, loc,
 				 restrict_to_current_line_spans, label);
 }
@@ -3264,13 +3265,14 @@ add_location_if_nearby (const diagnostic_context &dc,
 
 void
 diagnostic_context::maybe_show_locus (const rich_location &richloc,
+				      const diagnostic_source_printing_options &opts,
 				      diagnostic_t diagnostic_kind,
 				      pretty_printer &pp,
 				      diagnostic_source_effect_info *effects)
 {
   const location_t loc = richloc.get_loc ();
   /* Do nothing if source-printing has been disabled.  */
-  if (!m_source_printing.enabled)
+  if (!opts.enabled)
     return;
 
   /* Don't attempt to print source for UNKNOWN_LOCATION and for builtins.  */
@@ -3287,13 +3289,25 @@ diagnostic_context::maybe_show_locus (const rich_location &richloc,
 
   m_last_location = loc;
 
-  diagnostic_source_print_policy source_policy (*this);
+  diagnostic_source_print_policy source_policy (*this, opts);
   source_policy.print (pp, richloc, diagnostic_kind, effects);
 }
 
 diagnostic_source_print_policy::
 diagnostic_source_print_policy (const diagnostic_context &dc)
 : m_options (dc.m_source_printing),
+  m_location_policy (dc),
+  m_start_span_cb (dc.m_text_callbacks.m_start_span),
+  m_file_cache (dc.get_file_cache ()),
+  m_diagram_theme (dc.get_diagram_theme ()),
+  m_escape_format (dc.get_escape_format ())
+{
+}
+
+diagnostic_source_print_policy::
+diagnostic_source_print_policy (const diagnostic_context &dc,
+				const diagnostic_source_printing_options &opts)
+: m_options (opts),
   m_location_policy (dc),
   m_start_span_cb (dc.m_text_callbacks.m_start_span),
   m_file_cache (dc.get_file_cache ()),
@@ -3322,6 +3336,9 @@ diagnostic_source_print_policy::print (pretty_printer &pp,
 void
 layout_printer::print (const diagnostic_source_print_policy &source_policy)
 {
+  diagnostic_prefixing_rule_t saved_rule = pp_prefixing_rule (&m_pp);
+  pp_prefixing_rule (&m_pp) = DIAGNOSTICS_SHOW_PREFIX_EVERY_LINE;
+
   if (get_options ().show_ruler_p)
     show_ruler (m_layout.m_x_offset_display + get_options ().max_width);
 
@@ -3358,6 +3375,8 @@ layout_printer::print (const diagnostic_source_print_policy &source_policy)
 
   if (auto effect_info = m_layout.m_effect_info)
     effect_info->m_trailing_out_edge_column = m_link_rhs_column;
+
+  pp_prefixing_rule (&m_pp) = saved_rule;
 }
 
 #if CHECKING_P
@@ -3581,7 +3600,7 @@ test_layout_x_offset_display_utf8 (const line_table_case &case_)
 			   linemap_position_for_column (line_table,
 							emoji_col));
     layout test_layout (policy, richloc, nullptr);
-    layout_printer lp (*dc.m_printer, test_layout, richloc, DK_ERROR);
+    layout_printer lp (*dc.get_reference_printer (), test_layout, richloc, DK_ERROR);
     lp.print (policy);
     ASSERT_STREQ ("     |         1         \n"
 		  "     |         1         \n"
@@ -3590,7 +3609,7 @@ test_layout_x_offset_display_utf8 (const line_table_case &case_)
 		  "that occupies 8 bytes and 4 display columns, starting at "
 		  "column #102.\n"
 		  "     | ^\n",
-		  pp_formatted_text (dc.m_printer));
+		  pp_formatted_text (dc.get_reference_printer ()));
   }
 
   /* Similar to the previous example, but now the offset called for would split
@@ -3608,7 +3627,7 @@ test_layout_x_offset_display_utf8 (const line_table_case &case_)
 			   linemap_position_for_column (line_table,
 							emoji_col + 2));
     layout test_layout (dc, richloc, nullptr);
-    layout_printer lp (*dc.m_printer, test_layout, richloc, DK_ERROR);
+    layout_printer lp (*dc.get_reference_printer (), test_layout, richloc, DK_ERROR);
     lp.print (policy);
     ASSERT_STREQ ("     |        1         1 \n"
 		  "     |        1         2 \n"
@@ -3617,7 +3636,7 @@ test_layout_x_offset_display_utf8 (const line_table_case &case_)
 		  "that occupies 8 bytes and 4 display columns, starting at "
 		  "column #102.\n"
 		  "     |  ^\n",
-		  pp_formatted_text (dc.m_printer));
+		  pp_formatted_text (dc.get_reference_printer ()));
   }
 
 }
@@ -3689,9 +3708,9 @@ test_layout_x_offset_display_tab (const line_table_case &case_)
       dc.m_tabstop = tabstop;
       diagnostic_source_print_policy policy (dc);
       layout test_layout (policy, richloc, nullptr);
-      layout_printer lp (*dc.m_printer, test_layout, richloc, DK_ERROR);
+      layout_printer lp (*dc.get_reference_printer (), test_layout, richloc, DK_ERROR);
       lp.print (policy);
-      const char *out = pp_formatted_text (dc.m_printer);
+      const char *out = pp_formatted_text (dc.get_reference_printer ());
       ASSERT_EQ (NULL, strchr (out, '\t'));
       const char *left_quote = strchr (out, '`');
       const char *right_quote = strchr (out, '\'');
@@ -3714,7 +3733,7 @@ test_layout_x_offset_display_tab (const line_table_case &case_)
       dc.m_source_printing.show_line_numbers_p = true;
       diagnostic_source_print_policy policy (dc);
       layout test_layout (policy, richloc, nullptr);
-      layout_printer lp (*dc.m_printer, test_layout, richloc, DK_ERROR);
+      layout_printer lp (*dc.get_reference_printer (), test_layout, richloc, DK_ERROR);
       lp.print (policy);
 
       /* We have arranged things so that two columns will be printed before
@@ -3730,7 +3749,7 @@ test_layout_x_offset_display_tab (const line_table_case &case_)
 	  "display columns, starting at column #103.\n"
 	  "     |   ^\n";
       const char *expected_output = (extra_width[tabstop] ? output1 : output2);
-      ASSERT_STREQ (expected_output, pp_formatted_text (dc.m_printer));
+      ASSERT_STREQ (expected_output, pp_formatted_text (dc.get_reference_printer ()));
     }
 }
 
@@ -3886,8 +3905,8 @@ test_one_liner_fixit_remove ()
   /* Test of adding a prefix.  */
   {
     test_diagnostic_context dc;
-    pp_prefixing_rule (dc.m_printer) = DIAGNOSTICS_SHOW_PREFIX_EVERY_LINE;
-    pp_set_prefix (dc.m_printer, xstrdup ("TEST PREFIX:"));
+    pp_prefixing_rule (dc.get_reference_printer ()) = DIAGNOSTICS_SHOW_PREFIX_EVERY_LINE;
+    pp_set_prefix (dc.get_reference_printer (), xstrdup ("TEST PREFIX:"));
     ASSERT_STREQ ("TEST PREFIX: foo = bar.field;\n"
 		  "TEST PREFIX:          ^~~~~~\n"
 		  "TEST PREFIX:          ------\n",
@@ -3913,8 +3932,8 @@ test_one_liner_fixit_remove ()
     test_diagnostic_context dc;
     dc.m_source_printing.show_ruler_p = true;
     dc.m_source_printing.max_width = 50;
-    pp_prefixing_rule (dc.m_printer) = DIAGNOSTICS_SHOW_PREFIX_EVERY_LINE;
-    pp_set_prefix (dc.m_printer, xstrdup ("TEST PREFIX:"));
+    pp_prefixing_rule (dc.get_reference_printer ()) = DIAGNOSTICS_SHOW_PREFIX_EVERY_LINE;
+    pp_set_prefix (dc.get_reference_printer (), xstrdup ("TEST PREFIX:"));
     ASSERT_STREQ ("TEST PREFIX:          1         2         3         4         5\n"
 		  "TEST PREFIX: 12345678901234567890123456789012345678901234567890\n"
 		  "TEST PREFIX: foo = bar.field;\n"
@@ -3929,8 +3948,8 @@ test_one_liner_fixit_remove ()
     dc.m_source_printing.show_ruler_p = true;
     dc.m_source_printing.max_width = 50;
     dc.m_source_printing.show_line_numbers_p = true;
-    pp_prefixing_rule (dc.m_printer) = DIAGNOSTICS_SHOW_PREFIX_EVERY_LINE;
-    pp_set_prefix (dc.m_printer, xstrdup ("TEST PREFIX:"));
+    pp_prefixing_rule (dc.get_reference_printer ()) = DIAGNOSTICS_SHOW_PREFIX_EVERY_LINE;
+    pp_set_prefix (dc.get_reference_printer (), xstrdup ("TEST PREFIX:"));
     ASSERT_STREQ ("TEST PREFIX:      |          1         2         3         4         5\n"
 		  "TEST PREFIX:      | 12345678901234567890123456789012345678901234567890\n"
 		  "TEST PREFIX:    1 | foo = bar.field;\n"
@@ -4012,12 +4031,12 @@ test_one_liner_fixit_validation_adhoc_locations ()
 {
   /* Generate a range that's too long to be packed, so must
      be stored as an ad-hoc location (given the defaults
-     of 5 bits or 0 bits of packed range); 41 columns > 2**5.  */
+     of 5 or 7 bits or 0 bits of packed range); 150 columns > 2**7.  */
   const location_t c7 = linemap_position_for_column (line_table, 7);
-  const location_t c47 = linemap_position_for_column (line_table, 47);
-  const location_t loc = make_location (c7, c7, c47);
+  const location_t c157 = linemap_position_for_column (line_table, 157);
+  const location_t loc = make_location (c7, c7, c157);
 
-  if (c47 > LINE_MAP_MAX_LOCATION_WITH_COLS)
+  if (c157 > LINE_MAP_MAX_LOCATION_WITH_COLS)
     return;
 
   ASSERT_TRUE (IS_ADHOC_LOC (loc));
@@ -4031,7 +4050,18 @@ test_one_liner_fixit_validation_adhoc_locations ()
 
     test_diagnostic_context dc;
     ASSERT_STREQ (" foo = bar.field;\n"
-		  "       ^~~~~~~~~~                               \n"
+		  "       ^~~~~~~~~~                               "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          \n"
 		  "       test\n",
 		  dc.test_show_locus (richloc));
   }
@@ -4039,29 +4069,62 @@ test_one_liner_fixit_validation_adhoc_locations ()
   /* Remove.  */
   {
     rich_location richloc (line_table, loc);
-    source_range range = source_range::from_locations (loc, c47);
+    source_range range = source_range::from_locations (loc, c157);
     richloc.add_fixit_remove (range);
     /* It should not have been discarded by the validator.  */
     ASSERT_EQ (1, richloc.get_num_fixit_hints ());
 
     test_diagnostic_context dc;
     ASSERT_STREQ (" foo = bar.field;\n"
-		  "       ^~~~~~~~~~                               \n"
-		  "       -----------------------------------------\n",
+		  "       ^~~~~~~~~~                               "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          \n"
+		  "       -----------------------------------------"
+		  "----------"
+		  "----------"
+		  "----------"
+		  "----------"
+		  "----------"
+		  "----------"
+		  "----------"
+		  "----------"
+		  "----------"
+		  "----------"
+		  "----------\n",
 		  dc.test_show_locus (richloc));
   }
 
   /* Replace.  */
   {
     rich_location richloc (line_table, loc);
-    source_range range = source_range::from_locations (loc, c47);
+    source_range range = source_range::from_locations (loc, c157);
     richloc.add_fixit_replace (range, "test");
     /* It should not have been discarded by the validator.  */
     ASSERT_EQ (1, richloc.get_num_fixit_hints ());
 
     test_diagnostic_context dc;
     ASSERT_STREQ (" foo = bar.field;\n"
-		  "       ^~~~~~~~~~                               \n"
+		  "       ^~~~~~~~~~                               "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          \n"
 		  "       test\n",
 		  dc.test_show_locus (richloc));
   }
@@ -4551,12 +4614,12 @@ test_one_liner_fixit_validation_adhoc_locations_utf8 ()
 {
   /* Generate a range that's too long to be packed, so must
      be stored as an ad-hoc location (given the defaults
-     of 5 bits or 0 bits of packed range); 41 columns > 2**5.  */
+     of 5 bits or 7 bits or 0 bits of packed range); 150 columns > 2**7.  */
   const location_t c12 = linemap_position_for_column (line_table, 12);
-  const location_t c52 = linemap_position_for_column (line_table, 52);
-  const location_t loc = make_location (c12, c12, c52);
+  const location_t c162 = linemap_position_for_column (line_table, 162);
+  const location_t loc = make_location (c12, c12, c162);
 
-  if (c52 > LINE_MAP_MAX_LOCATION_WITH_COLS)
+  if (c162 > LINE_MAP_MAX_LOCATION_WITH_COLS)
     return;
 
   ASSERT_TRUE (IS_ADHOC_LOC (loc));
@@ -4574,7 +4637,18 @@ test_one_liner_fixit_validation_adhoc_locations_utf8 ()
 			     "_bar.\xf0\x9f\x98\x82"
 				    "_field\xcf\x80"
 					   ";\n"
-		  "          ^~~~~~~~~~~~~~~~                     \n"
+		  "          ^~~~~~~~~~~~~~~~                     "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          \n"
 		  "          test\n",
 		dc.test_show_locus (richloc));
   }
@@ -4582,7 +4656,7 @@ test_one_liner_fixit_validation_adhoc_locations_utf8 ()
   /* Remove.  */
   {
     rich_location richloc (line_table, loc);
-    source_range range = source_range::from_locations (loc, c52);
+    source_range range = source_range::from_locations (loc, c162);
     richloc.add_fixit_remove (range);
     /* It should not have been discarded by the validator.  */
     ASSERT_EQ (1, richloc.get_num_fixit_hints ());
@@ -4593,15 +4667,37 @@ test_one_liner_fixit_validation_adhoc_locations_utf8 ()
 			     "_bar.\xf0\x9f\x98\x82"
 				    "_field\xcf\x80"
 					   ";\n"
-		  "          ^~~~~~~~~~~~~~~~                     \n"
-		  "          -------------------------------------\n",
+		  "          ^~~~~~~~~~~~~~~~                     "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          \n"
+		  "          -------------------------------------"
+		  "----------"
+		  "----------"
+		  "----------"
+		  "----------"
+		  "----------"
+		  "----------"
+		  "----------"
+		  "----------"
+		  "----------"
+		  "----------"
+		  "----------\n",
 		dc.test_show_locus (richloc));
   }
 
   /* Replace.  */
   {
     rich_location richloc (line_table, loc);
-    source_range range = source_range::from_locations (loc, c52);
+    source_range range = source_range::from_locations (loc, c162);
     richloc.add_fixit_replace (range, "test");
     /* It should not have been discarded by the validator.  */
     ASSERT_EQ (1, richloc.get_num_fixit_hints ());
@@ -4612,7 +4708,18 @@ test_one_liner_fixit_validation_adhoc_locations_utf8 ()
 			     "_bar.\xf0\x9f\x98\x82"
 				    "_field\xcf\x80"
 					   ";\n"
-		  "          ^~~~~~~~~~~~~~~~                     \n"
+		  "          ^~~~~~~~~~~~~~~~                     "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          "
+		  "          \n"
 		  "          test\n",
 		dc.test_show_locus (richloc));
   }

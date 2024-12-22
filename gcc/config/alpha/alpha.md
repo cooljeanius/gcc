@@ -4201,7 +4201,7 @@
 })
 
 ;; For the unaligned byte and halfword cases, we use code similar to that
-;; in the ;; Architecture book, but reordered to lower the number of registers
+;; in the Architecture book, but reordered to lower the number of registers
 ;; required.  Operand 0 is the address.  Operand 1 is the data to store.
 ;; Operands 2, 3, and 4 are DImode temporaries, where operands 2 and 4 may
 ;; be the same temporary, if desired.  If the address is in a register,
@@ -5171,7 +5171,7 @@
     }
   };
 
-  bool write = INTVAL (operands[1]) != 0;
+  bool write = (INTVAL (operands[1]) & 1) != 0;
   bool lru = INTVAL (operands[2]) != 0;
 
   return alt[write][lru];

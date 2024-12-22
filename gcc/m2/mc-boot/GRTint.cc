@@ -257,7 +257,7 @@ static int Max (int i, int j)
 
 static int Min (int i, int j)
 {
-  /* 
+  /*
    Max - returns the minimum: i or j.
   */
   if (i < j)

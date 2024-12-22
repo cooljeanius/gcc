@@ -24,6 +24,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "cp-tree.h"
 #include "cxx-pretty-print.h"
 #include "tree-pretty-print.h"
+#include "make-unique.h"
 
 static void pp_cxx_unqualified_id (cxx_pretty_printer *, tree);
 static void pp_cxx_nested_name_specifier (cxx_pretty_printer *, tree);
@@ -411,7 +412,7 @@ pp_cxx_userdef_literal (cxx_pretty_printer *pp, tree t)
      :: operator-function-id
      :: qualifier-id
      ( expression )
-     id-expression   
+     id-expression
 
    GNU Extensions:
      __builtin_va_arg ( assignment-expression , type-id )
@@ -420,15 +421,15 @@ pp_cxx_userdef_literal (cxx_pretty_printer *pp, tree t)
 
      __builtin_is_virtual_base_of ( type-id , type-id )
 
-     __has_nothrow_assign ( type-id )   
+     __has_nothrow_assign ( type-id )
      __has_nothrow_constructor ( type-id )
      __has_nothrow_copy ( type-id )
-     __has_trivial_assign ( type-id )   
+     __has_trivial_assign ( type-id )
      __has_trivial_constructor ( type-id )
      __has_trivial_copy ( type-id )
      __has_unique_object_representations ( type-id )
      __has_trivial_destructor ( type-id )
-     __has_virtual_destructor ( type-id )     
+     __has_virtual_destructor ( type-id )
      __is_abstract ( type-id )
      __is_base_of ( type-id , type-id )
      __is_class ( type-id )
@@ -875,7 +876,7 @@ cxx_pretty_printer::unary_expression (tree t)
       pp_cxx_left_paren (this);
       type_id (TREE_OPERAND (t, 0));
       pp_cxx_right_paren (this);
-      break;      
+      break;
 
     case NOEXCEPT_EXPR:
       pp_cxx_ws_string (this, "noexcept");
@@ -1216,6 +1217,13 @@ cxx_pretty_printer::expression (tree t)
     case EXPR_PACK_EXPANSION:
       expression (PACK_EXPANSION_PATTERN (t));
       pp_cxx_ws_string (this, "...");
+      break;
+
+    case PACK_INDEX_EXPR:
+      expression (PACK_INDEX_PACK (t));
+      pp_cxx_left_bracket (this);
+      expression (PACK_INDEX_INDEX (t));
+      pp_cxx_right_bracket (this);
       break;
 
     case UNARY_LEFT_FOLD_EXPR:
@@ -1690,7 +1698,7 @@ cxx_pretty_printer::direct_declarator (tree t)
 	    /* A function parameter pack or non-type template
 	       parameter pack.  */
 	    pp_cxx_ws_string (this, "...");
-		      
+
 	  id_expression (DECL_NAME (t));
 	}
       abstract_declarator (TREE_TYPE (t));
@@ -1916,6 +1924,13 @@ cxx_pretty_printer::type_id (tree t)
     case TYPE_PACK_EXPANSION:
       type_id (PACK_EXPANSION_PATTERN (t));
       pp_cxx_ws_string (this, "...");
+      break;
+
+    case PACK_INDEX_TYPE:
+      type_id (PACK_INDEX_PACK (t));
+      pp_cxx_left_bracket (this);
+      expression (PACK_INDEX_INDEX (t));
+      pp_cxx_right_bracket (this);
       break;
 
     case TYPE_ARGUMENT_PACK:
@@ -2279,7 +2294,7 @@ pp_cxx_template_parameter (cxx_pretty_printer *pp, tree t)
     {
     case TYPE_DECL:
       pp_cxx_ws_string (pp, "class");
-      if (TEMPLATE_TYPE_PARAMETER_PACK (TREE_TYPE (t)))
+      if (TEMPLATE_TYPE_PARAMETER_PACK (TREE_TYPE (parameter)))
 	pp_cxx_ws_string (pp, "...");
       if (DECL_NAME (parameter))
 	pp_cxx_tree_identifier (pp, DECL_NAME (parameter));
@@ -2334,8 +2349,8 @@ pp_cxx_constrained_type_spec (cxx_pretty_printer *pp, tree c)
       pp_cxx_ws_string(pp, "<unsatisfied-type-constraint>");
       return;
     }
-  tree t, a;
-  placeholder_extract_concept_and_args (c, t, a);
+  tree t = TREE_OPERAND (c, 0);
+  tree a = TREE_OPERAND (c, 1);
   pp->id_expression (t);
   pp_cxx_begin_template_argument_list (pp);
   pp_cxx_ws_string (pp, "<placeholder>");
@@ -2465,6 +2480,7 @@ cxx_pretty_printer::declaration (tree t)
       }
   else switch (TREE_CODE (t))
     {
+    case FIELD_DECL:
     case VAR_DECL:
     case TYPE_DECL:
       pp_cxx_simple_declaration (this, t);
@@ -2927,8 +2943,8 @@ cxx_pretty_printer::cxx_pretty_printer ()
 
 /* cxx_pretty_printer's implementation of pretty_printer::clone vfunc.  */
 
-pretty_printer *
+std::unique_ptr<pretty_printer>
 cxx_pretty_printer::clone () const
 {
-  return new cxx_pretty_printer (*this);
+  return ::make_unique<cxx_pretty_printer> (*this);
 }

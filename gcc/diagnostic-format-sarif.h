@@ -23,6 +23,7 @@ along with GCC; see the file COPYING3.  If not see
 
 #include "json.h"
 #include "diagnostic-format.h"
+#include "diagnostic-output-file.h"
 
 class logical_location;
 
@@ -34,6 +35,11 @@ enum class sarif_version
   num_versions
 };
 
+extern diagnostic_output_file
+diagnostic_output_format_open_sarif_file (diagnostic_context &context,
+					  line_maps *line_maps,
+					  const char *base_file_name);
+
 extern void
 diagnostic_output_format_init_sarif_stderr (diagnostic_context &context,
 					    const line_maps *line_maps,
@@ -42,7 +48,7 @@ diagnostic_output_format_init_sarif_stderr (diagnostic_context &context,
 					    enum sarif_version version);
 extern void
 diagnostic_output_format_init_sarif_file (diagnostic_context &context,
-					  const line_maps *line_maps,
+					  line_maps *line_maps,
 					  const char *main_input_filename_,
 					  bool formatted,
 					  enum sarif_version version,
@@ -54,6 +60,12 @@ diagnostic_output_format_init_sarif_stream (diagnostic_context &context,
 					    bool formatted,
 					    enum sarif_version version,
 					    FILE *stream);
+extern std::unique_ptr<diagnostic_output_format>
+make_sarif_sink (diagnostic_context &context,
+		 const line_maps &line_maps,
+		 const char *main_input_filename_,
+		 enum sarif_version version,
+		 diagnostic_output_file output_file);
 
 /* Concrete subclass of json::object for SARIF property bags
    (SARIF v2.1.0 section 3.8).  */

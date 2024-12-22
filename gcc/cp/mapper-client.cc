@@ -27,7 +27,6 @@ along with GCC; see the file COPYING3.  If not see
 #define INCLUDE_STRING
 #define INCLUDE_VECTOR
 #define INCLUDE_MAP
-#define INCLUDE_MEMORY
 #include "system.h"
 
 #include "line-map.h"
@@ -268,7 +267,7 @@ module_client::open_module_client (location_t loc, const char *o,
 			  c = new module_client (fd, fd);
 		      }
 		  }
-		
+
 	      }
 	      break;
 	    }
@@ -297,7 +296,7 @@ module_client::open_module_client (location_t loc, const char *o,
 		  line = l;
 		errmsg = "reading";
 	      }
-	      
+
 	    close (fd);
 	  }
 	}

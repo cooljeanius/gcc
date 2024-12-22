@@ -19,7 +19,6 @@ along with GCC; see the file COPYING3.  If not see
 <http://www.gnu.org/licenses/>.  */
 
 #define INCLUDE_ISL
-#define INCLUDE_MEMORY
 
 #include "config.h"
 
@@ -444,7 +443,7 @@ nary_op_to_tree (tree type, __isl_take isl_ast_expr *expr, ivs_params &ip)
       break;
 
     default:
-      gcc_unreachable ();    
+      gcc_unreachable ();
     }
   isl_ast_expr *arg_expr = isl_ast_expr_get_op_arg (expr, 0);
   tree res = gcc_expression_from_isl_expression (type, arg_expr, ip);
@@ -747,7 +746,7 @@ translate_isl_ast_node_for (loop_p context_loop, __isl_keep isl_ast_node *node,
 
 /* Inserts in iv_map a tuple (OLD_LOOP->num, NEW_NAME) for the induction
    variables of the loops around GBB in SESE.
- 
+
    FIXME: Instead of using a vec<tree> that maps each loop id to a possible
    chrec, we could consider using a map<int, tree> that maps loop ids to the
    corresponding tree expressions.  */
@@ -854,7 +853,7 @@ translate_isl_ast_node_block (loop_p context_loop,
   isl_ast_node_list_free (node_list);
   return next_e;
 }
- 
+
 /* Creates a new if region corresponding to isl's cond.  */
 
 edge translate_isl_ast_to_gimple::

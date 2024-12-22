@@ -830,7 +830,7 @@ epiphany_rtx_costs (rtx x, machine_mode mode, int outer_code,
 	  return false;
 	}
 
-	
+
     case SET:
       {
 	rtx src = SET_SRC (x);
@@ -3044,5 +3044,8 @@ epiphany_starting_frame_offset (void)
 {
   return epiphany_stack_offset;
 }
+
+#undef TARGET_DOCUMENTATION_NAME
+#define TARGET_DOCUMENTATION_NAME "Epiphany"
 
 struct gcc_target targetm = TARGET_INITIALIZER;
