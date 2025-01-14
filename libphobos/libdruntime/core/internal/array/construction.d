@@ -48,7 +48,7 @@ Tarr _d_arrayctor(Tarr : T[], T)(return scope Tarr to, scope Tarr from, char* ma
     import core.stdc.stdint : uintptr_t;
     debug(PRINTF) import core.stdc.stdio : printf;
 
-    debug(PRINTF) printf("_d_arrayctor(from = %p,%d) size = %d\n", from.ptr, from.length, T.sizeof);
+    debug(PRINTF) printf("_d_arrayctor(from = %p,%zd) size = %zd\n", from.ptr, from.length, T.sizeof);
 
     void[] vFrom = (cast(void*) from.ptr)[0..from.length];
     void[] vTo = (cast(void*) to.ptr)[0..to.length];
@@ -513,7 +513,7 @@ version (D_ProfileGC)
  */
 Tarr _d_newarraymTX(Tarr : U[], T, U)(size_t[] dims, bool isShared=false) @trusted
 {
-    debug(PRINTF) printf("_d_newarraymTX(dims.length = %d)\n", dims.length);
+    debug(PRINTF) printf("_d_newarraymTX(dims.length = %zd)\n", dims.length);
 
     if (dims.length == 0)
         return null;
@@ -526,16 +526,17 @@ Tarr _d_newarraymTX(Tarr : U[], T, U)(size_t[] dims, bool isShared=false) @trust
 
         auto dim = dims[0];
 
-        debug(PRINTF) printf("__allocateInnerArray(ti = %p, ti.next = %p, dim = %d, ndims = %d\n", ti, ti.next, dim, dims.length);
+        debug(PRINTF) printf("__allocateInnerArray(UnqT = %s, dim = %lu, ndims = %lu\n", UnqT.stringof.ptr, dim, dims.length);
         if (dims.length == 1)
         {
             auto r = _d_newarrayT!UnqT(dim, isShared);
-            return *cast(void[]*)(&r);
+            return *cast(void[]*)&r;
         }
 
         auto allocSize = (void[]).sizeof * dim;
-        auto info = __arrayAlloc!UnqT(allocSize);
-        __setArrayAllocLength!UnqT(info, allocSize, isShared);
+        // the array-of-arrays holds pointers! Don't use UnqT here!
+        auto info = __arrayAlloc!(void[])(allocSize);
+        __setArrayAllocLength!(void[])(info, allocSize, isShared);
         auto p = __arrayStart(info)[0 .. dim];
 
         foreach (i; 0..dim)
@@ -546,7 +547,7 @@ Tarr _d_newarraymTX(Tarr : U[], T, U)(size_t[] dims, bool isShared=false) @trust
     }
 
     auto result = __allocateInnerArray(dims);
-    debug(PRINTF) printf("result = %llx\n", result.ptr);
+    debug(PRINTF) printf("result = %p\n", result.ptr);
 
     return (cast(U*) result.ptr)[0 .. dims[0]];
 }
@@ -577,6 +578,16 @@ unittest
         for (size_t j = 0; j < a[i].length; j++)
             assert(a[i][j].x == 1);
     }
+}
+
+// https://issues.dlang.org/show_bug.cgi?id=24436
+@system unittest
+{
+    import core.memory : GC;
+
+    int[][] a = _d_newarraymTX!(int[][], int)([2, 2]);
+
+    assert(!(GC.getAttr(a.ptr) & GC.BlkAttr.NO_SCAN));
 }
 
 version (D_ProfileGC)

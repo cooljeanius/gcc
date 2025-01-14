@@ -1,6 +1,6 @@
 /* Report error messages, build initializers, and perform
    some front-end optimizations for C++ compiler.
-   Copyright (C) 1987-2024 Free Software Foundation, Inc.
+   Copyright (C) 1987-2025 Free Software Foundation, Inc.
    Hacked by Michael Tiemann (tiemann@cygnus.com)
 
 This file is part of GCC.
@@ -757,7 +757,7 @@ split_nonconstant_init (tree dest, tree init)
 	init = NULL_TREE;
 
       for (tree f : flags)
-	add_stmt (build_disable_temp_cleanup (f));
+	finish_expr_stmt (build_disable_temp_cleanup (f));
       release_tree_vector (flags);
 
       code = pop_stmt_list (code);
@@ -1568,10 +1568,10 @@ massage_init_elt (tree type, tree init, int nested, int flags,
     new_flags |= LOOKUP_AGGREGATE_PAREN_INIT;
   init = digest_init_r (type, init, nested ? 2 : 1, new_flags, complain);
   /* When we defer constant folding within a statement, we may want to
-     defer this folding as well.  Don't call this on CONSTRUCTORs because
-     their elements have already been folded, and we must avoid folding
-     the result of get_nsdmi.  */
-  if (TREE_CODE (init) != CONSTRUCTOR)
+     defer this folding as well.  Don't call this on CONSTRUCTORs in
+     a template because their elements have already been folded, and
+     we must avoid folding the result of get_nsdmi.  */
+  if (!(processing_template_decl && TREE_CODE (init) == CONSTRUCTOR))
     {
       tree t = fold_non_dependent_init (init, complain);
       if (TREE_CONSTANT (t))

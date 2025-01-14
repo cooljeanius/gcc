@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2024, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2025, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -36,6 +36,7 @@ with Exp_Aggr;       use Exp_Aggr;
 with Exp_Ch6;        use Exp_Ch6;
 with Exp_Ch7;        use Exp_Ch7;
 with Exp_Ch11;       use Exp_Ch11;
+with Exp_Dbug;       use Exp_Dbug;
 with Freeze;         use Freeze;
 with Ghost;          use Ghost;
 with Inline;         use Inline;
@@ -1279,6 +1280,11 @@ package body Exp_Util is
                           (Find_Last_Init (N), Stmt, Suppress => All_Checks);
                      end if;
                   end;
+
+               --  Nothing to generate for the cleanup of an allocator
+
+               elsif For_Allocator (N) then
+                  null;
 
                --  Generate:
                --    if F then
@@ -5847,10 +5853,6 @@ package body Exp_Util is
    is
       U_Typ : constant Entity_Id := Unique_Entity (Typ);
 
-      Calls_OK : Boolean := False;
-      --  This flag is set to True when expression Expr contains at least one
-      --  call to a nondispatching primitive function of Typ.
-
       function Search_Primitive_Calls (N : Node_Id) return Traverse_Result;
       --  Search for nondispatching calls to primitive functions of type Typ
 
@@ -5885,8 +5887,6 @@ package body Exp_Util is
                if Present (Disp_Typ)
                  and then Unique_Entity (Disp_Typ) = U_Typ
                then
-                  Calls_OK := True;
-
                   --  There is no need to continue the traversal, as one such
                   --  call suffices.
 
@@ -5898,13 +5898,12 @@ package body Exp_Util is
          return OK;
       end Search_Primitive_Calls;
 
-      procedure Search_Calls is new Traverse_Proc (Search_Primitive_Calls);
+      function Search_Calls is new Traverse_Func (Search_Primitive_Calls);
 
    --  Start of processing for Expression_Contains_Primitives_Calls_Of_Type
 
    begin
-      Search_Calls (Expr);
-      return Calls_OK;
+      return Search_Calls (Expr) = Abandon;
    end Expression_Contains_Primitives_Calls_Of;
 
    ----------------------
@@ -6101,7 +6100,7 @@ package body Exp_Util is
 
          if not Found
            and then Present (Interfaces (Typ))
-           and then not (Is_Empty_Elmt_List (Interfaces (Typ)))
+           and then not Is_Empty_Elmt_List (Interfaces (Typ))
          then
             --  Skip the tag associated with the primary table
 
@@ -7709,20 +7708,20 @@ package body Exp_Util is
          return;
       end if;
 
-      --  Insert the action when the context is "Handling of Default and Per-
-      --  Object Expressions" only when requested by the caller.
-
-      if Spec_Expr_OK then
-         null;
-
       --  Ignore insert of actions from inside default expression (or other
       --  similar "spec expression") in the special spec-expression analyze
       --  mode. Any insertions at this point have no relevance, since we are
       --  only doing the analyze to freeze the types of any static expressions.
       --  See section "Handling of Default and Per-Object Expressions" in the
-      --  spec of package Sem for further details.
+      --  spec of package Sem for further details. However, if the user does
+      --  nevertheless request the insert, then obey it.
 
-      elsif In_Spec_Expression then
+      --  Under strict preanalysis we cannot ignore insert of actions because
+      --  we may be adding to the tree a subtype declaration that is required
+      --  for proper preanalysis (see Sem_Ch3.Find_Type_Of_Object).
+
+      if In_Spec_Expression and then not Spec_Expr_OK then
+         pragma Assert (not In_Strict_Preanalysis);
          return;
       end if;
 
@@ -8951,7 +8950,7 @@ package body Exp_Util is
          Aspect := Find_Value_Of_Aspect (Typ, Aspect_Constant_Indexing);
 
          if Present (Aspect) then
-            Index := Entity (Aspect);
+            Index := Ultimate_Alias (Entity (Aspect));
 
             --  Examine the statements following the container object and
             --  look for a call to the default indexing routine where the
@@ -9036,7 +9035,7 @@ package body Exp_Util is
          Aspect := Find_Value_Of_Aspect (Typ, Aspect_Default_Iterator);
 
          if Present (Aspect) then
-            Iter := Entity (Aspect);
+            Iter := Ultimate_Alias (Entity (Aspect));
 
             --  Examine the statements following the container object and
             --  look for a call to the default iterate routine where the
@@ -10310,7 +10309,6 @@ package body Exp_Util is
                Make_Defining_Identifier (Loc, Name_uParent),
              Component_Definition =>
                Make_Component_Definition (Loc,
-                 Aliased_Present    => False,
                  Subtype_Indication => New_Occurrence_Of (Constr_Root, Loc))));
 
          Set_Reverse_Storage_Order
@@ -10325,7 +10323,6 @@ package body Exp_Util is
                Make_Defining_Identifier (Loc, Name_uTag),
              Component_Definition =>
                Make_Component_Definition (Loc,
-                 Aliased_Present    => False,
                  Subtype_Indication =>
                    New_Occurrence_Of (RTE (RE_Tag), Loc))));
 
@@ -10337,7 +10334,6 @@ package body Exp_Util is
           Defining_Identifier  => Make_Temporary (Loc, 'C'),
           Component_Definition =>
             Make_Component_Definition (Loc,
-              Aliased_Present    => False,
               Subtype_Indication => New_Occurrence_Of (Str_Type, Loc))));
 
       Append_To (List_Def,
@@ -13555,6 +13551,46 @@ package body Exp_Util is
 
       return False;
    end Requires_Cleanup_Actions;
+
+   --------------------------------------------
+   -- Rewrite_Object_Declaration_As_Renaming --
+   --------------------------------------------
+
+   procedure Rewrite_Object_Declaration_As_Renaming (N, Nam : Node_Id) is
+      Def_Id : constant Entity_Id  := Defining_Identifier (N);
+      Loc    : constant Source_Ptr := Sloc (N);
+
+   begin
+      Rewrite (N,
+        Make_Object_Renaming_Declaration (Loc,
+          Defining_Identifier => Def_Id,
+          Subtype_Mark        => New_Occurrence_Of (Etype (Def_Id), Loc),
+          Name                => Nam));
+
+      --  Keep original aspects
+
+      Move_Aspects (Original_Node (N), N);
+
+      --  We do not analyze this renaming declaration, because all its
+      --  components have already been analyzed, and if we were to go
+      --  ahead and analyze it, we would in effect be trying to generate
+      --  another declaration of X, which won't do.
+
+      Set_Renamed_Object (Def_Id, Nam);
+      Set_Analyzed (N);
+
+      --  We do need to deal with debug issues for this renaming
+
+      --  First, if entity comes from source, then mark it as needing
+      --  debug information, even though it is defined by a generated
+      --  renaming that does not come from source.
+
+      Set_Debug_Info_Defining_Id (N);
+
+      --  Now call the routine to generate debug info for the renaming
+
+      Insert_Action (N, Debug_Renaming_Declaration (N));
+   end Rewrite_Object_Declaration_As_Renaming;
 
    ------------------------------------
    -- Safe_Unchecked_Type_Conversion --

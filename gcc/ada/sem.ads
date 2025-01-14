@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 S p e c                                  --
 --                                                                          --
---          Copyright (C) 1992-2024, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2025, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -702,6 +702,11 @@ package Sem is
    function Explicit_Suppress (E : Entity_Id; C : Check_Id) return Boolean;
    --  This function returns True if an explicit pragma Suppress for check C
    --  is present in the package defining E.
+
+   function In_Strict_Preanalysis return Boolean;
+   pragma Inline (In_Strict_Preanalysis);
+   --  Determine whether preanalysis is active at the point of invocation
+   --  and we are not processing a Spec Expression.
 
    function Preanalysis_Active return Boolean;
    pragma Inline (Preanalysis_Active);

@@ -1,5 +1,5 @@
 /* Tree inlining.
-   Copyright (C) 2001-2024 Free Software Foundation, Inc.
+   Copyright (C) 2001-2025 Free Software Foundation, Inc.
    Contributed by Alexandre Oliva <aoliva@redhat.com>
 
 This file is part of GCC.
@@ -1158,6 +1158,13 @@ remap_gimple_op_r (tree *tp, int *walk_subtrees, void *data)
 	  if (invariant && !is_gimple_min_invariant (*tp))
 	    id->regimplify = true;
 
+	  *walk_subtrees = 0;
+	}
+      else if (TREE_CODE (*tp) == OMP_NEXT_VARIANT)
+	{
+	  /* Neither operand is interesting, and walking the selector
+	     causes problems because it's not an expression.  */
+	  gcc_assert (TREE_CODE (TREE_OPERAND (*tp, 0)) == INTEGER_CST);
 	  *walk_subtrees = 0;
 	}
     }
@@ -5041,8 +5048,8 @@ expand_call_inline (basic_block bb, gimple *stmt, copy_body_data *id,
   if (src_properties != prop_mask)
     dst_cfun->curr_properties &= src_properties | ~prop_mask;
   dst_cfun->calls_eh_return |= id->src_cfun->calls_eh_return;
-  id->dst_node->calls_declare_variant_alt
-    |= id->src_node->calls_declare_variant_alt;
+  id->dst_node->has_omp_variant_constructs
+    |= id->src_node->has_omp_variant_constructs;
 
   gcc_assert (!id->src_cfun->after_inlining);
 
@@ -6343,8 +6350,8 @@ tree_function_versioning (tree old_decl, tree new_decl,
   DECL_ARGUMENTS (new_decl) = DECL_ARGUMENTS (old_decl);
   initialize_cfun (new_decl, old_decl,
 		   new_entry ? new_entry->count : old_entry_block->count);
-  new_version_node->calls_declare_variant_alt
-    = old_version_node->calls_declare_variant_alt;
+  new_version_node->has_omp_variant_constructs
+    = old_version_node->has_omp_variant_constructs;
   if (DECL_STRUCT_FUNCTION (new_decl)->gimple_df)
     DECL_STRUCT_FUNCTION (new_decl)->gimple_df->ipa_pta
       = id.src_cfun->gimple_df->ipa_pta;

@@ -1,5 +1,5 @@
 /* Definitions for describing one tree-ssa optimization pass.
-   Copyright (C) 2004-2024 Free Software Foundation, Inc.
+   Copyright (C) 2004-2025 Free Software Foundation, Inc.
    Contributed by Richard Henderson <rth@redhat.com>
 
 This file is part of GCC.
@@ -230,6 +230,7 @@ protected:
 #define PROP_assumptions_done	(1 << 19)	/* Assume function kept
 						   around.  */
 #define PROP_gimple_lbitint	(1 << 20)       /* lowered large _BitInt */
+#define PROP_last_full_fold	(1 << 21)	/* Start of last forwprop.  */
 
 #define PROP_gimple \
   (PROP_gimple_any | PROP_gimple_lcf | PROP_gimple_leh | PROP_gimple_lomp)
@@ -573,6 +574,7 @@ extern rtl_opt_pass *make_pass_rtl_dse3 (gcc::context *ctxt);
 extern rtl_opt_pass *make_pass_rtl_cprop (gcc::context *ctxt);
 extern rtl_opt_pass *make_pass_rtl_pre (gcc::context *ctxt);
 extern rtl_opt_pass *make_pass_rtl_hoist (gcc::context *ctxt);
+extern rtl_opt_pass *make_pass_hardreg_pre (gcc::context *ctxt);
 extern rtl_opt_pass *make_pass_rtl_avoid_store_forwarding (gcc::context *ctxt);
 extern rtl_opt_pass *make_pass_rtl_store_motion (gcc::context *ctxt);
 extern rtl_opt_pass *make_pass_cse_after_global_opts (gcc::context *ctxt);

@@ -1,5 +1,5 @@
 /* Control flow functions for trees.
-   Copyright (C) 2001-2024 Free Software Foundation, Inc.
+   Copyright (C) 2001-2025 Free Software Foundation, Inc.
    Contributed by Diego Novillo <dnovillo@redhat.com>
 
 This file is part of GCC.
@@ -5344,6 +5344,7 @@ tree_node_can_be_shared (tree t)
       || TREE_CODE (t) == SSA_NAME
       || TREE_CODE (t) == IDENTIFIER_NODE
       || TREE_CODE (t) == CASE_LABEL_EXPR
+      || TREE_CODE (t) == OMP_NEXT_VARIANT
       || is_gimple_min_invariant (t))
     return true;
 

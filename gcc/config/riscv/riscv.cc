@@ -1,5 +1,5 @@
 /* Subroutines used for code generation for RISC-V.
-   Copyright (C) 2011-2024 Free Software Foundation, Inc.
+   Copyright (C) 2011-2025 Free Software Foundation, Inc.
    Contributed by Andrew Waterman (andrew@sifive.com).
    Based on MIPS target for GNU compiler.
 
@@ -1112,10 +1112,10 @@ riscv_build_integer_1 (struct riscv_integer_op codes[RISCV_MAX_INTEGER_OPS],
 	{
 	  HOST_WIDE_INT bit = ctz_hwi (value);
 	  alt_codes[i].code = (i == 0 ? UNKNOWN : IOR);
-	  alt_codes[i].value = 1UL << bit;
+	  alt_codes[i].value = HOST_WIDE_INT_1U << bit;
 	  alt_codes[i].use_uw = false;
 	  alt_codes[i].save_temporary = false;
-	  value &= ~(1ULL << bit);
+	  value &= ~(HOST_WIDE_INT_1U << bit);
 	  i++;
 	}
 
@@ -7009,62 +7009,77 @@ riscv_print_operand (FILE *file, rtx op, int letter)
       fputs (GET_RTX_NAME (reverse_condition (code)), file);
       break;
 
-    case 'A': {
-      const enum memmodel model = memmodel_base (INTVAL (op));
-      if (riscv_memmodel_needs_amo_acquire (model)
-	  && riscv_memmodel_needs_amo_release (model))
-	fputs (".aqrl", file);
-      else if (riscv_memmodel_needs_amo_acquire (model))
-	fputs (".aq", file);
-      else if (riscv_memmodel_needs_amo_release (model))
-	fputs (".rl", file);
+    case 'A':
+      if (!CONST_INT_P (op))
+	output_operand_lossage ("invalid operand for '%%%c'", letter);
+      else
+	{
+	  const enum memmodel model = memmodel_base (INTVAL (op));
+	  if (riscv_memmodel_needs_amo_acquire (model)
+	      && riscv_memmodel_needs_amo_release (model))
+	    fputs (".aqrl", file);
+	  else if (riscv_memmodel_needs_amo_acquire (model))
+	    fputs (".aq", file);
+	  else if (riscv_memmodel_needs_amo_release (model))
+	    fputs (".rl", file);
+	}
       break;
-    }
 
-    case 'I': {
-      const enum memmodel model = memmodel_base (INTVAL (op));
-      if (TARGET_ZTSO && model != MEMMODEL_SEQ_CST)
-	/* LR ops only have an annotation for SEQ_CST in the Ztso mapping.  */
-	break;
-      else if (model == MEMMODEL_SEQ_CST)
-	fputs (".aqrl", file);
-      else if (riscv_memmodel_needs_amo_acquire (model))
-	fputs (".aq", file);
+    case 'I':
+      if (!CONST_INT_P (op))
+	output_operand_lossage ("invalid operand for '%%%c'", letter);
+      else
+	{
+	  const enum memmodel model = memmodel_base (INTVAL (op));
+	  if (TARGET_ZTSO && model != MEMMODEL_SEQ_CST)
+	    /* LR ops only have an annotation for SEQ_CST in the Ztso mapping.  */
+	    break;
+	  else if (model == MEMMODEL_SEQ_CST)
+	    fputs (".aqrl", file);
+	  else if (riscv_memmodel_needs_amo_acquire (model))
+	    fputs (".aq", file);
+	}
       break;
-    }
 
-    case 'J': {
-      const enum memmodel model = memmodel_base (INTVAL (op));
-      if (TARGET_ZTSO && model == MEMMODEL_SEQ_CST)
-	/* SC ops only have an annotation for SEQ_CST in the Ztso mapping.  */
-	fputs (".rl", file);
-      else if (TARGET_ZTSO)
-	break;
-      else if (riscv_memmodel_needs_amo_release (model))
-	fputs (".rl", file);
+    case 'J':
+      if (!CONST_INT_P (op))
+	output_operand_lossage ("invalid operand for '%%%c'", letter);
+      else
+	{
+	  const enum memmodel model = memmodel_base (INTVAL (op));
+	  if (TARGET_ZTSO && model == MEMMODEL_SEQ_CST)
+	    /* SC ops only have an annotation for SEQ_CST in the Ztso mapping.  */
+	    fputs (".rl", file);
+	  else if (TARGET_ZTSO)
+	    break;
+	  else if (riscv_memmodel_needs_amo_release (model))
+	    fputs (".rl", file);
+	}
       break;
-    }
 
     case 'L':
-      {
-	const char *ntl_hint = NULL;
-	switch (INTVAL (op))
-	  {
-	  case 0:
-	    ntl_hint = "ntl.all";
-	    break;
-	  case 1:
-	    ntl_hint = "ntl.pall";
-	    break;
-	  case 2:
-	    ntl_hint = "ntl.p1";
-	    break;
-	  }
+      if (!CONST_INT_P (op))
+	output_operand_lossage ("invalid operand for '%%%c'", letter);
+      else
+	{
+	  const char *ntl_hint = NULL;
+	  switch (INTVAL (op))
+	    {
+	    case 0:
+	      ntl_hint = "ntl.all";
+	      break;
+	    case 1:
+	      ntl_hint = "ntl.pall";
+	      break;
+	    case 2:
+	      ntl_hint = "ntl.p1";
+	      break;
+	    }
 
-      if (ntl_hint)
-	asm_fprintf (file, "%s\n\t", ntl_hint);
+	  if (ntl_hint)
+	    asm_fprintf (file, "%s\n\t", ntl_hint);
+	}
       break;
-      }
 
     case 'i':
       if (code != REG)
@@ -7076,32 +7091,44 @@ riscv_print_operand (FILE *file, rtx op, int letter)
       break;
 
     case 'S':
-      {
-	rtx newop = GEN_INT (ctz_hwi (INTVAL (op)));
-	output_addr_const (file, newop);
-	break;
-      }
+      if (!CONST_INT_P (op))
+	output_operand_lossage ("invalid operand for '%%%c'", letter);
+      else
+	{
+	  rtx newop = GEN_INT (ctz_hwi (INTVAL (op)));
+	  output_addr_const (file, newop);
+	}
+      break;
     case 'T':
-      {
-	rtx newop = GEN_INT (ctz_hwi (~INTVAL (op)));
-	output_addr_const (file, newop);
-	break;
-      }
+      if (!CONST_INT_P (op))
+	output_operand_lossage ("invalid operand for '%%%c'", letter);
+      else
+	{
+	  rtx newop = GEN_INT (ctz_hwi (~INTVAL (op)));
+	  output_addr_const (file, newop);
+	}
+      break;
     case 'X':
-      {
-	int ival = INTVAL (op) + 1;
-	rtx newop = GEN_INT (ctz_hwi (ival) + 1);
-	output_addr_const (file, newop);
-	break;
-      }
+      if (!CONST_INT_P (op))
+	output_operand_lossage ("invalid operand for '%%%c'", letter);
+      else
+	{
+	  int ival = INTVAL (op) + 1;
+	  rtx newop = GEN_INT (ctz_hwi (ival) + 1);
+	  output_addr_const (file, newop);
+	}
+      break;
     case 'Y':
-      {
-	unsigned int imm = (UINTVAL (op) & 63);
-	gcc_assert (imm <= 63);
-	rtx newop = GEN_INT (imm);
-	output_addr_const (file, newop);
-	break;
-      }
+      if (!CONST_INT_P (op))
+	output_operand_lossage ("invalid operand for '%%%c'", letter);
+      else
+	{
+	  unsigned int imm = (UINTVAL (op) & 63);
+	  gcc_assert (imm <= 63);
+	  rtx newop = GEN_INT (imm);
+	  output_addr_const (file, newop);
+	}
+      break;
     case 'N':
       {
 	if (!REG_P(op))
@@ -7119,7 +7146,7 @@ riscv_print_operand (FILE *file, rtx op, int letter)
 	else if (IN_RANGE (regno, V_REG_FIRST, V_REG_LAST))
 	  offset = V_REG_FIRST;
 	else
-	  output_operand_lossage ("invalid register number for 'N' modifie");
+	  output_operand_lossage ("invalid register number for 'N' modifier");
 
 	asm_fprintf (file, "%u", (regno - offset));
 	break;
@@ -9564,8 +9591,7 @@ riscv_register_move_cost (machine_mode mode,
   bool from_is_gpr = from == GR_REGS || from == RVC_GR_REGS;
   bool to_is_fpr = to == FP_REGS || to == RVC_FP_REGS;
   bool to_is_gpr = to == GR_REGS || to == RVC_GR_REGS;
-  if ((from_is_fpr && to == to_is_gpr) ||
-      (from_is_gpr && to_is_fpr))
+  if ((from_is_fpr && to_is_gpr) || (from_is_gpr && to_is_fpr))
     return tune_param->fmv_cost;
 
   if (from == V_REGS)

@@ -1,5 +1,5 @@
 /* Nested function decomposition for GIMPLE.
-   Copyright (C) 2004-2024 Free Software Foundation, Inc.
+   Copyright (C) 2004-2025 Free Software Foundation, Inc.
 
    This file is part of GCC.
 
@@ -2694,6 +2694,7 @@ convert_nl_goto_reference (gimple_stmt_iterator *gsi, bool *handled_ops_p,
     {
       new_label = create_artificial_label (UNKNOWN_LOCATION);
       DECL_NONLOCAL (new_label) = 1;
+      DECL_CONTEXT (new_label) = target_context;
       *slot = new_label;
     }
   else

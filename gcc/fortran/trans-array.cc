@@ -1,5 +1,5 @@
 /* Array translation routines
-   Copyright (C) 2002-2024 Free Software Foundation, Inc.
+   Copyright (C) 2002-2025 Free Software Foundation, Inc.
    Contributed by Paul Brook <paul@nowt.org>
    and Steven Bosscher <s.bosscher@student.tudelft.nl>
 
@@ -1632,9 +1632,20 @@ gfc_trans_create_temp_array (stmtblock_t * pre, stmtblock_t * post, gfc_ss * ss,
       tree class_data;
       tree dtype;
       gfc_expr *expr1 = fcn_ss ? fcn_ss->info->expr : NULL;
+      bool rank_changer;
+
+      /* Pick out these transformational functions because they change the rank
+	 or shape of the first argument. This requires that the class type be
+	 changed, the dtype updated and the correct rank used.  */
+      rank_changer = expr1 && expr1->expr_type == EXPR_FUNCTION
+		     && expr1->value.function.isym
+		     && (expr1->value.function.isym->id == GFC_ISYM_RESHAPE
+			 || expr1->value.function.isym->id == GFC_ISYM_SPREAD
+			 || expr1->value.function.isym->id == GFC_ISYM_PACK
+			 || expr1->value.function.isym->id == GFC_ISYM_UNPACK);
 
       /* Create a class temporary for the result using the lhs class object.  */
-      if (class_expr != NULL_TREE)
+      if (class_expr != NULL_TREE && !rank_changer)
 	{
 	  tmp = gfc_create_var (TREE_TYPE (class_expr), "ctmp");
 	  gfc_add_modify (pre, tmp, class_expr);
@@ -1672,33 +1683,29 @@ gfc_trans_create_temp_array (stmtblock_t * pre, stmtblock_t * post, gfc_ss * ss,
 	  elemsize = gfc_evaluate_now (elemsize, pre);
 	}
 
+      class_data = gfc_class_data_get (tmp);
+
+      if (rank_changer)
+	{
+	  /* Take the dtype from the class expression.  */
+	  dtype = gfc_conv_descriptor_dtype (gfc_class_data_get (class_expr));
+	  tmp = gfc_conv_descriptor_dtype (desc);
+	  gfc_add_modify (pre, tmp, dtype);
+
+	  /* These transformational functions change the rank.  */
+	  tmp = gfc_conv_descriptor_rank (desc);
+	  gfc_add_modify (pre, tmp,
+			  build_int_cst (TREE_TYPE (tmp), ss->loop->dimen));
+	  fcn_ss->info->class_container = NULL_TREE;
+	}
+
       /* Assign the new descriptor to the _data field. This allows the
 	 vptr _copy to be used for scalarized assignment since the class
 	 temporary can be found from the descriptor.  */
-      class_data = gfc_class_data_get (tmp);
       tmp = fold_build1_loc (input_location, VIEW_CONVERT_EXPR,
 			     TREE_TYPE (desc), desc);
       gfc_add_modify (pre, class_data, tmp);
 
-      if (expr1 && expr1->expr_type == EXPR_FUNCTION
-	  && expr1->value.function.isym
-	  && (expr1->value.function.isym->id == GFC_ISYM_RESHAPE
-	      || expr1->value.function.isym->id == GFC_ISYM_UNPACK))
-	{
-	  /* Take the dtype from the class expression.  */
-	  dtype = gfc_conv_descriptor_dtype (gfc_class_data_get (class_expr));
-	  tmp = gfc_conv_descriptor_dtype (class_data);
-	  gfc_add_modify (pre, tmp, dtype);
-
-	  /* Transformational functions reshape and reduce can change the rank.  */
-	  if (fcn_ss && fcn_ss->info && fcn_ss->info->class_container)
-	    {
-	      tmp = gfc_conv_descriptor_rank (class_data);
-	      gfc_add_modify (pre, tmp,
-			      build_int_cst (TREE_TYPE (tmp), ss->loop->dimen));
-	      fcn_ss->info->class_container = NULL_TREE;
-	    }
-	}
       /* Point desc to the class _data field.  */
       desc = class_data;
     }
@@ -9777,6 +9784,7 @@ structure_alloc_comps (gfc_symbol * der_type, tree decl, tree dest,
   int caf_dereg_mode;
   symbol_attribute *attr;
   bool deallocate_called;
+  static hash_set<gfc_symbol *> seen_derived_types;
 
   gfc_init_block (&fnblock);
 
@@ -9899,13 +9907,17 @@ structure_alloc_comps (gfc_symbol * der_type, tree decl, tree dest,
     }
   /* Otherwise, act on the components or recursively call self to
      act on a chain of components.  */
+  seen_derived_types.add (der_type);
   for (c = der_type->components; c; c = c->next)
     {
       bool cmp_has_alloc_comps = (c->ts.type == BT_DERIVED
 				  || c->ts.type == BT_CLASS)
 				    && c->ts.u.derived->attr.alloc_comp;
-      bool same_type = (c->ts.type == BT_DERIVED && der_type == c->ts.u.derived)
-	|| (c->ts.type == BT_CLASS && der_type == CLASS_DATA (c)->ts.u.derived);
+      bool same_type
+	= (c->ts.type == BT_DERIVED
+	   && seen_derived_types.contains (c->ts.u.derived))
+	  || (c->ts.type == BT_CLASS
+	      && seen_derived_types.contains (CLASS_DATA (c)->ts.u.derived));
 
       bool is_pdt_type = c->ts.type == BT_DERIVED
 			 && c->ts.u.derived->attr.pdt_type;
@@ -10070,7 +10082,7 @@ structure_alloc_comps (gfc_symbol * der_type, tree decl, tree dest,
 	  if (c->ts.type == BT_CLASS)
 	    {
 	      attr = &CLASS_DATA (c)->attr;
-	      if (attr->class_pointer)
+	      if (attr->class_pointer || c->attr.proc_pointer)
 		continue;
 	    }
 	  else
@@ -10128,12 +10140,13 @@ structure_alloc_comps (gfc_symbol * der_type, tree decl, tree dest,
 	      /* Handle all types of components besides components of the
 		 same_type as the current one, because those would create an
 		 endless loop.  */
-	      caf_dereg_mode
-		  = (caf_in_coarray (caf_mode) || attr->codimension)
-		  ? (gfc_caf_is_dealloc_only (caf_mode)
-		     ? GFC_CAF_COARRAY_DEALLOCATE_ONLY
-		     : GFC_CAF_COARRAY_DEREGISTER)
-		  : GFC_CAF_COARRAY_NOCOARRAY;
+	      caf_dereg_mode = (caf_in_coarray (caf_mode)
+				&& (attr->dimension || c->caf_token))
+				    || attr->codimension
+				 ? (gfc_caf_is_dealloc_only (caf_mode)
+				      ? GFC_CAF_COARRAY_DEALLOCATE_ONLY
+				      : GFC_CAF_COARRAY_DEREGISTER)
+				 : GFC_CAF_COARRAY_NOCOARRAY;
 
 	      caf_token = NULL_TREE;
 	      /* Coarray components are handled directly by
@@ -10571,10 +10584,9 @@ structure_alloc_comps (gfc_symbol * der_type, tree decl, tree dest,
 					   false, false, NULL_TREE, NULL_TREE);
 	      gfc_add_expr_to_block (&fnblock, tmp);
 	    }
-	  else if ((c->attr.allocatable)
-		    && !c->attr.proc_pointer && !same_type
-		    && (!(cmp_has_alloc_comps && c->as) || c->attr.codimension
-			|| caf_in_coarray (caf_mode)))
+	  else if (c->attr.allocatable && !c->attr.proc_pointer
+		   && (!(cmp_has_alloc_comps && c->as) || c->attr.codimension
+		       || caf_in_coarray (caf_mode)))
 	    {
 	      rank = c->as ? c->as->rank : 0;
 	      if (c->attr.codimension)
@@ -10915,6 +10927,7 @@ structure_alloc_comps (gfc_symbol * der_type, tree decl, tree dest,
 	  break;
 	}
     }
+  seen_derived_types.remove (der_type);
 
   return gfc_finish_block (&fnblock);
 }

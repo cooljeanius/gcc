@@ -1,5 +1,5 @@
 /* Callgraph handling code.
-   Copyright (C) 2003-2024 Free Software Foundation, Inc.
+   Copyright (C) 2003-2025 Free Software Foundation, Inc.
    Contributed by Jan Hubicka
 
 This file is part of GCC.
@@ -932,8 +932,6 @@ symbol_table::create_edge (cgraph_node *caller, cgraph_node *callee,
 				      caller->decl);
   else
     edge->in_polymorphic_cdtor = caller->thunk;
-  if (callee)
-    caller->calls_declare_variant_alt |= callee->declare_variant_alt;
 
   if (callee && symtab->state != LTO_STREAMING
       && edge->callee->comdat_local_p ())

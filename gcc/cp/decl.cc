@@ -1,5 +1,5 @@
 /* Process declarations and variables for -*- C++ -*- compiler.
-   Copyright (C) 1988-2024 Free Software Foundation, Inc.
+   Copyright (C) 1988-2025 Free Software Foundation, Inc.
    Contributed by Michael Tiemann (tiemann@cygnus.com)
 
 This file is part of GCC.
@@ -1398,7 +1398,14 @@ check_redeclaration_exception_specification (tree new_decl,
       location_t new_loc = DECL_SOURCE_LOCATION (new_decl);
       auto_diagnostic_group d;
 
-      if (DECL_IN_SYSTEM_HEADER (old_decl) && DECL_EXTERN_C_P (old_decl))
+      /* Be permissive about C++98 vs C++11 operator new declarations.  */
+      bool global_new = (IDENTIFIER_NEW_OP_P (DECL_NAME (new_decl))
+			 && CP_DECL_CONTEXT (new_decl) == global_namespace
+			 && (nothrow_spec_p (new_exceptions)
+			     == nothrow_spec_p (old_exceptions)));
+
+      if (DECL_IN_SYSTEM_HEADER (old_decl)
+	  && (global_new || DECL_EXTERN_C_P (old_decl)))
 	/* Don't fuss about the C library; the C library functions are not
 	   specified to have exception specifications (just behave as if they
 	   have them), but some implementations include them.  */
@@ -1407,7 +1414,7 @@ check_redeclaration_exception_specification (tree new_decl,
 	/* We used to silently permit mismatched eh specs with
 	   -fno-exceptions, so only complain if -pedantic.  */
 	complained = pedwarn (new_loc, OPT_Wpedantic, msg, new_decl);
-      else if (!new_exceptions)
+      else if (!new_exceptions || global_new)
 	/* Reduce to pedwarn for omitted exception specification.  No warning
 	   flag for this; silence the warning by correcting the code.  */
 	complained = pedwarn (new_loc, 0, msg, new_decl);
@@ -8466,12 +8473,7 @@ omp_declare_variant_finalize_one (tree decl, tree attr)
   if (TREE_CODE (TREE_TYPE (decl)) == METHOD_TYPE)
     parm = DECL_CHAIN (parm);
   for (; parm; parm = DECL_CHAIN (parm))
-    if (type_dependent_expression_p (parm))
-      vec_safe_push (args, build_constructor (TREE_TYPE (parm), NULL));
-    else if (MAYBE_CLASS_TYPE_P (TREE_TYPE (parm)))
-      vec_safe_push (args, build_local_temp (TREE_TYPE (parm)));
-    else
-      vec_safe_push (args, build_zero_cst (TREE_TYPE (parm)));
+    vec_safe_push (args, build_stub_object (TREE_TYPE (parm)));
 
   unsigned nappend_args = 0;
   tree append_args_list = TREE_CHAIN (TREE_CHAIN (chain));
@@ -8502,7 +8504,7 @@ omp_declare_variant_finalize_one (tree decl, tree attr)
 	      return true;
 	    }
 	  for (unsigned i = 0; i < nappend_args; i++)
-	    vec_safe_push (args, build_zero_cst (TREE_TYPE (type)));
+	    vec_safe_push (args, build_stub_object (TREE_TYPE (type)));
 	}
     }
 
@@ -8624,7 +8626,7 @@ omp_declare_variant_finalize_one (tree decl, tree attr)
 	  tree construct
 	    = omp_get_context_selector_list (ctx, OMP_TRAIT_SET_CONSTRUCT);
 	  omp_mark_declare_variant (match_loc, variant, construct);
-	  if (!omp_context_selector_matches (ctx))
+	  if (!omp_context_selector_matches (ctx, NULL_TREE, false))
 	    return true;
 	  TREE_PURPOSE (TREE_VALUE (attr)) = variant;
 

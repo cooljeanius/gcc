@@ -1,5 +1,5 @@
 /* Fold a constant sub-tree into a single node for C-compiler
-   Copyright (C) 1987-2024 Free Software Foundation, Inc.
+   Copyright (C) 1987-2025 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -4052,6 +4052,8 @@ operand_compare::hash_operand (const_tree t, inchash::hash &hstate,
       return;
     case BLOCK:
     case OMP_CLAUSE:
+    case OMP_NEXT_VARIANT:
+    case OMP_TARGET_DEVICE_MATCHES:
       /* Ignore.  */
       return;
     case TREE_LIST:

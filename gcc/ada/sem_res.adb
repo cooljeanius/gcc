@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2024, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2025, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -525,11 +525,16 @@ package body Sem_Res is
            Entity (Expression (Find_Aspect (Typ, Lit_Aspect)));
          Name := Make_Identifier (Loc, Chars (Callee));
 
-         if Is_Derived_Type (Typ)
-           and then Base_Type (Etype (Callee)) /= Base_Type (Typ)
-         then
+         --  It seems that we shouldn't need to retrieve the corresponding
+         --  primitive for a derived type at this point, because it should
+         --  have been determined earlier by Inherit_Nonoverridable_Aspects,
+         --  but the wrapper function created for a literal function when the
+         --  type is frozen gets created too late, so we search again at this
+         --  point. Would be nice to find a way to avoid this. ???
+
+         if Is_Derived_Type (Typ) then
             Callee :=
-              Corresponding_Primitive_Op
+              Corresponding_Op_Of_Derived_Type
                 (Ancestor_Op     => Callee,
                  Descendant_Type => Base_Type (Typ));
          end if;
@@ -5816,13 +5821,13 @@ package body Sem_Res is
               and then Nkind (Associated_Node_For_Itype (Typ)) =
                          N_Discriminant_Specification
             then
+               Check_Restriction (No_Coextensions, N);
+
                declare
                   Discr : constant Entity_Id :=
                     Defining_Identifier (Associated_Node_For_Itype (Typ));
 
                begin
-                  Check_Restriction (No_Coextensions, N);
-
                   --  Ada 2012 AI05-0052: If the designated type of the
                   --  allocator is limited, then the allocator shall not
                   --  be used to define the value of an access discriminant
@@ -8142,7 +8147,7 @@ package body Sem_Res is
            and then Comes_From_Source (E)
            and then No (Constant_Value (E))
            and then Is_Frozen (Etype (E))
-           and then not In_Spec_Expression
+           and then not Preanalysis_Active
            and then not Is_Imported (E)
            and then Nkind (Parent (E)) /= N_Object_Renaming_Declaration
          then
@@ -12384,7 +12389,7 @@ package body Sem_Res is
 
             if Nkind (Rop) = N_Real_Literal
               and then Realval (Rop) /= Ureal_0
-              and then abs (Realval (Rop)) < Delta_Value (Standard_Duration)
+              and then abs Realval (Rop) < Delta_Value (Standard_Duration)
             then
                Error_Msg_N
                  ("??universal real operand can only "

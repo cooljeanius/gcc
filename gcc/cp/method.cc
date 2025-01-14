@@ -1,6 +1,6 @@
 /* Handle the hair of processing (but not expanding) inline functions.
    Also manage function and variable name overloading.
-   Copyright (C) 1987-2024 Free Software Foundation, Inc.
+   Copyright (C) 1987-2025 Free Software Foundation, Inc.
    Contributed by Michael Tiemann (tiemann@cygnus.com)
 
 This file is part of GCC.
@@ -1097,8 +1097,8 @@ genericize_spaceship (location_t loc, tree type, tree op0, tree op1)
       if (type == error_mark_node)
 	return error_mark_node;
     }
-
-  gcc_checking_assert (tag < cc_last);
+  else if (tag == cc_last)
+    return error_mark_node;
 
   tree r;
   bool scalar = SCALAR_TYPE_P (TREE_TYPE (op0));
@@ -1912,6 +1912,18 @@ build_stub_object (tree reftype)
     reftype = cp_build_reference_type (reftype, /*rval*/true);
   tree stub = build1 (CONVERT_EXPR, reftype, integer_one_node);
   return convert_from_reference (stub);
+}
+
+/* True iff EXPR is the result of build_stub_object.  */
+
+bool
+is_stub_object (tree expr)
+{
+  if (!REFERENCE_REF_P (expr))
+    return false;
+  expr = TREE_OPERAND (expr, 0);
+  return (TREE_CODE (expr) == CONVERT_EXPR
+	  && TREE_OPERAND (expr, 0) == integer_one_node);
 }
 
 /* Build a std::declval<TYPE>() expression and return it.  */

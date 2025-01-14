@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2024, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2025, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -281,9 +281,16 @@ package body Exp_Ch6 is
    --  Does the main work of Expand_Call. Post_Call is as for Expand_Actuals.
 
    procedure Expand_Ctrl_Function_Call (N : Node_Id; Use_Sec_Stack : Boolean);
-   --  N is a function call which returns a controlled object. Transform the
+   --  N is a function call that returns a controlled object. Transform the
    --  call into a temporary which retrieves the returned object from the
    --  primary or secondary stack (Use_Sec_Stack says which) using 'reference.
+
+   --  This expansion is necessary in all the cases where the constant object
+   --  denoted by the call needs finalization in the current subprogram, which
+   --  excludes return statements, and is not identified with another object
+   --  that will be finalized, which excludes (statically) declared objects,
+   --  dynamically allocated objects, and targets of assignments that are done
+   --  directly (without intermediate temporaries).
 
    procedure Expand_Non_Function_Return (N : Node_Id);
    --  Expand a simple return statement found in a procedure body, entry body,
@@ -5331,16 +5338,17 @@ package body Exp_Ch6 is
 
       elsif Nkind (Call_Node) = N_Function_Call
         and then Nkind (Parent (Call_Node)) = N_Function_Call
+        and then Is_Entity_Name (Name (Parent (Call_Node)))
       then
          declare
             Aspect : constant Node_Id :=
               Find_Value_Of_Aspect
                 (Etype (Call_Node), Aspect_Constant_Indexing);
+            Subp   : constant Entity_Id := Entity (Name (Parent (Call_Node)));
 
          begin
             if Present (Aspect)
-              and then Is_Entity_Name (Name (Parent (Call_Node)))
-              and then Entity (Name (Parent (Call_Node))) = Entity (Aspect)
+              and then Subp = Ultimate_Alias (Entity (Aspect))
             then
                --  Resolution is now finished, make sure we don't start
                --  analysis again because of the duplication.
@@ -5359,7 +5367,8 @@ package body Exp_Ch6 is
 
    procedure Expand_Ctrl_Function_Call (N : Node_Id; Use_Sec_Stack : Boolean)
    is
-      Par : constant Node_Id := Parent (N);
+      Par        : constant Node_Id := Parent (N);
+      Uncond_Par : constant Node_Id := Unconditional_Parent (N);
 
    begin
       --  Optimization: if the returned value is returned again, then no need
@@ -5368,7 +5377,7 @@ package body Exp_Ch6 is
       --  Note that simple return statements are distributed into conditional
       --  expressions but we may be invoked before this distribution is done.
 
-      if Nkind (Unconditional_Parent (N)) = N_Simple_Return_Statement then
+      if Nkind (Uncond_Par) = N_Simple_Return_Statement then
          return;
       end if;
 
@@ -5381,8 +5390,15 @@ package body Exp_Ch6 is
 
       if Nkind (Par) in N_Object_Declaration | N_Delta_Aggregate
         and then Expression (Par) = N
-        and then not Use_Sec_Stack
       then
+         if not Use_Sec_Stack then
+            return;
+         end if;
+
+      --  Note that object declarations are also distributed into conditional
+      --  expressions but we may be invoked before this distribution is done.
+
+      elsif Nkind (Uncond_Par) = N_Object_Declaration then
          return;
       end if;
 
@@ -5397,9 +5413,15 @@ package body Exp_Ch6 is
       end if;
 
       --  Avoid expansion to catch the error when the function call is on the
-      --  left-hand side of an assignment.
+      --  left-hand side of an assignment. Likewise if it is on the right-hand
+      --  side and no controlling actions will be performed for the assignment,
+      --  which means that this is an initialization of the target and it can
+      --  thus be performed directly. Note that the code generator should also
+      --  avoid creating a temporary for the right-hand side in this case.
 
-      if Nkind (Par) = N_Assignment_Statement and then N = Name (Par) then
+      if Nkind (Par) = N_Assignment_Statement
+        and then (N = Name (Par) or else No_Ctrl_Actions (Par))
+      then
          return;
       end if;
 
@@ -8477,7 +8499,22 @@ package body Exp_Ch6 is
             Chain   := Empty;
          end if;
 
-         Insert_Actions (Allocator, Actions);
+         --  See the Needs_Cleanup predicate in Expand_Allocator_Expression
+
+         if Alloc_Form = Caller_Allocation
+           and then not For_Special_Return_Object (Allocator)
+           and then not (Is_Entity_Name (Name (Func_Call))
+                          and then No_Raise (Entity (Name (Func_Call))))
+           and then not Restriction_Active (No_Exception_Propagation)
+           and then RTE_Available (RE_Free)
+           and then not Debug_Flag_QQ
+         then
+            Insert_Action (Allocator,
+              Build_Cleanup_For_Allocator (Loc,
+                Return_Obj_Access, Storage_Pool (Allocator), Actions));
+         else
+            Insert_Actions (Allocator, Actions);
+         end if;
       end;
 
       --  When the function has a controlling result, an allocation-form
@@ -9107,24 +9144,14 @@ package body Exp_Ch6 is
 
       if Definite and then not Is_OK_Return_Object then
 
-         --  The related object declaration is encased in a transient block
-         --  because the build-in-place function call contains at least one
-         --  nested function call that produces a controlled transient
-         --  temporary:
-
-         --    Obj : ... := BIP_Func_Call (Ctrl_Func_Call);
-
-         --  Since the build-in-place expansion decouples the call from the
-         --  object declaration, the finalization machinery lacks the context
-         --  which prompted the generation of the transient block. To resolve
-         --  this scenario, store the build-in-place call.
-
-         if Scope_Is_Transient then
-            Set_BIP_Initialization_Call (Obj_Def_Id, Res_Decl);
-         end if;
-
          Set_Expression (Obj_Decl, Empty);
          Set_No_Initialization (Obj_Decl);
+
+         --  Since the build-in-place expansion decouples the call from the
+         --  object declaration, the finalization machinery needs to know
+         --  when the object is initialized. Store the build-in-place call.
+
+         Set_BIP_Initialization_Call (Obj_Def_Id, Res_Decl);
 
          --  Park the generated statements if the declaration requires it and
          --  is not the node that is wrapped in a transient scope.

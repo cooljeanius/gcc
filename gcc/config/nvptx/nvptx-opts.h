@@ -1,5 +1,5 @@
 /* Definitions for the NVPTX port needed for option handling.
-   Copyright (C) 2015-2024 Free Software Foundation, Inc.
+   Copyright (C) 2015-2025 Free Software Foundation, Inc.
 
    This file is part of GCC.
 
@@ -43,6 +43,7 @@ enum ptx_version
   PTX_VERSION_6_0,
   PTX_VERSION_6_3,
   PTX_VERSION_7_0,
+  PTX_VERSION_7_3,
   PTX_VERSION_7_8
 };
 

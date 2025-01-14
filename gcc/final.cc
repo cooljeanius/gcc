@@ -1,5 +1,5 @@
 /* Convert RTL to assembler code and output it, for GNU compiler.
-   Copyright (C) 1987-2024 Free Software Foundation, Inc.
+   Copyright (C) 1987-2025 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -363,7 +363,11 @@ get_attr_length_1 (rtx_insn *insn, int (*fallback_fn) (rtx_insn *))
 
       case CALL_INSN:
       case JUMP_INSN:
-	length = fallback_fn (insn);
+	body = PATTERN (insn);
+	if (GET_CODE (body) == ASM_INPUT || asm_noperands (body) >= 0)
+	  length = asm_insn_count (body) * fallback_fn (insn);
+	else
+	  length = fallback_fn (insn);
 	break;
 
       case INSN:
