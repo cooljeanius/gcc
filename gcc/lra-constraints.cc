@@ -1,5 +1,5 @@
 /* Code for RTL transformations to satisfy insn constraints.
-   Copyright (C) 2010-2024 Free Software Foundation, Inc.
+   Copyright (C) 2010-2025 Free Software Foundation, Inc.
    Contributed by Vladimir Makarov <vmakarov@redhat.com>.
 
    This file is part of GCC.
@@ -5872,6 +5872,20 @@ inherit_reload_reg (bool def_p, int original_regno,
 		   "    Rejecting inheritance for insn %d(%s)<-%d(%s) "
 		   "as secondary mem is needed\n",
 		   REGNO (dest), reg_class_names[get_reg_class (REGNO (dest))],
+		   original_regno, reg_class_names[rclass]);
+	  fprintf (lra_dump_file,
+		   "    >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n");
+	}
+      return false;
+    }
+  if (ira_reg_class_min_nregs[rclass][GET_MODE (original_reg)]
+      != ira_reg_class_max_nregs[rclass][GET_MODE (original_reg)])
+    {
+      if (lra_dump_file != NULL)
+	{
+	  fprintf (lra_dump_file,
+		   "    Rejecting inheritance for %d "
+		   "because of requiring non-uniform class %s\n",
 		   original_regno, reg_class_names[rclass]);
 	  fprintf (lra_dump_file,
 		   "    >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n");

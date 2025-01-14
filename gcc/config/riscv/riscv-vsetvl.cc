@@ -1,5 +1,5 @@
 /* VSETVL pass for RISC-V 'V' Extension for GNU compiler.
-   Copyright (C) 2022-2024 Free Software Foundation, Inc.
+   Copyright (C) 2022-2025 Free Software Foundation, Inc.
    Contributed by Juzhe Zhong (juzhe.zhong@rivai.ai), RiVAI Technologies Ltd.
 
 This file is part of GCC.
@@ -222,6 +222,8 @@ enum emit_type
   EMIT_BEFORE,
   EMIT_AFTER,
 };
+
+static const int MAX_LMUL = 8;
 
 /* dump helper functions */
 static const char *
@@ -1445,14 +1447,13 @@ private:
   inline bool prev_ratio_valid_for_next_sew_p (const vsetvl_info &prev,
 					       const vsetvl_info &next)
   {
-    return prev.get_ratio () >= (next.get_sew () / 8);
+    return prev.get_ratio () >= (next.get_sew () / MAX_LMUL);
   }
   inline bool next_ratio_valid_for_prev_sew_p (const vsetvl_info &prev,
 					       const vsetvl_info &next)
   {
-    return next.get_ratio () >= (prev.get_sew () / 8);
+    return next.get_ratio () >= (prev.get_sew () / MAX_LMUL);
   }
-
   inline bool sew_ge_and_ratio_eq_p (const vsetvl_info &prev,
 				     const vsetvl_info &next)
   {
@@ -1469,6 +1470,13 @@ private:
   {
     return sew_ge_p (prev, next) && prev_sew_le_next_max_sew_p (prev, next)
 	   && next_ratio_valid_for_prev_sew_p (prev, next);
+  }
+  inline bool
+  sew_ge_and_prev_sew_le_next_max_sew_and_ratio_eq_p (
+    const vsetvl_info &prev, const vsetvl_info &next)
+  {
+    return sew_ge_p (prev, next) && prev_sew_le_next_max_sew_p (prev, next)
+	   && ratio_eq_p (prev, next);
   }
   inline bool sew_le_and_next_sew_le_prev_max_sew_p (const vsetvl_info &prev,
 						     const vsetvl_info &next)
@@ -1722,6 +1730,7 @@ private:
   {
     int max_sew = MAX (prev.get_sew (), next.get_sew ());
     prev.set_sew (max_sew);
+    prev.set_ratio (calculate_ratio (prev.get_sew (), prev.get_vlmul ()));
     use_min_of_max_sew (prev, next);
   }
   inline void use_next_sew_lmul (vsetvl_info &prev, const vsetvl_info &next)

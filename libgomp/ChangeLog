@@ -1,3 +1,43 @@
+2025-01-13  Paul-Antoine Arras  <parras@baylibre.com>
+
+	* testsuite/libgomp.fortran/dispatch-1.f90: Add missing target
+	directive.
+
+2025-01-09  Thomas Schwinge  <tschwinge@baylibre.com>
+
+	PR target/65181
+	* fortran.c (omp_get_device_from_uid_): Adjust.
+	* testsuite/libgomp.oacc-fortran/privatized-ref-2.f90: Likewise.
+
+2025-01-07  Tobias Burnus  <tburnus@baylibre.com>
+
+	* libgomp.texi (OpenMP 6.0): Fix typo.
+	(omp_get_default_device): Update the wording as the value
+	returned by omp_get_initial_device is now ambiguous.
+	(omp_get_num_devices): Minor wording tweak.
+	(omp_get_initial_device): Note that the function may also
+	return omp_initial_device since OpenMP 6.
+
+2025-01-03  Jakub Jelinek  <jakub@redhat.com>
+
+	* configure: Regenerate.
+
+2025-01-03  Paul-Antoine Arras  <parras@baylibre.com>
+
+	* libgomp.texi:
+
+2025-01-02  Paul-Antoine Arras  <parras@baylibre.com>
+
+	* testsuite/libgomp.fortran/declare-variant-2-aux.f90: New test.
+	* testsuite/libgomp.fortran/declare-variant-2.f90: New test (xfail).
+	* testsuite/libgomp.fortran/dispatch-1.f90: New test.
+	* testsuite/libgomp.fortran/dispatch-2.f90: New test.
+	* testsuite/libgomp.fortran/dispatch-3.f90: New test.
+
+2025-01-02  Jakub Jelinek  <jakub@redhat.com>
+
+	* libgomp.texi: Bump @copying's copyright year.
+
 2024-12-19  Tobias Burnus  <tburnus@baylibre.com>
 
 	* libgomp.texi (OpenMP Context Selectors): Document that 'kind' also
@@ -21829,7 +21869,7 @@
 
 	Initial implementation and checkin.
 
-Copyright (C) 2005-2024 Free Software Foundation, Inc.
+Copyright (C) 2005-2025 Free Software Foundation, Inc.
 
 Copying and distribution of this file, with or without modification,
 are permitted in any medium without royalty provided the copyright

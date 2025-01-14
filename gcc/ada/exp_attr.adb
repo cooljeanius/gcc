@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2024, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2025, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -2265,18 +2265,6 @@ package body Exp_Attr is
       --  nothing more to do.
 
       case Id is
-
-      --  Attributes related to Ada 2012 iterators. They are only allowed in
-      --  attribute definition clauses and should never be expanded.
-
-      when Attribute_Constant_Indexing
-         | Attribute_Default_Iterator
-         | Attribute_Implicit_Dereference
-         | Attribute_Iterable
-         | Attribute_Iterator_Element
-         | Attribute_Variable_Indexing
-      =>
-         raise Program_Error;
 
       --  Internal attributes used to deal with Ada 2012 delayed aspects. These
       --  were already rejected by the parser. Thus they shouldn't appear here.
@@ -6434,10 +6422,10 @@ package body Exp_Attr is
                begin
                   Iter :=
                     Make_Iterator_Specification (Loc,
-                    Defining_Identifier => Elem,
-                    Name => Relocate_Node (Prefix (N)),
-                    Subtype_Indication => Empty);
-                  Set_Of_Present (Iter);
+                      Defining_Identifier => Elem,
+                      Subtype_Indication  => Empty,
+                      Of_Present          => True,
+                      Name                => Relocate_Node (Prefix (N)));
 
                   New_Loop := Make_Loop_Statement (Loc,
                     Iteration_Scheme =>

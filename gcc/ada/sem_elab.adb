@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1997-2024, Free Software Foundation, Inc.         --
+--          Copyright (C) 1997-2025, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -17389,7 +17389,7 @@ package body Sem_Elab is
       --  Nothing to do if call is being preanalyzed, as when within a
       --  pre/postcondition, a predicate, or an invariant.
 
-      elsif In_Spec_Expression then
+      elsif Preanalysis_Active then
          return;
       end if;
 

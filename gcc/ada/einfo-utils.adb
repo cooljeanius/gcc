@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---           Copyright (C) 2020-2024, Free Software Foundation, Inc.        --
+--           Copyright (C) 2020-2025, Free Software Foundation, Inc.        --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -1036,6 +1036,7 @@ package body Einfo.Utils is
                   Id = Pragma_Always_Terminates         or else
                   Id = Pragma_Contract_Cases            or else
                   Id = Pragma_Exceptional_Cases         or else
+                  Id = Pragma_Exit_Cases                or else
                   Id = Pragma_Subprogram_Variant        or else
                   Id = Pragma_Test_Case;
 

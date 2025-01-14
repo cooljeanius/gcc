@@ -3,7 +3,7 @@
    building RTL.  These routines are used both during actual parsing
    and during the instantiation of template functions.
 
-   Copyright (C) 1998-2024 Free Software Foundation, Inc.
+   Copyright (C) 1998-2025 Free Software Foundation, Inc.
    Written by Mark Mitchell (mmitchell@usa.net) based on code found
    formerly in parse.y and pt.cc.
 
@@ -2133,6 +2133,29 @@ finish_compound_stmt (tree stmt)
   add_stmt (stmt);
 }
 
+/* Finish an asm string literal, which can be a string literal
+   or parenthesized constant expression.  Extract the string literal
+   from the latter.  */
+
+tree
+finish_asm_string_expression (location_t loc, tree string)
+{
+  if (string == error_mark_node
+      || TREE_CODE (string) == STRING_CST
+      || processing_template_decl)
+    return string;
+  string = cxx_constant_value (string, tf_error);
+  if (TREE_CODE (string) == STRING_CST)
+    string = build1_loc (loc, PAREN_EXPR, TREE_TYPE (string),
+			 string);
+  cexpr_str cstr (string);
+  if (!cstr.type_check (loc))
+    return error_mark_node;
+  if (!cstr.extract (loc, string))
+    string = error_mark_node;
+  return string;
+}
+
 /* Finish an asm-statement, whose components are a STRING, some
    OUTPUT_OPERANDS, some INPUT_OPERANDS, some CLOBBERS and some
    LABELS.  Also note whether the asm-statement should be
@@ -2158,6 +2181,26 @@ finish_asm_stmt (location_t loc, int volatile_p, tree string,
       int i;
 
       oconstraints = XALLOCAVEC (const char *, noutputs);
+
+      string = finish_asm_string_expression (cp_expr_loc_or_loc (string, loc),
+					     string);
+      if (string == error_mark_node)
+	return error_mark_node;
+      for (int i = 0; i < 2; ++i)
+	for (t = i ? input_operands : output_operands; t; t = TREE_CHAIN (t))
+	  {
+	    tree s = TREE_VALUE (TREE_PURPOSE (t));
+	    s = finish_asm_string_expression (cp_expr_loc_or_loc (s, loc), s);
+	    if (s == error_mark_node)
+	      return error_mark_node;
+	    TREE_VALUE (TREE_PURPOSE (t)) = s;
+	  }
+      for (t = clobbers; t; t = TREE_CHAIN (t))
+	{
+	  tree s = TREE_VALUE (t);
+	  s = finish_asm_string_expression (cp_expr_loc_or_loc (s, loc), s);
+	  TREE_VALUE (t) = s;
+	}
 
       string = resolve_asm_operand_names (string, output_operands,
 					  input_operands, labels);
@@ -10196,26 +10239,27 @@ finish_omp_threadprivate (tree vars)
   for (t = vars; t; t = TREE_CHAIN (t))
     {
       tree v = TREE_PURPOSE (t);
+      location_t loc = EXPR_LOCATION (TREE_VALUE (t));
 
       if (error_operand_p (v))
 	;
       else if (!VAR_P (v))
-	error ("%<threadprivate%> %qD is not file, namespace "
-	       "or block scope variable", v);
+	error_at (loc, "%<threadprivate%> %qD is not file, namespace "
+		       "or block scope variable", v);
       /* If V had already been marked threadprivate, it doesn't matter
 	 whether it had been used prior to this point.  */
       else if (TREE_USED (v)
 	  && (DECL_LANG_SPECIFIC (v) == NULL
 	      || !CP_DECL_THREADPRIVATE_P (v)))
-	error ("%qE declared %<threadprivate%> after first use", v);
+	error_at (loc, "%qE declared %<threadprivate%> after first use", v);
       else if (! TREE_STATIC (v) && ! DECL_EXTERNAL (v))
-	error ("automatic variable %qE cannot be %<threadprivate%>", v);
+	error_at (loc, "automatic variable %qE cannot be %<threadprivate%>", v);
       else if (! COMPLETE_TYPE_P (complete_type (TREE_TYPE (v))))
-	error ("%<threadprivate%> %qE has incomplete type", v);
+	error_at (loc, "%<threadprivate%> %qE has incomplete type", v);
       else if (TREE_STATIC (v) && TYPE_P (CP_DECL_CONTEXT (v))
 	       && CP_DECL_CONTEXT (v) != current_class_type)
-	error ("%<threadprivate%> %qE directive not "
-	       "in %qT definition", v, CP_DECL_CONTEXT (v));
+	error_at (loc, "%<threadprivate%> %qE directive not "
+		       "in %qT definition", v, CP_DECL_CONTEXT (v));
       else
 	{
 	  /* Allocate a LANG_SPECIFIC structure for V, if needed.  */

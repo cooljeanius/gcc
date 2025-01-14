@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 S p e c                                  --
 --                                                                          --
---          Copyright (C) 1992-2024, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2025, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -598,12 +598,16 @@ package Sem_Util is
    --  attribute, except in the case of formal private and derived types.
    --  Possible optimization???
 
-   function Corresponding_Primitive_Op
+   function Corresponding_Op_Of_Derived_Type
      (Ancestor_Op     : Entity_Id;
       Descendant_Type : Entity_Id) return Entity_Id;
-   --  Given a primitive subprogram of a first type and a (distinct)
-   --  descendant type of that type, find the corresponding primitive
-   --  subprogram of the descendant type.
+   --  Given a subprogram Ancestor_Op associated with an ancestor type,
+   --  and a (distinct) descendant type of that type, find the corresponding
+   --  subprogram entity, if any, of the descendant type and return it.
+   --  Usually this is a primitive subprogram, but if Ancestor_Op is not
+   --  a primitive of the ancestor type (for example, it could be a class-wide
+   --  operation of the ancestor), then this function will simply return
+   --  Ancestor_Op.
 
    function Current_Entity (N : Node_Id) return Entity_Id;
    pragma Inline (Current_Entity);
@@ -1698,6 +1702,16 @@ package Sem_Util is
    --  either the value is not yet known before back-end processing or it is
    --  not known at compile time after back-end processing.
 
+   procedure Inherit_Nonoverridable_Aspects
+     (Typ : Entity_Id; From_Typ : Entity_Id);
+   --  For each nonoverridable aspect of parent type From_Typ, create an
+   --  inherited aspect for Typ and identify the subprograms that are denoted
+   --  by the inherited aspect, which may be the same subprograms of From_Typ,
+   --  or the corresponding inherited or overriding subprograms of Typ (in the
+   --  case where the parent subprogram is primitive), or even other eligible
+   --  subprograms that have been added to the derived type (such as can occur
+   --  in the case of indexing aspects).
+
    procedure Inherit_Predicate_Flags
      (Subt, Par  : Entity_Id;
       Only_Flags : Boolean := False);
@@ -2354,6 +2368,7 @@ package Sem_Util is
    --    Contract_Cases
    --    Depends
    --    Exceptional_Cases
+   --    Exit_Cases
    --    Extensions_Visible
    --    Global
    --    Post

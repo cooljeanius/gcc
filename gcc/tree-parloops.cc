@@ -1,5 +1,5 @@
 /* Loop autoparallelization.
-   Copyright (C) 2006-2024 Free Software Foundation, Inc.
+   Copyright (C) 2006-2025 Free Software Foundation, Inc.
    Contributed by Sebastian Pop <pop@cri.ensmp.fr>
    Zdenek Dvorak <dvorakz@suse.cz> and Razya Ladelsky <razya@il.ibm.com>.
 
@@ -948,7 +948,7 @@ reduction_phi (reduction_info_table_type *reduction_list, gimple *phi)
 {
   struct reduction_info tmpred, *red;
 
-  if (reduction_list->is_empty () || phi == NULL)
+  if (reduction_list->is_empty () || phi == NULL || !is_a <gphi *> (phi))
     return NULL;
 
   if (gimple_uid (phi) == (unsigned int)-1

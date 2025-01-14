@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2024, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2025, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -2075,6 +2075,21 @@ package body Atree is
          return Node_Or_Entity_Id (Link (N));
       end if;
    end Node_Parent;
+
+   -------------------------------
+   -- Parent_Or_List_Containing --
+   -------------------------------
+
+   function Parent_Or_List_Containing (X : Union_Id) return Union_Id is
+   begin
+      if X in Node_Range then
+         return Link (Node_Id (X));
+      elsif X in List_Range then
+         return Union_Id (List_Parent (List_Id (X)));
+      else
+         raise Program_Error;
+      end if;
+   end Parent_Or_List_Containing;
 
    -------------
    -- Present --

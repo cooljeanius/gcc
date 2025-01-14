@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2024, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2025, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -1409,10 +1409,10 @@ package body Sem_Ch3 is
                begin
                   Decl :=
                     Make_Subtype_Declaration (Loc,
-                      Defining_Identifier => Nam,
-                      Subtype_Indication  =>
+                      Defining_Identifier    => Nam,
+                      Null_Exclusion_Present => True,
+                      Subtype_Indication     =>
                         New_Occurrence_Of (Entity (S), Loc));
-                  Set_Null_Exclusion_Present (Decl);
                   Insert_Before (Parent (Def), Decl);
                   Analyze (Decl);
                   Set_Entity (S, Nam);
@@ -4575,7 +4575,8 @@ package body Sem_Ch3 is
            and then Is_Itype (T)
          then
             Set_Has_Delayed_Freeze (T);
-         elsif not In_Spec_Expression then
+
+         elsif not Preanalysis_Active then
             Freeze_Before (N, T);
          end if;
       end if;
@@ -4689,11 +4690,22 @@ package body Sem_Ch3 is
          if Back_End_Inlining
            and then Expander_Active
            and then Nkind (E) = N_Function_Call
-           and then Nkind (Name (E)) in N_Has_Entity
+           and then Is_Entity_Name (Name (E))
            and then Is_Inlined (Entity (Name (E)))
            and then not Is_Constrained (Etype (E))
-           and then Analyzed (N)
            and then No (Expression (N))
+           and then Analyzed (N)
+         then
+            goto Leave;
+         end if;
+
+         --  No further action needed if E is a conditional expression and N
+         --  has been replaced by a renaming declaration during its expansion
+         --  (see Expand_N_Case_Expression and Expand_N_If_Expression).
+
+         if Expander_Active
+           and then Nkind (E) in N_Case_Expression | N_If_Expression
+           and then Nkind (N) = N_Object_Renaming_Declaration
          then
             goto Leave;
          end if;
@@ -6600,12 +6612,6 @@ package body Sem_Ch3 is
                            (Related_Nod => P,
                             N           => Access_Definition (Component_Def));
          Set_Is_Local_Anonymous_Access (Element_Type);
-
-         --  Propagate the parent. This field is needed if we have to generate
-         --  the master_id associated with an anonymous access to task type
-         --  component (see Expand_N_Full_Type_Declaration.Build_Master)
-
-         Copy_Parent (To => Element_Type, From => T);
 
          --  Ada 2005 (AI-230): In case of components that are anonymous access
          --  types the level of accessibility depends on the enclosing type
@@ -12185,11 +12191,10 @@ package body Sem_Ch3 is
          else
             Type_Def :=
               Make_Access_To_Object_Definition (Loc,
+                All_Present        => All_Present (Access_Def),
+                Constant_Present   => Constant_Present (Access_Def),
                 Subtype_Indication =>
-                   Relocate_Node (Subtype_Mark (Access_Def)));
-
-            Set_Constant_Present (Type_Def, Constant_Present (Access_Def));
-            Set_All_Present (Type_Def, All_Present (Access_Def));
+                  Relocate_Node (Subtype_Mark (Access_Def)));
          end if;
 
          Set_Null_Exclusion_Present
@@ -18556,7 +18561,7 @@ package body Sem_Ch3 is
                Error_Msg_N
                  ("full view of private extension must be an extension", N);
 
-            elsif not (Abstract_Present (Parent (Prev)))
+            elsif not Abstract_Present (Parent (Prev))
               and then Abstract_Present (Type_Definition (N))
             then
                Error_Msg_N
@@ -18791,7 +18796,9 @@ package body Sem_Ch3 is
          end if;
 
          --  When generating code, insert subtype declaration ahead of
-         --  declaration that generated it.
+         --  declaration that generated it. Similar behavior required under
+         --  preanalysis (including strict preanalysis) to perform the
+         --  minimum decoration, and avoid reporting spurious errors.
 
          Insert_Action (Obj_Def,
            Make_Subtype_Declaration (Sloc (P),

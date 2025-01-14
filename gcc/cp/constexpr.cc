@@ -2,7 +2,7 @@
    constexpr functions.  These routines are used both during actual parsing
    and during the instantiation of template functions.
 
-   Copyright (C) 1998-2024 Free Software Foundation, Inc.
+   Copyright (C) 1998-2025 Free Software Foundation, Inc.
 
    This file is part of GCC.
 
@@ -8005,6 +8005,7 @@ cxx_eval_constant_expression (const constexpr_ctx *ctx, tree t,
     case BIT_NOT_EXPR:
     case TRUTH_NOT_EXPR:
     case FIXED_CONVERT_EXPR:
+    case VEC_DUPLICATE_EXPR:
       r = cxx_eval_unary_expression (ctx, t, lval,
 				     non_constant_p, overflow_p);
       break;
@@ -8718,7 +8719,7 @@ cxx_eval_constant_expression (const constexpr_ctx *ctx, tree t,
 	    error_at (EXPR_LOCATION (t),
 		      "statement is not a constant expression");
 	}
-      else
+      else if (flag_checking)
 	internal_error ("unexpected expression %qE of kind %s", t,
 			get_tree_code_name (TREE_CODE (t)));
       *non_constant_p = true;
@@ -10344,6 +10345,7 @@ potential_constant_expression_1 (tree t, bool want_rval, bool strict, bool now,
     case UNARY_PLUS_EXPR:
     case UNARY_LEFT_FOLD_EXPR:
     case UNARY_RIGHT_FOLD_EXPR:
+    case VEC_DUPLICATE_EXPR:
     unary:
       return RECUR (TREE_OPERAND (t, 0), rval);
 
@@ -10369,9 +10371,14 @@ potential_constant_expression_1 (tree t, bool want_rval, bool strict, bool now,
 	       && (dependent_type_p (TREE_TYPE (t))
 		   || !COMPLETE_TYPE_P (TREE_TYPE (t))
 		   || literal_type_p (TREE_TYPE (t)))
-	       && TREE_OPERAND (t, 0))
+	       && TREE_OPERAND (t, 0)
+	       && (TREE_CODE (t) != CAST_EXPR
+		   || !TREE_CHAIN (TREE_OPERAND (t, 0))))
 	{
-	  tree type = TREE_TYPE (TREE_OPERAND (t, 0));
+	  tree from = TREE_OPERAND (t, 0);
+	  if (TREE_CODE (t) == CAST_EXPR)
+	    from = TREE_VALUE (from);
+	  tree type = TREE_TYPE (from);
 	  /* If this is a dependent type, it could end up being a class
 	     with conversions.  */
 	  if (type == NULL_TREE || WILDCARD_TYPE_P (type))

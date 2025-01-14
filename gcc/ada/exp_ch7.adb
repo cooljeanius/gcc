@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2024, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2025, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -514,7 +514,13 @@ package body Exp_Ch7 is
    --  cleanup actions are performed at the end of the block.
 
    procedure Store_Actions_In_Scope (AK : Scope_Action_Kind; L : List_Id);
-   --  Shared processing for Store_xxx_Actions_In_Scope
+   --  Shared processing for the Store_xxx_Actions_In_Scope routines: attach
+   --  the list L of actions to the list of actions stored in the top of the
+   --  scope stack specified by AK.
+
+   procedure Store_New_Actions_In_Scope (AK : Scope_Action_Kind; L : List_Id);
+   --  Same as above for the case where the list of actions stored in the top
+   --  of the scope stack specified by AK is empty.
 
    -------------------------------------------
    -- Unnesting procedures for CCG and LLVM --
@@ -2546,7 +2552,8 @@ package body Exp_Ch7 is
                elsif Ekind (Obj_Id) = E_Variable
                  and then Is_RTE (Obj_Typ, RE_Master_Node)
                then
-                  Processing_Actions (Decl);
+                  Processing_Actions
+                    (Decl, Strict => not Is_Independent (Obj_Id));
 
                --  The object is of the form:
                --    Obj : [constant] Typ [:= Expr];
@@ -8906,14 +8913,7 @@ package body Exp_Ch7 is
 
    begin
       if Is_Empty_List (Actions) then
-         Actions := L;
-
-         if Is_List_Member (SE.Node_To_Be_Wrapped) then
-            Set_Parent (L, Parent (SE.Node_To_Be_Wrapped));
-         else
-            Set_Parent (L, SE.Node_To_Be_Wrapped);
-         end if;
-
+         Store_New_Actions_In_Scope (AK, L);
          Analyze_List (L);
 
       elsif AK = Before then
@@ -8933,6 +8933,22 @@ package body Exp_Ch7 is
       Store_Actions_In_Scope (After, L);
    end Store_After_Actions_In_Scope;
 
+   ---------------------------------------------------
+   -- Store_After_Actions_In_Scope_Without_Analysis --
+   ---------------------------------------------------
+
+   procedure Store_After_Actions_In_Scope_Without_Analysis (L : List_Id) is
+      SE      : Scope_Stack_Entry renames Scope_Stack.Table (Scope_Stack.Last);
+      Actions : List_Id renames SE.Actions_To_Be_Wrapped (After);
+
+   begin
+      if Is_Empty_List (Actions) then
+         Store_New_Actions_In_Scope (After, L);
+      else
+         Insert_List_Before (First (Actions), L);
+      end if;
+   end Store_After_Actions_In_Scope_Without_Analysis;
+
    -----------------------------------
    -- Store_Before_Actions_In_Scope --
    -----------------------------------
@@ -8950,6 +8966,29 @@ package body Exp_Ch7 is
    begin
       Store_Actions_In_Scope (Cleanup, L);
    end Store_Cleanup_Actions_In_Scope;
+
+   --------------------------------
+   -- Store_New_Actions_In_Scope --
+   --------------------------------
+
+   procedure Store_New_Actions_In_Scope (AK : Scope_Action_Kind; L : List_Id)
+   is
+      SE      : Scope_Stack_Entry renames Scope_Stack.Table (Scope_Stack.Last);
+      Actions : List_Id renames SE.Actions_To_Be_Wrapped (AK);
+
+   begin
+      pragma Assert (Is_Empty_List (Actions));
+
+      Actions := L;
+
+      --  Set the Parent link to provide the context for the actions
+
+      if Is_List_Member (SE.Node_To_Be_Wrapped) then
+         Set_Parent (L, Parent (SE.Node_To_Be_Wrapped));
+      else
+         Set_Parent (L, SE.Node_To_Be_Wrapped);
+      end if;
+   end Store_New_Actions_In_Scope;
 
    ------------------
    -- Unnest_Block --

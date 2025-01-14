@@ -1,5 +1,5 @@
 /* Intrinsic translation
-   Copyright (C) 2002-2024 Free Software Foundation, Inc.
+   Copyright (C) 2002-2025 Free Software Foundation, Inc.
    Contributed by Paul Brook <paul@nowt.org>
    and Steven Bosscher <s.bosscher@student.tudelft.nl>
 
@@ -6991,6 +6991,198 @@ gfc_conv_intrinsic_not (gfc_se * se, gfc_expr * expr)
 			      TREE_TYPE (arg), arg);
 }
 
+
+/* Generate code for OUT_OF_RANGE.  */
+static void
+gfc_conv_intrinsic_out_of_range (gfc_se * se, gfc_expr * expr)
+{
+  tree *args;
+  tree type;
+  tree tmp = NULL_TREE, tmp1, tmp2;
+  unsigned int num_args;
+  int k;
+  gfc_se rnd_se;
+  gfc_actual_arglist *arg = expr->value.function.actual;
+  gfc_expr *x = arg->expr;
+  gfc_expr *mold = arg->next->expr;
+
+  num_args = gfc_intrinsic_argument_list_length (expr);
+  args = XALLOCAVEC (tree, num_args);
+
+  gfc_conv_intrinsic_function_args (se, expr, args, num_args);
+
+  gfc_init_se (&rnd_se, NULL);
+
+  if (num_args == 3)
+    {
+      /* The ROUND argument is optional and shall appear only if X is
+	 of type real and MOLD is of type integer (see edit F23/004).  */
+      gfc_expr *round = arg->next->next->expr;
+      gfc_conv_expr (&rnd_se, round);
+
+      if (round->expr_type == EXPR_VARIABLE
+	  && round->symtree->n.sym->attr.dummy
+	  && round->symtree->n.sym->attr.optional)
+	{
+	  tree present = gfc_conv_expr_present (round->symtree->n.sym);
+	  rnd_se.expr = build3_loc (input_location, COND_EXPR,
+				    logical_type_node, present,
+				    rnd_se.expr, logical_false_node);
+	  gfc_add_block_to_block (&se->pre, &rnd_se.pre);
+	}
+    }
+  else
+    {
+      /* If ROUND is absent, it is equivalent to having the value false.  */
+      rnd_se.expr = logical_false_node;
+    }
+
+  type = TREE_TYPE (args[0]);
+  k = gfc_validate_kind (mold->ts.type, mold->ts.kind, false);
+
+  switch (x->ts.type)
+    {
+    case BT_REAL:
+      /* X may be IEEE infinity or NaN, but the representation of MOLD may not
+	 support infinity or NaN.  */
+      tree finite;
+      finite = build_call_expr_loc (input_location,
+				    builtin_decl_explicit (BUILT_IN_ISFINITE),
+				    1,  args[0]);
+      finite = convert (logical_type_node, finite);
+
+      if (mold->ts.type == BT_REAL)
+	{
+	  tmp1 = build1 (ABS_EXPR, type, args[0]);
+	  tmp2 = gfc_conv_mpfr_to_tree (gfc_real_kinds[k].huge,
+					mold->ts.kind, 0);
+	  tmp = build2 (GT_EXPR, logical_type_node, tmp1,
+			convert (type, tmp2));
+
+	  /* Check if MOLD representation supports infinity or NaN.  */
+	  bool infnan = (HONOR_INFINITIES (TREE_TYPE (args[1]))
+			 || HONOR_NANS (TREE_TYPE (args[1])));
+	  tmp = build3 (COND_EXPR, logical_type_node, finite, tmp,
+			infnan ? logical_false_node : logical_true_node);
+	}
+      else
+	{
+	  tree rounded;
+	  tree decl;
+
+	  decl = gfc_builtin_decl_for_float_kind (BUILT_IN_TRUNC, x->ts.kind);
+	  gcc_assert (decl != NULL_TREE);
+
+	  /* Round or truncate argument X, depending on the optional argument
+	     ROUND (default: .false.).  */
+	  tmp1 = build_round_expr (args[0], type);
+	  tmp2 = build_call_expr_loc (input_location, decl, 1, args[0]);
+	  rounded = build3 (COND_EXPR, type, rnd_se.expr, tmp1, tmp2);
+
+	  if (mold->ts.type == BT_INTEGER)
+	    {
+	      tmp1 = gfc_conv_mpz_to_tree (gfc_integer_kinds[k].min_int,
+					   x->ts.kind);
+	      tmp2 = gfc_conv_mpz_to_tree (gfc_integer_kinds[k].huge,
+					   x->ts.kind);
+	    }
+	  else if (mold->ts.type == BT_UNSIGNED)
+	    {
+	      tmp1 = build_real_from_int_cst (type, integer_zero_node);
+	      tmp2 = gfc_conv_mpz_to_tree (gfc_unsigned_kinds[k].huge,
+					   x->ts.kind);
+	    }
+	  else
+	    gcc_unreachable ();
+
+	  tmp1 = build2 (LT_EXPR, logical_type_node, rounded,
+			 convert (type, tmp1));
+	  tmp2 = build2 (GT_EXPR, logical_type_node, rounded,
+			 convert (type, tmp2));
+	  tmp = build2 (TRUTH_ORIF_EXPR, logical_type_node, tmp1, tmp2);
+	  tmp = build2 (TRUTH_ORIF_EXPR, logical_type_node,
+			build1 (TRUTH_NOT_EXPR, logical_type_node, finite),
+			tmp);
+	}
+      break;
+
+    case BT_INTEGER:
+      if (mold->ts.type == BT_INTEGER)
+	{
+	  tmp1 = gfc_conv_mpz_to_tree (gfc_integer_kinds[k].min_int,
+				       x->ts.kind);
+	  tmp2 = gfc_conv_mpz_to_tree (gfc_integer_kinds[k].huge,
+				       x->ts.kind);
+	  tmp1 = build2 (LT_EXPR, logical_type_node, args[0],
+			 convert (type, tmp1));
+	  tmp2 = build2 (GT_EXPR, logical_type_node, args[0],
+			 convert (type, tmp2));
+	  tmp = build2 (TRUTH_ORIF_EXPR, logical_type_node, tmp1, tmp2);
+	}
+      else if (mold->ts.type == BT_UNSIGNED)
+	{
+	  int i = gfc_validate_kind (x->ts.type, x->ts.kind, false);
+	  tmp = build_int_cst (type, 0);
+	  tmp = build2 (LT_EXPR, logical_type_node, args[0], tmp);
+	  if (mpz_cmp (gfc_integer_kinds[i].huge,
+		       gfc_unsigned_kinds[k].huge) > 0)
+	    {
+	      tmp2 = gfc_conv_mpz_to_tree (gfc_unsigned_kinds[k].huge,
+					   x->ts.kind);
+	      tmp2 = build2 (GT_EXPR, logical_type_node, args[0],
+			     convert (type, tmp2));
+	      tmp = build2 (TRUTH_ORIF_EXPR, logical_type_node, tmp, tmp2);
+	    }
+	}
+      else if (mold->ts.type == BT_REAL)
+	{
+	  tmp2 = gfc_conv_mpfr_to_tree (gfc_real_kinds[k].huge,
+					mold->ts.kind, 0);
+	  tmp1 = build1 (NEGATE_EXPR, TREE_TYPE (tmp2), tmp2);
+	  tmp1 = build2 (LT_EXPR, logical_type_node, args[0],
+			 convert (type, tmp1));
+	  tmp2 = build2 (GT_EXPR, logical_type_node, args[0],
+			 convert (type, tmp2));
+	  tmp = build2 (TRUTH_ORIF_EXPR, logical_type_node, tmp1, tmp2);
+	}
+      else
+	gcc_unreachable ();
+      break;
+
+    case BT_UNSIGNED:
+      if (mold->ts.type == BT_UNSIGNED)
+	{
+	  tmp = gfc_conv_mpz_to_tree (gfc_unsigned_kinds[k].huge,
+				      x->ts.kind);
+	  tmp = build2 (GT_EXPR, logical_type_node, args[0],
+			convert (type, tmp));
+	}
+      else if (mold->ts.type == BT_INTEGER)
+	{
+	  tmp = gfc_conv_mpz_to_tree (gfc_integer_kinds[k].huge,
+				      x->ts.kind);
+	  tmp = build2 (GT_EXPR, logical_type_node, args[0],
+			convert (type, tmp));
+	}
+      else if (mold->ts.type == BT_REAL)
+	{
+	  tmp = gfc_conv_mpfr_to_tree (gfc_real_kinds[k].huge,
+				       mold->ts.kind, 0);
+	  tmp = build2 (GT_EXPR, logical_type_node, args[0],
+			convert (type, tmp));
+	}
+      else
+	gcc_unreachable ();
+      break;
+
+    default:
+      gcc_unreachable ();
+    }
+
+  se->expr = convert (gfc_typenode_for_spec (&expr->ts), tmp);
+}
+
+
 /* Set or clear a single bit.  */
 static void
 gfc_conv_intrinsic_singlebitop (gfc_se * se, gfc_expr * expr, int set)
@@ -10024,11 +10216,39 @@ gfc_conv_intrinsic_loc (gfc_se * se, gfc_expr * expr)
 }
 
 
-/* The following routine generates code for the intrinsic
-   functions from the ISO_C_BINDING module:
-    * C_LOC
-    * C_FUNLOC
-    * C_ASSOCIATED  */
+/* Specialized trim for f_c_string.  */
+
+static void
+conv_trim (gfc_se *tse, gfc_se *str)
+{
+  tree cond, plen, pvar, tlen, ttmp, tvar;
+
+  tlen = gfc_create_var (gfc_charlen_type_node, "tlen");
+  plen = gfc_build_addr_expr (NULL_TREE, tlen);
+
+  tvar = gfc_create_var (pchar_type_node, "tstr");
+  pvar = gfc_build_addr_expr (ppvoid_type_node, tvar);
+
+  ttmp = build_call_expr_loc (input_location, gfor_fndecl_string_trim, 4,
+			      plen, pvar, str->string_length, str->expr);
+
+  gfc_add_expr_to_block (&tse->pre, ttmp);
+
+  /* Free the temporary afterwards, if necessary.  */
+  cond = fold_build2_loc (input_location, GT_EXPR, logical_type_node,
+			  tlen, build_int_cst (TREE_TYPE (tlen), 0));
+  ttmp = gfc_call_free (tvar);
+  ttmp = build3_v (COND_EXPR, cond, ttmp, build_empty_stmt (input_location));
+  gfc_add_expr_to_block (&tse->post, ttmp);
+
+  tse->expr = tvar;
+  tse->string_length = tlen;
+}
+
+
+/* The following routine generates code for the intrinsic functions from
+   the ISO_C_BINDING module: C_LOC, C_FUNLOC, C_ASSOCIATED, and
+   F_C_STRING.  */
 
 static void
 conv_isocbinding_function (gfc_se *se, gfc_expr *expr)
@@ -10102,6 +10322,149 @@ conv_isocbinding_function (gfc_se *se, gfc_expr *expr)
 				      logical_type_node,
 				      not_null_expr, eq_expr);
 	}
+    }
+  else if (expr->value.function.isym->id == GFC_ISYM_F_C_STRING)
+    {
+      /* There are three cases:
+	 f_c_string(string)          -> trim(string) // c_null_char
+	 f_c_string(string, .false.) -> trim(string) // c_null_char
+	 f_c_string(string, .true.)  -> string       // c_null_char  */
+
+      gfc_se lse, rse, tse;
+      tree len, tmp, var;
+      gfc_expr *string = arg->expr;
+      gfc_expr *asis = arg->next->expr;
+      gfc_expr *cnc;
+
+      /* Convert string. */
+      gfc_init_se (&lse, se);
+      gfc_conv_expr (&lse, string);
+      gfc_conv_string_parameter (&lse);
+
+      /* Create a string for C_NULL_CHAR and convert it.  */
+      cnc = gfc_get_character_expr (gfc_default_character_kind,
+				    &string->where, "\0", 1);
+      gfc_init_se (&rse, se);
+      gfc_conv_expr (&rse, cnc);
+      gfc_conv_string_parameter (&rse);
+      gfc_free_expr (cnc);
+
+#ifdef cnode
+#undef cnode
+#endif
+#define cnode gfc_charlen_type_node
+      if (asis)
+	{
+	  stmtblock_t block;
+	  gfc_se asis_se, vse;
+	  tree elen, evar, tlen, tvar;
+	  tree else_branch, then_branch;
+
+	  elen = evar = tlen = tvar = NULL_TREE;
+
+	  /* f_c_string(string, .true.) -> string // c_null_char  */
+
+	  gfc_init_block (&block);
+
+	  gfc_add_block_to_block (&block, &lse.pre);
+	  gfc_add_block_to_block (&block, &rse.pre);
+
+	  tlen = fold_build2_loc (input_location, PLUS_EXPR, cnode,
+				  fold_convert (cnode, lse.string_length),
+				  fold_convert (cnode, rse.string_length));
+
+	  gfc_init_se (&vse, se);
+	  tvar = gfc_conv_string_tmp (&vse, pchar_type_node, tlen);
+	  gfc_add_block_to_block (&block, &vse.pre);
+
+	  tmp = build_call_expr_loc (input_location, gfor_fndecl_concat_string,
+				     6, tlen, tvar,
+				     lse.string_length, lse.expr,
+				     rse.string_length, rse.expr);
+	  gfc_add_expr_to_block (&block, tmp);
+
+	  then_branch = gfc_finish_block (&block);
+
+	  /* f_c_string(string, .false.) = trim(string) // c_null_char  */
+
+	  gfc_init_block (&block);
+
+	  gfc_init_se (&tse, se);
+	  conv_trim (&tse, &lse);
+	  gfc_add_block_to_block (&block, &tse.pre);
+	  gfc_add_block_to_block (&block, &rse.pre);
+
+	  elen = fold_build2_loc (input_location, PLUS_EXPR, cnode,
+				  fold_convert (cnode, tse.string_length),
+				  fold_convert (cnode, rse.string_length));
+
+	  gfc_init_se (&vse, se);
+	  evar = gfc_conv_string_tmp (&vse, pchar_type_node, elen);
+	  gfc_add_block_to_block (&block, &vse.pre);
+
+	  tmp = build_call_expr_loc (input_location, gfor_fndecl_concat_string,
+				     6, elen, evar,
+				     tse.string_length, tse.expr,
+				     rse.string_length, rse.expr);
+	  gfc_add_expr_to_block (&block, tmp);
+
+	  else_branch = gfc_finish_block (&block);
+
+	  gfc_init_se (&asis_se, se);
+	  gfc_conv_expr (&asis_se, asis);
+	  if (asis->expr_type == EXPR_VARIABLE
+	    && asis->symtree->n.sym->attr.dummy
+	    && asis->symtree->n.sym->attr.optional)
+	    {
+	      tree present = gfc_conv_expr_present (asis->symtree->n.sym);
+	      asis_se.expr = build3_loc (input_location, COND_EXPR,
+					 logical_type_node, present,
+					 asis_se.expr,
+					 build_int_cst (logical_type_node, 0));
+	    }
+	  gfc_add_block_to_block (&se->pre, &asis_se.pre);
+	  tmp = fold_build3_loc (input_location, COND_EXPR, void_type_node,
+				 asis_se.expr, then_branch, else_branch);
+
+	  gfc_add_expr_to_block (&se->pre, tmp);
+
+	  var = fold_build3_loc (input_location, COND_EXPR, pchar_type_node,
+				 asis_se.expr, tvar, evar);
+	  gfc_add_expr_to_block (&se->pre, var);
+
+	  len = fold_build3_loc (input_location, COND_EXPR, cnode,
+				 asis_se.expr, tlen, elen);
+	  gfc_add_expr_to_block (&se->pre, len);
+	}
+      else
+	{
+	  /* f_c_string(string) = trim(string) // c_null_char  */
+
+	  gfc_add_block_to_block (&se->pre, &lse.pre);
+	  gfc_add_block_to_block (&se->pre, &rse.pre);
+
+	  gfc_init_se (&tse, se);
+	  conv_trim (&tse, &lse);
+	  gfc_add_block_to_block (&se->pre, &tse.pre);
+	  gfc_add_block_to_block (&se->post, &tse.post);
+
+	  len = fold_build2_loc (input_location, PLUS_EXPR, cnode,
+				 fold_convert (cnode, tse.string_length),
+				 fold_convert (cnode, rse.string_length));
+
+	  var = gfc_conv_string_tmp (se, pchar_type_node, len);
+
+	  tmp = build_call_expr_loc (input_location, gfor_fndecl_concat_string,
+				     6, len, var,
+				     tse.string_length, tse.expr,
+				     rse.string_length, rse.expr);
+	  gfc_add_expr_to_block (&se->pre, tmp);
+	}
+
+      se->expr = var;
+      se->string_length = len;
+
+#undef cnode
     }
   else
     gcc_unreachable ();
@@ -11243,6 +11606,7 @@ gfc_conv_intrinsic_function (gfc_se * se, gfc_expr * expr)
     case GFC_ISYM_C_ASSOCIATED:
     case GFC_ISYM_C_FUNLOC:
     case GFC_ISYM_C_LOC:
+    case GFC_ISYM_F_C_STRING:
       conv_isocbinding_function (se, expr);
       break;
 
@@ -11576,6 +11940,10 @@ gfc_conv_intrinsic_function (gfc_se * se, gfc_expr * expr)
 
     case GFC_ISYM_OR:
       gfc_conv_intrinsic_bitop (se, expr, BIT_IOR_EXPR);
+      break;
+
+    case GFC_ISYM_OUT_OF_RANGE:
+      gfc_conv_intrinsic_out_of_range (se, expr);
       break;
 
     case GFC_ISYM_PARITY:

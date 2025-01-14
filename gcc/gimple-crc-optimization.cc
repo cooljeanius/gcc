@@ -1,5 +1,5 @@
 /* CRC optimization.
-   Copyright (C) 2022-2024 Free Software Foundation, Inc.
+   Copyright (C) 2022-2025 Free Software Foundation, Inc.
    Contributed by Mariam Arutunian <mariamarutunian@gmail.com>
 
 This file is part of GCC.
@@ -947,6 +947,7 @@ crc_optimization::loop_may_calculate_crc (class loop *loop)
 	fprintf (dump_file,
 		 "The number of conditional "
 		 "branches in the loop isn't 2.\n");
+      free (loop_bbs);
       return false;
     }
 
@@ -977,8 +978,11 @@ crc_optimization::loop_may_calculate_crc (class loop *loop)
 		  return true;
 		}
 
-		if (++checked_xor_count == 2)
+	      if (++checked_xor_count == 2)
+		{
+		  free (loop_bbs);
 		  return false;
+		}
 	    }
 	}
     }

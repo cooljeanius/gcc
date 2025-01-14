@@ -1,5 +1,5 @@
 /* Tuning model description for AArch64 architecture.
-   Copyright (C) 2009-2024 Free Software Foundation, Inc.
+   Copyright (C) 2009-2025 Free Software Foundation, Inc.
 
    This file is part of GCC.
 
@@ -251,7 +251,6 @@ static const struct tune_params generic_armv9_a_tunings =
   0,	/* max_case_values.  */
   tune_params::AUTOPREFETCHER_WEAK,	/* autoprefetcher_model.  */
   (AARCH64_EXTRA_TUNE_BASE
-   | AARCH64_EXTRA_TUNE_USE_NEW_VECTOR_COSTS
    | AARCH64_EXTRA_TUNE_MATCHED_VECTOR_THROUGHPUT),	/* tune_flags.  */
   &generic_armv9a_prefetch_tune,
   AARCH64_LDP_STP_POLICY_ALWAYS,   /* ldp_policy_model.  */

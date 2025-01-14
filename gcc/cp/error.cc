@@ -1,6 +1,6 @@
 /* Call-backs for C++ error reporting.
    This code is non-reentrant.
-   Copyright (C) 1993-2024 Free Software Foundation, Inc.
+   Copyright (C) 1993-2025 Free Software Foundation, Inc.
    This file is part of GCC.
 
 GCC is free software; you can redistribute it and/or modify
@@ -285,7 +285,7 @@ cxx_initialize_diagnostics (diagnostic_context *context)
   context->m_adjust_diagnostic_info = cp_adjust_diagnostic_info;
 }
 
-/* Dump an '@module' name suffix for DECL, if any.  */
+/* Dump an '@module' name suffix for DECL, if it's attached to an import.  */
 
 static void
 dump_module_suffix (cxx_pretty_printer *pp, tree decl)
@@ -2603,6 +2603,15 @@ dump_expr (cxx_pretty_printer *pp, tree t, int flags)
 	  gcc_assert (TREE_CODE (t) == CALL_EXPR);
 	  dump_expr (pp, CALL_EXPR_FN (t), flags | TFF_EXPR_IN_PARENS);
 	  dump_call_expr_args (pp, t, flags, true);
+	}
+      else if (is_stub_object (t))
+	{
+	  pp_string (pp, "std::declval<");
+	  if (lvalue_p (t)) /* T& */
+	    dump_type (pp, TREE_TYPE (STRIP_REFERENCE_REF (t)), flags);
+	  else /* T */
+	    dump_type (pp, TREE_TYPE (t), flags);
+	  pp_string (pp, ">()");
 	}
       else
 	{

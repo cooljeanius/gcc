@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2024, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2025, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -2820,20 +2820,14 @@ package body Sem_Ch10 is
 
       Install_Elaboration_Model (Par_Unit);
 
-      --  The syntax rules require a proper body for a subprogram subunit
+      --  The syntax rules require a proper body for a subprogram subunit.
+      --  Note that we already checked for "is null" in the parser.
 
       if Nkind (Proper_Body (Sinfo.Nodes.Unit (N))) = N_Subprogram_Declaration
       then
-         if Null_Present (Specification (Proper_Body (Sinfo.Nodes.Unit (N))))
-         then
-            Error_Msg_N
-              ("null procedure not allowed as subunit",
-               Proper_Body (Unit (N)));
-         else
-            Error_Msg_N
-              ("subprogram declaration not allowed as subunit",
-               Defining_Unit_Name (Specification (Proper_Body (Unit (N)))));
-         end if;
+         Error_Msg_N
+           ("subprogram declaration not allowed as subunit",
+            Defining_Unit_Name (Specification (Proper_Body (Unit (N)))));
       end if;
 
       Analyze (Proper_Body (Unit (N)));
@@ -4182,7 +4176,7 @@ package body Sem_Ch10 is
                   P      := Unit (Parent_Spec (Lib_Spec));
                   P_Name := Defining_Entity (P);
 
-                  if not (Private_Present (Parent (Lib_Spec)))
+                  if not Private_Present (Parent (Lib_Spec))
                     and then not In_Private_Part (P_Name)
                   then
                      Install_Private_Declarations (P_Name);

@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2024, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2025, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -2927,7 +2927,7 @@ package body Sem_Eval is
             | Name_Source_Location
          =>
             if Inside_A_Generic
-              or else In_Spec_Expression
+              or else Preanalysis_Active
             then
                null;
             else
