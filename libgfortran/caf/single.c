@@ -1,5 +1,5 @@
 /* Single-image implementation of GNU Fortran Coarray Library
-   Copyright (C) 2011-2024 Free Software Foundation, Inc.
+   Copyright (C) 2011-2025 Free Software Foundation, Inc.
    Contributed by Tobias Burnus <burnus@net-b.de>
 
 This file is part of the GNU Fortran Coarray Runtime Library (libcaf).
@@ -2927,7 +2927,7 @@ _gfortran_caf_get_by_ct (
 {
   caf_single_token_t single_token = TOKEN (token);
   void *src_ptr = opt_src_desc ? (void *) opt_src_desc : single_token->memptr;
-  int free_buffer;
+  int32_t free_buffer;
   void *dst_ptr = opt_dst_desc ? (void *)opt_dst_desc : dst_data;
   void *old_dst_data_ptr = NULL;
 

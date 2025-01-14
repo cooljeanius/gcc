@@ -1,5 +1,5 @@
 /* Get CPU type and Features for x86 processors.
-   Copyright (C) 2012-2024 Free Software Foundation, Inc.
+   Copyright (C) 2012-2025 Free Software Foundation, Inc.
    Contributed by Sriraman Tallam (tmsriram@google.com)
 
 This file is part of GCC.
@@ -640,7 +640,6 @@ get_intel_cpu (struct __processor_model *cpu_model,
   else if (cpu_model2->__cpu_family == 0x13)
     switch (cpu_model2->__cpu_model)
       {
-      case 0x00:
       case 0x01:
 	/* Diamond Rapids.  */
 	cpu = "diamondrapids";

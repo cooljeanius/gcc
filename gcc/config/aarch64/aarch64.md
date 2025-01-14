@@ -1,5 +1,5 @@
 ;; Machine description for AArch64 architecture.
-;; Copyright (C) 2009-2024 Free Software Foundation, Inc.
+;; Copyright (C) 2009-2025 Free Software Foundation, Inc.
 ;; Contributed by ARM Ltd.
 ;;
 ;; This file is part of GCC.
@@ -198,8 +198,10 @@
     UNSPEC_AUTIB1716
     UNSPEC_AUTIASP
     UNSPEC_AUTIBSP
+    UNSPEC_BSL
     UNSPEC_CALLEE_ABI
     UNSPEC_CASESI
+    UNSPEC_COMBINE
     UNSPEC_CPYMEM
     UNSPEC_CRC32B
     UNSPEC_CRC32CB
@@ -209,6 +211,8 @@
     UNSPEC_CRC32H
     UNSPEC_CRC32W
     UNSPEC_CRC32X
+    UNSPEC_DUP
+    UNSPEC_DUP_LANE
     UNSPEC_FCVTZS
     UNSPEC_FCVTZU
     UNSPEC_FJCVTZS
@@ -227,6 +231,7 @@
     UNSPEC_FRINTP
     UNSPEC_FRINTX
     UNSPEC_FRINTZ
+    UNSPEC_GET_LANE
     UNSPEC_GOTSMALLPIC
     UNSPEC_GOTSMALLPIC28K
     UNSPEC_GOTSMALLTLS
@@ -236,6 +241,10 @@
     UNSPEC_LDP_FST
     UNSPEC_LDP_SND
     UNSPEC_LD1
+    UNSPEC_LD1_DUP
+    UNSPEC_LD1x2
+    UNSPEC_LD1x3
+    UNSPEC_LD1x4
     UNSPEC_LD2
     UNSPEC_LD2_DREG
     UNSPEC_LD2_DUP
@@ -265,12 +274,17 @@
     UNSPEC_REV
     UNSPEC_SADALP
     UNSPEC_SCVTF
+    UNSPEC_SET_LANE
     UNSPEC_SETMEM
     UNSPEC_SISD_NEG
     UNSPEC_SISD_SSHL
     UNSPEC_SISD_USHL
     UNSPEC_SSHL_2S
     UNSPEC_ST1
+    UNSPEC_ST1_LANE
+    UNSPEC_ST1x2
+    UNSPEC_ST1x3
+    UNSPEC_ST1x4
     UNSPEC_ST2
     UNSPEC_ST3
     UNSPEC_ST4
@@ -314,6 +328,8 @@
     UNSPEC_UNPACKSLO
     UNSPEC_UNPACKULO
     UNSPEC_PACK
+    UNSPEC_VCREATE
+    UNSPEC_VEC_COPY
     UNSPEC_WHILEGE
     UNSPEC_WHILEGT
     UNSPEC_WHILEHI
@@ -1744,14 +1760,33 @@
         && ! (GET_CODE (operands[1]) == CONST_DOUBLE
 	      && aarch64_float_const_zero_rtx_p (operands[1])))
       operands[1] = force_reg (<MODE>mode, operands[1]);
+
+    if (!DECIMAL_FLOAT_MODE_P (<MODE>mode)
+	&& GET_CODE (operands[1]) == CONST_DOUBLE
+	&& can_create_pseudo_p ()
+	&& !aarch64_can_const_movi_rtx_p (operands[1], <MODE>mode)
+	&& !aarch64_float_const_representable_p (operands[1])
+	&& !aarch64_float_const_zero_rtx_p (operands[1])
+	&&  aarch64_float_const_rtx_p (operands[1]))
+      {
+	unsigned HOST_WIDE_INT ival;
+	bool res = aarch64_reinterpret_float_as_int (operands[1], &ival);
+	gcc_assert (res);
+
+	machine_mode intmode
+	  = int_mode_for_size (GET_MODE_BITSIZE (<MODE>mode), 0).require ();
+	rtx tmp = gen_reg_rtx (intmode);
+	emit_move_insn (tmp, gen_int_mode (ival, intmode));
+	emit_move_insn (operands[0], gen_lowpart (<MODE>mode, tmp));
+	DONE;
+      }
   }
 )
 
 (define_insn "*mov<mode>_aarch64"
   [(set (match_operand:HFBF 0 "nonimmediate_operand")
 	(match_operand:HFBF 1 "general_operand"))]
-  "TARGET_FLOAT && (register_operand (operands[0], <MODE>mode)
-    || aarch64_reg_or_fp_zero (operands[1], <MODE>mode))"
+  "aarch64_valid_fp_move (operands[0], operands[1], <MODE>mode)"
   {@ [ cons: =0 , 1   ; attrs: type , arch  ]
      [ w        , Y   ; neon_move   , simd  ] movi\t%0.4h, #0
      [ w        , ?rY ; f_mcr       , fp16  ] fmov\t%h0, %w1
@@ -1774,8 +1809,7 @@
 (define_insn "*mov<mode>_aarch64"
   [(set (match_operand:SFD 0 "nonimmediate_operand")
 	(match_operand:SFD 1 "general_operand"))]
-  "TARGET_FLOAT && (register_operand (operands[0], <MODE>mode)
-    || aarch64_reg_or_fp_zero (operands[1], <MODE>mode))"
+  "aarch64_valid_fp_move (operands[0], operands[1], <MODE>mode)"
   {@ [ cons: =0 , 1   ; attrs: type , arch  ]
      [ w        , Y   ; neon_move   , simd  ] movi\t%0.2s, #0
      [ w        , ?rY ; f_mcr       , *     ] fmov\t%s0, %w1
@@ -1795,8 +1829,7 @@
 (define_insn "*mov<mode>_aarch64"
   [(set (match_operand:DFD 0 "nonimmediate_operand")
 	(match_operand:DFD 1 "general_operand"))]
-  "TARGET_FLOAT && (register_operand (operands[0], <MODE>mode)
-    || aarch64_reg_or_fp_zero (operands[1], <MODE>mode))"
+  "aarch64_valid_fp_move (operands[0], operands[1], <MODE>mode)"
   {@ [ cons: =0 , 1   ; attrs: type , arch  ]
      [ w        , Y   ; neon_move   , simd  ] movi\t%d0, #0
      [ w        , ?rY ; f_mcr       , *     ] fmov\t%d0, %x1
@@ -1810,27 +1843,6 @@
      [ m        , rY  ; store_8     , *     ] str\t%x1, %0
      [ r        , r   ; mov_reg     , *     ] mov\t%x0, %x1
      [ r        , O   ; fconstd     , *     ] << aarch64_is_mov_xn_imm (INTVAL (operands[1])) ? "mov\t%x0, %1" : "mov\t%w0, %1";
-  }
-)
-
-(define_split
-  [(set (match_operand:GPF_HF 0 "nonimmediate_operand")
-	(match_operand:GPF_HF 1 "const_double_operand"))]
-  "can_create_pseudo_p ()
-   && !aarch64_can_const_movi_rtx_p (operands[1], <MODE>mode)
-   && !aarch64_float_const_representable_p (operands[1])
-   && !aarch64_float_const_zero_rtx_p (operands[1])
-   &&  aarch64_float_const_rtx_p (operands[1])"
-  [(const_int 0)]
-  {
-    unsigned HOST_WIDE_INT ival;
-    if (!aarch64_reinterpret_float_as_int (operands[1], &ival))
-      FAIL;
-
-    rtx tmp = gen_reg_rtx (<FCVT_TARGET>mode);
-    emit_move_insn (tmp, gen_int_mode (ival, <FCVT_TARGET>mode));
-    emit_move_insn (operands[0], gen_lowpart (<MODE>mode, tmp));
-    DONE;
   }
 )
 
@@ -7834,11 +7846,11 @@
   [(set_attr "type" "f_cvtf2i")]
 )
 
-;; Pointer authentication patterns are always provided.  In architecture
-;; revisions prior to ARMv8.3-A these HINT instructions operate as NOPs.
+;; Pointer authentication patterns are always provided.  On targets that
+;; don't implement FEAT_PAuth these HINT instructions operate as NOPs.
 ;; This lets the user write portable software which authenticates pointers
-;; when run on something which implements ARMv8.3-A, and which runs
-;; correctly, but does not authenticate pointers, where ARMv8.3-A is not
+;; when run on something which implements FEAT_PAuth, and which runs
+;; correctly, but does not authenticate pointers, where FEAT_PAuth is not
 ;; implemented.
 
 ;; Signing/Authenticating R30 using SP as the salt.

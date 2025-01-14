@@ -1,3 +1,63 @@
+2025-01-12  David Malcolm  <dmalcolm@redhat.com>
+
+	PR c/118112
+	* c-typeck.cc (inform_declaration): Add "function_expr" param and
+	use it for cases where we couldn't show the function decl to show
+	field decls for callbacks.
+	(build_function_call_vec): Add missing auto_diagnostic_group.
+	Update for new param of inform_declaration.
+	(convert_arguments): Likewise.  For the "too many arguments" case
+	add the expected vs actual counts to the message, and if we have
+	it, add the location_t of the first surplus param as a secondary
+	location within the diagnostic.  For the "too few arguments" case,
+	determine the minimum number of arguments required and add the
+	expected vs actual counts to the message, tweaking it to "at least"
+	for variadic functions.
+
+2025-01-10  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c/118376
+	* c-parser.cc (c_parser_postfix_expression): Call
+	set_c_expr_source_range before break in the __builtin_stdc_rotate_*
+	case.
+
+2025-01-09  Martin Uecker  <uecker@tugraz.at>
+
+	PR c/117866
+	* c-decl.cc (get_parm_info): Change condition for warning.
+
+2025-01-09  Jason Merrill  <jason@redhat.com>
+	    Torbjörn SVENSSON  <torbjorn.svensson@foss.st.com>
+
+	PR c/116060
+	* c-typeck.cc (convert_for_assignment): Make sure left hand side and
+	right hand side has identical named types to aid diagnostic output.
+
+2025-01-03  Sandra Loosemore  <sloosemore@baylibre.com>
+
+	* c-parser.cc (struct c_parser): Change in_omp_attribute_pragma
+	field to be of type struct omp_attribute_pragma_state.
+	(struct omp_attribute_pragma_state): New.
+	(c_parser_skip_until_found): Use the new way to restore state
+	on EOF.
+	(c_parser_skip_to_pragma_eol): Likewise.
+	(c_parser_handle_statement_omp_attributes): Create an
+	omp_attribute_pragma_state to hold the restore state.  Do not
+	store state in tok.flags.
+	(omp_maybe_parse_omp_decl): Likewise.
+
+2025-01-02  David Malcolm  <dmalcolm@redhat.com>
+
+	PR c/117629
+	* c-decl.cc (declspecs_add_type): Special-case attempts to use
+	bool as a typedef name or declaration name.
+	* c-errors.cc (get_std_for_keyword): New.
+	(add_note_about_new_keyword): New.
+	* c-parser.cc (report_bad_enum_name): New, split out from...
+	(c_parser_enum_specifier): ...here, adding handling for RID_FALSE
+	and RID_TRUE.
+	* c-tree.h (add_note_about_new_keyword): New decl.
+
 2024-12-18  Tobias Burnus  <tburnus@baylibre.com>
 
 	* c-parser.cc (c_parser_omp_clause_init_modifiers): New;
@@ -11121,7 +11181,7 @@
 	* c-decl.c: Likewise.  Include gt-c-c-decl.h, not gt-c-decl.h.
 	* c-parser.c: Likewise.  Include gt-c-c-parser.h, not gt-c-parser.h.
 
-Copyright (C) 2012-2024 Free Software Foundation, Inc.
+Copyright (C) 2012-2025 Free Software Foundation, Inc.
 
 Copying and distribution of this file, with or without modification,
 are permitted in any medium without royalty provided the copyright

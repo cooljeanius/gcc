@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2024, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2025, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -2076,7 +2076,7 @@ package body Checks is
          Lo := Succ (Expr_Type, UR_From_Uint (Ifirst - 1));
          Lo_OK := True;
 
-      elsif abs (Ifirst) < Max_Bound then
+      elsif abs Ifirst < Max_Bound then
          Lo := UR_From_Uint (Ifirst) - Ureal_Half;
          Lo_OK := (Ifirst > 0);
 
@@ -2120,7 +2120,7 @@ package body Checks is
          Hi := Pred (Expr_Type, UR_From_Uint (Ilast + 1));
          Hi_OK := True;
 
-      elsif abs (Ilast) < Max_Bound then
+      elsif abs Ilast < Max_Bound then
          Hi := UR_From_Uint (Ilast) + Ureal_Half;
          Hi_OK := (Ilast < 0);
       else
@@ -2893,6 +2893,10 @@ package body Checks is
 
       if Deref then
          Expr := Make_Explicit_Dereference (Loc, Prefix => Expr);
+
+         --  Preserve Comes_From_Source for Predicate_Check_In_Scope
+
+         Preserve_Comes_From_Source (Expr, N);
       end if;
 
       --  Disable checks to prevent an infinite recursion
@@ -6239,7 +6243,7 @@ package body Checks is
       --  do the corresponding optimizations later on when applying the checks.
 
       if Mode in Minimized_Or_Eliminated then
-         if not (Overflow_Checks_Suppressed (Etype (N)))
+         if not Overflow_Checks_Suppressed (Etype (N))
            and then not (Is_Entity_Name (N)
                           and then Overflow_Checks_Suppressed (Entity (N)))
          then
@@ -7302,9 +7306,7 @@ package body Checks is
       --  Delay the generation of the check until 'Loop_Entry has been properly
       --  expanded. This is done in Expand_Loop_Entry_Attributes.
 
-      elsif Nkind (Prefix (N)) = N_Attribute_Reference
-        and then Attribute_Name (Prefix (N)) = Name_Loop_Entry
-      then
+      elsif Is_Attribute_Loop_Entry (Prefix (N)) then
          return;
       end if;
 

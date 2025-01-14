@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2024 Free Software Foundation, Inc.
+/* Copyright (C) 2015-2025 Free Software Foundation, Inc.
    Contributed by ARM Ltd.
 
    This file is part of GCC.
@@ -37,8 +37,6 @@ AARCH64_EXTRA_TUNING_OPTION ("rename_fma_regs", RENAME_FMA_REGS)
 AARCH64_EXTRA_TUNING_OPTION ("cheap_shift_extend", CHEAP_SHIFT_EXTEND)
 
 AARCH64_EXTRA_TUNING_OPTION ("cse_sve_vl_constants", CSE_SVE_VL_CONSTANTS)
-
-AARCH64_EXTRA_TUNING_OPTION ("use_new_vector_costs", USE_NEW_VECTOR_COSTS)
 
 AARCH64_EXTRA_TUNING_OPTION ("matched_vector_throughput", MATCHED_VECTOR_THROUGHPUT)
 

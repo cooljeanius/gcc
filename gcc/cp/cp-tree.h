@@ -1,5 +1,5 @@
 /* Definitions for -*- C++ -*- parsing and type checking.
-   Copyright (C) 1987-2024 Free Software Foundation, Inc.
+   Copyright (C) 1987-2025 Free Software Foundation, Inc.
    Contributed by Michael Tiemann (tiemann@cygnus.com)
 
 This file is part of GCC.
@@ -7456,6 +7456,7 @@ extern tree get_copy_assign			(tree);
 extern tree get_default_ctor			(tree);
 extern tree get_dtor				(tree, tsubst_flags_t);
 extern tree build_stub_object			(tree);
+extern bool is_stub_object			(tree);
 extern tree build_invoke			(tree, const_tree,
 						 tsubst_flags_t);
 extern tree strip_inheriting_ctors		(tree);
@@ -7946,6 +7947,7 @@ enum {
 extern tree begin_compound_stmt			(unsigned int);
 
 extern void finish_compound_stmt		(tree);
+extern tree finish_asm_string_expression	(location_t, tree);
 extern tree finish_asm_stmt			(location_t, int, tree, tree,
 						 tree, tree, tree, bool, bool);
 extern tree finish_label_stmt			(tree);
@@ -8437,7 +8439,7 @@ extern tree build_x_shufflevector               (location_t,
 extern tree build_simple_component_ref		(tree, tree);
 extern tree build_ptrmemfunc_access_expr	(tree, tree);
 extern tree build_address			(tree);
-extern tree build_nop				(tree, tree);
+extern tree build_nop				(tree, tree CXX_MEM_STAT_INFO);
 extern tree non_reference			(tree);
 extern tree lookup_anon_field			(tree, tree);
 extern bool invalid_nonstatic_memfn_p		(location_t, tree,

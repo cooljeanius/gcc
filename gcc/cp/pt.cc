@@ -1,5 +1,5 @@
 /* Handle parameterized types (templates) for GNU -*- C++ -*-.
-   Copyright (C) 1992-2024 Free Software Foundation, Inc.
+   Copyright (C) 1992-2025 Free Software Foundation, Inc.
    Written by Ken Raeburn (raeburn@cygnus.com) while at Watchmaker Computing.
    Rewritten by Jason Merrill (jason@cygnus.com).
 
@@ -5637,8 +5637,7 @@ check_default_tmpl_args (tree decl, tree parms, bool is_primary,
        local scope.  */
     return true;
 
-  if ((TREE_CODE (decl) == TYPE_DECL
-       && TREE_TYPE (decl)
+  if ((DECL_IMPLICIT_TYPEDEF_P (decl)
        && LAMBDA_TYPE_P (TREE_TYPE (decl)))
       || (TREE_CODE (decl) == FUNCTION_DECL
 	  && LAMBDA_FUNCTION_P (decl)))
@@ -5924,7 +5923,7 @@ push_template_decl (tree decl, bool is_friend)
          template <typename T> friend void A<T>::f();
        is not primary.  */
     ;
-  else if (TREE_CODE (decl) == TYPE_DECL && LAMBDA_TYPE_P (TREE_TYPE (decl)))
+  else if (DECL_IMPLICIT_TYPEDEF_P (decl) && LAMBDA_TYPE_P (TREE_TYPE (decl)))
     /* Lambdas are not primary.  */
     ;
   else
@@ -6077,7 +6076,8 @@ push_template_decl (tree decl, bool is_friend)
   else if (!ctx
 	   || TREE_CODE (ctx) == FUNCTION_DECL
 	   || (CLASS_TYPE_P (ctx) && TYPE_BEING_DEFINED (ctx))
-	   || (TREE_CODE (decl) == TYPE_DECL && LAMBDA_TYPE_P (TREE_TYPE (decl)))
+	   || (DECL_IMPLICIT_TYPEDEF_P (decl)
+	       && LAMBDA_TYPE_P (TREE_TYPE (decl)))
 	   || (is_friend && !(DECL_LANG_SPECIFIC (decl)
 			      && DECL_TEMPLATE_INFO (decl))))
     {
@@ -14063,6 +14063,14 @@ tsubst_pack_index (tree t, tree args, tsubst_flags_t complain, tree in_decl)
   tree pack = PACK_INDEX_PACK (t);
   if (PACK_EXPANSION_P (pack))
     pack = tsubst_pack_expansion (pack, args, complain, in_decl);
+  else
+    {
+      /* PACK can be {*args#0} whose args#0's value-expr refers to
+	 a partially instantiated closure.  Let tsubst find the
+	 fully-instantiated one.  */
+      gcc_assert (TREE_CODE (pack) == TREE_VEC);
+      pack = tsubst (pack, args, complain, in_decl);
+    }
   if (TREE_CODE (pack) == TREE_VEC && TREE_VEC_LENGTH (pack) == 0)
     {
       if (complain & tf_error)
@@ -19168,9 +19176,12 @@ tsubst_stmt (tree t, tree args, tsubst_flags_t complain, tree in_decl)
 			       outputs, inputs, clobbers, labels,
 			       ASM_INLINE_P (t), false);
 	tree asm_expr = tmp;
-	if (TREE_CODE (asm_expr) == CLEANUP_POINT_EXPR)
-	  asm_expr = TREE_OPERAND (asm_expr, 0);
-	ASM_BASIC_P (asm_expr) = ASM_BASIC_P (t);
+	if (asm_expr != error_mark_node)
+	  {
+	    if (TREE_CODE (asm_expr) == CLEANUP_POINT_EXPR)
+	      asm_expr = TREE_OPERAND (asm_expr, 0);
+	    ASM_BASIC_P (asm_expr) = ASM_BASIC_P (t);
+	  }
       }
       break;
 
@@ -22437,7 +22448,10 @@ instantiate_template (tree tmpl, tree orig_args, tsubst_flags_t complain)
      substitution of a template variable, but the type of the variable
      template may be auto, in which case we will call do_auto_deduction
      in mark_used (which clears tf_partial) and the auto must be properly
-     reduced at that time for the deduction to work.  */
+     reduced at that time for the deduction to work.
+
+     Note that later below we set tf_partial iff there are dependent arguments;
+     the above is concerned specifically about the non-dependent case.  */
   complain &= tf_warning_or_error;
 
   gcc_assert (TREE_CODE (tmpl) == TEMPLATE_DECL);
@@ -22516,9 +22530,14 @@ instantiate_template (tree tmpl, tree orig_args, tsubst_flags_t complain)
      template, not the context of the overload resolution we're doing.  */
   push_to_top_level ();
   /* If there are dependent arguments, e.g. because we're doing partial
-     ordering, make sure processing_template_decl stays set.  */
+     ordering, make sure processing_template_decl stays set.  And set
+     tf_partial mainly for benefit of instantiation of alias templates
+     that contain extra-args trees.  */
   if (uses_template_parms (targ_ptr))
-    ++processing_template_decl;
+    {
+      ++processing_template_decl;
+      complain |= tf_partial;
+    }
   if (DECL_CLASS_SCOPE_P (gen_tmpl))
     {
       tree ctx;
@@ -29034,9 +29053,15 @@ type_dependent_expression_p (tree expression)
 
       if (TREE_CODE (expression) == TEMPLATE_ID_EXPR)
 	{
-	  if (any_dependent_template_arguments_p
-	      (TREE_OPERAND (expression, 1)))
+	  tree args = TREE_OPERAND (expression, 1);
+	  if (any_dependent_template_arguments_p (args))
 	    return true;
+	  /* Arguments of a function template-id aren't necessarily coerced
+	     yet so we must conservatively assume that the address (and not
+	     just value) of the argument matters as per [temp.dep.temp]/3.  */
+	  for (tree arg : tree_vec_range (args))
+	    if (has_value_dependent_address (arg))
+	      return true;
 	  expression = TREE_OPERAND (expression, 0);
 	  if (identifier_p (expression))
 	    return true;

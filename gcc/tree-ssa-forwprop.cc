@@ -1,5 +1,5 @@
 /* Forward propagation of expressions for single use variables.
-   Copyright (C) 2004-2024 Free Software Foundation, Inc.
+   Copyright (C) 2004-2025 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -2269,7 +2269,7 @@ check_ctz_array (tree ctor, unsigned HOST_WIDE_INT mulc,
 		 HOST_WIDE_INT &zero_val, unsigned shift, unsigned bits)
 {
   tree elt, idx;
-  unsigned HOST_WIDE_INT i, mask;
+  unsigned HOST_WIDE_INT i, mask, raw_idx = 0;
   unsigned matched = 0;
 
   mask = ((HOST_WIDE_INT_1U << (bits - shift)) - 1) << shift;
@@ -2278,13 +2278,34 @@ check_ctz_array (tree ctor, unsigned HOST_WIDE_INT mulc,
 
   FOR_EACH_CONSTRUCTOR_ELT (CONSTRUCTOR_ELTS (ctor), i, idx, elt)
     {
-      if (TREE_CODE (idx) != INTEGER_CST || TREE_CODE (elt) != INTEGER_CST)
+      if (!tree_fits_shwi_p (idx))
 	return false;
-      if (i > bits * 2)
+      if (!tree_fits_shwi_p (elt) && TREE_CODE (elt) != RAW_DATA_CST)
 	return false;
 
       unsigned HOST_WIDE_INT index = tree_to_shwi (idx);
-      HOST_WIDE_INT val = tree_to_shwi (elt);
+      HOST_WIDE_INT val;
+
+      if (TREE_CODE (elt) == INTEGER_CST)
+	val = tree_to_shwi (elt);
+      else
+	{
+	  if (raw_idx == (unsigned) RAW_DATA_LENGTH (elt))
+	    {
+	      raw_idx = 0;
+	      continue;
+	    }
+	  if (TYPE_UNSIGNED (TREE_TYPE (elt)))
+	    val = RAW_DATA_UCHAR_ELT (elt, raw_idx);
+	  else
+	    val = RAW_DATA_SCHAR_ELT (elt, raw_idx);
+	  index += raw_idx;
+	  raw_idx++;
+	  i--;
+	}
+
+      if (index > bits * 2)
+	return false;
 
       if (index == 0)
 	{
@@ -4086,14 +4107,22 @@ class pass_forwprop : public gimple_opt_pass
 {
 public:
   pass_forwprop (gcc::context *ctxt)
-    : gimple_opt_pass (pass_data_forwprop, ctxt)
+    : gimple_opt_pass (pass_data_forwprop, ctxt), last_p (false)
   {}
 
   /* opt_pass methods: */
   opt_pass * clone () final override { return new pass_forwprop (m_ctxt); }
+  void set_pass_param (unsigned int n, bool param) final override
+    {
+      gcc_assert (n == 0);
+      last_p = param;
+    }
   bool gate (function *) final override { return flag_tree_forwprop; }
   unsigned int execute (function *) final override;
 
+ private:
+  /* Determines whether the pass instance should set PROP_last_full_fold.  */
+  bool last_p;
 }; // class pass_forwprop
 
 unsigned int
@@ -4102,6 +4131,8 @@ pass_forwprop::execute (function *fun)
   unsigned int todoflags = 0;
 
   cfg_changed = false;
+  if (last_p)
+    fun->curr_properties |= PROP_last_full_fold;
 
   calculate_dominance_info (CDI_DOMINATORS);
 

@@ -1,5 +1,5 @@
 /* Target code for NVPTX.
-   Copyright (C) 2014-2024 Free Software Foundation, Inc.
+   Copyright (C) 2014-2025 Free Software Foundation, Inc.
    Contributed by Bernd Schmidt <bernds@codesourcery.com>
 
    This file is part of GCC.
@@ -245,6 +245,10 @@ default_ptx_version_option (void)
      warp convergence.  */
   res = MAX (res, PTX_VERSION_6_0);
 
+  /* For sm_52+, pick at least 7.3, to enable PTX 'alloca'.  */
+  if (ptx_isa_option >= PTX_ISA_SM52)
+    res = MAX (res, PTX_VERSION_7_3);
+
   /* Verify that we pick a version that supports the sm.  */
   gcc_assert (first <= res);
   return res;
@@ -267,6 +271,8 @@ ptx_version_to_string (enum ptx_version v)
       return "6.3";
     case PTX_VERSION_7_0:
       return "7.0";
+    case PTX_VERSION_7_3:
+      return "7.3";
     case PTX_VERSION_7_8:
       return "7.8";
     default:
@@ -291,6 +297,8 @@ ptx_version_to_number (enum ptx_version v, bool major_p)
       return major_p ? 6 : 3;
     case PTX_VERSION_7_0:
       return major_p ? 7 : 0;
+    case PTX_VERSION_7_3:
+      return major_p ? 7 : 3;
     case PTX_VERSION_7_8:
       return major_p ? 7 : 8;
     default:
@@ -1789,7 +1797,7 @@ nvptx_function_ok_for_sibcall (tree, tree)
 static rtx
 nvptx_get_drap_rtx (void)
 {
-  if (TARGET_SOFT_STACK && stack_realign_drap)
+  if (stack_realign_drap)
     return arg_pointer_rtx;
   return NULL_RTX;
 }

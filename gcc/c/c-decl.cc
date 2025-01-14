@@ -1,5 +1,5 @@
 /* Process declarations and variables for C compiler.
-   Copyright (C) 1988-2024 Free Software Foundation, Inc.
+   Copyright (C) 1988-2025 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -8677,7 +8677,7 @@ get_parm_info (bool ellipsis, tree expr)
 	      if (b->id)
 		{
 		  /* The %s will be one of 'struct', 'union', or 'enum'.  */
-		  if (!flag_isoc23)
+		  if (!flag_isoc23 || !COMPLETE_TYPE_P (decl))
 		    warning_at (b->locus, 0,
 				"%<%s %E%> declared inside parameter list"
 				" will not be visible outside of this definition or"
@@ -12493,8 +12493,22 @@ declspecs_add_type (location_t loc, struct c_declspecs *specs,
 	     "__auto_type".  */
 	  if (specs->typespec_word != cts_none)
 	    {
-	      error_at (loc,
-			"two or more data types in declaration specifiers");
+	      if (i == RID_BOOL)
+		{
+		  auto_diagnostic_group d;
+		  if (specs->storage_class == csc_typedef)
+		    error_at (loc,
+			      "%qs cannot be defined via %<typedef%>",
+			      IDENTIFIER_POINTER (type));
+		  else
+		    error_at (loc,
+			      "%qs cannot be used here",
+			      IDENTIFIER_POINTER (type));
+		  add_note_about_new_keyword (loc, type);
+		}
+	      else
+		error_at (loc,
+			  "two or more data types in declaration specifiers");
 	      return specs;
 	    }
 	  switch (i)

@@ -1,5 +1,5 @@
 /* Machine description for AArch64 architecture.
-   Copyright (C) 2009-2024 Free Software Foundation, Inc.
+   Copyright (C) 2009-2025 Free Software Foundation, Inc.
    Contributed by ARM Ltd.
 
    This file is part of GCC.
@@ -1802,7 +1802,7 @@ aarch64_ldn_stn_vectors (machine_mode mode)
 
 /* Given an Advanced SIMD vector mode MODE and a tuple size NELEMS, return the
    corresponding vector structure mode.  */
-static opt_machine_mode
+opt_machine_mode
 aarch64_advsimd_vector_array_mode (machine_mode mode,
 				   unsigned HOST_WIDE_INT nelems)
 {
@@ -6591,7 +6591,17 @@ aarch64_split_sve_subreg_move (rtx dest, rtx ptrue, rtx src)
 static bool
 aarch64_function_ok_for_sibcall (tree, tree exp)
 {
-  if (crtl->abi->id () != expr_callee_abi (exp).id ())
+  auto from_abi = crtl->abi->id ();
+  auto to_abi = expr_callee_abi (exp).id ();
+
+  /* ARM_PCS_SVE preserves strictly more than ARM_PCS_SIMD, which in
+     turn preserves strictly more than the base PCS.  The callee must
+     preserve everything that the caller is required to preserve.  */
+  if (from_abi != to_abi && to_abi == ARM_PCS_SVE)
+    to_abi = ARM_PCS_SIMD;
+  if (from_abi != to_abi && to_abi == ARM_PCS_SIMD)
+    to_abi = ARM_PCS_AAPCS64;
+  if (from_abi != to_abi)
     return false;
 
   tree fntype = TREE_TYPE (TREE_TYPE (CALL_EXPR_FN (exp)));
@@ -10273,12 +10283,12 @@ aarch64_expand_epilogue (rtx_call_insn *sibcall)
 	1) Sibcalls don't return in a normal way, so if we're about to call one
 	   we must authenticate.
 
-	2) The RETAA instruction is not available before ARMv8.3-A, so if we are
-	   generating code for !TARGET_ARMV8_3 we can't use it and must
+	2) The RETAA instruction is not available without FEAT_PAuth, so if we
+	   are generating code for !TARGET_PAUTH we can't use it and must
 	   explicitly authenticate.
     */
   if (aarch64_return_address_signing_enabled ()
-      && (sibcall || !TARGET_ARMV8_3))
+      && (sibcall || !TARGET_PAUTH))
     {
       switch (aarch64_ra_sign_key)
 	{
@@ -11299,6 +11309,36 @@ aarch64_can_const_movi_rtx_p (rtx x, machine_mode mode)
   return aarch64_simd_valid_mov_imm (v_op);
 }
 
+/* Return TRUE if DST and SRC with mode MODE is a valid fp move.  */
+bool
+aarch64_valid_fp_move (rtx dst, rtx src, machine_mode mode)
+{
+  if (!TARGET_FLOAT)
+    return false;
+
+  if (aarch64_reg_or_fp_zero (src, mode))
+    return true;
+
+  if (!register_operand (dst, mode))
+    return false;
+
+  if (MEM_P (src))
+    return true;
+
+  if (!DECIMAL_FLOAT_MODE_P (mode))
+    {
+      if (aarch64_can_const_movi_rtx_p (src, mode)
+	  || aarch64_float_const_representable_p (src)
+	  || aarch64_float_const_zero_rtx_p (src))
+	return true;
+
+      /* Block FP immediates which are split during expand.  */
+      if (aarch64_float_const_rtx_p (src))
+	return false;
+    }
+
+  return can_create_pseudo_p ();
+}
 
 /* Return the fixed registers used for condition codes.  */
 
@@ -16627,16 +16667,6 @@ aarch64_vectorize_create_costs (vec_info *vinfo, bool costing_for_scalar)
   return new aarch64_vector_costs (vinfo, costing_for_scalar);
 }
 
-/* Return true if the current CPU should use the new costs defined
-   in GCC 11.  This should be removed for GCC 12 and above, with the
-   costs applying to all CPUs instead.  */
-static bool
-aarch64_use_new_vector_costs_p ()
-{
-  return (aarch64_tune_params.extra_tuning_flags
-	  & AARCH64_EXTRA_TUNE_USE_NEW_VECTOR_COSTS);
-}
-
 /* Return the appropriate SIMD costs for vectors of type VECTYPE.  */
 static const simd_vec_cost *
 aarch64_simd_vec_costs (tree vectype)
@@ -17358,6 +17388,47 @@ aarch64_vector_costs::count_ops (unsigned int count, vect_cost_for_stmt kind,
 	return;
     }
 
+  /* Detect the case where we are using an emulated gather/scatter.  When a
+     target does not support gathers and scatters directly the vectorizer
+     emulates these by constructing an index vector and then issuing an
+     extraction for every lane in the vector.  If the index vector is loaded
+     from memory, the vector load and extractions are subsequently lowered by
+     veclower into a series of scalar index loads.  After the final loads are
+     done it issues a vec_construct to recreate the vector from the scalar.  For
+     costing when we see a vec_to_scalar on a stmt with VMAT_GATHER_SCATTER we
+     are dealing with an emulated instruction and should adjust costing
+     properly.  */
+  if (kind == vec_to_scalar
+      && (m_vec_flags & VEC_ADVSIMD)
+      && vect_mem_access_type (stmt_info, node) == VMAT_GATHER_SCATTER)
+    {
+      auto dr = STMT_VINFO_DATA_REF (stmt_info);
+      tree dr_ref = DR_REF (dr);
+      while (handled_component_p (dr_ref))
+	{
+	  if (TREE_CODE (dr_ref) == ARRAY_REF)
+	    {
+	      tree offset = TREE_OPERAND (dr_ref, 1);
+	      if (SSA_VAR_P (offset))
+		{
+		  if (gimple_vuse (SSA_NAME_DEF_STMT (offset)))
+		    {
+		      if (STMT_VINFO_TYPE (stmt_info) == load_vec_info_type)
+			ops->loads += count - 1;
+		      else
+			  /* Stores want to count both the index to array and data to
+			     array using vec_to_scalar.  However we have index stores
+			     in Adv.SIMD and so we only want to adjust the index
+			     loads.  */
+			ops->loads += count / 2;
+		      return;
+		    }
+		  break;
+		}
+	    }
+	  dr_ref = TREE_OPERAND (dr_ref, 0);
+	}
+    }
 
   /* Count the basic operation cost associated with KIND.  */
   switch (kind)
@@ -17555,7 +17626,7 @@ aarch64_vector_costs::add_stmt_cost (int count, vect_cost_for_stmt kind,
 
   /* Do one-time initialization based on the vinfo.  */
   loop_vec_info loop_vinfo = dyn_cast<loop_vec_info> (m_vinfo);
-  if (!m_analyzed_vinfo && aarch64_use_new_vector_costs_p ())
+  if (!m_analyzed_vinfo)
     {
       if (loop_vinfo)
 	analyze_loop_vinfo (loop_vinfo);
@@ -17573,7 +17644,7 @@ aarch64_vector_costs::add_stmt_cost (int count, vect_cost_for_stmt kind,
 
   /* Try to get a more accurate cost by looking at STMT_INFO instead
      of just looking at KIND.  */
-  if (stmt_info && aarch64_use_new_vector_costs_p ())
+  if (stmt_info)
     {
       /* If we scalarize a strided store, the vectorizer costs one
 	 vec_to_scalar for each element.  However, we can store the first
@@ -17638,7 +17709,7 @@ aarch64_vector_costs::add_stmt_cost (int count, vect_cost_for_stmt kind,
   else
     m_num_last_promote_demote = 0;
 
-  if (stmt_info && aarch64_use_new_vector_costs_p ())
+  if (stmt_info)
     {
       /* Account for any extra "embedded" costs that apply additively
 	 to the base cost calculated above.  */
@@ -17999,9 +18070,7 @@ aarch64_vector_costs::finish_cost (const vector_costs *uncast_scalar_costs)
 
   auto *scalar_costs
     = static_cast<const aarch64_vector_costs *> (uncast_scalar_costs);
-  if (loop_vinfo
-      && m_vec_flags
-      && aarch64_use_new_vector_costs_p ())
+  if (loop_vinfo && m_vec_flags)
     {
       m_costs[vect_body] = adjust_body_cost (loop_vinfo, scalar_costs,
 					     m_costs[vect_body]);
@@ -24879,18 +24948,42 @@ aarch64_sve_expand_vector_init_subvector (rtx target, rtx vals)
   machine_mode mode = GET_MODE (target);
   int nelts = XVECLEN (vals, 0);
 
-  gcc_assert (nelts == 2);
+  gcc_assert (nelts % 2 == 0);
 
-  rtx arg0 = XVECEXP (vals, 0, 0);
-  rtx arg1 = XVECEXP (vals, 0, 1);
-
-  /* If we have two elements and are concatting vector.  */
-  machine_mode elem_mode = GET_MODE (arg0);
+  /* We have to be concatting vector.  */
+  machine_mode elem_mode = GET_MODE (XVECEXP (vals, 0, 0));
   gcc_assert (VECTOR_MODE_P (elem_mode));
 
-  arg0 = force_reg (elem_mode, arg0);
-  arg1 = force_reg (elem_mode, arg1);
-  emit_insn (gen_aarch64_pack_partial (mode, target, arg0, arg1));
+  auto_vec<rtx> worklist;
+  machine_mode wider_mode = elem_mode;
+
+  for (int i = 0; i < nelts; i++)
+    worklist.safe_push (force_reg (elem_mode, XVECEXP (vals, 0, i)));
+
+  /* Keep widening pairwise to have maximum throughput.  */
+  while (nelts >= 2)
+    {
+      wider_mode
+	= related_vector_mode (wider_mode, GET_MODE_INNER (wider_mode),
+			       GET_MODE_NUNITS (wider_mode) * 2).require ();
+
+      for (int i = 0; i < nelts; i += 2)
+	{
+	  rtx arg0 = worklist[i];
+	  rtx arg1 = worklist[i+1];
+	  gcc_assert (GET_MODE (arg0) == GET_MODE (arg1));
+
+	  rtx tmp = gen_reg_rtx (wider_mode);
+	  emit_insn (gen_aarch64_pack_partial (wider_mode, tmp, arg0, arg1));
+	  worklist[i / 2] = tmp;
+	}
+
+      nelts /= 2;
+    }
+
+  gcc_assert (wider_mode == mode);
+  emit_move_insn (target, worklist[0]);
+
   return;
 }
 

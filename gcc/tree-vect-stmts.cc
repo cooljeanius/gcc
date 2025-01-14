@@ -1,5 +1,5 @@
 /* Statement Analysis and Transformation for Vectorization
-   Copyright (C) 2003-2024 Free Software Foundation, Inc.
+   Copyright (C) 2003-2025 Free Software Foundation, Inc.
    Contributed by Dorit Naishlos <dorit@il.ibm.com>
    and Ira Rosen <irar@il.ibm.com>
 
@@ -5583,7 +5583,7 @@ vectorizable_conversion (vec_info *vinfo,
   scalar_mode lhs_mode = SCALAR_TYPE_MODE (lhs_type);
   scalar_mode rhs_mode = SCALAR_TYPE_MODE (rhs_type);
   opt_scalar_mode rhs_mode_iter;
-  vec<std::pair<tree, tree_code> > converts = vNULL;
+  auto_vec<std::pair<tree, tree_code> > converts;
 
   /* Supportable by target?  */
   switch (modifier)
@@ -5597,7 +5597,7 @@ vectorizable_conversion (vec_info *vinfo,
       if (supportable_indirect_convert_operation (code,
 						  vectype_out,
 						  vectype_in,
-						  &converts,
+						  converts,
 						  op0))
 	{
 	  gcc_assert (converts.length () <= 2);
@@ -8834,22 +8834,7 @@ vectorizable_store (vec_info *vinfo,
 		{
 		  if (costing_p)
 		    {
-		      /* Only need vector extracting when there are more
-			 than one stores.  */
-		      if (nstores > 1)
-			inside_cost
-			  += record_stmt_cost (cost_vec, 1, vec_to_scalar,
-					       stmt_info, slp_node,
-					       0, vect_body);
-		      /* Take a single lane vector type store as scalar
-			 store to avoid ICE like 110776.  */
-		      if (VECTOR_TYPE_P (ltype)
-			  && known_ne (TYPE_VECTOR_SUBPARTS (ltype), 1U))
-			n_adjacent_stores++;
-		      else
-			inside_cost
-			  += record_stmt_cost (cost_vec, 1, scalar_store,
-					       stmt_info, 0, vect_body);
+		      n_adjacent_stores++;
 		      continue;
 		    }
 		  tree newref, newoff;
@@ -8905,9 +8890,26 @@ vectorizable_store (vec_info *vinfo,
       if (costing_p)
 	{
 	  if (n_adjacent_stores > 0)
-	    vect_get_store_cost (vinfo, stmt_info, slp_node, n_adjacent_stores,
-				 alignment_support_scheme, misalignment,
-				 &inside_cost, cost_vec);
+	    {
+	      /* Take a single lane vector type store as scalar
+		 store to avoid ICE like 110776.  */
+	      if (VECTOR_TYPE_P (ltype)
+		  && maybe_ne (TYPE_VECTOR_SUBPARTS (ltype), 1U))
+		vect_get_store_cost (vinfo, stmt_info, slp_node,
+				     n_adjacent_stores, alignment_support_scheme,
+				     misalignment, &inside_cost, cost_vec);
+	      else
+		inside_cost
+		  += record_stmt_cost (cost_vec, n_adjacent_stores,
+				       scalar_store, stmt_info, 0, vect_body);
+	      /* Only need vector extracting when there are more
+		 than one stores.  */
+	      if (nstores > 1)
+		inside_cost
+		  += record_stmt_cost (cost_vec, n_adjacent_stores,
+				       vec_to_scalar, stmt_info, slp_node,
+				       0, vect_body);
+	    }
 	  if (dump_enabled_p ())
 	    dump_printf_loc (MSG_NOTE, vect_location,
 			     "vect_model_store_cost: inside_cost = %d, "
@@ -10729,9 +10731,6 @@ vectorizable_load (vec_info *vinfo,
 	  /* Else fall back to the default element-wise access.  */
 	  ltype = build_aligned_type (ltype, TYPE_ALIGN (TREE_TYPE (vectype)));
 	}
-      /* Load vector(1) scalar_type if it's 1 element-wise vectype.  */
-      else if (nloads == 1)
-	ltype = vectype;
 
       if (slp)
 	{
@@ -10780,11 +10779,11 @@ vectorizable_load (vec_info *vinfo,
 					     group_el * elsz + cst_offset);
 	      tree data_ref = build2 (MEM_REF, ltype, running_off, this_off);
 	      vect_copy_ref_info (data_ref, DR_REF (first_dr_info->dr));
-	      new_stmt = gimple_build_assign (make_ssa_name (ltype), data_ref);
+	      new_temp = make_ssa_name (ltype);
+	      new_stmt = gimple_build_assign (new_temp, data_ref);
 	      vect_finish_stmt_generation (vinfo, stmt_info, new_stmt, gsi);
 	      if (nloads > 1)
-		CONSTRUCTOR_APPEND_ELT (v, NULL_TREE,
-					gimple_assign_lhs (new_stmt));
+		CONSTRUCTOR_APPEND_ELT (v, NULL_TREE, new_temp);
 
 	      group_el += lnel;
 	      if (! slp
@@ -10830,6 +10829,15 @@ vectorizable_load (vec_info *vinfo,
 						   gsi);
 		    }
 		}
+	    }
+	  else if (!costing_p && ltype != vectype)
+	    {
+	      new_stmt = gimple_build_assign (make_ssa_name (vectype),
+					      VIEW_CONVERT_EXPR,
+					      build1 (VIEW_CONVERT_EXPR,
+						      vectype, new_temp));
+	      vect_finish_stmt_generation (vinfo, stmt_info, new_stmt,
+					   gsi);
 	    }
 
 	  if (!costing_p)
@@ -15168,7 +15176,7 @@ bool
 supportable_indirect_convert_operation (code_helper code,
 					tree vectype_out,
 					tree vectype_in,
-					vec<std::pair<tree, tree_code> > *converts,
+					vec<std::pair<tree, tree_code> > &converts,
 					tree op0)
 {
   bool found_mode = false;
@@ -15185,7 +15193,7 @@ supportable_indirect_convert_operation (code_helper code,
 				     vectype_in,
 				     &tc1))
     {
-      converts->safe_push (std::make_pair (vectype_out, tc1));
+      converts.safe_push (std::make_pair (vectype_out, tc1));
       return true;
     }
 
@@ -15276,9 +15284,9 @@ supportable_indirect_convert_operation (code_helper code,
 
       if (found_mode)
 	{
-	  converts->safe_push (std::make_pair (cvt_type, tc2));
+	  converts.safe_push (std::make_pair (cvt_type, tc2));
 	  if (TYPE_MODE (cvt_type) != TYPE_MODE (vectype_out))
-	    converts->safe_push (std::make_pair (vectype_out, tc1));
+	    converts.safe_push (std::make_pair (vectype_out, tc1));
 	  return true;
 	}
     }

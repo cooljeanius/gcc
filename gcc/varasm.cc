@@ -1,5 +1,5 @@
 /* Output variables, constants and external declarations, for GNU compiler.
-   Copyright (C) 1987-2024 Free Software Foundation, Inc.
+   Copyright (C) 1987-2025 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -4301,34 +4301,17 @@ output_constant_pool_2 (fixed_size_mode mode, rtx x, unsigned int align)
       {
 	gcc_assert (GET_CODE (x) == CONST_VECTOR);
 
-	/* Pick the smallest integer mode that contains at least one
-	   whole element.  Often this is byte_mode and contains more
-	   than one element.  */
-	unsigned int nelts = GET_MODE_NUNITS (mode);
-	unsigned int elt_bits = GET_MODE_PRECISION (mode) / nelts;
-	unsigned int int_bits = MAX (elt_bits, BITS_PER_UNIT);
-	scalar_int_mode int_mode = int_mode_for_size (int_bits, 0).require ();
-	unsigned int mask = GET_MODE_MASK (GET_MODE_INNER (mode));
+	auto_vec<target_unit, 128> buffer;
+	buffer.reserve (GET_MODE_SIZE (mode));
 
-	/* We allow GET_MODE_PRECISION (mode) <= GET_MODE_BITSIZE (mode) but
-	   only properly handle cases where the difference is less than a
-	   byte.  */
-	gcc_assert (GET_MODE_BITSIZE (mode) - GET_MODE_PRECISION (mode) <
-		    BITS_PER_UNIT);
+	bool ok = native_encode_rtx (mode, x, buffer, 0, GET_MODE_SIZE (mode));
+	gcc_assert (ok);
 
-	/* Build the constant up one integer at a time.  */
-	unsigned int elts_per_int = int_bits / elt_bits;
-	for (unsigned int i = 0; i < nelts; i += elts_per_int)
+	for (unsigned i = 0; i < GET_MODE_SIZE (mode); i++)
 	  {
-	    unsigned HOST_WIDE_INT value = 0;
-	    unsigned int limit = MIN (nelts - i, elts_per_int);
-	    for (unsigned int j = 0; j < limit; ++j)
-	    {
-	      auto elt = INTVAL (CONST_VECTOR_ELT (x, i + j));
-	      value |= (elt & mask) << (j * elt_bits);
-	    }
-	    output_constant_pool_2 (int_mode, gen_int_mode (value, int_mode),
-				    i != 0 ? MIN (align, int_bits) : align);
+	    unsigned HOST_WIDE_INT value = buffer[i];
+	    output_constant_pool_2 (byte_mode, gen_int_mode (value, byte_mode),
+				    i == 0 ? align : 1);
 	  }
 	break;
       }
@@ -5665,7 +5648,8 @@ array_size_for_constructor (tree val)
 	index = TREE_OPERAND (index, 1);
       if (value && TREE_CODE (value) == RAW_DATA_CST)
 	index = size_binop (PLUS_EXPR, index,
-			    bitsize_int (RAW_DATA_LENGTH (value) - 1));
+			    build_int_cst (TREE_TYPE (index),
+					   RAW_DATA_LENGTH (value) - 1));
       if (max_index == NULL_TREE || tree_int_cst_lt (max_index, index))
 	max_index = index;
     }

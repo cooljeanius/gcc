@@ -1,5 +1,5 @@
 ;; Machine Description for LoongArch for GNU compiler.
-;; Copyright (C) 2021-2024 Free Software Foundation, Inc.
+;; Copyright (C) 2021-2025 Free Software Foundation, Inc.
 ;; Contributed by Loongson Ltd.
 ;; Based on MIPS target for GNU compiler.
 
@@ -527,13 +527,15 @@
 		     (gt "") (gtu "u")
 		     (ge "") (geu "u")
 		     (lt "") (ltu "u")
-		     (le "") (leu "u")])
+		     (le "") (leu "u")
+		     (smax "") (umax "u")])
 
 ;; <U> is like <u> except uppercase.
 (define_code_attr U [(sign_extend "") (zero_extend "U")])
 
 ;; <su> is like <u>, but the signed form expands to "s" rather than "".
-(define_code_attr su [(sign_extend "s") (zero_extend "u")])
+(define_code_attr su [(sign_extend "s") (zero_extend "u")
+                      (smax "s") (umax "u")])
 
 (define_code_attr u_bool [(sign_extend "false") (zero_extend "true")])
 
@@ -2207,7 +2209,7 @@
   "!TARGET_64BIT
    && (register_operand (operands[0], DImode)
        || reg_or_0_operand (operands[1], DImode))"
-  { return loongarch_output_move (operands[0], operands[1]); }
+  { return loongarch_output_move (operands); }
   "CONST_INT_P (operands[1]) && REG_P (operands[0]) && GP_REG_P (REGNO
   (operands[0]))"
   [(const_int 0)]
@@ -2226,7 +2228,9 @@
   "TARGET_64BIT
    && (register_operand (operands[0], DImode)
        || reg_or_0_operand (operands[1], DImode))"
-  { return loongarch_output_move (operands[0], operands[1]); }
+  {
+    return loongarch_output_move (operands);
+  }
   "CONST_INT_P (operands[1]) && REG_P (operands[0]) && GP_REG_P (REGNO
   (operands[0]))"
   [(const_int 0)]
@@ -2313,7 +2317,7 @@
 	(match_operand:SI 1 "move_operand" "r,Yd,w,rJ,*r*J,m,*f,*f"))]
   "(register_operand (operands[0], SImode)
     || reg_or_0_operand (operands[1], SImode))"
-  { return loongarch_output_move (operands[0], operands[1]); }
+  { return loongarch_output_move (operands); }
   "CONST_INT_P (operands[1]) && REG_P (operands[0]) && GP_REG_P (REGNO
   (operands[0]))"
   [(const_int 0)]
@@ -2347,7 +2351,7 @@
 	(match_operand:HI 1 "move_operand" "r,Yd,I,m,rJ,k,rJ"))]
   "(register_operand (operands[0], HImode)
        || reg_or_0_operand (operands[1], HImode))"
-  { return loongarch_output_move (operands[0], operands[1]); }
+  { return loongarch_output_move (operands); }
   "CONST_INT_P (operands[1]) && REG_P (operands[0]) && GP_REG_P (REGNO
   (operands[0]))"
   [(const_int 0)]
@@ -2381,7 +2385,7 @@
 	(match_operand:QI 1 "move_operand" "r,I,m,rJ,k,rJ"))]
   "(register_operand (operands[0], QImode)
        || reg_or_0_operand (operands[1], QImode))"
-  { return loongarch_output_move (operands[0], operands[1]); }
+  { return loongarch_output_move (operands); }
   [(set_attr "move_type" "move,const,load,store,load,store")
    (set_attr "mode" "QI")])
 
@@ -2402,7 +2406,7 @@
   "TARGET_HARD_FLOAT
    && (register_operand (operands[0], SFmode)
        || reg_or_0_operand (operands[1], SFmode))"
-  { return loongarch_output_move (operands[0], operands[1]); }
+  { return loongarch_output_move (operands); }
   [(set_attr "move_type" "fmove,mgtf,fpload,fpstore,fpload,fpstore,store,store,mgtf,mftg,move,load,store")
    (set_attr "mode" "SF")])
 
@@ -2412,7 +2416,7 @@
   "TARGET_SOFT_FLOAT
    && (register_operand (operands[0], SFmode)
        || reg_or_0_operand (operands[1], SFmode))"
-  { return loongarch_output_move (operands[0], operands[1]); }
+  { return loongarch_output_move (operands); }
   [(set_attr "move_type" "move,load,store")
    (set_attr "mode" "SF")])
 
@@ -2433,7 +2437,7 @@
   "TARGET_DOUBLE_FLOAT
    && (register_operand (operands[0], DFmode)
        || reg_or_0_operand (operands[1], DFmode))"
-  { return loongarch_output_move (operands[0], operands[1]); }
+  { return loongarch_output_move (operands); }
   [(set_attr "move_type" "fmove,mgtf,fpload,fpstore,fpload,fpstore,store,store,mgtf,mftg,move,load,store")
    (set_attr "mode" "DF")])
 
@@ -2444,7 +2448,7 @@
    && TARGET_64BIT
    && (register_operand (operands[0], DFmode)
        || reg_or_0_operand (operands[1], DFmode))"
-  { return loongarch_output_move (operands[0], operands[1]); }
+  { return loongarch_output_move (operands); }
   [(set_attr "move_type" "move,load,store")
    (set_attr "mode" "DF")])
 
@@ -2587,7 +2591,10 @@
 	    (subreg:SI (match_operand:DI 1 "register_operand" "0") 0))
 	  (match_operand:DI 2 "const_lu32i_operand" "u")))]
   "TARGET_64BIT"
-  "lu32i.d\t%0,%X2>>32"
+  {
+    operands[2] = GEN_INT (INTVAL (operands[2]) >> 32);
+    return "lu32i.d\t%0,%X2";
+  }
   [(set_attr "type" "arith")
    (set_attr "mode" "DI")])
 
@@ -2598,7 +2605,10 @@
 		  (match_operand 2 "lu52i_mask_operand"))
 	  (match_operand 3 "const_lu52i_operand" "v")))]
   "TARGET_64BIT"
-  "lu52i.d\t%0,%1,%X3>>52"
+  {
+    operands[3] = GEN_INT (INTVAL (operands[3]) >> 52);
+    return "lu52i.d\t%0,%1,%X3";
+  }
   [(set_attr "type" "arith")
    (set_attr "mode" "DI")])
 
@@ -3111,13 +3121,14 @@
 
 (define_insn "bstrpick_alsl_paired"
   [(set (match_operand:DI 0 "register_operand" "=&r")
-	(plus:DI (match_operand:DI 1 "register_operand" "r")
-		 (and:DI (ashift:DI (match_operand:DI 2 "register_operand" "r")
-				    (match_operand 3 "const_immalsl_operand" ""))
-			 (match_operand 4 "immediate_operand" ""))))]
+	(plus:DI
+	  (and:DI (ashift:DI (match_operand:DI 1 "register_operand" "r")
+			     (match_operand 2 "const_immalsl_operand" ""))
+		  (match_operand 3 "immediate_operand" ""))
+	  (match_operand:DI 4 "register_operand" "r")))]
   "TARGET_64BIT
-   && ((INTVAL (operands[4]) >> INTVAL (operands[3])) == 0xffffffff)"
-  "bstrpick.d\t%0,%2,31,0\n\talsl.d\t%0,%0,%1,%3"
+   && ((INTVAL (operands[3]) >> INTVAL (operands[2])) == 0xffffffff)"
+  "bstrpick.d\t%0,%1,31,0\n\talsl.d\t%0,%0,%4,%2"
   [(set_attr "type" "arith")
    (set_attr "mode" "DI")
    (set_attr "insn_count" "2")])
@@ -4221,6 +4232,16 @@
   "bytepick.d\t%0,%1,%2,<bytepick_imm>"
   [(set_attr "mode" "DI")])
 
+(define_insn "bytepick_d_<bytepick_imm>_rev"
+  [(set (match_operand:DI 0 "register_operand" "=r")
+	(ior:DI (ashift (match_operand:DI 1 "register_operand" "r")
+			(const_int bytepick_d_ashift_amount))
+		(lshiftrt (match_operand:DI 2 "register_operand" "r")
+			  (const_int <bytepick_d_lshiftrt_amount>))))]
+  "TARGET_64BIT"
+  "bytepick.d\t%0,%2,%1,<bytepick_imm>"
+  [(set_attr "mode" "DI")])
+
 (define_insn "bitrev_4b"
   [(set (match_operand:SI 0 "register_operand" "=r")
 	(unspec:SI [(match_operand:SI 1 "register_operand" "r")]
@@ -4326,9 +4347,9 @@
   {
     /* The load destination does not overlap the source.  */
     gcc_assert (!reg_overlap_mentioned_p (operands[0], operands[1]));
-    output_asm_insn (loongarch_output_move (operands[0], operands[1]),
+    output_asm_insn (loongarch_output_move (operands),
 		     operands);
-    output_asm_insn (loongarch_output_move (operands[2], operands[3]),
+    output_asm_insn (loongarch_output_move (&operands[2]),
 		     &operands[2]);
     return "";
   }

@@ -1,5 +1,5 @@
 /* Parser for C and Objective-C.
-   Copyright (C) 1987-2024 Free Software Foundation, Inc.
+   Copyright (C) 1987-2025 Free Software Foundation, Inc.
 
    Parser actions based on the old Bison parser; structure somewhat
    influenced by and fragments based on the C++ parser.
@@ -262,13 +262,23 @@ struct GTY(()) c_parser {
   struct omp_for_parse_data * GTY((skip)) omp_for_parse_state;
 
   /* If we're in the context of OpenMP directives written as C23
-     attributes turned into pragma, vector of tokens created from that,
-     otherwise NULL.  */
-  vec<c_token, va_gc> *in_omp_attribute_pragma;
+     attributes turned into pragma, the tokens field is temporarily
+     redirected.  This holds data needed to restore state afterwards.
+     It's NULL otherwise.  */
+  struct omp_attribute_pragma_state *in_omp_attribute_pragma;
 
   /* Set for omp::decl attribute parsing to the decl to which it
      appertains.  */
   tree in_omp_decl_attribute;
+};
+
+/* Holds data needed to restore the token stream to its previous state
+   after parsing an OpenMP attribute-syntax pragma.  */
+struct GTY(()) omp_attribute_pragma_state
+{
+  vec<c_token, va_gc> *token_vec;
+  c_token * GTY((skip)) save_tokens;
+  unsigned int save_tokens_avail;
 };
 
 /* Return a pointer to the Nth token in PARSERs tokens_buf.  */
@@ -1312,8 +1322,9 @@ c_parser_skip_until_found (c_parser *parser,
 	  c_token *token = c_parser_peek_token (parser);
 	  if (token->type == CPP_EOF)
 	    {
-	      parser->tokens = &parser->tokens_buf[0];
-	      parser->tokens_avail = token->flags;
+	      parser->tokens = parser->in_omp_attribute_pragma->save_tokens;
+	      parser->tokens_avail
+		= parser->in_omp_attribute_pragma->save_tokens_avail;
 	      parser->in_omp_attribute_pragma = NULL;
 	    }
 	}
@@ -1335,8 +1346,9 @@ c_parser_skip_until_found (c_parser *parser,
 	      c_token *token = c_parser_peek_token (parser);
 	      if (token->type == CPP_EOF)
 		{
-		  parser->tokens = &parser->tokens_buf[0];
-		  parser->tokens_avail = token->flags;
+		  parser->tokens = parser->in_omp_attribute_pragma->save_tokens;
+		  parser->tokens_avail
+		    = parser->in_omp_attribute_pragma->save_tokens_avail;
 		  parser->in_omp_attribute_pragma = NULL;
 		}
 	    }
@@ -1429,8 +1441,9 @@ c_parser_skip_to_pragma_eol (c_parser *parser, bool error_if_not_eol = true)
       c_token *token = c_parser_peek_token (parser);
       if (token->type == CPP_EOF)
 	{
-	  parser->tokens = &parser->tokens_buf[0];
-	  parser->tokens_avail = token->flags;
+	  parser->tokens = parser->in_omp_attribute_pragma->save_tokens;
+	  parser->tokens_avail
+	    = parser->in_omp_attribute_pragma->save_tokens_avail;
 	  parser->in_omp_attribute_pragma = NULL;
 	}
     }
@@ -3785,6 +3798,47 @@ c_parser_declspecs (c_parser *parser, struct c_declspecs *specs,
     specs->postfix_attrs = c_parser_std_attribute_specifier_sequence (parser);
 }
 
+/* Complain about a non-CPP_NAME within an enumerator list.  */
+
+static void
+report_bad_enum_name (c_parser *parser)
+{
+  if (!parser->error)
+    {
+      c_token *token = c_parser_peek_token (parser);
+      switch (token->type)
+	{
+	default:
+	  break;
+	case CPP_CLOSE_BRACE:
+	  /* Give a nicer error for "enum {}".  */
+	  error_at (token->location,
+		    "empty enum is invalid");
+	  parser->error = true;
+	  return;
+	case CPP_KEYWORD:
+	  /* Give a nicer error for attempts to use "true" and "false"
+	     in enums with C23 onwards.  */
+	  if (token->keyword == RID_FALSE
+	      || token->keyword == RID_TRUE)
+	    {
+	      auto_diagnostic_group d;
+	      error_at (token->location,
+			"cannot use keyword %qs as enumeration constant",
+			IDENTIFIER_POINTER (token->value));
+	      add_note_about_new_keyword (token->location,
+					  token->value);
+	      parser->error = true;
+	      return;
+	    }
+	  break;
+	}
+    }
+
+  /* Otherwise, a more generic error message.  */
+  c_parser_error (parser, "expected identifier");
+}
+
 /* Parse an enum specifier (C90 6.5.2.2, C99 6.7.2.2, C11 6.7.2.2).
 
    enum-specifier:
@@ -3952,16 +4006,7 @@ c_parser_enum_specifier (c_parser *parser)
 	  location_t decl_loc, value_loc;
 	  if (c_parser_next_token_is_not (parser, CPP_NAME))
 	    {
-	      /* Give a nicer error for "enum {}".  */
-	      if (c_parser_next_token_is (parser, CPP_CLOSE_BRACE)
-		  && !parser->error)
-		{
-		  error_at (c_parser_peek_token (parser)->location,
-			    "empty enum is invalid");
-		  parser->error = true;
-		}
-	      else
-		c_parser_error (parser, "expected identifier");
+	      report_bad_enum_name (parser);
 	      c_parser_skip_until_found (parser, CPP_CLOSE_BRACE, NULL);
 	      values = error_mark_node;
 	      break;
@@ -7152,7 +7197,6 @@ c_parser_handle_statement_omp_attributes (c_parser *parser, tree &attrs,
     return false;
 
   unsigned int tokens_avail = parser->tokens_avail;
-  gcc_assert (parser->tokens == &parser->tokens_buf[0]);
 
   tokens++;
   vec<c_token, va_gc> *toks = NULL;
@@ -7184,12 +7228,15 @@ c_parser_handle_statement_omp_attributes (c_parser *parser, tree &attrs,
   tok.type = CPP_EOF;
   tok.keyword = RID_MAX;
   tok.location = toks->last ().location;
-  tok.flags = tokens_avail;
   toks->quick_push (tok);
 
+  gcc_assert (!parser->in_omp_attribute_pragma);
+  parser->in_omp_attribute_pragma = ggc_alloc<omp_attribute_pragma_state> ();
+  parser->in_omp_attribute_pragma->token_vec = toks;
+  parser->in_omp_attribute_pragma->save_tokens = parser->tokens;
+  parser->in_omp_attribute_pragma->save_tokens_avail = tokens_avail;
   parser->tokens = toks->address ();
   parser->tokens_avail = tokens;
-  parser->in_omp_attribute_pragma = toks;
   return true;
 }
 
@@ -12859,6 +12906,7 @@ c_parser_postfix_expression (c_parser *parser)
 		  expr.value = build2_loc (loc, COMPOUND_EXPR,
 					   TREE_TYPE (expr.value),
 					   instrument_expr, expr.value);
+		set_c_expr_source_range (&expr, loc, close_paren_loc);
 		break;
 	      }
 	    tree barg1 = arg;
@@ -26885,7 +26933,7 @@ c_finish_omp_declare_variant (c_parser *parser, tree fndecl, tree parms)
 	  ctx  = c_parser_omp_context_selector_specification (parser, parms);
 	  if (ctx == error_mark_node)
 	    goto fail;
-	  ctx = omp_check_context_selector (match_loc, ctx);
+	  ctx = omp_check_context_selector (match_loc, ctx, false);
 	  if (ctx != error_mark_node && variant != error_mark_node)
 	    {
 	      if (TREE_CODE (variant) != FUNCTION_DECL)
@@ -27147,7 +27195,7 @@ c_finish_omp_declare_variant (c_parser *parser, tree fndecl, tree parms)
       tree construct = omp_get_context_selector_list (ctx,
 						      OMP_TRAIT_SET_CONSTRUCT);
       omp_mark_declare_variant (match_loc, variant, construct);
-      if (omp_context_selector_matches (ctx))
+      if (omp_context_selector_matches (ctx, NULL_TREE, false))
 	{
 	  tree attr = tree_cons (get_identifier ("omp declare variant base"),
 				 build_tree_list (variant, ctx),
@@ -27342,12 +27390,15 @@ c_maybe_parse_omp_decl (tree decl, tree d)
   tok.type = CPP_EOF;
   tok.keyword = RID_MAX;
   tok.location = last[-1].location;
-  tok.flags = tokens_avail;
   toks->quick_push (tok);
   parser->in_omp_decl_attribute = decl;
+  gcc_assert (!parser->in_omp_attribute_pragma);
+  parser->in_omp_attribute_pragma = ggc_alloc<omp_attribute_pragma_state> ();
+  parser->in_omp_attribute_pragma->token_vec = toks;
+  parser->in_omp_attribute_pragma->save_tokens = parser->tokens;
+  parser->in_omp_attribute_pragma->save_tokens_avail = tokens_avail;
   parser->tokens = toks->address ();
   parser->tokens_avail = toks->length ();
-  parser->in_omp_attribute_pragma = toks;
   c_parser_pragma (parser, pragma_external, NULL, NULL_TREE);
   parser->in_omp_decl_attribute = NULL_TREE;
   return true;

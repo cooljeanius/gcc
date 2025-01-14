@@ -1,5 +1,5 @@
 /* Symbol table.
-   Copyright (C) 2012-2024 Free Software Foundation, Inc.
+   Copyright (C) 2012-2025 Free Software Foundation, Inc.
    Contributed by Jan Hubicka
 
 This file is part of GCC.
@@ -2160,7 +2160,7 @@ symtab_node::get_partitioning_class (void)
   if (DECL_ABSTRACT_P (decl))
     return SYMBOL_EXTERNAL;
 
-  if (cnode && (cnode->inlined_to || cnode->declare_variant_alt))
+  if (cnode && cnode->inlined_to)
     return SYMBOL_DUPLICATE;
 
   /* Transparent aliases are always duplicated.  */
