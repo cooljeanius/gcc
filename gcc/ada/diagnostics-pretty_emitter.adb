@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2024, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2025, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -327,7 +327,6 @@ package body Diagnostics.Pretty_Emitter is
    is
       Cur_Loc : Source_Ptr := Get_Line_End (Buf, Loc);
    begin
-
       while Cur_Loc > Buf'First
         and then Buf (Cur_Loc) in ASCII.LF | ASCII.CR
       loop

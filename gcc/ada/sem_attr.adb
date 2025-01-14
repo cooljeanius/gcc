@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2024, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2025, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -1994,9 +1994,7 @@ package body Sem_Attr is
             Resolve (E1, Any_Integer);
             Set_Etype (E1, Standard_Integer);
 
-            if not Is_OK_Static_Expression (E1)
-              or else Raises_Constraint_Error (E1)
-            then
+            if not Is_OK_Static_Expression (E1) then
                Flag_Non_Static_Expr
                  ("expression for dimension must be static!", E1);
                Error_Attr;
@@ -2108,11 +2106,12 @@ package body Sem_Attr is
             --  designated type of the access type, since the type of the
             --  referenced array is this type (see AI95-00106).
 
-            --  As done elsewhere, freezing must not happen when preanalyzing
-            --  a pre- or postcondition or a default value for an object or for
-            --  a formal parameter.
+            --    However, we must not freeze the designated type during
+            --    preanalysis; neither under strict preanalysis nor when
+            --    preanalyzing a pre- or postcondition or a default value
+            --    for an object or for a formal parameter.
 
-            if not In_Spec_Expression then
+            if not Preanalysis_Active then
                Freeze_Before (N, Designated_Type (P_Type));
             end if;
 
@@ -2267,7 +2266,7 @@ package body Sem_Attr is
          --  Now test for dynamic predicate
 
          if Has_Predicates (P_Type)
-           and then not (Has_Static_Predicate (P_Type))
+           and then not Has_Static_Predicate (P_Type)
          then
             Error_Attr_P
               ("prefix of % attribute may not have dynamic predicate");
@@ -3216,26 +3215,23 @@ package body Sem_Attr is
 
          --  Deal with Ada 83 issues
 
-         if not Attribute_83 (Attr_Id) then
-            if Ada_Version = Ada_83 then
-               Error_Msg_Name_1 := Aname;
-               Error_Msg_N ("(Ada 83) attribute% is not standard??", N);
-            end if;
-
-            if Attribute_Impl_Def (Attr_Id) then
-               Check_Restriction (No_Implementation_Attributes, N);
-            end if;
+         if not Attribute_83 (Attr_Id) and then Ada_Version = Ada_83 then
+            Error_Msg_Name_1 := Aname;
+            Error_Msg_N ("(Ada 83) attribute% is not standard??", N);
          end if;
 
          --  Deal with Ada 2005 attributes that are implementation attributes
          --  because they appear in a version of Ada before Ada 2005, ditto for
          --  Ada 2012 and Ada 2022 attributes appearing in an earlier version.
+         --  Likewise for GNAT implementation-defined attributes.
 
          if (Attribute_05 (Attr_Id) and then Ada_Version < Ada_2005)
                or else
             (Attribute_12 (Attr_Id) and then Ada_Version < Ada_2012)
                or else
             (Attribute_22 (Attr_Id) and then Ada_Version < Ada_2022)
+               or else
+            Attribute_Impl_Def (Attr_Id)
          then
             Check_Restriction (No_Implementation_Attributes, N);
          end if;
@@ -3424,18 +3420,6 @@ package body Sem_Attr is
       --  Remaining processing depends on attribute
 
       case Attr_Id is
-
-      --  Attributes related to Ada 2012 iterators. Attribute specifications
-      --  exist for these, but they cannot be queried.
-
-      when Attribute_Constant_Indexing
-         | Attribute_Default_Iterator
-         | Attribute_Implicit_Dereference
-         | Attribute_Iterator_Element
-         | Attribute_Iterable
-         | Attribute_Variable_Indexing
-      =>
-         Error_Msg_N ("illegal attribute", N);
 
       --  Internal attributes used to deal with Ada 2012 delayed aspects. These
       --  were already rejected by the parser. Thus they shouldn't appear here.
@@ -4035,7 +4019,7 @@ package body Sem_Attr is
                   if (Is_Type (Tsk) and then Tsk = S)
                     or else (not Is_Type (Tsk)
                               and then Etype (Tsk) = S
-                              and then not (Comes_From_Source (S)))
+                              and then not Comes_From_Source (S))
                   then
                      null;
                   else
@@ -8156,6 +8140,13 @@ package body Sem_Attr is
 
       if Nkind (N) /= N_Attribute_Reference then
          return;
+
+      --  No evaluation required under strict preanalysis because locating
+      --  static expressions is not needed; this also minimizes making tree
+      --  modifications during strict preanalysis.
+
+      elsif In_Strict_Preanalysis then
+         return;
       end if;
 
       Aname := Attribute_Name (N);
@@ -9017,19 +9008,6 @@ package body Sem_Attr is
 
       case Id is
 
-      --  Attributes related to Ada 2012 iterators; nothing to evaluate for
-      --  these.
-
-      when Attribute_Constant_Indexing
-         | Attribute_Default_Iterator
-         | Attribute_Implicit_Dereference
-         | Attribute_Iterator_Element
-         | Attribute_Iterable
-         | Attribute_Reduce
-         | Attribute_Variable_Indexing
-      =>
-         null;
-
       --  Internal attributes used to deal with Ada 2012 delayed aspects.
       --  These were already rejected by the parser. Thus they shouldn't
       --  appear here.
@@ -9448,7 +9426,7 @@ package body Sem_Attr is
       -----------
 
       --  Image is a scalar attribute, but is never static, because it is
-      --  not a static function (having a non-scalar argument (RM 4.9(22))
+      --  not a static function (having a non-scalar argument (RM 4.9(22)).
       --  However, we can constant-fold the image of an enumeration literal
       --  if names are available and default Image implementation has not
       --  been overridden.
@@ -10209,6 +10187,13 @@ package body Sem_Attr is
                null;
          end case;
       end Range_Length;
+
+      ------------
+      -- Reduce --
+      ------------
+
+      when Attribute_Reduce =>
+         null;
 
       ---------
       -- Ref --
@@ -11365,10 +11350,11 @@ package body Sem_Attr is
                   end loop;
 
                   --  If Prefix is a subprogram name, this reference freezes,
-                  --  but not if within spec expression mode. The profile of
-                  --  the subprogram is not frozen at this point.
+                  --  but not during preanalysis (including preanalysis of
+                  --  spec expressions). The profile of the subprogram is not
+                  --  frozen at this point.
 
-                  if not In_Spec_Expression then
+                  if not Preanalysis_Active then
                      Freeze_Before (N, Entity (P), Do_Freeze_Profile => False);
                   end if;
 
@@ -11377,7 +11363,7 @@ package body Sem_Attr is
                --  If it is an object, complete its resolution.
 
                elsif Is_Overloadable (Entity (P)) then
-                  if not In_Spec_Expression then
+                  if not Preanalysis_Active then
                      Freeze_Before (N, Entity (P), Do_Freeze_Profile => False);
                   end if;
 

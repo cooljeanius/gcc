@@ -1,5 +1,5 @@
 /* Prototypes of target machine for GNU compiler.  LoongArch version.
-   Copyright (C) 2021-2024 Free Software Foundation, Inc.
+   Copyright (C) 2021-2025 Free Software Foundation, Inc.
    Contributed by Loongson Ltd.
    Based on MIPS target for GNU compiler.
 
@@ -86,7 +86,7 @@ extern void loongarch_split_move (rtx, rtx);
 extern bool loongarch_addu16i_imm12_operand_p (HOST_WIDE_INT, machine_mode);
 extern void loongarch_split_plus_constant (rtx *, machine_mode);
 extern void loongarch_split_vector_move (rtx, rtx);
-extern const char *loongarch_output_move (rtx, rtx);
+extern const char *loongarch_output_move (rtx *);
 #ifdef RTX_CODE
 extern void loongarch_expand_scc (rtx *);
 extern void loongarch_expand_vec_cmp (rtx *);
@@ -171,7 +171,7 @@ extern void loongarch_expand_atomic_qihi (union loongarch_gen_fn_ptrs,
 
 extern void loongarch_expand_vector_group_init (rtx, rtx);
 extern void loongarch_expand_vector_init (rtx, rtx);
-extern void loongarch_expand_vec_unpack (rtx op[2], bool, bool);
+extern void loongarch_expand_vec_unpack (rtx op[2], bool);
 extern void loongarch_expand_vec_perm (rtx, rtx, rtx, rtx);
 extern void loongarch_expand_vec_perm_1 (rtx[]);
 extern void loongarch_expand_vector_extract (rtx, rtx, int);

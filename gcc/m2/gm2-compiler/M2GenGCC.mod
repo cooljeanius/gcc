@@ -1,6 +1,6 @@
 (* M2GenGCC.mod convert the quadruples into GCC trees.
 
-Copyright (C) 2001-2024 Free Software Foundation, Inc.
+Copyright (C) 2001-2025 Free Software Foundation, Inc.
 Contributed by Gaius Mulley <gaius.mulley@southwales.ac.uk>.
 
 This file is part of GNU Modula-2.
@@ -1660,7 +1660,7 @@ BEGIN
    THEN
       RETURN GetSizeOfHighFromUnbounded(tokenno, param)
    ELSE
-      RETURN BuildSize(tokenno, Mod2Gcc(GetType(param)), FALSE)
+      RETURN BuildSize (TokenToLocation (tokenno), Mod2Gcc (GetType (param)), FALSE)
    END
 END GetParamSize ;
 

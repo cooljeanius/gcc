@@ -1,5 +1,5 @@
 /* -*- C++ -*- Parser.
-   Copyright (C) 2000-2024 Free Software Foundation, Inc.
+   Copyright (C) 2000-2025 Free Software Foundation, Inc.
    Written by Mark Mitchell <mark@codesourcery.com>.
 
    This file is part of GCC.
@@ -735,12 +735,6 @@ cp_lexer_new_main (void)
   gcc_assert (!the_parser);
   the_parser = cp_parser_new (lexer);
 
-  unsigned raw_data_tokens = 0;
-  char *raw_data_buf = NULL;
-  const unsigned int raw_data_max_len
-    = 131072 - offsetof (struct tree_string, str) - 1;
-  const unsigned int raw_data_min_len = 128;
-
   /* Get the remaining tokens from the preprocessor.  */
   while (tok->type != CPP_EOF)
     {
@@ -749,99 +743,6 @@ cp_lexer_new_main (void)
 	module_token_lang (tok->type, tok->keyword, tok->u.value,
 			   tok->location, filter);
 
-      /* Attempt to optimize long lists of 0-255 integers
-	 separated by commas into CPP_EMBED.
-	 In particular, when we see
-	 CPP_NUMBER CPP_COMMA ( CPP_NUMBER CPP_COMMA ){n} CPP_NUMBER
-	 where n is in [raw_data_min_len, raw_data_max_len - 2]
-	 and all CPP_NUMBER tokens have int type and value in [0, UCHAR_MAX]
-	 it is changed into
-	 CPP_NUMBER CPP_COMMA CPP_EMBED CPP_COMMA CPP_NUMBER.  */
-    recheck:
-      if (tok->type == CPP_NUMBER
-	  && (raw_data_tokens & 1) == 0
-	  && TREE_CODE (tok->u.value) == INTEGER_CST
-	  && TREE_TYPE (tok->u.value) == integer_type_node
-	  && !wi::neg_p (wi::to_wide (tok->u.value))
-	  && wi::to_widest (tok->u.value) <= UCHAR_MAX
-	  && raw_data_tokens < raw_data_max_len * 2)
-	{
-	  raw_data_tokens++;
-	  /* * 2 comes from each byte in the middle represented by 2 tokens,
-	     CPP_NUMBER and CPP_COMMA, while + 3 stands for the
-	     CPP_NUMBER CPP_COMMA at the start and CPP_NUMBER at the end.  */
-	  if (raw_data_tokens >= raw_data_min_len * 2 + 3)
-	    {
-	      unsigned int len = lexer->buffer->length ();
-	      unsigned int new_len;
-	      if (raw_data_tokens == raw_data_min_len * 2 + 3)
-		{
-		  if (raw_data_buf == NULL)
-		    raw_data_buf = XNEWVEC (char, raw_data_max_len);
-		  for (unsigned i = len - raw_data_tokens, j = 0;
-		       i < len; i += 2, ++j)
-		    raw_data_buf[j]
-		      = (char) tree_to_uhwi ((*lexer->buffer)[i].u.value);
-		  /* + 5 stands for
-		     CPP_NUMBER CPP_COMMA CPP_EMBED CPP_COMMA CPP_NUMBER
-		     tokens that will replace the original raw_data_tokens
-		     tokens.  */
-		  new_len = len - raw_data_tokens + 5;
-		}
-	      else
-		{
-		  raw_data_buf[raw_data_tokens / 2]
-		    = (char) tree_to_uhwi (tok->u.value);
-		  new_len = len - 2;
-		}
-	      /* The last 2 tokens are always CPP_COMMA CPP_NUMBER.  */
-	      (*lexer->buffer)[new_len - 2] = (*lexer->buffer)[len - 2];
-	      (*lexer->buffer)[new_len - 1] = (*lexer->buffer)[len - 1];
-	      lexer->buffer->truncate (new_len);
-	    }
-	}
-      else if (tok->type == CPP_COMMA && (raw_data_tokens & 1) == 1)
-	raw_data_tokens++;
-      else if (raw_data_tokens >= raw_data_min_len * 2 + 3)
-	{
-	  unsigned last_number = (raw_data_tokens & 1);
-	  /* Index of the CPP_EMBED token.  From the above code, that
-	     future CPP_EMBED slot is followed by at least CPP_COMMA CPP_NUMBER
-	     tokens and if !last_number by another CPP_COMMA and then
-	     by the current token which is either not a CPP_NUMBER (e.g.
-	     often CPP_CLOSE_BRACE), or CPP_NUMBER with non-int type or with
-	     value not in [0, UCHAR_MAX], or reaching the raw_data_max_len
-	     limit.  So we need to substract 1 (to get at the current token
-	     index) plus 3 + !last_number to get at the CPP_EMBED index.  */
-	  unsigned int idx = lexer->buffer->length () - 4 - !last_number;
-	  if (!last_number)
-	    --raw_data_tokens;
-	  /* Number of bytes in the sequence, including the first and last
-	     CPP_NUMBER.  Those two bytes are included in the underlying
-	     STRING_CST but not in RAW_DATA_CST.  */
-	  raw_data_tokens = raw_data_tokens / 2 + 1;
-	  tree raw = make_node (RAW_DATA_CST);
-	  TREE_TYPE (raw) = integer_type_node;
-	  /* Minus the first and last bytes which have their own CPP_NUMBER
-	     tokens.  */
-	  RAW_DATA_LENGTH (raw) = raw_data_tokens - 2;
-	  tree owner = build_string (raw_data_tokens, raw_data_buf);
-	  TREE_TYPE (owner) = build_array_type_nelts (unsigned_char_type_node,
-						      raw_data_tokens);
-	  RAW_DATA_OWNER (raw) = owner;
-	  /* Skip over the first byte which has its own CPP_NUMBER token.  */
-	  RAW_DATA_POINTER (raw) = TREE_STRING_POINTER (owner) + 1;
-	  (*lexer->buffer)[idx].type = CPP_EMBED;
-	  (*lexer->buffer)[idx].u.value = raw;
-	  raw_data_tokens = 0;
-	  goto recheck;
-	}
-      else if (raw_data_tokens)
-	{
-	  raw_data_tokens = 0;
-	  goto recheck;
-	}
-
       /* Check for early pragmas that need to be handled now.  */
       if (tok->type == CPP_PRAGMA_EOL)
 	cp_lexer_handle_early_pragma (lexer);
@@ -849,8 +750,6 @@ cp_lexer_new_main (void)
       tok = vec_safe_push (lexer->buffer, cp_token ());
       cp_lexer_get_preprocessor_token (C_LEX_STRING_NO_JOIN, tok);
     }
-
-  XDELETEVEC (raw_data_buf);
 
   lexer->next_token = lexer->buffer->address ();
   lexer->last_token = lexer->next_token
@@ -23208,15 +23107,11 @@ cp_parser_asm_string_expression (cp_parser *parser)
       matching_parens parens;
       parens.consume_open (parser);
       tree string = cp_parser_constant_expression (parser);
-      if (string != error_mark_node)
-	string = cxx_constant_value (string, tf_error);
-      cexpr_str cstr (string);
-      if (!cstr.type_check (tok->location))
-	return error_mark_node;
-      if (!cstr.extract (tok->location, string))
-	string = error_mark_node;
       parens.require_close (parser);
-      return string;
+      if (TREE_CODE (string) == STRING_CST)
+	string = build1_loc (tok->location, PAREN_EXPR, TREE_TYPE (string),
+			     string);
+      return finish_asm_string_expression (tok->location, string);
     }
   else if (!cp_parser_is_string_literal (tok))
     {
@@ -23497,7 +23392,7 @@ cp_parser_asm_definition (cp_parser* parser)
 				      inputs, clobbers, labels, inline_p,
 				      false);
 	  /* If the extended syntax was not used, mark the ASM_EXPR.  */
-	  if (!extended_p)
+	  if (!extended_p && asm_stmt != error_mark_node)
 	    {
 	      tree temp = asm_stmt;
 	      if (TREE_CODE (temp) == CLEANUP_POINT_EXPR)
@@ -30145,7 +30040,7 @@ cp_parser_yield_expression (cp_parser* parser)
 /* Parse an (optional) asm-specification.
 
    asm-specification:
-     asm ( asm-string-expr )
+     asm ( string-literal )
 
    If the asm-specification is present, returns a STRING_CST
    corresponding to the string-literal.  Otherwise, returns
@@ -30168,8 +30063,9 @@ cp_parser_asm_specification_opt (cp_parser* parser)
   parens.require_open (parser);
 
   /* Look for the string-literal.  */
-  tree asm_specification = cp_parser_asm_string_expression (parser);
-
+  tree asm_specification = cp_parser_string_literal (parser,
+						     /*translate=*/false,
+						     /*wide_ok=*/false);
   /* Look for the `)'.  */
   parens.require_close (parser);
 
@@ -38799,8 +38695,9 @@ check_no_duplicate_clause (tree clauses, enum omp_clause_code code,
    If KIND is nonzero, create the appropriate node and install the decl
    in OMP_CLAUSE_DECL and add the node to the head of the list.
 
-   If KIND is zero, create a TREE_LIST with the decl in TREE_PURPOSE;
-   return the list created.
+   If KIND is zero (= OMP_CLAUSE_ERROR), create a TREE_LIST with the decl
+   in TREE_PURPOSE and the location in TREE_VALUE (accessible using
+   EXPR_LOCATION); return the list created.
 
    COLON can be NULL if only closing parenthesis should end the list,
    or pointer to bool which will receive false if the list is terminated
@@ -38937,7 +38834,7 @@ cp_parser_omp_var_list_no_open (cp_parser *parser, enum omp_clause_code kind,
 	  goto build_clause;
 	}
       token = cp_lexer_peek_token (parser->lexer);
-      if (kind != 0
+      if (kind != 0  /* kind != OMP_CLAUSE_ERROR */
 	  && cp_parser_is_keyword (token, RID_THIS))
 	{
 	  decl = finish_this_expr ();
@@ -38995,7 +38892,7 @@ cp_parser_omp_var_list_no_open (cp_parser *parser, enum omp_clause_code kind,
 	decl = process_outer_var_ref (decl, tf_warning_or_error);
       if (decl == error_mark_node)
 	;
-      else if (kind != 0)
+      else if (kind != 0)  /* kind != OMP_CLAUSE_ERROR */
 	{
 	  switch (kind)
 	    {
@@ -39141,8 +39038,8 @@ cp_parser_omp_var_list_no_open (cp_parser *parser, enum omp_clause_code kind,
 	  OMP_CLAUSE_CHAIN (u) = list;
 	  list = u;
 	}
-      else
-	list = tree_cons (decl, NULL_TREE, list);
+      else  /* kind == 0 alias kind == OMP_CLAUSE_ERROR */
+	list = tree_cons (decl, build_empty_stmt (token->location), list);
 
     get_comma:
       if (cp_lexer_next_token_is_not (parser->lexer, CPP_COMMA))
@@ -39189,17 +39086,17 @@ cp_parser_omp_var_list (cp_parser *parser, enum omp_clause_code kind, tree list,
 {
   if (parser->lexer->in_omp_decl_attribute)
     {
+      location_t loc = cp_lexer_peek_token (parser->lexer)->location;
       if (kind)
 	{
-	  location_t loc = cp_lexer_peek_token (parser->lexer)->location;
 	  tree u = build_omp_clause (loc, kind);
 	  OMP_CLAUSE_DECL (u) = parser->lexer->in_omp_decl_attribute;
 	  OMP_CLAUSE_CHAIN (u) = list;
 	  return u;
 	}
-      else
-	return tree_cons (parser->lexer->in_omp_decl_attribute, NULL_TREE,
-			  list);
+      else  /* kind == OMP_CLAUSE_ERROR  */
+	return tree_cons (parser->lexer->in_omp_decl_attribute,
+			  build_empty_stmt (loc), list);
     }
 
   if (cp_parser_require (parser, CPP_OPEN_PAREN, RT_OPEN_PAREN))
@@ -39314,7 +39211,6 @@ cp_parser_oacc_data_clause (cp_parser *parser, pragma_omp_clause c_kind,
 static tree
 cp_parser_oacc_data_clause_deviceptr (cp_parser *parser, tree list)
 {
-  location_t loc = cp_lexer_peek_token (parser->lexer)->location;
   tree vars, t;
 
   /* Can't use OMP_CLAUSE_MAP here (that is, can't use the generic
@@ -39324,6 +39220,7 @@ cp_parser_oacc_data_clause_deviceptr (cp_parser *parser, tree list)
   for (t = vars; t; t = TREE_CHAIN (t))
     {
       tree v = TREE_PURPOSE (t);
+      location_t loc = EXPR_LOCATION (TREE_VALUE (t));
       tree u = build_omp_clause (loc, OMP_CLAUSE_MAP);
       OMP_CLAUSE_SET_MAP_KIND (u, GOMP_MAP_FORCE_DEVICEPTR);
       OMP_CLAUSE_DECL (u) = v;
@@ -50161,8 +50058,9 @@ cp_parser_omp_dispatch (cp_parser *parser, cp_token *pragma_tok)
     default:
       gcc_unreachable ();
     }
-  if (TREE_CODE (*dispatch_call) == FLOAT_EXPR
-      || TREE_CODE (*dispatch_call) == CONVERT_EXPR)
+  while (TREE_CODE (*dispatch_call) == FLOAT_EXPR
+	 || TREE_CODE (*dispatch_call) == CONVERT_EXPR
+	 || TREE_CODE (*dispatch_call) == INDIRECT_REF)
     dispatch_call = &TREE_OPERAND (*dispatch_call, 0);
   *dispatch_call = build_call_expr_internal_loc (loc, IFN_GOMP_DISPATCH,
 						 TREE_TYPE (*dispatch_call), 1,
@@ -50297,7 +50195,7 @@ cp_finish_omp_declare_variant (cp_parser *parser, cp_token *pragma_tok,
 	  ctx = cp_parser_omp_context_selector_specification (parser, true);
 	  if (ctx == error_mark_node)
 	    goto fail;
-	  ctx = omp_check_context_selector (match_loc, ctx);
+	  ctx = omp_check_context_selector (match_loc, ctx, false);
 	  if (ctx != error_mark_node && variant != error_mark_node)
 	    {
 	      tree match_loc_node
@@ -50329,8 +50227,6 @@ cp_finish_omp_declare_variant (cp_parser *parser, cp_token *pragma_tok,
 		{
 		  cp_lexer_consume_token (parser->lexer); // need_device_ptr
 		  cp_lexer_consume_token (parser->lexer); // :
-		  location_t arg_loc
-		    = cp_lexer_peek_token (parser->lexer)->location;
 
 		  tree arg;
 		  tree list
@@ -50340,6 +50236,7 @@ cp_finish_omp_declare_variant (cp_parser *parser, cp_token *pragma_tok,
 		  for (tree c = list; c != NULL_TREE; c = TREE_CHAIN (c))
 		    {
 		      tree decl = TREE_PURPOSE (c);
+		      location_t arg_loc = EXPR_LOCATION (TREE_VALUE (c));
 		      int idx;
 		      for (arg = parms, idx = 0; arg != NULL;
 			   arg = TREE_CHAIN (arg), idx++)
@@ -50354,7 +50251,6 @@ cp_finish_omp_declare_variant (cp_parser *parser, cp_token *pragma_tok,
 		      arg = TREE_VALUE (arg);
 		      if (adjust_args_list.contains (arg))
 			{
-			  // TODO fix location
 			  error_at (arg_loc, "%qD is specified more than once",
 				    decl);
 			  continue;
@@ -53161,7 +53057,9 @@ cp_parser_pragma (cp_parser *parser, enum pragma_context context, bool *if_p)
       break;
 
     case PRAGMA_OMP_DISPATCH:
-      cp_parser_omp_dispatch (parser, pragma_tok);
+      if (context != pragma_stmt && context != pragma_compound)
+	goto bad_stmt;
+      cp_parser_omp_construct (parser, pragma_tok, if_p);
       return true;
 
     case PRAGMA_IVDEP:

@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2024, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2025, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -1382,11 +1382,11 @@ package body Sem_Aggr is
 
          --  Do not perform this transformation if this was a string literal
          --  to start with, whose components needed constraint checks, or if
-         --  the component type is non-static, because it will require those
-         --  checks and be transformed back into an aggregate. If the index
-         --  type is not Integer the aggregate may represent a user-defined
-         --  string type but the context might need the original type so we
-         --  do not perform the transformation at this point.
+         --  the component type is nonstatic or has predicates, because it will
+         --  require those checks and be transformed back into an aggregate.
+         --  If the index type is not Integer, then the aggregate may represent
+         --  a user-defined string type but the context might need the original
+         --  type, so we do not perform the transformation at this point.
 
          if Number_Dimensions (Typ) = 1
            and then Is_Standard_Character_Type (Component_Type (Typ))
@@ -1396,6 +1396,7 @@ package body Sem_Aggr is
            and then not Is_Bit_Packed_Array (Typ)
            and then Nkind (Original_Node (Parent (N))) /= N_String_Literal
            and then Is_OK_Static_Subtype (Component_Type (Typ))
+           and then not Has_Predicates (Component_Type (Typ))
            and then Base_Type (Etype (First_Index (Typ))) =
                       Base_Type (Standard_Integer)
            and then not Has_Static_Empty_Array_Bounds (Typ)
@@ -2968,8 +2969,8 @@ package body Sem_Aggr is
                               Scope_Parent : Node_Id;
                            begin
                               if Nkind (Exp) /= N_Identifier
-                                or else not Present (Entity (Exp))
-                                or else not Present (Scope (Entity (Exp)))
+                                or else No (Entity (Exp))
+                                or else No (Scope (Entity (Exp)))
                                 or else Ekind (Scope (Entity (Exp))) /= E_Loop
                               then
                                  return OK;

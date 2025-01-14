@@ -1,5 +1,5 @@
 ;; Machine description for RISC-V for GNU compiler.
-;; Copyright (C) 2011-2024 Free Software Foundation, Inc.
+;; Copyright (C) 2011-2025 Free Software Foundation, Inc.
 ;; Contributed by Andrew Waterman (andrew@sifive.com).
 ;; Based on MIPS target for GNU compiler.
 
@@ -861,19 +861,19 @@
 ;; Transform (X & C1) + C2 into (X | ~C1) - (-C2 | ~C1)
 ;; Where C1 is not a LUI operand, but ~C1 is a LUI operand
 
-(define_insn_and_split "*lui_constraint<ANYI:mode>_and_to_or"
-	[(set (match_operand:ANYI 0 "register_operand" "=r")
-	(plus:ANYI (and:ANYI (match_operand:ANYI 1 "register_operand" "r")
-			 (match_operand 2 "const_int_operand"))
-		 (match_operand 3 "const_int_operand")))
+(define_insn_and_split "*lui_constraint<X:mode>_and_to_or"
+	[(set (match_operand:X 0 "register_operand" "=r")
+	(plus:X (and:X (match_operand:X 1 "register_operand" "r")
+		       (match_operand 2 "const_int_operand"))
+		(match_operand 3 "const_int_operand")))
    (clobber (match_scratch:X 4 "=&r"))]
-  "LUI_OPERAND (~INTVAL (operands[2]))
-   && ((INTVAL (operands[2]) & (-INTVAL (operands[3])))
-   == (-INTVAL (operands[3])))
-   && riscv_const_insns (operands[3], false)
-   && (riscv_const_insns
-   (GEN_INT (~INTVAL (operands[2]) | -INTVAL (operands[3])), false)
-   <= riscv_const_insns (operands[3], false))"
+  "(LUI_OPERAND (~INTVAL (operands[2]))
+    && ((INTVAL (operands[2]) & (-INTVAL (operands[3])))
+	== (-INTVAL (operands[3])))
+    && riscv_const_insns (operands[3], false)
+    && (riscv_const_insns (GEN_INT (~INTVAL (operands[2])
+				    | -INTVAL (operands[3])), false)
+	<= riscv_const_insns (operands[3], false)))"
   "#"
   "&& reload_completed"
   [(set (match_dup 4) (match_dup 5))
@@ -2969,9 +2969,7 @@
 ;; for IOR/XOR.  It probably doesn't matter for AND.
 ;;
 ;; We also don't want to do this if the immediate already fits in a simm12
-;; field, or is a single bit operand, or when we might be able to generate
-;; a shift-add sequence via the splitter in bitmanip.md
-;; in bitmanip.md for masks that are a run of consecutive ones.
+;; field, or it is a single bit operand and zbs is available.
 (define_insn_and_split "<optab>_shift_reverse<X:mode>"
   [(set (match_operand:X 0 "register_operand" "=r")
     (any_bitwise:X (ashift:X (match_operand:X 1 "register_operand" "r")
@@ -2979,10 +2977,7 @@
 		   (match_operand 3 "immediate_operand" "n")))]
   "(!SMALL_OPERAND (INTVAL (operands[3]))
     && SMALL_OPERAND (INTVAL (operands[3]) >> INTVAL (operands[2]))
-    && popcount_hwi (INTVAL (operands[3])) > 1
-    && (!(TARGET_64BIT && TARGET_ZBA)
-	|| !consecutive_bits_operand (operands[3], VOIDmode)
-	|| !imm123_operand (operands[2], VOIDmode))
+    && (!TARGET_ZBS || popcount_hwi (INTVAL (operands[3])) > 1)
     && (INTVAL (operands[3]) & ((1ULL << INTVAL (operands[2])) - 1)) == 0)"
   "#"
   "&& 1"

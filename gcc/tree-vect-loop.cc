@@ -1,5 +1,5 @@
 /* Loop Vectorization
-   Copyright (C) 2003-2024 Free Software Foundation, Inc.
+   Copyright (C) 2003-2025 Free Software Foundation, Inc.
    Contributed by Dorit Naishlos <dorit@il.ibm.com> and
    Ira Rosen <irar@il.ibm.com>
 
@@ -1688,7 +1688,9 @@ vect_compute_single_scalar_iteration_cost (loop_vec_info loop_vinfo)
 	  gimple *stmt = gsi_stmt (si);
 	  stmt_vec_info stmt_info = loop_vinfo->lookup_stmt (stmt);
 
-          if (!is_gimple_assign (stmt) && !is_gimple_call (stmt))
+	  if (!is_gimple_assign (stmt)
+	      && !is_gimple_call (stmt)
+	      && !is_a<gcond *> (stmt))
             continue;
 
           /* Skip stmts that are not vectorized inside the loop.  */
@@ -6039,7 +6041,9 @@ vect_create_epilog_for_reduction (loop_vec_info loop_vinfo,
      # b1 = phi <b2, b0>
      a2 = operation (a1)
      b2 = operation (b1)  */
-  bool slp_reduc = (slp_node && !REDUC_GROUP_FIRST_ELEMENT (stmt_info));
+  bool slp_reduc
+    = (slp_node
+       && !REDUC_GROUP_FIRST_ELEMENT (STMT_VINFO_REDUC_DEF (reduc_info)));
   bool direct_slp_reduc;
   tree induction_index = NULL_TREE;
 
@@ -6331,7 +6335,7 @@ vect_create_epilog_for_reduction (loop_vec_info loop_vinfo,
      a multiple of the SLP group size.
 
      The same is true if we couldn't use a single defuse cycle.  */
-  if (REDUC_GROUP_FIRST_ELEMENT (stmt_info)
+  if (REDUC_GROUP_FIRST_ELEMENT (STMT_VINFO_REDUC_DEF (reduc_info))
       || direct_slp_reduc
       || (slp_reduc
 	  && constant_multiple_p (TYPE_VECTOR_SUBPARTS (vectype), group_size))
@@ -6632,7 +6636,7 @@ vect_create_epilog_for_reduction (loop_vec_info loop_vinfo,
       if (slp_node)
 	{
 	  tree initial_value = NULL_TREE;
-	  if (REDUC_GROUP_FIRST_ELEMENT (stmt_info))
+	  if (REDUC_GROUP_FIRST_ELEMENT (STMT_VINFO_REDUC_DEF (reduc_info)))
 	    initial_value = reduc_info->reduc_initial_values[0];
 	  neutral_op = neutral_op_for_reduction (TREE_TYPE (vectype), code,
 						 initial_value, false);

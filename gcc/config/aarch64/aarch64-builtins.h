@@ -1,5 +1,5 @@
 /* Builtins' description for AArch64 SIMD architecture.
-   Copyright (C) 2023-2024 Free Software Foundation, Inc.
+   Copyright (C) 2023-2025 Free Software Foundation, Inc.
    This file is part of GCC.
 
    GCC is free software; you can redistribute it and/or modify it
@@ -28,6 +28,8 @@ enum aarch64_type_qualifiers
   qualifier_const = 0x2, /* 1 << 1  */
   /* T *foo.  */
   qualifier_pointer = 0x4, /* 1 << 2  */
+  /* const T *foo.  */
+  qualifier_const_pointer = 0x6,
   /* Used when expanding arguments if an operand could
      be an immediate.  */
   qualifier_immediate = 0x8, /* 1 << 3  */

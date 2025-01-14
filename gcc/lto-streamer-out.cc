@@ -1,6 +1,6 @@
 /* Write the GIMPLE representation to a file stream.
 
-   Copyright (C) 2009-2024 Free Software Foundation, Inc.
+   Copyright (C) 2009-2025 Free Software Foundation, Inc.
    Contributed by Kenneth Zadeck <zadeck@naturalbridge.com>
    Re-implemented by Diego Novillo <dnovillo@google.com>
 
@@ -2886,8 +2886,7 @@ lto_output (void)
 		  && flag_incremental_link != INCREMENTAL_LINK_LTO)
 	      /* Thunks have no body but they may be synthetized
 		 at WPA time.  */
-	      || DECL_ARGUMENTS (cnode->decl)
-	      || cnode->declare_variant_alt))
+	      || DECL_ARGUMENTS (cnode->decl)))
 	output_function (cnode, output_order);
       else if ((vnode = dyn_cast <varpool_node *> (snode))
 	       && (DECL_INITIAL (vnode->decl) != error_mark_node

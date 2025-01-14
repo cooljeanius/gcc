@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2024, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2025, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -394,7 +394,7 @@ package body System.Image_R is
       Digs (1) := (if Is_Negative (V) then '-' else ' ');
       Ndigs := 1;
 
-      X := Double_Real.To_Double (abs (V));
+      X := Double_Real.To_Double (abs V);
 
       --  If X is zero, we are done
 

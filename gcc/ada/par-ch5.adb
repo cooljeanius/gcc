@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2024, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2025, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -405,6 +405,25 @@ package body Ch5 is
                   --  Always return, in the case where we scanned out handlers
                   --  that we did not expect, Parse_Exception_Handlers returned
                   --  with Token being either end or EOF, so we are OK.
+
+                  exit;
+
+               --  Case of finally
+
+               when Tok_Finally =>
+                  Test_Statement_Required;
+
+                  --  See the analogous comment in the Tok_Exception branch.
+
+                  if not SS_Flags.Fitm
+                    and then Start_Column >= Scopes (Scope.Last).Ecol
+                  then
+                     Error_Msg_SC ("finally construct not permitted here");
+                     Scan; -- past FINALLY
+                     Discard_Junk_List (P_Sequence_Of_Statements (SS_Sreq));
+                  end if;
+
+                  --  We exit like in the exception branch, should we really???
 
                   exit;
 

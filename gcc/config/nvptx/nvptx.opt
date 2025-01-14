@@ -1,5 +1,5 @@
 ; Options for the NVPTX port
-; Copyright (C) 2014-2024 Free Software Foundation, Inc.
+; Copyright (C) 2014-2025 Free Software Foundation, Inc.
 ;
 ; This file is part of GCC.
 ;
@@ -141,6 +141,9 @@ Enum(ptx_version) String(6.3) Value(PTX_VERSION_6_3)
 
 EnumValue
 Enum(ptx_version) String(7.0) Value(PTX_VERSION_7_0)
+
+EnumValue
+Enum(ptx_version) String(7.3) Value(PTX_VERSION_7_3)
 
 EnumValue
 Enum(ptx_version) String(7.8) Value(PTX_VERSION_7_8)

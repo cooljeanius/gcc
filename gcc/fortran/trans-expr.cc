@@ -1,5 +1,5 @@
 /* Expression translation
-   Copyright (C) 2002-2024 Free Software Foundation, Inc.
+   Copyright (C) 2002-2025 Free Software Foundation, Inc.
    Contributed by Paul Brook <paul@nowt.org>
    and Steven Bosscher <s.bosscher@student.tudelft.nl>
 
@@ -165,7 +165,10 @@ gfc_get_ultimate_alloc_ptr_comps_caf_token (gfc_se *outerse, gfc_expr *expr)
     }
 
   if (last_caf_ref == NULL)
-    return NULL_TREE;
+    {
+      gfc_free_expr (caf_expr);
+      return NULL_TREE;
+    }
 
   tree comp = last_caf_ref->u.c.component->caf_token
 		? gfc_comp_caf_token (last_caf_ref->u.c.component)
@@ -174,7 +177,10 @@ gfc_get_ultimate_alloc_ptr_comps_caf_token (gfc_se *outerse, gfc_expr *expr)
   gfc_se se;
   bool comp_ref = !last_caf_ref->u.c.component->attr.dimension;
   if (comp == NULL_TREE && comp_ref)
-    return NULL_TREE;
+    {
+      gfc_free_expr (caf_expr);
+      return NULL_TREE;
+    }
   gfc_init_se (&se, outerse);
   gfc_free_ref_list (last_caf_ref->next);
   last_caf_ref->next = NULL;
@@ -4150,6 +4156,19 @@ gfc_conv_expr_op (gfc_se * se, gfc_expr * expr)
 
   if (lop)
     {
+      // Inhibit overeager optimization of Cray pointer comparisons (PR106692).
+      if (expr->value.op.op1->expr_type == EXPR_VARIABLE
+	  && expr->value.op.op1->ts.type == BT_INTEGER
+	  && expr->value.op.op1->symtree
+	  && expr->value.op.op1->symtree->n.sym->attr.cray_pointer)
+	TREE_THIS_VOLATILE (lse.expr) = 1;
+
+      if (expr->value.op.op2->expr_type == EXPR_VARIABLE
+	  && expr->value.op.op2->ts.type == BT_INTEGER
+	  && expr->value.op.op2->symtree
+	  && expr->value.op.op2->symtree->n.sym->attr.cray_pointer)
+	TREE_THIS_VOLATILE (rse.expr) = 1;
+
       /* The result of logical ops is always logical_type_node.  */
       tmp = fold_build2_loc (input_location, code, logical_type_node,
 			     lse.expr, rse.expr);
@@ -6488,7 +6507,8 @@ conv_null_actual (gfc_se * parmse, gfc_expr * e, gfc_symbol * fsym)
 	  int dummy_rank;
 	  tree tmp = parmse->expr;
 
-	  if (fsym->attr.allocatable && fsym->attr.intent == INTENT_UNKNOWN)
+	  if ((fsym->attr.allocatable || fsym->attr.pointer)
+	      && fsym->attr.intent == INTENT_UNKNOWN)
 	    fsym->attr.intent = INTENT_IN;
 	  tmp = gfc_conv_scalar_to_descriptor (parmse, tmp, fsym->attr);
 	  dummy_rank = fsym->as ? fsym->as->rank : 0;
@@ -11445,6 +11465,9 @@ arrayfunc_assign_needs_temporary (gfc_expr * expr1, gfc_expr * expr2)
      character lengths are the same.  */
   if (expr2->ts.type == BT_CHARACTER && expr2->rank > 0)
     {
+      if (UNLIMITED_POLY (expr1))
+	return true;
+
       if (expr1->ts.u.cl->length == NULL
 	    || expr1->ts.u.cl->length->expr_type != EXPR_CONSTANT)
 	return true;

@@ -1,5 +1,5 @@
 /* Statement translation -- generate GCC trees from gfc_code.
-   Copyright (C) 2002-2024 Free Software Foundation, Inc.
+   Copyright (C) 2002-2025 Free Software Foundation, Inc.
    Contributed by Paul Brook <paul@nowt.org>
    and Steven Bosscher <s.bosscher@student.tudelft.nl>
 
@@ -5165,7 +5165,7 @@ gfc_trans_forall_1 (gfc_code * code, forall_info * nested_forall_info)
 
   n = 0;
   /* Count the FORALL index number.  */
-  for (fa = code->ext.forall_iterator; fa; fa = fa->next)
+  for (fa = code->ext.concur.forall_iterator; fa; fa = fa->next)
     n++;
   nvar = n;
 
@@ -5185,7 +5185,7 @@ gfc_trans_forall_1 (gfc_code * code, forall_info * nested_forall_info)
   gfc_init_block (&block);
 
   n = 0;
-  for (fa = code->ext.forall_iterator; fa; fa = fa->next)
+  for (fa = code->ext.concur.forall_iterator; fa; fa = fa->next)
     {
       gfc_symbol *sym = fa->var->symtree->n.sym;
 
@@ -5446,7 +5446,7 @@ gfc_trans_forall_1 (gfc_code * code, forall_info * nested_forall_info)
 
 done:
   /* Restore the original index variables.  */
-  for (fa = code->ext.forall_iterator, n = 0; fa; fa = fa->next, n++)
+  for (fa = code->ext.concur.forall_iterator, n = 0; fa; fa = fa->next, n++)
     gfc_restore_sym (fa->var->symtree->n.sym, &saved_vars[n]);
 
   /* Free the space for var, start, end, step, varexpr.  */

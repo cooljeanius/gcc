@@ -1,5 +1,5 @@
 /* Subroutines common to both C and C++ pretty-printers.
-   Copyright (C) 2002-2024 Free Software Foundation, Inc.
+   Copyright (C) 2002-2025 Free Software Foundation, Inc.
    Contributed by Gabriel Dos Reis <gdr@integrable-solutions.net>
 
 This file is part of GCC.
@@ -1398,29 +1398,7 @@ c_pretty_printer::primary_expression (tree e)
 
     case SSA_NAME:
       if (SSA_NAME_VAR (e))
-	{
-	  tree var = SSA_NAME_VAR (e);
-	  if (tree id = SSA_NAME_IDENTIFIER (e))
-	    {
-	      const char *name = IDENTIFIER_POINTER (id);
-	      const char *dot;
-	      if (DECL_ARTIFICIAL (var) && (dot = strchr (name, '.')))
-		{
-		  /* Print the name without the . suffix (such as in VLAs).
-		     Use pp_c_identifier so that it can be converted into
-		     the appropriate encoding.  */
-		  size_t size = dot - name;
-		  char *ident = XALLOCAVEC (char, size + 1);
-		  memcpy (ident, name, size);
-		  ident[size] = '\0';
-		  pp_c_identifier (this, ident);
-		}
-	      else
-		primary_expression (var);
-	    }
-	  else
-	    primary_expression (var);
-	}
+	primary_expression (SSA_NAME_VAR (e));
       else if (gimple_assign_single_p (SSA_NAME_DEF_STMT (e)))
 	{
 	  /* Print only the right side of the GIMPLE assignment.  */
@@ -3033,7 +3011,20 @@ pp_c_tree_decl_identifier (c_pretty_printer *pp, tree t)
   gcc_assert (DECL_P (t));
 
   if (DECL_NAME (t))
-    name = IDENTIFIER_POINTER (DECL_NAME (t));
+    {
+      const char *dot;
+      name = IDENTIFIER_POINTER (DECL_NAME (t));
+      if (DECL_ARTIFICIAL (t) && (dot = strchr (name, '.')))
+	{
+	  /* Print the name without the . suffix (such as in VLAs and
+	     callee-copied parameters).  */
+	  size_t size = dot - name;
+	  char *ident = XALLOCAVEC (char, size + 1);
+	  memcpy (ident, name, size);
+	  ident[size] = '\0';
+	  name = ident;
+	}
+    }
   else
     {
       static char xname[8];

@@ -1,5 +1,5 @@
 /* Top level of GCC compilers (cc1, cc1plus, etc.)
-   Copyright (C) 1987-2024 Free Software Foundation, Inc.
+   Copyright (C) 1987-2025 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -2895,8 +2895,7 @@ ipa_write_summaries (void)
     {
       struct cgraph_node *node = order[i];
 
-      if ((node->definition || node->declare_variant_alt)
-	  && node->need_lto_streaming)
+      if (node->definition && node->need_lto_streaming)
 	{
 	  if (gimple_has_body_p (node->decl))
 	    lto_prepare_function_for_streaming (node);

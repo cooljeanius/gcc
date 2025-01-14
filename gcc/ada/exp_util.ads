@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 S p e c                                  --
 --                                                                          --
---          Copyright (C) 1992-2024, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2025, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -1242,6 +1242,9 @@ package Exp_Util is
    --
    --  These cases require special actions on scope exit. Lib_Level is True if
    --  the construct is at library level, and False otherwise.
+
+   procedure Rewrite_Object_Declaration_As_Renaming (N, Nam : Node_Id);
+   --  Rewrite object declaration N as an object renaming declaration of Nam
 
    function Safe_Unchecked_Type_Conversion (Exp : Node_Id) return Boolean;
    --  Given the node for an N_Unchecked_Type_Conversion, return True if this

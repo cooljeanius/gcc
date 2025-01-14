@@ -19,11 +19,11 @@
 
 @copying
 @quotation
-GNAT User's Guide for Native Platforms , Dec 12, 2024
+GNAT User's Guide for Native Platforms , Jan 13, 2025
 
 AdaCore
 
-Copyright @copyright{} 2008-2024, Free Software Foundation
+Copyright @copyright{} 2008-2025, Free Software Foundation
 @end quotation
 
 @end copying
@@ -16077,7 +16077,7 @@ equivalent @code{gnatmake} flag (@ref{d1,,Switches for gnatmake}).
 
 @item @code{-o `file'}
 
-Name the output file @code{file} (default is @code{b~`xxx}.adb`).
+Name the output file @code{file} (default is @code{b~`xxx'.adb}).
 Note that if this option is used, then linking must be done manually,
 gnatlink cannot be used.
 
@@ -24748,13 +24748,6 @@ Build a non-relocatable DLL at @code{address}. If you don’t specify
 @code{address}, @code{gnatdll} uses the default address of @code{0x11000000}. By
 default, when this switch is missing, @code{gnatdll} builds a
 relocatable DLL. We advise you to build relocatable DLL.
-
-@geindex -b (gnatdll)
-
-@item @code{-b `address'}
-
-Set the relocatable DLL base address. By default the address is
-@code{0x11000000}.
 
 @geindex -bargs (gnatdll)
 

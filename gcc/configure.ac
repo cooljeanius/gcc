@@ -1,7 +1,7 @@
 # configure.ac for GCC
 # Process this file with autoconf to generate a configuration script.
 
-# Copyright (C) 1997-2024 Free Software Foundation, Inc.
+# Copyright (C) 1997-2025 Free Software Foundation, Inc.
 
 #This file is part of GCC.
 
@@ -1652,7 +1652,7 @@ AC_CHECK_DECLS([basename(const char*), strstr(const char*,const char*)], , ,[
 #include "system.h"])
 
 gcc_AC_CHECK_DECLS(getenv atol atoll asprintf sbrk abort atof getcwd getwd \
-	madvise stpcpy strnlen strsignal strverscmp \
+	madvise mkstemps stpcpy strnlen strsignal strverscmp \
 	strtol strtoul strtoll strtoull setenv unsetenv \
 	errno snprintf vsnprintf vasprintf malloc realloc calloc \
 	free getopt clock getpagesize ffs fmemopen gcc_UNLOCKED_FUNCS, , ,[
@@ -3612,12 +3612,14 @@ gcc_GAS_CHECK_FEATURE(section merging support, gcc_cv_as_shf_merge,
  [--fatal-warnings],
  [.section .rodata.str, "aMS", @progbits, 1])
 if test $gcc_cv_as_shf_merge = no; then
-  gcc_GAS_CHECK_FEATURE(section merging support, gcc_cv_as_shf_merge,
+  gcc_GAS_CHECK_FEATURE(section merging support (%progbits),
+    gcc_cv_as_shf_merge_percent,
     [--fatal-warnings],
     [.section .rodata.str, "aMS", %progbits, 1])
 fi
 AC_DEFINE_UNQUOTED(HAVE_GAS_SHF_MERGE,
-  [`if test $gcc_cv_as_shf_merge = yes; then echo 1; else echo 0; fi`],
+  [`if test $gcc_cv_as_shf_merge = yes \
+    || test $gcc_cv_as_shf_merge_percent = yes; then echo 1; else echo 0; fi`],
 [Define 0/1 if your assembler supports marking sections with SHF_MERGE flag.])
 
 gcc_GAS_CHECK_FEATURE([COMDAT group support (GNU as)],

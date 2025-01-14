@@ -1,5 +1,5 @@
 /* Parse tree dumper
-   Copyright (C) 2003-2024 Free Software Foundation, Inc.
+   Copyright (C) 2003-2025 Free Software Foundation, Inc.
    Contributed by Steven Bosscher
 
 This file is part of GCC.
@@ -835,6 +835,8 @@ show_attr (symbol_attribute *attr, const char * module)
     fputs (" VOLATILE", dumpfile);
   if (attr->threadprivate)
     fputs (" THREADPRIVATE", dumpfile);
+  if (attr->temporary)
+    fputs (" TEMPORARY", dumpfile);
   if (attr->target)
     fputs (" TARGET", dumpfile);
   if (attr->dummy)
@@ -868,6 +870,8 @@ show_attr (symbol_attribute *attr, const char * module)
     fputs (" IN-NAMELIST", dumpfile);
   if (attr->in_common)
     fputs (" IN-COMMON", dumpfile);
+  if (attr->in_equivalence)
+    fputs (" IN-EQUIVALENCE", dumpfile);
 
   if (attr->abstract)
     fputs (" ABSTRACT", dumpfile);
@@ -926,6 +930,47 @@ show_attr (symbol_attribute *attr, const char * module)
     fputs (" OMP-DECLARE-TARGET-LINK", dumpfile);
   if (attr->omp_declare_target_indirect)
     fputs (" OMP-DECLARE-TARGET-INDIRECT", dumpfile);
+  if (attr->omp_device_type == OMP_DEVICE_TYPE_HOST)
+    fputs (" OMP-DEVICE-TYPE-HOST", dumpfile);
+  if (attr->omp_device_type == OMP_DEVICE_TYPE_NOHOST)
+    fputs (" OMP-DEVICE-TYPE-NOHOST", dumpfile);
+  if (attr->omp_device_type == OMP_DEVICE_TYPE_ANY)
+    fputs (" OMP-DEVICE-TYPE-ANY", dumpfile);
+  if (attr->omp_allocate)
+    fputs (" OMP-ALLOCATE", dumpfile);
+
+  if (attr->oacc_declare_create)
+    fputs (" OACC-DECLARE-CREATE", dumpfile);
+  if (attr->oacc_declare_copyin)
+    fputs (" OACC-DECLARE-COPYIN", dumpfile);
+  if (attr->oacc_declare_deviceptr)
+    fputs (" OACC-DECLARE-DEVICEPTR", dumpfile);
+  if (attr->oacc_declare_device_resident)
+    fputs (" OACC-DECLARE-DEVICE-RESIDENT", dumpfile);
+
+  switch (attr->oacc_routine_lop)
+    {
+    case OACC_ROUTINE_LOP_NONE:
+    case OACC_ROUTINE_LOP_ERROR:
+      break;
+
+    case OACC_ROUTINE_LOP_GANG:
+      fputs (" OACC-ROUTINE-LOP-GANG", dumpfile);
+      break;
+
+    case OACC_ROUTINE_LOP_WORKER:
+      fputs (" OACC-ROUTINE-LOP-WORKER", dumpfile);
+      break;
+
+    case  OACC_ROUTINE_LOP_VECTOR:
+      fputs (" OACC-ROUTINE-LOP-VECTOR", dumpfile);
+      break;
+
+    case OACC_ROUTINE_LOP_SEQ:
+      fputs (" OACC-ROUTINE-LOP-SEQ", dumpfile);
+      break;
+      }
+
   if (attr->elemental)
     fputs (" ELEMENTAL", dumpfile);
   if (attr->pure)
@@ -956,8 +1001,69 @@ show_attr (symbol_attribute *attr, const char * module)
     fputs (" IS-MAIN-PROGRAM", dumpfile);
   if (attr->oacc_routine_nohost)
     fputs (" OACC-ROUTINE-NOHOST", dumpfile);
+  if (attr->temporary)
+    fputs (" TEMPORARY", dumpfile);
+  if (attr->assign)
+    fputs (" ASSIGN", dumpfile);
+  if (attr->not_always_present)
+    fputs (" NOT-ALWAYS-PRESENT", dumpfile);
+  if (attr->implied_index)
+    fputs (" IMPLIED-INDEX", dumpfile);
+  if (attr->proc_pointer)
+    fputs (" PROC-POINTER", dumpfile);
+  if (attr->fe_temp)
+    fputs (" FE-TEMP", dumpfile);
+  if (attr->automatic)
+    fputs (" AUTOMATIC", dumpfile);
+  if (attr->class_pointer)
+    fputs (" CLASS-POINTER", dumpfile);
+  if (attr->save == SAVE_EXPLICIT)
+    fputs (" SAVE-EXPLICIT", dumpfile);
+  if (attr->save == SAVE_IMPLICIT)
+    fputs (" SAVE-IMPLICIT", dumpfile);
+  if (attr->used_in_submodule)
+    fputs (" USED-IN-SUBMODULE", dumpfile);
+  if (attr->use_only)
+    fputs (" USE-ONLY", dumpfile);
+  if (attr->use_rename)
+    fputs (" USE-RENAME", dumpfile);
+  if (attr->imported)
+    fputs (" IMPORTED", dumpfile);
+  if (attr->host_assoc)
+    fputs (" HOST-ASSOC", dumpfile);
+  if (attr->generic)
+    fputs (" GENERIC", dumpfile);
+  if (attr->generic_copy)
+    fputs (" GENERIC-COPY", dumpfile);
+  if (attr->untyped)
+    fputs (" UNTYPED", dumpfile);
+  if (attr->extension)
+    fprintf (dumpfile, " EXTENSION(%u)", attr->extension);
+  if (attr->is_class)
+    fputs (" IS-CLASS", dumpfile);
+  if (attr->class_ok)
+    fputs (" CLASS-OK", dumpfile);
+  if (attr->vtab)
+    fputs (" VTAB", dumpfile);
+  if (attr->vtype)
+    fputs (" VTYPE", dumpfile);
+  if (attr->module_procedure)
+    fputs (" MODULE-PROCEDURE", dumpfile);
+  if (attr->if_source == IFSRC_DECL)
+    fputs (" IFSRC-DECL", dumpfile);
+  if (attr->if_source == IFSRC_IFBODY)
+    fputs (" IFSRC-IFBODY", dumpfile);
 
-  /* FIXME: Still missing are oacc_routine_lop and ext_attr.  */
+  for (int i = 0; i < EXT_ATTR_LAST; i++)
+    {
+      if (attr->ext_attr & (1 << i))
+	{
+	  fputs (" ATTRIBUTE-", dumpfile);
+	  for (const char *p = ext_attr_list[i].name; p && *p; p++)
+	    putc (TOUPPER (*p), dumpfile);
+	}
+    }
+
   fputc (')', dumpfile);
 }
 
@@ -2201,6 +2307,18 @@ show_omp_clauses (gfc_omp_clauses *omp_clauses)
 	}
       fputc (')', dumpfile);
     }
+  if (omp_clauses->novariants)
+    {
+      fputs (" NOVARIANTS(", dumpfile);
+      show_expr (omp_clauses->novariants);
+      fputc (')', dumpfile);
+    }
+  if (omp_clauses->nocontext)
+    {
+      fputs (" NOCONTEXT(", dumpfile);
+      show_expr (omp_clauses->nocontext);
+      fputc (')', dumpfile);
+    }
 }
 
 /* Show a single OpenMP or OpenACC directive node and everything underneath it
@@ -2238,6 +2356,9 @@ show_omp_node (int level, gfc_code *c)
     case EXEC_OMP_CANCEL: name = "CANCEL"; break;
     case EXEC_OMP_CANCELLATION_POINT: name = "CANCELLATION POINT"; break;
     case EXEC_OMP_CRITICAL: name = "CRITICAL"; break;
+    case EXEC_OMP_DISPATCH:
+      name = "DISPATCH";
+      break;
     case EXEC_OMP_DISTRIBUTE: name = "DISTRIBUTE"; break;
     case EXEC_OMP_DISTRIBUTE_PARALLEL_DO:
       name = "DISTRIBUTE PARALLEL DO"; break;
@@ -2342,6 +2463,7 @@ show_omp_node (int level, gfc_code *c)
     case EXEC_OMP_ASSUME:
     case EXEC_OMP_CANCEL:
     case EXEC_OMP_CANCELLATION_POINT:
+    case EXEC_OMP_DISPATCH:
     case EXEC_OMP_DISTRIBUTE:
     case EXEC_OMP_DISTRIBUTE_PARALLEL_DO:
     case EXEC_OMP_DISTRIBUTE_PARALLEL_DO_SIMD:
@@ -2883,7 +3005,7 @@ show_code_node (int level, gfc_code *c)
 
     case EXEC_FORALL:
       fputs ("FORALL ", dumpfile);
-      for (fa = c->ext.forall_iterator; fa; fa = fa->next)
+      for (fa = c->ext.concur.forall_iterator; fa; fa = fa->next)
 	{
 	  show_expr (fa->var);
 	  fputc (' ', dumpfile);
@@ -2943,7 +3065,7 @@ show_code_node (int level, gfc_code *c)
 
     case EXEC_DO_CONCURRENT:
       fputs ("DO CONCURRENT ", dumpfile);
-      for (fa = c->ext.forall_iterator; fa; fa = fa->next)
+      for (fa = c->ext.concur.forall_iterator; fa; fa = fa->next)
         {
           show_expr (fa->var);
           fputc (' ', dumpfile);
@@ -2956,7 +3078,114 @@ show_code_node (int level, gfc_code *c)
           if (fa->next != NULL)
             fputc (',', dumpfile);
         }
-      show_expr (c->expr1);
+
+      if (c->expr1 != NULL)
+	{
+	  fputc (',', dumpfile);
+	  show_expr (c->expr1);
+	}
+
+      if (c->ext.concur.locality[LOCALITY_LOCAL])
+	{
+	  fputs (" LOCAL (", dumpfile);
+
+	  for (gfc_expr_list *el = c->ext.concur.locality[LOCALITY_LOCAL];
+	       el; el = el->next)
+	    {
+	      show_expr (el->expr);
+	      if (el->next)
+		fputc (',', dumpfile);
+	    }
+	  fputc (')', dumpfile);
+	}
+
+      if (c->ext.concur.locality[LOCALITY_LOCAL_INIT])
+	{
+	  fputs (" LOCAL_INIT (", dumpfile);
+	  for (gfc_expr_list *el = c->ext.concur.locality[LOCALITY_LOCAL_INIT];
+	       el; el = el->next)
+	  {
+	    show_expr (el->expr);
+	    if (el->next)
+	      fputc (',', dumpfile);
+	  }
+	  fputc (')', dumpfile);
+	}
+
+      if (c->ext.concur.locality[LOCALITY_SHARED])
+	{
+	  fputs (" SHARED (", dumpfile);
+	  for (gfc_expr_list *el = c->ext.concur.locality[LOCALITY_SHARED];
+	       el; el = el->next)
+	    {
+	      show_expr (el->expr);
+	      if (el->next)
+		fputc (',', dumpfile);
+	    }
+	  fputc (')', dumpfile);
+	}
+
+      if (c->ext.concur.default_none)
+	{
+	  fputs (" DEFAULT (NONE)", dumpfile);
+	}
+
+      if (c->ext.concur.locality[LOCALITY_REDUCE])
+	{
+	  gfc_expr_list *el = c->ext.concur.locality[LOCALITY_REDUCE];
+	  while (el)
+	    {
+	      fputs (" REDUCE (", dumpfile);
+	      if (el->expr)
+		{
+		  if (el->expr->expr_type == EXPR_FUNCTION)
+		    {
+		      const char *name;
+		      switch (el->expr->value.function.isym->id)
+			{
+			  case GFC_ISYM_MIN:
+			    name = "MIN";
+			    break;
+			  case GFC_ISYM_MAX:
+			    name = "MAX";
+			    break;
+			  case GFC_ISYM_IAND:
+			    name = "IAND";
+			    break;
+			  case GFC_ISYM_IOR:
+			    name = "IOR";
+			    break;
+			  case GFC_ISYM_IEOR:
+			    name = "IEOR";
+			    break;
+			  default:
+			    gcc_unreachable ();
+			}
+		      fputs (name, dumpfile);
+		    }
+		  else
+		    show_expr (el->expr);
+		}
+	      else
+		{
+		  fputs ("(NULL)", dumpfile);
+		}
+
+	      fputc (':', dumpfile);
+	      el = el->next;
+
+	      while (el && el->expr && el->expr->expr_type == EXPR_VARIABLE)
+		{
+		  show_expr (el->expr);
+		  el = el->next;
+		  if (el && el->expr && el->expr->expr_type == EXPR_VARIABLE)
+		    fputc (',', dumpfile);
+		}
+
+	      fputc (')', dumpfile);
+	    }
+	}
+
       ++show_level;
 
       show_code (level + 1, c->block->next);
@@ -3575,6 +3804,7 @@ show_code_node (int level, gfc_code *c)
     case EXEC_OMP_BARRIER:
     case EXEC_OMP_CRITICAL:
     case EXEC_OMP_DEPOBJ:
+    case EXEC_OMP_DISPATCH:
     case EXEC_OMP_DISTRIBUTE:
     case EXEC_OMP_DISTRIBUTE_PARALLEL_DO:
     case EXEC_OMP_DISTRIBUTE_PARALLEL_DO_SIMD:

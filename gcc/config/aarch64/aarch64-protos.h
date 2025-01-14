@@ -1,5 +1,5 @@
 /* Machine description for AArch64 architecture.
-   Copyright (C) 2009-2024 Free Software Foundation, Inc.
+   Copyright (C) 2009-2025 Free Software Foundation, Inc.
    Contributed by ARM Ltd.
 
    This file is part of GCC.
@@ -857,6 +857,7 @@ opt_machine_mode aarch64_v64_mode (scalar_mode);
 opt_machine_mode aarch64_v128_mode (scalar_mode);
 opt_machine_mode aarch64_full_sve_mode (scalar_mode);
 bool aarch64_can_const_movi_rtx_p (rtx x, machine_mode mode);
+bool aarch64_valid_fp_move (rtx, rtx, machine_mode);
 bool aarch64_const_vec_all_same_int_p (rtx, HOST_WIDE_INT);
 bool aarch64_const_vec_all_same_in_range_p (rtx, HOST_WIDE_INT,
 					    HOST_WIDE_INT);
@@ -896,6 +897,8 @@ bool aarch64_move_imm (unsigned HOST_WIDE_INT, machine_mode);
 machine_mode aarch64_sve_int_mode (machine_mode);
 opt_machine_mode aarch64_sve_pred_mode (unsigned int);
 machine_mode aarch64_sve_pred_mode (machine_mode);
+opt_machine_mode aarch64_advsimd_vector_array_mode (machine_mode,
+						    unsigned HOST_WIDE_INT);
 opt_machine_mode aarch64_sve_data_mode (scalar_mode, poly_uint64);
 bool aarch64_sve_mode_p (machine_mode);
 HOST_WIDE_INT aarch64_fold_sve_cnt_pat (aarch64_svpattern, unsigned int);
