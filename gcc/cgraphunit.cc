@@ -311,6 +311,7 @@ symbol_table::process_new_functions (void)
     {
       cgraph_node *node = cgraph_new_nodes[i];
       fndecl = node->decl;
+      bitmap_obstack_initialize (NULL);
       switch (state)
 	{
 	case CONSTRUCTION:
@@ -367,6 +368,7 @@ symbol_table::process_new_functions (void)
 	  gcc_unreachable ();
 	  break;
 	}
+      bitmap_obstack_release (NULL);
     }
 
   cgraph_new_nodes.release ();
@@ -2586,6 +2588,8 @@ symbol_table::finalize_compilation_unit (void)
 
   if (!seen_error ())
     {
+      timevar_push (TV_SYMOUT);
+
       /* Give the frontends the chance to emit early debug based on
 	 what is still reachable in the TU.  */
       (*lang_hooks.finalize_early_debug) ();
@@ -2595,6 +2599,8 @@ symbol_table::finalize_compilation_unit (void)
       debuginfo_early_start ();
       (*debug_hooks->early_finish) (main_input_filename);
       debuginfo_early_stop ();
+
+      timevar_pop (TV_SYMOUT);
     }
 
   /* Finally drive the pass manager.  */

@@ -2198,14 +2198,20 @@ get_group_load_store_type (vec_info *vinfo, stmt_vec_info stmt_info,
 			       " non-consecutive accesses\n");
 	      return false;
 	    }
+
+	  unsigned HOST_WIDE_INT dr_size
+	    = vect_get_scalar_dr_size (first_dr_info);
+	  poly_int64 off = 0;
+	  if (*memory_access_type == VMAT_CONTIGUOUS_REVERSE)
+	    off = (TYPE_VECTOR_SUBPARTS (vectype) - 1) * -dr_size;
+
 	  /* An overrun is fine if the trailing elements are smaller
 	     than the alignment boundary B.  Every vector access will
 	     be a multiple of B and so we are guaranteed to access a
 	     non-gap element in the same B-sized block.  */
 	  if (overrun_p
 	      && gap < (vect_known_alignment_in_bytes (first_dr_info,
-						       vectype)
-			/ vect_get_scalar_dr_size (first_dr_info)))
+						       vectype, off) / dr_size))
 	    overrun_p = false;
 
 	  /* When we have a contiguous access across loop iterations
@@ -2216,20 +2222,21 @@ get_group_load_store_type (vec_info *vinfo, stmt_vec_info stmt_info,
 
 	     If there is a combination of the access not covering the full
 	     vector and a gap recorded then we may need to peel twice.  */
+	  bool large_vector_overrun_p = false;
 	  if (loop_vinfo
 	      && (*memory_access_type == VMAT_CONTIGUOUS
 		  || *memory_access_type == VMAT_CONTIGUOUS_REVERSE)
 	      && SLP_TREE_LOAD_PERMUTATION (slp_node).exists ()
 	      && !multiple_p (group_size * LOOP_VINFO_VECT_FACTOR (loop_vinfo),
 			      nunits))
-	    overrun_p = true;
+	    large_vector_overrun_p = overrun_p = true;
 
 	  /* If the gap splits the vector in half and the target
 	     can do half-vector operations avoid the epilogue peeling
 	     by simply loading half of the vector only.  Usually
 	     the construction with an upper zero half will be elided.  */
 	  dr_alignment_support alss;
-	  int misalign = dr_misalignment (first_dr_info, vectype);
+	  int misalign = dr_misalignment (first_dr_info, vectype, off);
 	  tree half_vtype;
 	  poly_uint64 remain;
 	  unsigned HOST_WIDE_INT tem, num;
@@ -2273,7 +2280,8 @@ get_group_load_store_type (vec_info *vinfo, stmt_vec_info stmt_info,
 		 access and that is sufficiently small to be covered
 		 by the single scalar iteration.  */
 	      unsigned HOST_WIDE_INT cnunits, cvf, cremain, cpart_size;
-	      if (!nunits.is_constant (&cnunits)
+	      if (masked_p
+		  || !nunits.is_constant (&cnunits)
 		  || !LOOP_VINFO_VECT_FACTOR (loop_vinfo).is_constant (&cvf)
 		  || (((cremain = (group_size * cvf - gap) % cnunits), true)
 		      && ((cpart_size = (1 << ceil_log2 (cremain))), true)
@@ -2282,9 +2290,11 @@ get_group_load_store_type (vec_info *vinfo, stmt_vec_info stmt_info,
 			       (vectype, cnunits / cpart_size,
 				&half_vtype) == NULL_TREE)))
 		{
-		  /* If all fails we can still resort to niter masking, so
-		     enforce the use of partial vectors.  */
-		  if (LOOP_VINFO_CAN_USE_PARTIAL_VECTORS_P (loop_vinfo))
+		  /* If all fails we can still resort to niter masking unless
+		     the vectors used are too big, so enforce the use of
+		     partial vectors.  */
+		  if (LOOP_VINFO_CAN_USE_PARTIAL_VECTORS_P (loop_vinfo)
+		      && !large_vector_overrun_p)
 		    {
 		      if (dump_enabled_p ())
 			dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location,
@@ -2301,6 +2311,16 @@ get_group_load_store_type (vec_info *vinfo, stmt_vec_info stmt_info,
 					 "access\n");
 		      return false;
 		    }
+		}
+	      else if (large_vector_overrun_p)
+		{
+		  if (dump_enabled_p ())
+		    dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location,
+				     "can't operate on partial vectors because "
+				     "only unmasked loads handle access "
+				     "shortening required because of gaps at "
+				     "the end of the access\n");
+		  LOOP_VINFO_CAN_USE_PARTIAL_VECTORS_P (loop_vinfo) = false;
 		}
 	    }
 	}
@@ -2575,6 +2595,128 @@ get_load_store_type (vec_info  *vinfo, stmt_vec_info stmt_info,
 			 "Not using elementwise accesses due to variable "
 			 "vectorization factor.\n");
       return false;
+    }
+
+
+  /* Checks if all scalar iterations are known to be inbounds.  */
+  bool inbounds = DR_SCALAR_KNOWN_BOUNDS (STMT_VINFO_DR_INFO (stmt_info));
+
+  /* Check if we support the operation if early breaks are needed.  Here we
+     must ensure that we don't access any more than the scalar code would
+     have.  A masked operation would ensure this, so for these load types
+     force masking.  */
+  if (loop_vinfo
+      && dr_safe_speculative_read_required (stmt_info)
+      && LOOP_VINFO_EARLY_BREAKS (loop_vinfo)
+      && (*memory_access_type == VMAT_GATHER_SCATTER
+	  || *memory_access_type == VMAT_STRIDED_SLP))
+    {
+      if (dump_enabled_p ())
+	  dump_printf_loc (MSG_NOTE, vect_location,
+			   "early break not supported: cannot peel for "
+			   "alignment. With non-contiguous memory vectorization"
+			   " could read out of bounds at %G ",
+			   STMT_VINFO_STMT (stmt_info));
+	if (inbounds)
+	  LOOP_VINFO_MUST_USE_PARTIAL_VECTORS_P (loop_vinfo) = true;
+	else
+	  return false;
+    }
+
+  /* If this DR needs alignment for correctness, we must ensure the target
+     alignment is a constant power-of-two multiple of the amount read per
+     vector iteration or force masking.  */
+  if (dr_safe_speculative_read_required (stmt_info)
+      && *alignment_support_scheme == dr_aligned)
+    {
+      /* We can only peel for loops, of course.  */
+      gcc_checking_assert (loop_vinfo);
+
+      auto target_alignment
+	= DR_TARGET_ALIGNMENT (STMT_VINFO_DR_INFO (stmt_info));
+      unsigned HOST_WIDE_INT target_align;
+
+      bool group_aligned = false;
+      if (target_alignment.is_constant (&target_align)
+	  && nunits.is_constant ())
+	{
+	  poly_uint64 vf = LOOP_VINFO_VECT_FACTOR (loop_vinfo);
+	  auto vectype_size
+	    = TREE_INT_CST_LOW (TYPE_SIZE_UNIT (TREE_TYPE (vectype)));
+	  poly_uint64 required_alignment = vf * vectype_size;
+	  /* If we have a grouped access we require that the alignment be N * elem.  */
+	  if (STMT_VINFO_GROUPED_ACCESS (stmt_info))
+	    required_alignment *=
+		DR_GROUP_SIZE (DR_GROUP_FIRST_ELEMENT (stmt_info));
+	  if (!multiple_p (target_alignment, required_alignment))
+	    {
+	      if (dump_enabled_p ())
+		dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location,
+			     "desired alignment %wu not met. Instead got %wu "
+			     "for DR alignment at %G",
+			     required_alignment.to_constant (),
+			     target_align, STMT_VINFO_STMT (stmt_info));
+	      return false;
+	    }
+
+	  if (!pow2p_hwi (target_align))
+	    {
+	      if (dump_enabled_p ())
+		dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location,
+			     "non-power-of-two vector alignment %wd "
+			     "for DR alignment at %G",
+			     target_align, STMT_VINFO_STMT (stmt_info));
+	      return false;
+	    }
+
+	  /* For VLA we have to insert a runtime check that the vector loads
+	     per iterations don't exceed a page size.  For now we can use
+	     POLY_VALUE_MAX as a proxy as we can't peel for VLA.  */
+	  if (known_gt (required_alignment, (unsigned)param_min_pagesize))
+	    {
+	      if (dump_enabled_p ())
+		{
+		  dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location,
+			       "alignment required for correctness (");
+		  dump_dec (MSG_MISSED_OPTIMIZATION, required_alignment);
+		  dump_printf (MSG_NOTE, ") may exceed page size\n");
+		}
+	      return false;
+	    }
+
+	  group_aligned = true;
+	}
+
+      /* There are multiple loads that have a misalignment that we couldn't
+	 align.  We would need LOOP_VINFO_MUST_USE_PARTIAL_VECTORS_P to
+	 vectorize. */
+      if (!group_aligned)
+	{
+	  if (inbounds)
+	    LOOP_VINFO_MUST_USE_PARTIAL_VECTORS_P (loop_vinfo) = true;
+	  else
+	    return false;
+	}
+
+      /* When using a group access the first element may be aligned but the
+	 subsequent loads may not be.  For LOAD_LANES since the loads are based
+	 on the first DR then all loads in the group are aligned.  For
+	 non-LOAD_LANES this is not the case. In particular a load + blend when
+	 there are gaps can have the non first loads issued unaligned, even
+	 partially overlapping the memory of the first load in order to simplify
+	 the blend.  This is what the x86_64 backend does for instance.  As
+	 such only the first load in the group is aligned, the rest are not.
+	 Because of this the permutes may break the alignment requirements that
+	 have been set, and as such we should for now, reject them.  */
+      if (slp_node && SLP_TREE_LOAD_PERMUTATION (slp_node).exists ())
+	{
+	  if (dump_enabled_p ())
+	    dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location,
+			     "loads with load permutations not supported for "
+			     "speculative early break loads for %G",
+			     STMT_VINFO_STMT (stmt_info));
+	  return false;
+	}
     }
 
   if (*alignment_support_scheme == dr_unaligned_unsupported)
@@ -4547,14 +4689,9 @@ vectorizable_simd_clone_call (vec_info *vinfo, stmt_vec_info stmt_info,
 	    case SIMD_CLONE_ARG_TYPE_MASK:
 	      if (loop_vinfo
 		  && LOOP_VINFO_CAN_USE_PARTIAL_VECTORS_P (loop_vinfo))
-		{
-		  unsigned nmasks
-		    = exact_div (ncopies * bestn->simdclone->simdlen,
-				 TYPE_VECTOR_SUBPARTS (vectype)).to_constant ();
-		  vect_record_loop_mask (loop_vinfo,
-					 &LOOP_VINFO_MASKS (loop_vinfo),
-					 nmasks, vectype, op);
-		}
+		vect_record_loop_mask (loop_vinfo,
+				       &LOOP_VINFO_MASKS (loop_vinfo),
+				       ncopies, vectype, op);
 
 	      break;
 	    }
@@ -5595,10 +5732,8 @@ vectorizable_conversion (vec_info *vinfo,
 	return false;
       gcc_assert (code.is_tree_code ());
       if (supportable_indirect_convert_operation (code,
-						  vectype_out,
-						  vectype_in,
-						  converts,
-						  op0))
+						  vectype_out, vectype_in,
+						  converts, op0, slp_op0))
 	{
 	  gcc_assert (converts.length () <= 2);
 	  if (converts.length () == 1)
@@ -5735,7 +5870,16 @@ vectorizable_conversion (vec_info *vinfo,
       else if (code == FLOAT_EXPR)
 	{
 	  wide_int op_min_value, op_max_value;
-	  if (!vect_get_range_info (op0, &op_min_value, &op_max_value))
+	  if (slp_node)
+	    {
+	      tree def;
+	      /* ???  Merge ranges in case of more than one lane.  */
+	      if (SLP_TREE_LANES (slp_op0) != 1
+		  || !(def = vect_get_slp_scalar_def (slp_op0, 0))
+		  || !vect_get_range_info (def, &op_min_value, &op_max_value))
+		goto unsupported;
+	    }
+	  else if (!vect_get_range_info (op0, &op_min_value, &op_max_value))
 	    goto unsupported;
 
 	  cvt_type
@@ -8630,7 +8774,7 @@ vectorizable_store (vec_info *vinfo,
       gimple_stmt_iterator incr_gsi;
       bool insert_after;
       gimple *incr;
-      tree offvar;
+      tree offvar = NULL_TREE;
       tree ivstep;
       tree running_off;
       tree stride_base, stride_step, alias_off;
@@ -8760,7 +8904,15 @@ vectorizable_store (vec_info *vinfo,
 		    }
 		}
 	    }
-	  ltype = build_aligned_type (ltype, TYPE_ALIGN (elem_type));
+	  unsigned align;
+	  if (alignment_support_scheme == dr_aligned)
+	    align = known_alignment (DR_TARGET_ALIGNMENT (first_dr_info));
+	  else
+	    align = dr_alignment (vect_dr_behavior (vinfo, first_dr_info));
+	  /* Alignment is at most the access size if we do multiple stores.  */
+	  if (nstores > 1)
+	    align = MIN (tree_to_uhwi (TYPE_SIZE_UNIT (ltype)), align);
+	  ltype = build_aligned_type (ltype, align * BITS_PER_UNIT);
 	  ncopies = SLP_TREE_NUMBER_OF_VEC_STMTS (slp_node);
 	}
 
@@ -10588,7 +10740,7 @@ vectorizable_load (vec_info *vinfo,
     {
       gimple_stmt_iterator incr_gsi;
       bool insert_after;
-      tree offvar;
+      tree offvar = NULL_TREE;
       tree ivstep;
       tree running_off;
       vec<constructor_elt, va_gc> *v = NULL;
@@ -10707,7 +10859,7 @@ vectorizable_load (vec_info *vinfo,
 						  &ptype);
 	      if (vtype != NULL_TREE)
 		{
-		  dr_alignment_support dr_align = dr_aligned;
+		  dr_alignment_support dr_align;
 		  int mis_align = 0;
 		  if (VECTOR_TYPE_P (ptype))
 		    {
@@ -10716,6 +10868,8 @@ vectorizable_load (vec_info *vinfo,
 			= vect_supportable_dr_alignment (vinfo, dr_info, ptype,
 							 mis_align);
 		    }
+		  else
+		    dr_align = dr_unaligned_supported;
 		  if (dr_align == dr_aligned
 		      || dr_align == dr_unaligned_supported)
 		    {
@@ -10728,8 +10882,15 @@ vectorizable_load (vec_info *vinfo,
 		    }
 		}
 	    }
-	  /* Else fall back to the default element-wise access.  */
-	  ltype = build_aligned_type (ltype, TYPE_ALIGN (TREE_TYPE (vectype)));
+	  unsigned align;
+	  if (alignment_support_scheme == dr_aligned)
+	    align = known_alignment (DR_TARGET_ALIGNMENT (first_dr_info));
+	  else
+	    align = dr_alignment (vect_dr_behavior (vinfo, first_dr_info));
+	  /* Alignment is at most the access size if we do multiple loads.  */
+	  if (nloads > 1)
+	    align = MIN (tree_to_uhwi (TYPE_SIZE_UNIT (ltype)), align);
+	  ltype = build_aligned_type (ltype, align * BITS_PER_UNIT);
 	}
 
       if (slp)
@@ -11982,8 +12143,14 @@ vectorizable_load (vec_info *vinfo,
 		    tree ltype = vectype;
 		    tree new_vtype = NULL_TREE;
 		    unsigned HOST_WIDE_INT gap = DR_GROUP_GAP (first_stmt_info);
+		    unsigned HOST_WIDE_INT dr_size
+		      = vect_get_scalar_dr_size (first_dr_info);
+		    poly_int64 off = 0;
+		    if (memory_access_type == VMAT_CONTIGUOUS_REVERSE)
+		      off = (TYPE_VECTOR_SUBPARTS (vectype) - 1) * -dr_size;
 		    unsigned int vect_align
-		      = vect_known_alignment_in_bytes (first_dr_info, vectype);
+		      = vect_known_alignment_in_bytes (first_dr_info, vectype,
+						       off);
 		    /* Try to use a single smaller load when we are about
 		       to load excess elements compared to the unrolled
 		       scalar loop.  */
@@ -12004,9 +12171,7 @@ vectorizable_load (vec_info *vinfo,
 			     scalar loop.  */
 			  ;
 			else if (known_gt (vect_align,
-					   ((nunits - remain)
-					    * vect_get_scalar_dr_size
-						(first_dr_info))))
+					   ((nunits - remain) * dr_size)))
 			  /* Aligned access to the gap area when there's
 			     at least one element in it is OK.  */
 			  ;
@@ -12411,7 +12576,7 @@ vectorizable_load (vec_info *vinfo,
 
 		  if (dump_enabled_p ())
 		    dump_printf_loc (MSG_NOTE, vect_location,
-				     "vect_model_load_cost:"
+				     "vect_model_load_cost: "
 				     "strided group_size = %d .\n",
 				     group_size);
 		}
@@ -12662,8 +12827,9 @@ vectorizable_condition (vec_info *vinfo,
 
   masked = !COMPARISON_CLASS_P (cond_expr);
   vec_cmp_type = truth_type_for (comp_vectype);
-
-  if (vec_cmp_type == NULL_TREE)
+  if (vec_cmp_type == NULL_TREE
+      || maybe_ne (TYPE_VECTOR_SUBPARTS (vectype),
+		   TYPE_VECTOR_SUBPARTS (vec_cmp_type)))
     return false;
 
   cond_code = TREE_CODE (cond_expr);
@@ -15177,7 +15343,7 @@ supportable_indirect_convert_operation (code_helper code,
 					tree vectype_out,
 					tree vectype_in,
 					vec<std::pair<tree, tree_code> > &converts,
-					tree op0)
+					tree op0, slp_tree slp_op0)
 {
   bool found_mode = false;
   scalar_mode lhs_mode = GET_MODE_INNER (TYPE_MODE (vectype_out));
@@ -15249,10 +15415,21 @@ supportable_indirect_convert_operation (code_helper code,
 		 In the future, if it is supported, changes may need to be made
 		 to this part, such as checking the RANGE of each element
 		 in the vector.  */
-	      if (TREE_CODE (op0) != SSA_NAME
-		  || !SSA_NAME_RANGE_INFO (op0)
-		  || !vect_get_range_info (op0, &op_min_value,
-					   &op_max_value))
+	      if (slp_op0)
+		{
+		  tree def;
+		  /* ???  Merge ranges in case of more than one lane.  */
+		  if (SLP_TREE_LANES (slp_op0) != 1
+		      || !(def = vect_get_slp_scalar_def (slp_op0, 0))
+		      || !vect_get_range_info (def,
+					       &op_min_value, &op_max_value))
+		    break;
+		}
+	      else if (!op0
+		       || TREE_CODE (op0) != SSA_NAME
+		       || !SSA_NAME_RANGE_INFO (op0)
+		       || !vect_get_range_info (op0, &op_min_value,
+						&op_max_value))
 		break;
 
 	      if (cvt_type == NULL_TREE

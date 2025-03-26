@@ -16668,7 +16668,7 @@ ix86_fp_compare_code_to_integer (enum rtx_code code)
       return NE;
     case EQ:
     case NE:
-      if (TARGET_AVX10_2_256)
+      if (TARGET_AVX10_2)
 	return code;
       /* FALLTHRU.  */
     default:
@@ -16724,7 +16724,7 @@ ix86_ifunc_ref_local_ok (void)
    This is currently used only with 64-bit or 32-bit GOT32X ELF targets
    to call the function marked "noplt" indirectly.  */
 
-static bool
+bool
 ix86_nopic_noplt_attribute_p (rtx call_op)
 {
   if (flag_pic || ix86_cmodel == CM_LARGE
@@ -20598,6 +20598,28 @@ ix86_class_likely_spilled_p (reg_class_t rclass)
     }
 
   return false;
+}
+
+/* Implement TARGET_CALLEE_SAVE_COST.  */
+
+static int
+ix86_callee_save_cost (spill_cost_type, unsigned int hard_regno, machine_mode,
+		       unsigned int, int mem_cost, const HARD_REG_SET &, bool)
+{
+  /* Account for the fact that push and pop are shorter and do their
+     own allocation and deallocation.  */
+  if (GENERAL_REGNO_P (hard_regno))
+    {
+      /* push is 1 byte while typical spill is 4-5 bytes.
+	 ??? We probably should adjust size costs accordingly.
+	 Costs are relative to reg-reg move that has 2 bytes for 32bit
+	 and 3 bytes otherwise.	 Be sure that no cost table sets cost
+	 to 2, so we end up with 0.  */
+      if (mem_cost <= 2 || optimize_function_for_size_p (cfun))
+	return 1;
+      return mem_cost - 2;
+    }
+  return mem_cost;
 }
 
 /* Return true if a set of DST by the expression SRC should be allowed.
@@ -25033,7 +25055,7 @@ ix86_get_mask_mode (machine_mode data_mode)
 	 to kmask for _Float16.  */
       || (TARGET_AVX512VL && TARGET_AVX512FP16
 	  && GET_MODE_INNER (data_mode) == E_HFmode)
-      || (TARGET_AVX10_2_256 && GET_MODE_INNER (data_mode) == E_BFmode))
+      || (TARGET_AVX10_2 && GET_MODE_INNER (data_mode) == E_BFmode))
     {
       if (elem_size == 4
 	  || elem_size == 8
@@ -27076,8 +27098,16 @@ ix86_libgcc_floating_mode_supported_p
 #define TARGET_PREFERRED_RELOAD_CLASS ix86_preferred_reload_class
 #undef TARGET_PREFERRED_OUTPUT_RELOAD_CLASS
 #define TARGET_PREFERRED_OUTPUT_RELOAD_CLASS ix86_preferred_output_reload_class
+/* When this hook returns true for MODE, the compiler allows
+   registers explicitly used in the rtl to be used as spill registers
+   but prevents the compiler from extending the lifetime of these
+   registers.  */
+#undef TARGET_SMALL_REGISTER_CLASSES_FOR_MODE_P
+#define TARGET_SMALL_REGISTER_CLASSES_FOR_MODE_P hook_bool_mode_true
 #undef TARGET_CLASS_LIKELY_SPILLED_P
 #define TARGET_CLASS_LIKELY_SPILLED_P ix86_class_likely_spilled_p
+#undef TARGET_CALLEE_SAVE_COST
+#define TARGET_CALLEE_SAVE_COST ix86_callee_save_cost
 
 #undef TARGET_VECTORIZE_BUILTIN_VECTORIZATION_COST
 #define TARGET_VECTORIZE_BUILTIN_VECTORIZATION_COST \

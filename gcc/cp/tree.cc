@@ -191,6 +191,8 @@ lvalue_kind (const_tree ref)
       return op1_lvalue_kind;
 
     case STRING_CST:
+      return clk_ordinary | clk_mergeable;
+
     case COMPOUND_LITERAL_EXPR:
       return clk_ordinary;
 
@@ -210,6 +212,10 @@ lvalue_kind (const_tree ref)
 	  && DECL_LANG_SPECIFIC (ref)
 	  && DECL_IN_AGGR_P (ref))
 	return clk_none;
+
+      if (TREE_CODE (ref) == CONST_DECL || DECL_MERGEABLE (ref))
+	return clk_ordinary | clk_mergeable;
+
       /* FALLTHRU */
     case INDIRECT_REF:
     case ARROW_EXPR:
@@ -405,6 +411,17 @@ bool
 bitfield_p (const_tree ref)
 {
   return (lvalue_kind (ref) & clk_bitfield);
+}
+
+/* True if REF is a glvalue with a unique address, excluding mergeable glvalues
+   such as string constants.  */
+
+bool
+non_mergeable_glvalue_p (const_tree ref)
+{
+  auto kind = lvalue_kind (ref);
+  return (kind != clk_none
+	  && !(kind & (clk_class|clk_mergeable)));
 }
 
 /* C++-specific version of stabilize_reference.  */
@@ -952,6 +969,24 @@ get_target_expr (tree init, tsubst_flags_t complain /* = tf_warning_or_error */)
     }
 }
 
+/* Like get_target_expr, but for an internal detail like a cleanup flag or loop
+   iterator.  These variables should not be extended by extend_all_temps.
+
+   This function can also be used for an ephemeral copy of a scalar value such
+   as the pointer to the allocated memory in build_new_1.
+
+   This function should not be used for objects that are part of the abstract
+   C++ semantics such as in stabilize_expr.  */
+
+tree
+get_internal_target_expr (tree init)
+{
+  init = convert_bitfield_to_declared_type (init);
+  tree t = force_target_expr (TREE_TYPE (init), init, tf_warning_or_error);
+  TARGET_EXPR_INTERNAL_P (t) = true;
+  return t;
+}
+
 /* If EXPR is a bitfield reference, convert it to the declared type of
    the bitfield, and return the resulting expression.  Otherwise,
    return EXPR itself.  */
@@ -1207,7 +1242,7 @@ build_cplus_array_type (tree elt_type, tree index_type, int dependent)
 /* Return an ARRAY_TYPE with element type ELT and length N.  */
 
 tree
-build_array_of_n_type (tree elt, int n)
+build_array_of_n_type (tree elt, unsigned HOST_WIDE_INT n)
 {
   return build_cplus_array_type (elt, build_index_type (size_int (n - 1)));
 }
@@ -1566,7 +1601,7 @@ apply_identity_attributes (tree result, tree attribs, bool *remove_attributes)
 
 /* Builds a qualified variant of T that is either not a typedef variant
    (the default behavior) or not a typedef variant of a user-facing type
-   (if FLAGS contains STF_USER_FACING).  If T is not a type, then this
+   (if FLAGS contains STF_USER_VISIBLE).  If T is not a type, then this
    just dispatches to strip_typedefs_expr.
 
    E.g. consider the following declarations:
@@ -1611,6 +1646,11 @@ strip_typedefs (tree t, bool *remove_attributes /* = NULL */,
     {
       if ((flags & STF_USER_VISIBLE)
 	  && !user_facing_original_type_p (t))
+	return t;
+
+      if ((flags & STF_KEEP_INJ_CLASS_NAME)
+	  && CLASS_TYPE_P (t)
+	  && DECL_SELF_REFERENCE_P (TYPE_NAME (t)))
 	return t;
 
       if (dependent_opaque_alias_p (t))
@@ -5313,7 +5353,8 @@ handle_init_priority_attribute (tree* node,
       && !in_system_header_at (input_location))
     {
       warning
-	(0, "requested %<init_priority%> %i is reserved for internal use",
+	(OPT_Wprio_ctor_dtor,
+	 "requested %<init_priority%> %i is reserved for internal use",
 	 pri);
     }
 
@@ -5788,6 +5829,7 @@ cp_walk_subtrees (tree *tp, int *walk_subtrees_p, walk_tree_fn func,
 		  && !TREE_STATIC (TREE_OPERAND (t, 0)))))
 	{
 	  tree decl = TREE_OPERAND (t, 0);
+	  WALK_SUBTREE (TREE_TYPE (decl));
 	  WALK_SUBTREE (DECL_INITIAL (decl));
 	  WALK_SUBTREE (DECL_SIZE (decl));
 	  WALK_SUBTREE (DECL_SIZE_UNIT (decl));
@@ -5836,6 +5878,12 @@ cp_walk_subtrees (tree *tp, int *walk_subtrees_p, walk_tree_fn func,
     case STATIC_ASSERT:
       WALK_SUBTREE (STATIC_ASSERT_CONDITION (t));
       WALK_SUBTREE (STATIC_ASSERT_MESSAGE (t));
+      break;
+
+    case INTEGER_TYPE:
+      /* Removed from walk_type_fields in r119481.  */
+      WALK_SUBTREE (TYPE_MIN_VALUE (t));
+      WALK_SUBTREE (TYPE_MAX_VALUE (t));
       break;
 
     default:
@@ -5998,6 +6046,8 @@ decl_linkage (tree decl)
     {
       if (TREE_CODE (decl) == TYPE_DECL && !TYPE_ANON_P (TREE_TYPE (decl)))
 	/* This entity has a typedef name for linkage purposes.  */;
+      else if (DECL_DECOMPOSITION_P (decl) && DECL_DECOMP_IS_BASE (decl))
+	/* Namespace-scope structured bindings can have linkage.  */;
       else if (TREE_CODE (decl) == NAMESPACE_DECL && cxx_dialect >= cxx11)
 	/* An anonymous namespace has internal linkage since C++11.  */
 	return lk_internal;
@@ -6481,11 +6531,11 @@ test_lvalue_kind ()
   tree string_lit = build_string (4, "foo");
   TREE_TYPE (string_lit) = char_array_type_node;
   string_lit = fix_string_type (string_lit);
-  ASSERT_EQ (clk_ordinary, lvalue_kind (string_lit));
+  ASSERT_EQ (clk_ordinary|clk_mergeable, lvalue_kind (string_lit));
 
   tree wrapped_string_lit = maybe_wrap_with_location (string_lit, loc);
   ASSERT_TRUE (location_wrapper_p (wrapped_string_lit));
-  ASSERT_EQ (clk_ordinary, lvalue_kind (wrapped_string_lit));
+  ASSERT_EQ (clk_ordinary|clk_mergeable, lvalue_kind (wrapped_string_lit));
 
   tree parm = build_decl (UNKNOWN_LOCATION, PARM_DECL,
 			  get_identifier ("some_parm"),

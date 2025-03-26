@@ -10,9 +10,6 @@
  * Source:    $(DRUNTIMESRC core/thread/osthread.d)
  */
 
-/* NOTE: This file has been patched from the original DMD distribution to
- * work with the GDC compiler.
- */
 module core.thread.osthread;
 
 import core.atomic;
@@ -37,10 +34,6 @@ else version (TVOS)
 else version (WatchOS)
     version = Darwin;
 
-version (Shared)
-    version (GNU)
-        version = GNUShared;
-
 version (D_InlineAsm_X86)
 {
     version (Windows)
@@ -59,72 +52,11 @@ else version (D_InlineAsm_X86_64)
         version = AsmX86_64_Posix;
     }
 }
-else version (X86)
-{
-    version (CET) {} else
-    {
-        version = AsmExternal;
-    }
-}
-else version (X86_64)
-{
-    version (CET)   {} else
-    version (D_X32) {} else
-    {
-        version = AsmExternal;
-    }
-}
-else version (PPC)
-{
-    version (Posix)
-    {
-        version = AsmExternal;
-    }
-}
-else version (MIPS_O32)
-{
-    version (Posix)
-    {
-        version = AsmExternal;
-    }
-}
-else version (AArch64)
-{
-    version (Posix)
-    {
-        version = AsmExternal;
-    }
-}
-else version (ARM)
-{
-    version (Posix)
-    {
-        version = AsmExternal;
-    }
-}
-
-version (Posix)
-{
-    version (AsmX86_Windows)    {} else
-    version (AsmX86_Posix)      {} else
-    version (AsmX86_64_Windows) {} else
-    version (AsmX86_64_Posix)   {} else
-    version (AsmExternal)       {} else
-    {
-        // NOTE: The ucontext implementation requires architecture specific
-        //       data definitions to operate so testing for it must be done
-        //       by checking for the existence of ucontext_t rather than by
-        //       a version identifier.  Please note that this is considered
-        //       an obsolescent feature according to the POSIX spec, so a
-        //       custom solution is still preferred.
-        static import core.sys.posix.ucontext;
-    }
-}
 
 version (Windows)
 {
     import core.stdc.stdint : uintptr_t; // for _beginthreadex decl below
-    import core.stdc.stdlib;             // for malloc, atexit
+    import core.stdc.stdlib : free, malloc, realloc;
     import core.sys.windows.basetsd /+: HANDLE+/;
     import core.sys.windows.threadaux /+: getThreadStackBottom, impersonate_thread, OpenThreadHandle+/;
     import core.sys.windows.winbase /+: CloseHandle, CREATE_SUSPENDED, DuplicateHandle, GetCurrentThread,
@@ -142,7 +74,7 @@ else version (Posix)
 {
     static import core.sys.posix.pthread;
     static import core.sys.posix.signal;
-    import core.stdc.errno;
+    import core.stdc.errno : EINTR, errno;
     import core.sys.posix.pthread : pthread_atfork, pthread_attr_destroy, pthread_attr_getstack, pthread_attr_init,
         pthread_attr_setstacksize, pthread_create, pthread_detach, pthread_getschedparam, pthread_join, pthread_self,
         pthread_setschedparam, sched_get_priority_max, sched_get_priority_min, sched_param, sched_yield;
@@ -157,9 +89,34 @@ else version (Posix)
     {
         import core.sys.darwin.mach.kern_return : KERN_SUCCESS;
         import core.sys.darwin.mach.port : mach_port_t;
-        import core.sys.darwin.mach.thread_act : mach_msg_type_number_t, thread_get_state, thread_resume,
-            thread_suspend, x86_THREAD_STATE64, x86_THREAD_STATE64_COUNT, x86_thread_state64_t;
+        import core.sys.darwin.mach.thread_act : mach_msg_type_number_t,
+            thread_get_state, thread_resume, thread_suspend;
         import core.sys.darwin.pthread : pthread_mach_thread_np;
+        version (X86)
+        {
+            import core.sys.darwin.mach.thread_act :
+             x86_THREAD_STATE32, x86_THREAD_STATE32_COUNT, x86_thread_state32_t;
+        }
+        else version (X86_64)
+        {
+            import core.sys.darwin.mach.thread_act :
+             x86_THREAD_STATE64, x86_THREAD_STATE64_COUNT, x86_thread_state64_t;
+        }
+        else version (AArch64)
+        {
+            import core.sys.darwin.mach.thread_act :
+             ARM_THREAD_STATE64, ARM_THREAD_STATE64_COUNT, arm_thread_state64_t;
+        }
+        else version (PPC)
+        {
+            import core.sys.darwin.mach.thread_act :
+             PPC_THREAD_STATE32, PPC_THREAD_STATE32_COUNT, ppc_thread_state32_t;
+        }
+        else version (PPC64)
+        {
+            import core.sys.darwin.mach.thread_act :
+             PPC_THREAD_STATE64, PPC_THREAD_STATE64_COUNT, ppc_thread_state64_t;
+        }
     }
 }
 
@@ -518,16 +475,8 @@ class Thread : ThreadBase
 
                 version (Shared)
                 {
-                    version (GNU)
-                    {
-                        auto libs = externDFunc!("gcc.sections.pinLoadedLibraries",
-                                                 void* function() @nogc nothrow)();
-                    }
-                    else
-                    {
-                        auto libs = externDFunc!("rt.sections_elf_shared.pinLoadedLibraries",
-                                                 void* function() @nogc nothrow)();
-                    }
+                    auto libs = externDFunc!("rt.sections_elf_shared.pinLoadedLibraries",
+                                             void* function() @nogc nothrow)();
 
                     auto ps = cast(void**).malloc(2 * size_t.sizeof);
                     if (ps is null) onOutOfMemoryError();
@@ -535,16 +484,8 @@ class Thread : ThreadBase
                     ps[1] = cast(void*)libs;
                     if ( pthread_create( &m_addr, &attr, &thread_entryPoint, ps ) != 0 )
                     {
-                        version (GNU)
-                        {
-                            externDFunc!("gcc.sections.unpinLoadedLibraries",
-                                         void function(void*) @nogc nothrow)(libs);
-                        }
-                        else
-                        {
-                            externDFunc!("rt.sections_elf_shared.unpinLoadedLibraries",
-                                         void function(void*) @nogc nothrow)(libs);
-                        }
+                        externDFunc!("rt.sections_elf_shared.unpinLoadedLibraries",
+                                     void function(void*) @nogc nothrow)(libs);
                         .free(ps);
                         onThreadError( "Error creating thread" );
                     }
@@ -1598,7 +1539,7 @@ private extern(D) void* getStackBottom() nothrow @nogc
             else version (X86_64)
                 asm pure nothrow @nogc { "movq %%gs:8, %0;" : "=r" (bottom); }
             else
-                static assert(false, "Platform not supported.");
+                static assert(false, "Architecture not supported.");
 
             return bottom;
         }
@@ -2182,8 +2123,8 @@ version (Windows)
 
             obj.initDataStorage();
 
-            Thread.setThis(obj);
-            Thread.add(obj);
+            Thread.registerThis(obj);
+
             scope (exit)
             {
                 Thread.remove(obj);
@@ -2268,12 +2209,7 @@ else version (Posix)
 
             // loadedLibraries need to be inherited from parent thread
             // before initilizing GC for TLS (rt_tlsgc_init)
-            version (GNUShared)
-            {
-                externDFunc!("gcc.sections.inheritLoadedLibraries",
-                             void function(void*) @nogc nothrow)(loadedLibraries);
-            }
-            else version (Shared)
+            version (Shared)
             {
                 externDFunc!("rt.sections_elf_shared.inheritLoadedLibraries",
                              void function(void*) @nogc nothrow)(loadedLibraries);
@@ -2282,8 +2218,9 @@ else version (Posix)
             obj.initDataStorage();
 
             atomicStore!(MemoryOrder.raw)(obj.m_isRunning, true);
-            Thread.setThis(obj); // allocates lazy TLS (see Issue 11981)
-            Thread.add(obj);     // can only receive signals from here on
+
+            Thread.registerThis(obj); // can only receive signals from here on
+
             scope (exit)
             {
                 Thread.remove(obj);
@@ -2355,12 +2292,7 @@ else version (Posix)
                     append( t );
                 }
                 rt_moduleTlsDtor();
-                version (GNUShared)
-                {
-                    externDFunc!("gcc.sections.cleanupLoadedLibraries",
-                                 void function() @nogc nothrow)();
-                }
-                else version (Shared)
+                version (Shared)
                 {
                     externDFunc!("rt.sections_elf_shared.cleanupLoadedLibraries",
                                  void function() @nogc nothrow)();
@@ -2837,16 +2769,8 @@ private size_t adjustStackSize(size_t sz) nothrow @nogc
     version (CRuntime_Glibc)
     {
         // On glibc, TLS uses the top of the stack, so add its size to the requested size
-        version (GNU)
-        {
-            sz += externDFunc!("gcc.sections.elf.sizeOfTLS",
-                               size_t function() @nogc nothrow)();
-        }
-        else
-        {
-            sz += externDFunc!("rt.sections_elf_shared.sizeOfTLS",
-                               size_t function() @nogc nothrow)();
-        }
+        sz += externDFunc!("rt.sections_elf_shared.sizeOfTLS",
+                           size_t function() @nogc nothrow)();
     }
 
     // stack size must be a multiple of pageSize

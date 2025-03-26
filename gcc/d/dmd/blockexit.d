@@ -1,7 +1,7 @@
 /**
  * Find out in what ways control flow can exit a statement block.
  *
- * Copyright:   Copyright (C) 1999-2024 by The D Language Foundation, All Rights Reserved
+ * Copyright:   Copyright (C) 1999-2025 by The D Language Foundation, All Rights Reserved
  * Authors:     $(LINK2 https://www.digitalmars.com, Walter Bright)
  * License:     $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:      $(LINK2 https://github.com/dlang/dmd/blob/master/src/dmd/blockexit.d, _blockexit.d)
@@ -478,7 +478,7 @@ int blockExit(Statement s, FuncDeclaration func, ErrorSink eSink)
             if (!(s.stc & STC.nothrow_))
             {
                 if(func)
-                    func.setThrow(s.loc, "`asm` statement is assumed to throw - mark it with `nothrow` if it does not");
+                    func.setThrow(s.loc, "executing an `asm` statement without a `nothrow` annotation");
                 if (eSink)
                     eSink.error(s.loc, "`asm` statement is assumed to throw - mark it with `nothrow` if it does not"); // TODO
                 else
@@ -510,7 +510,7 @@ int blockExit(Statement s, FuncDeclaration func, ErrorSink eSink)
  +
  + Returns: `BE.[err]throw` depending on the type of `exp`
  +/
-BE checkThrow(ref const Loc loc, Expression exp, FuncDeclaration func, ErrorSink eSink)
+BE checkThrow(Loc loc, Expression exp, FuncDeclaration func, ErrorSink eSink)
 {
     Type t = exp.type.toBasetype();
     ClassDeclaration cd = t.isClassHandle();
@@ -523,7 +523,7 @@ BE checkThrow(ref const Loc loc, Expression exp, FuncDeclaration func, ErrorSink
     if (eSink)
         eSink.error(loc, "`%s` is thrown but not caught", exp.type.toChars());
     else if (func)
-        func.setThrow(loc, "`%s` is thrown but not caught", exp.type);
+        func.setThrow(loc, "`%s` being thrown but not caught", exp.type);
 
     return BE.throw_;
 }

@@ -3,7 +3,7 @@
  *
  * Specification: $(LINK2 https://dlang.org/spec/lex.html, Lexical)
  *
- * Copyright:   Copyright (C) 1999-2024 by The D Language Foundation, All Rights Reserved
+ * Copyright:   Copyright (C) 1999-2025 by The D Language Foundation, All Rights Reserved
  * Authors:     $(LINK2 https://www.digitalmars.com, Walter Bright)
  * License:     $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:      $(LINK2 https://github.com/dlang/dmd/blob/master/src/dmd/lexer.d, _lexer.d)
@@ -34,11 +34,6 @@ import dmd.tokens;
 
 nothrow:
 
-version (DMDLIB)
-{
-    version = LocOffset;
-}
-
 /***********************************************************
  * Values to use for various magic identifiers
  */
@@ -68,8 +63,10 @@ class Lexer
 {
     private __gshared OutBuffer stringbuffer;
 
+    BaseLoc* baseLoc;       // Used to generate `scanloc`, which is just an index into this data structure
     Loc scanloc;            // for error messages
     Loc prevloc;            // location of token before current
+    int linnum;             // current line number
 
     const(char)* p;         // current character
 
@@ -132,10 +129,11 @@ class Lexer
         ErrorSink errorSink,
         const CompileEnv* compileEnv) scope
     {
-        scanloc = Loc(filename, 1, 1);
         // debug printf("Lexer::Lexer(%p)\n", base);
         // debug printf("lexer.filename = %s\n", filename);
         token = Token.init;
+        this.baseLoc = newBaseLoc(filename, endoffset);
+        this.linnum = 1;
         this.base = base;
         this.end = base + endoffset;
         p = base + begoffset;
@@ -225,7 +223,9 @@ class Lexer
         tokenizeNewlines = true;
         inTokenStringConstant = 0;
         lastDocLine = 0;
-        scanloc = Loc("#defines", 1, 1);
+
+        baseLoc = newBaseLoc("#defines", slice.length);
+        scanloc = baseLoc.getLoc(0);
     }
 
     /**********************************
@@ -319,7 +319,7 @@ class Lexer
      */
     final void scan(Token* t)
     {
-        const lastLine = scanloc.linnum;
+        const lastLine = linnum;
         Loc startLoc;
         t.blockComment = null;
         t.lineComment = null;
@@ -867,7 +867,7 @@ class Lexer
                             case 0:
                             case 0x1A:
                                 error(t.loc, "unterminated /* */ comment");
-                                p = end;
+                                //p = end;
                                 t.loc = loc();
                                 t.value = TOK.endOfFile;
                                 return;
@@ -897,7 +897,7 @@ class Lexer
                     {
                         // if /** but not /**/
                         getDocComment(t, lastLine == startLoc.linnum, startLoc.linnum - lastDocLine > 1);
-                        lastDocLine = scanloc.linnum;
+                        lastDocLine = linnum;
                     }
                     continue;
                 case '/': // do // style comments
@@ -925,9 +925,9 @@ class Lexer
                             if (doDocComment && t.ptr[2] == '/')
                             {
                                 getDocComment(t, lastLine == startLoc.linnum, startLoc.linnum - lastDocLine > 1);
-                                lastDocLine = scanloc.linnum;
+                                lastDocLine = linnum;
                             }
-                            p = end;
+                            //p = end;
                             t.loc = loc();
                             t.value = TOK.endOfFile;
                             return;
@@ -957,7 +957,7 @@ class Lexer
                     if (doDocComment && t.ptr[2] == '/')
                     {
                         getDocComment(t, lastLine == startLoc.linnum, startLoc.linnum - lastDocLine > 1);
-                        lastDocLine = scanloc.linnum;
+                        lastDocLine = linnum;
                     }
                     p++;
                     endOfLine();
@@ -1003,7 +1003,7 @@ class Lexer
                             case 0:
                             case 0x1A:
                                 error(t.loc, "unterminated /+ +/ comment");
-                                p = end;
+                                //p = end;
                                 t.loc = loc();
                                 t.value = TOK.endOfFile;
                                 return;
@@ -1029,7 +1029,7 @@ class Lexer
                         {
                             // if /++ but not /++/
                             getDocComment(t, lastLine == startLoc.linnum, startLoc.linnum - lastDocLine > 1);
-                            lastDocLine = scanloc.linnum;
+                            lastDocLine = linnum;
                         }
                         continue;
                     }
@@ -1464,7 +1464,7 @@ class Lexer
      * Returns:
      *  the escape sequence as a single character
      */
-    private dchar escapeSequence(const ref Loc loc, ref const(char)* sequence, bool Ccompile, out dchar c2)
+    private dchar escapeSequence(Loc loc, ref const(char)* sequence, bool Ccompile, out dchar c2)
     {
         const(char)* p = sequence; // cache sequence reference on stack
         scope(exit) sequence = p;
@@ -2571,19 +2571,19 @@ class Lexer
     Ldone:
         if (errorDigit)
         {
-            error(token.loc, "%s digit expected, not `%c`", base == 2 ? "binary".ptr :
+            error(scanloc, "%s digit expected, not `%c`", base == 2 ? "binary".ptr :
                                                  base == 8 ? "octal".ptr :
                                                  "decimal".ptr, errorDigit);
             err = true;
         }
         if (overflow && !err)
         {
-            error("integer overflow");
+            error(scanloc, "integer overflow");
             err = true;
         }
         if ((base == 2 && !anyBinaryDigitsNoSingleUS) ||
             (base == 16 && !anyHexDigitsNoSingleUS))
-            error(token.loc, "`%.*s` isn't a valid integer literal, use `%.*s0` instead", cast(int)(p - start), start, 2, start);
+            error(scanloc, "`%.*s` isn't a valid integer literal, use `%.*s0` instead", cast(int)(p - start), start, 2, start);
 
         t.unsvalue = n;
 
@@ -2612,7 +2612,7 @@ class Lexer
                 goto L1;
             case 'l':
                 f = FLAGS.long_;
-                error("lower case integer suffix 'l' is not allowed. Please use 'L' instead");
+                error(scanloc, "lower case integer suffix 'l' is not allowed. Please use 'L' instead");
                 goto L1;
             case 'L':
                 f = FLAGS.long_;
@@ -2620,7 +2620,7 @@ class Lexer
                 p++;
                 if ((flags & f) && !err)
                 {
-                    error("repeated integer suffix `%c`", p[-1]);
+                    error(scanloc, "repeated integer suffix `%c`", p[-1]);
                     err = true;
                 }
                 flags = cast(FLAGS)(flags | f);
@@ -2634,9 +2634,9 @@ class Lexer
         {
             if (err)
                 // can't translate invalid octal value, just show a generic message
-                error("octal literals larger than 7 are no longer supported");
+                error(scanloc, "octal literals larger than 7 are no longer supported");
             else
-                error(token.loc, "octal literals `0%llo%.*s` are no longer supported, use `std.conv.octal!\"%llo%.*s\"` instead",
+                error(scanloc, "octal literals `0%llo%.*s` are no longer supported, use `std.conv.octal!\"%llo%.*s\"` instead",
                     n, cast(int)(p - psuffix), psuffix, n, cast(int)(p - psuffix), psuffix);
         }
         TOK result;
@@ -3154,9 +3154,7 @@ class Lexer
 
     final Loc loc() @nogc
     {
-        scanloc.charnum = cast(ushort)(1 + p - line);
-        version (LocOffset)
-            scanloc.fileOffset = cast(uint)(p - base);
+        scanloc = baseLoc.getLoc(cast(uint) (p - base));
         return scanloc;
     }
 
@@ -3165,7 +3163,7 @@ class Lexer
         eSink.error(token.loc, format, args);
     }
 
-    void error(T...)(const ref Loc loc, const(char)* format, T args)
+    void error(T...)(Loc loc, const(char)* format, T args)
     {
         eSink.error(loc, format, args);
     }
@@ -3175,12 +3173,12 @@ class Lexer
         eSink.errorSupplemental(token.loc, format, args);
     }
 
-    void deprecation(T...)(const ref Loc loc, const(char)* format, T args)
+    void deprecation(T...)(Loc loc, const(char)* format, T args)
     {
         eSink.deprecation(loc, format, args);
     }
 
-    void warning(T...)(const ref Loc loc, const(char)* format, T args)
+    void warning(T...)(Loc loc, const(char)* format, T args)
     {
         eSink.warning(loc, format, args);
     }
@@ -3251,7 +3249,6 @@ class Lexer
      */
     final void poundLine(ref Token tok, bool linemarker)
     {
-        auto linnum = this.scanloc.linnum;
         const(char)* filespec = null;
         bool flags;
 
@@ -3288,9 +3285,7 @@ class Lexer
             case TOK.endOfLine:
                 if (!inTokenStringConstant)
                 {
-                    this.scanloc.linnum = linnum;
-                    if (filespec)
-                        this.scanloc.filename = filespec;
+                    baseLoc.addSubstitution(cast(uint) (p - base), filespec, linnum);
                 }
                 return;
             case TOK.file:
@@ -3446,9 +3441,8 @@ class Lexer
         int linestart = 0;
         if (ct == '/')
         {
-            if (q < qend && *q == ' ') {
+            if (q < qend && *q == ' ')
                 ++q;
-            }
         }
         else if (q < qend)
         {
@@ -3589,10 +3583,11 @@ class Lexer
     /**************************
      * `p` should be at start of next line
      */
-    private void endOfLine() @nogc @safe
+    private void endOfLine() @safe
     {
-        scanloc.linnum = scanloc.linnum + 1;
+        linnum += 1;
         line = p;
+        baseLoc.newLine(cast(uint)(p - base));
     }
 
     /****************************
@@ -3682,7 +3677,7 @@ unittest
         string expectedSupplemental;
         bool gotError;
 
-        void verror(const ref Loc loc, const(char)* format, va_list ap)
+        void verror(Loc loc, const(char)* format, va_list ap)
         {
             gotError = true;
             char[100] buffer = void;
@@ -3690,7 +3685,7 @@ unittest
             assert(expected == actual);
         }
 
-        void errorSupplemental(const ref Loc loc, const(char)* format, ...)
+        void errorSupplemental(Loc loc, const(char)* format, ...)
         {
             gotError = true;
             char[128] buffer = void;
