@@ -2980,7 +2980,7 @@ build_class_member_access_expr (cp_expr object, tree member,
 				    /*nonnull=*/1, complain);
 	  /* If we found the base successfully then we should be able
 	     to convert to it successfully.  */
-	  gcc_assert (object != error_mark_node);
+	  gcc_assert (object != error_mark_node || seen_error ());
 	}
 
       /* If MEMBER is from an anonymous aggregate, we have converted
@@ -3870,7 +3870,11 @@ cp_build_indirect_ref_1 (location_t loc, tree ptr, ref_operator errorstring,
 	  return error_mark_node;
 	}
       else if (do_fold && TREE_CODE (pointer) == ADDR_EXPR
-	       && same_type_p (t, TREE_TYPE (TREE_OPERAND (pointer, 0))))
+	       && same_type_p (t, TREE_TYPE (TREE_OPERAND (pointer, 0)))
+	       /* Don't let this change the value category.  '*&TARGET_EXPR'
+		  is an lvalue, but folding it into 'TARGET_EXPR' would turn
+		  it into a prvalue of class type.  */
+	       && lvalue_p (TREE_OPERAND (pointer, 0)))
 	/* The POINTER was something like `&x'.  We simplify `*&x' to
 	   `x'.  */
 	return TREE_OPERAND (pointer, 0);
@@ -4219,16 +4223,14 @@ get_member_function_from_ptrfunc (tree *instance_ptrptr, tree function,
 	      && !DECL_P (instance_ptr)
 	      && !TREE_CONSTANT (instance_ptr)))
 	instance_ptr = instance_save_expr
-	  = force_target_expr (TREE_TYPE (instance_ptr), instance_ptr,
-			       complain);
+	  = get_internal_target_expr (instance_ptr);
 
       /* See above comment.  */
       if (TREE_SIDE_EFFECTS (function)
 	  || (!nonvirtual
 	      && !DECL_P (function)
 	      && !TREE_CONSTANT (function)))
-	function
-	  = force_target_expr (TREE_TYPE (function), function, complain);
+	function = get_internal_target_expr (function);
 
       /* Start by extracting all the information from the PMF itself.  */
       e3 = pfn_from_ptrmemfunc (function);
@@ -4867,6 +4869,11 @@ tree
 build_omp_array_section (location_t loc, tree array_expr, tree index,
 			 tree length)
 {
+  if (TREE_CODE (array_expr) == TYPE_DECL
+      || type_dependent_expression_p (array_expr))
+    return build3_loc (loc, OMP_ARRAY_SECTION, NULL_TREE, array_expr, index,
+		       length);
+
   tree type = TREE_TYPE (array_expr);
   gcc_assert (type);
   type = non_reference (type);
@@ -5473,7 +5480,7 @@ cp_build_binary_op (const op_location_t &location,
           case stv_firstarg:
             {
               op0 = convert (TREE_TYPE (type1), op0);
-	      op0 = save_expr (op0);
+	      op0 = cp_save_expr (op0);
               op0 = build_vector_from_val (type1, op0);
 	      orig_type0 = type0 = TREE_TYPE (op0);
               code0 = TREE_CODE (type0);
@@ -5483,7 +5490,7 @@ cp_build_binary_op (const op_location_t &location,
           case stv_secondarg:
             {
               op1 = convert (TREE_TYPE (type0), op1);
-	      op1 = save_expr (op1);
+	      op1 = cp_save_expr (op1);
               op1 = build_vector_from_val (type0, op1);
 	      orig_type1 = type1 = TREE_TYPE (op1);
               code1 = TREE_CODE (type1);
@@ -6012,9 +6019,9 @@ cp_build_binary_op (const op_location_t &location,
 	    return error_mark_node;
 
 	  if (TREE_SIDE_EFFECTS (op0))
-	    op0 = save_expr (op0);
+	    op0 = cp_save_expr (op0);
 	  if (TREE_SIDE_EFFECTS (op1))
-	    op1 = save_expr (op1);
+	    op1 = cp_save_expr (op1);
 
 	  pfn0 = pfn_from_ptrmemfunc (op0);
 	  pfn0 = cp_fully_fold (pfn0);
@@ -6255,8 +6262,8 @@ cp_build_binary_op (const op_location_t &location,
 	  && !processing_template_decl
 	  && sanitize_flags_p (SANITIZE_POINTER_COMPARE))
 	{
-	  op0 = save_expr (op0);
-	  op1 = save_expr (op1);
+	  op0 = cp_save_expr (op0);
+	  op1 = cp_save_expr (op1);
 
 	  tree tt = builtin_decl_explicit (BUILT_IN_ASAN_POINTER_COMPARE);
 	  instrument_expr = build_call_expr_loc (location, tt, 2, op0, op1);
@@ -6516,14 +6523,14 @@ cp_build_binary_op (const op_location_t &location,
 	    return error_mark_node;
 	  if (first_complex)
 	    {
-	      op0 = save_expr (op0);
+	      op0 = cp_save_expr (op0);
 	      real = cp_build_unary_op (REALPART_EXPR, op0, true, complain);
 	      imag = cp_build_unary_op (IMAGPART_EXPR, op0, true, complain);
 	      switch (code)
 		{
 		case MULT_EXPR:
 		case TRUNC_DIV_EXPR:
-		  op1 = save_expr (op1);
+		  op1 = cp_save_expr (op1);
 		  imag = build2 (resultcode, real_type, imag, op1);
 		  /* Fall through.  */
 		case PLUS_EXPR:
@@ -6536,13 +6543,13 @@ cp_build_binary_op (const op_location_t &location,
 	    }
 	  else
 	    {
-	      op1 = save_expr (op1);
+	      op1 = cp_save_expr (op1);
 	      real = cp_build_unary_op (REALPART_EXPR, op1, true, complain);
 	      imag = cp_build_unary_op (IMAGPART_EXPR, op1, true, complain);
 	      switch (code)
 		{
 		case MULT_EXPR:
-		  op0 = save_expr (op0);
+		  op0 = cp_save_expr (op0);
 		  imag = build2 (resultcode, real_type, op0, imag);
 		  /* Fall through.  */
 		case PLUS_EXPR:
@@ -11447,7 +11454,7 @@ check_return_expr (tree retval, bool *no_warning, bool *dangling)
       bool converted = false;
       tree moved;
       /* Until C++23, this was only interesting for class type, but in C++23,
-	 we should do the below when we're converting rom/to a class/reference
+	 we should do the below when we're converting from/to a class/reference
 	 (a non-scalar type).  */
 	if ((cxx_dialect < cxx23
 	     ? CLASS_TYPE_P (functype)

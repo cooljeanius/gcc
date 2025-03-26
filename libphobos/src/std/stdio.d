@@ -18,6 +18,7 @@ $(TR $(TD Reading) $(TD
     $(MYREF chunks)
     $(MYREF lines)
     $(MYREF readf)
+    $(MYREF readfln)
     $(MYREF readln)
 ))
 $(TR $(TD Writing) $(TD
@@ -2094,6 +2095,85 @@ $(CONSOLE
             "Unexpected '\\n' when converting from type LockingTextReader to type int");
     }
 
+    /**
+    Reads a line from the file and parses it using $(REF formattedRead, std,format,read).
+
+    Params:
+      format = The $(MREF_ALTTEXT format string, std,format). When passed as a
+      compile-time argument, the string will be statically checked against the
+      argument types passed.
+      data = Items to be read.
+
+    Returns: Same as `formattedRead`: the number of variables filled. If the
+    input ends early, this number will be less that the number of variables
+    provided.
+
+    Example:
+    ---
+    // sum_rows.d
+    void main()
+    {
+        import std.stdio;
+        auto f = File("input");
+        int a, b, c;
+        while (f.readfln("%d %d %d", a, b, c) == 3)
+        {
+            writeln(a + b + c);
+        }
+    }
+    ---
+    $(CONSOLE
+% cat << EOF > input
+1 2 3
+4 5 6
+7 8 9
+EOF
+% rdmd sum_rows.d
+6
+15
+24
+    )
+    */
+    uint readfln(alias format, Data...)(auto ref Data data)
+    if (isSomeString!(typeof(format)))
+    {
+        import std.format : checkFormatException;
+
+        alias e = checkFormatException!(format, Data);
+        static assert(!e, e);
+        return this.readfln(format, data);
+    }
+
+    /// ditto
+    uint readfln(Data...)(scope const(char)[] format, auto ref Data data)
+    {
+        import std.format.read : formattedRead;
+        import std.string : stripRight;
+
+        string line = this.readln.stripRight("\r\n");
+        return formattedRead(line, format, data);
+    }
+
+    @system unittest
+    {
+        static import std.file;
+
+        auto deleteme = testFilename();
+        std.file.write(deleteme, "hello\nworld\ntrue\nfalse\n");
+        scope(exit) std.file.remove(deleteme);
+        string s;
+        auto f = File(deleteme);
+        f.readfln!"%s"(s);
+        assert(s == "hello", "["~s~"]");
+        f.readfln("%s", s);
+        assert(s == "world", "["~s~"]");
+
+        bool b1, b2;
+        f.readfln("%s", b1);
+        f.readfln("%s", b2);
+        assert(b1 == true && b2 == false);
+    }
+
 /**
  Returns a temporary file by calling $(CSTDIO tmpfile).
  Note that the created file has no $(LREF name).*/
@@ -2169,13 +2249,13 @@ Allows to directly use range operations on lines of a file.
     private struct ByLineImpl(Char, Terminator)
     {
     private:
-        import std.typecons : RefCounted, RefCountedAutoInitialize;
+        import std.typecons : borrow, RefCountedAutoInitialize, SafeRefCounted;
 
         /* Ref-counting stops the source range's Impl
          * from getting out of sync after the range is copied, e.g.
          * when accessing range.front, then using std.range.take,
          * then accessing range.front again. */
-        alias PImpl = RefCounted!(Impl, RefCountedAutoInitialize.no);
+        alias PImpl = SafeRefCounted!(Impl, RefCountedAutoInitialize.no);
         PImpl impl;
 
         static if (isScalarType!Terminator)
@@ -2190,19 +2270,24 @@ Allows to directly use range operations on lines of a file.
             impl = PImpl(f, kt, terminator);
         }
 
-        @property bool empty()
+        /* Verifiably `@safe` when built with -preview=DIP1000. */
+        @property bool empty() @trusted
         {
-            return impl.refCountedPayload.empty;
+            // Using `ref` is actually necessary here.
+            return impl.borrow!((ref i) => i.empty);
         }
 
-        @property Char[] front()
+        /* Verifiably `@safe` when built with -preview=DIP1000. */
+        @property Char[] front() @trusted
         {
-            return impl.refCountedPayload.front;
+            // Using `ref` is likely optional here.
+            return impl.borrow!((ref i) => i.front);
         }
 
-        void popFront()
+        /* Verifiably `@safe` when built with -preview=DIP1000. */
+        void popFront() @trusted
         {
-            impl.refCountedPayload.popFront();
+            return impl.borrow!((ref i) => i.popFront());
         }
 
     private:
@@ -2216,6 +2301,7 @@ Allows to directly use range operations on lines of a file.
             KeepTerminator keepTerminator;
             bool haveLine;
 
+        @safe:
         public:
             this(File f, KeepTerminator kt, Terminator terminator)
             {
@@ -2375,7 +2461,7 @@ void main()
         return ByLineImpl!(Char, Terminator)(this, keepTerminator, terminator);
     }
 
-    @system unittest
+    @safe unittest
     {
         static import std.file;
         auto deleteme = testFilename();
@@ -2393,7 +2479,7 @@ void main()
     }
 
     // https://issues.dlang.org/show_bug.cgi?id=19980
-    @system unittest
+    @safe unittest
     {
         static import std.file;
         auto deleteme = testFilename();
@@ -2541,12 +2627,11 @@ $(REF readText, std,file)
             is(typeof(File("").byLineCopy!(char, char).front) == char[]));
     }
 
-    @system unittest
+    @safe unittest
     {
         import std.algorithm.comparison : equal;
         static import std.file;
 
-        scope(failure) printf("Failed test at line %d\n", __LINE__);
         auto deleteme = testFilename();
         std.file.write(deleteme, "");
         scope(success) std.file.remove(deleteme);
@@ -2620,7 +2705,7 @@ $(REF readText, std,file)
         test("sue\r", ["sue\r"], kt, '\r');
     }
 
-    @system unittest
+    @safe unittest
     {
         import std.algorithm.comparison : equal;
         import std.range : drop, take;
@@ -4484,6 +4569,70 @@ if (isSomeChar!C && is(Unqual!C == C) && !is(C == enum) &&
     }
 }
 
+/**
+Reads a line from `stdin` and parses it using $(REF formattedRead, std,format,read).
+
+Params:
+  format = The $(MREF_ALTTEXT format string, std,format). When passed as a
+  compile-time argument, the string will be statically checked against the
+  argument types passed.
+  data = Items to be read.
+
+Returns: Same as `formattedRead`: the number of variables filled. If the
+input ends early, this number will be less that the number of variables
+provided.
+
+Example:
+---
+// sum_rows.d
+void main()
+{
+    import std.stdio;
+    int a, b, c;
+    while (readfln("%d %d %d", a, b, c) == 3)
+    {
+        writeln(a + b + c);
+    }
+}
+---
+$(CONSOLE
+% cat << EOF > input
+1 2 3
+4 5 6
+7 8 9
+EOF
+% rdmd sum_rows.d < input
+6
+15
+24
+)
+*/
+uint readfln(alias format, Data...)(auto ref Data data)
+{
+    import std.format : checkFormatException;
+
+    alias e = checkFormatException!(format, Data);
+    static assert(!e, e);
+    return .readfln(format, data);
+}
+
+/// ditto
+uint readfln(Data...)(scope const(char)[] format, auto ref Data data)
+{
+    return stdin.readfln(format, data);
+}
+
+@system unittest
+{
+    float f;
+    string s;
+    char c;
+    int n;
+    if (false) readfln("%f %s %c %d", f, s, c, n);
+    if (false) readfln!"%f %s %c %d"(f, s, c, n);
+
+}
+
 /*
  * Convenience function that forwards to `core.sys.posix.stdio.fopen`
  * (to `_wfopen` on Windows)
@@ -4763,6 +4912,15 @@ struct lines
 
         auto myByLineCopy = f.byLineCopy;
         foreach (line; myByLineCopy)
+            continue;
+    }
+
+    {
+        auto f = File(deleteMe, "r");
+        scope(exit) { f.close(); }
+
+        auto myByLine = f.byLine;
+        foreach (line; myByLine)
             continue;
     }
 }

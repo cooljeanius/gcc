@@ -1017,7 +1017,7 @@ public:
   }
 
   void on_report_diagnostic (const diagnostic_info &info,
-			     diagnostic_t orig_diag_kind)
+			     diagnostic_t orig_diag_kind) final override
   {
     JIT_LOG_SCOPE (gcc::jit::active_playback_ctxt->get_logger ());
 
@@ -1278,6 +1278,8 @@ recording::type* tree_type_to_jit_type (tree type)
   {
     tree inner_type = TREE_TYPE (type);
     recording::type* element_type = tree_type_to_jit_type (inner_type);
+    if (!element_type)
+      return nullptr;
     return element_type->get_pointer ();
   }
   else
@@ -1299,10 +1301,6 @@ recording::type* tree_type_to_jit_type (tree type)
 	}
       }
     }
-
-    fprintf (stderr, "Unknown type:\n");
-    debug_tree (type);
-    abort ();
   }
 
   return NULL;
@@ -1372,7 +1370,7 @@ jit_langhook_global_bindings_p (void)
 static tree
 jit_langhook_pushdecl (tree decl ATTRIBUTE_UNUSED)
 {
-  gcc_unreachable ();
+  return NULL_TREE;
 }
 
 static tree

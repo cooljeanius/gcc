@@ -26,7 +26,7 @@ D_EXTRA_DFLAGS=-fpreview=dip1000 -fpreview=dtorfields -fpreview=fieldwise \
 # D flags for compilation
 AM_DFLAGS= \
 	$(phobos_lt_pic_flag) $(phobos_compiler_shared_flag) \
-	$(WARN_DFLAGS) $(CHECKING_DFLAGS) $(SECTION_FLAGS) $(CET_DFLAGS)
+	$(WARN_DFLAGS) $(CHECKING_DFLAGS) $(SECTION_FLAGS) $(CET_FLAGS)
 
 # Flags for other kinds of sources
 AM_CFLAGS=$(CET_FLAGS)
@@ -78,7 +78,7 @@ install-data-local:
 	done
 
 # Source file definitions. Boring stuff, auto-generated with
-# https://gist.github.com/jpf91/8744acebc9dcf1e9d1a35cdff20afbb2
+# libphobos/scripts/gen_phobos_sources.d
 # Can't use wildcards here:
 # https://www.gnu.org/software/automake/manual/html_node/Wildcards.html
 if ENABLE_LIBDRUNTIME_ONLY
@@ -87,13 +87,15 @@ PHOBOS_DSOURCES =
 
 else
 
-PHOBOS_DSOURCES = etc/c/curl.d etc/c/zlib.d std/algorithm/comparison.d \
-	std/algorithm/internal.d std/algorithm/iteration.d \
-	std/algorithm/mutation.d std/algorithm/package.d \
-	std/algorithm/searching.d std/algorithm/setops.d \
-	std/algorithm/sorting.d std/array.d std/ascii.d std/base64.d \
-	std/bigint.d std/bitmanip.d std/checkedint.d std/compiler.d \
-	std/complex.d std/concurrency.d std/container/array.d \
+PHOBOS_DSOURCES = etc/c/curl.d etc/c/odbc/odbc32.d etc/c/odbc/odbc64.d \
+	etc/c/odbc/package.d etc/c/odbc/sql.d etc/c/odbc/sqlext.d \
+	etc/c/odbc/sqltypes.d etc/c/odbc/sqlucode.d etc/c/sqlite3.d \
+	etc/c/zlib.d std/algorithm/comparison.d std/algorithm/internal.d \
+	std/algorithm/iteration.d std/algorithm/mutation.d \
+	std/algorithm/package.d std/algorithm/searching.d \
+	std/algorithm/setops.d std/algorithm/sorting.d std/array.d std/ascii.d \
+	std/base64.d std/bigint.d std/bitmanip.d std/checkedint.d \
+	std/compiler.d std/complex.d std/concurrency.d std/container/array.d \
 	std/container/binaryheap.d std/container/dlist.d \
 	std/container/package.d std/container/rbtree.d std/container/slist.d \
 	std/container/util.d std/conv.d std/csv.d std/datetime/date.d \

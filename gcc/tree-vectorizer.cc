@@ -633,6 +633,8 @@ vec_info::move_dr (stmt_vec_info new_stmt_info, stmt_vec_info old_stmt_info)
     = STMT_VINFO_GATHER_SCATTER_P (old_stmt_info);
   STMT_VINFO_STRIDED_P (new_stmt_info)
     = STMT_VINFO_STRIDED_P (old_stmt_info);
+  STMT_VINFO_SIMD_LANE_ACCESS_P (new_stmt_info)
+    = STMT_VINFO_SIMD_LANE_ACCESS_P (old_stmt_info);
 }
 
 /* Permanently remove the statement described by STMT_INFO from the
@@ -1130,7 +1132,9 @@ try_vectorize_loop_1 (hash_table<simduid_to_vf> *&simduid_to_vf_htab,
 	      if (call && gimple_call_internal_p (call))
 		{
 		  internal_fn ifn = gimple_call_internal_fn (call);
-		  if (ifn == IFN_MASK_LOAD || ifn == IFN_MASK_STORE
+		  if (ifn == IFN_MASK_LOAD
+		      || ifn == IFN_MASK_STORE
+		      || ifn == IFN_MASK_CALL
 		      /* Don't keep the if-converted parts when the ifn with
 			 specifc type is not supported by the backend.  */
 		      || (direct_internal_fn_p (ifn)

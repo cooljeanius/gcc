@@ -1467,11 +1467,10 @@ ipacp_value_safe_for_type (tree param_type, tree value)
     return NULL_TREE;
 }
 
-/* Return the result of a (possibly arithmetic) operation on the constant
-   value INPUT.  OPERAND is 2nd operand for binary operation.  RES_TYPE is
-   the type of the parameter to which the result is passed.  Return
-   NULL_TREE if that cannot be determined or be considered an
-   interprocedural invariant.  */
+/* Return the result of a (possibly arithmetic) operation on the constant value
+   INPUT.  OPERAND is 2nd operand for binary operation.  RES_TYPE is the type
+   in which any operation is to be performed.  Return NULL_TREE if that cannot
+   be determined or be considered an interprocedural invariant.  */
 
 static tree
 ipa_get_jf_arith_result (enum tree_code opcode, tree input, tree operand,
@@ -1511,21 +1510,6 @@ ipa_get_jf_arith_result (enum tree_code opcode, tree input, tree operand,
     return NULL_TREE;
 
   return res;
-}
-
-/* Return the result of a (possibly arithmetic) pass through jump function
-   JFUNC on the constant value INPUT.  RES_TYPE is the type of the parameter
-   to which the result is passed.  Return NULL_TREE if that cannot be
-   determined or be considered an interprocedural invariant.  */
-
-static tree
-ipa_get_jf_pass_through_result (struct ipa_jump_func *jfunc, tree input,
-				tree res_type)
-{
-  return ipa_get_jf_arith_result (ipa_get_jf_pass_through_operation (jfunc),
-				  input,
-				  ipa_get_jf_pass_through_operand (jfunc),
-				  res_type);
 }
 
 /* Return the result of an ancestor jump function JFUNC on the constant value
@@ -1595,7 +1579,14 @@ ipa_value_from_jfunc (class ipa_node_params *info, struct ipa_jump_func *jfunc,
 	return NULL_TREE;
 
       if (jfunc->type == IPA_JF_PASS_THROUGH)
-	return ipa_get_jf_pass_through_result (jfunc, input, parm_type);
+	{
+	  if (!parm_type)
+	    return NULL_TREE;
+	  enum tree_code opcode = ipa_get_jf_pass_through_operation (jfunc);
+	  tree op2 = ipa_get_jf_pass_through_operand (jfunc);
+	  tree cstval = ipa_get_jf_arith_result (opcode, input, op2, NULL_TREE);
+	  return ipacp_value_safe_for_type (parm_type, cstval);
+	}
       else
 	return ipa_get_jf_ancestor_result (jfunc, input);
     }
@@ -1729,8 +1720,45 @@ ipa_vr_intersect_with_arith_jfunc (vrange &vr,
   enum tree_code operation = ipa_get_jf_pass_through_operation (jfunc);
   if (TREE_CODE_CLASS (operation) == tcc_unary)
     {
+      value_range op_res;
+      const value_range *inter_vr;
+      if (operation != NOP_EXPR)
+	{
+	  /* Since we construct arithmetic jump functions even when there is a
+             type conversion in between the operation encoded in the jump
+             function and when it is passed in a call argument, the IPA
+             propagation phase must also perform the operation and conversion
+             in two separate steps.
+
+	     TODO: In order to remove the use of expr_type_first_operand_type_p
+	     predicate we would need to stream the operation type, ideally
+	     encoding the whole jump function as a series of expr_eval_op
+	     structures.  */
+
+	  tree operation_type;
+	  if (expr_type_first_operand_type_p (operation))
+	    operation_type = src_type;
+	  else if (operation == ABSU_EXPR)
+	    operation_type = unsigned_type_for (src_type);
+	  else
+	    return;
+	  op_res.set_varying (operation_type);
+	  if (!ipa_vr_operation_and_type_effects (op_res, src_vr, operation,
+						  operation_type, src_type))
+	    return;
+	  if (src_type == dst_type)
+	    {
+	      vr.intersect (op_res);
+	      return;
+	    }
+	  inter_vr = &op_res;
+	  src_type = operation_type;
+	}
+      else
+	inter_vr = &src_vr;
+
       value_range tmp_res (dst_type);
-      if (ipa_vr_operation_and_type_effects (tmp_res, src_vr, operation,
+      if (ipa_vr_operation_and_type_effects (tmp_res, *inter_vr, NOP_EXPR,
 					     dst_type, src_type))
 	vr.intersect (tmp_res);
       return;
@@ -1746,10 +1774,12 @@ ipa_vr_intersect_with_arith_jfunc (vrange &vr,
   tree operation_type;
   if (TREE_CODE_CLASS (operation) == tcc_comparison)
     operation_type = boolean_type_node;
-  else
+  else if (expr_type_first_operand_type_p (operation))
     operation_type = src_type;
+  else
+    return;
 
-  value_range op_res (dst_type);
+  value_range op_res (operation_type);
   if (!ipa_vr_supported_type_p (operation_type)
       || !handler.operand_check_p (operation_type, src_type, op_vr.type ())
       || !handler.fold_range (op_res, operation_type, src_vr, op_vr))
@@ -2120,15 +2150,13 @@ ipcp_lattice<valtype>::add_value (valtype newval, cgraph_edge *cs,
 /* A helper function that returns result of operation specified by OPCODE on
    the value of SRC_VAL.  If non-NULL, OPND1_TYPE is expected type for the
    value of SRC_VAL.  If the operation is binary, OPND2 is a constant value
-   acting as its second operand.  If non-NULL, RES_TYPE is expected type of
-   the result.  */
+   acting as its second operand.  */
 
 static tree
 get_val_across_arith_op (enum tree_code opcode,
 			 tree opnd1_type,
 			 tree opnd2,
-			 ipcp_value<tree> *src_val,
-			 tree res_type)
+			 ipcp_value<tree> *src_val)
 {
   tree opnd1 = src_val->value;
 
@@ -2137,7 +2165,7 @@ get_val_across_arith_op (enum tree_code opcode,
       && !useless_type_conversion_p (opnd1_type, TREE_TYPE (opnd1)))
     return NULL_TREE;
 
-  return ipa_get_jf_arith_result (opcode, opnd1, opnd2, res_type);
+  return ipa_get_jf_arith_result (opcode, opnd1, opnd2, NULL_TREE);
 }
 
 /* Propagate values through an arithmetic transformation described by a jump
@@ -2213,7 +2241,7 @@ propagate_vals_across_arith_jfunc (cgraph_edge *cs,
 	  for (int j = 1; j < max_recursive_depth; j++)
 	    {
 	      tree cstval = get_val_across_arith_op (opcode, opnd1_type, opnd2,
-						     src_val, res_type);
+						     src_val);
 	      cstval = ipacp_value_safe_for_type (res_type, cstval);
 	      if (!cstval)
 		break;
@@ -2238,7 +2266,7 @@ propagate_vals_across_arith_jfunc (cgraph_edge *cs,
 	  }
 
 	tree cstval = get_val_across_arith_op (opcode, opnd1_type, opnd2,
-					       src_val, res_type);
+					       src_val);
 	cstval = ipacp_value_safe_for_type (res_type, cstval);
 	if (cstval)
 	  ret |= dest_lat->add_value (cstval, cs, src_val, src_idx,
@@ -2261,6 +2289,7 @@ propagate_vals_across_pass_through (cgraph_edge *cs, ipa_jump_func *jfunc,
 				    ipcp_lattice<tree> *dest_lat, int src_idx,
 				    tree parm_type)
 {
+  gcc_checking_assert (parm_type);
   return propagate_vals_across_arith_jfunc (cs,
 				ipa_get_jf_pass_through_operation (jfunc),
 				NULL_TREE,
@@ -4609,7 +4638,8 @@ adjust_clone_incoming_counts (cgraph_node *node,
 	cs->count = cs->count.combine_with_ipa_count (sum);
       }
     else if (!desc->processed_edges->contains (cs)
-	     && cs->caller->clone_of == desc->orig)
+	     && cs->caller->clone_of == desc->orig
+	     && cs->count.compatible_p (desc->count))
       {
 	cs->count += desc->count;
 	if (dump_file)
