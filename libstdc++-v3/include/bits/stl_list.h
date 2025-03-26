@@ -1784,7 +1784,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       void
       pop_front() _GLIBCXX_NOEXCEPT
-      { this->_M_erase(begin()); }
+      {
+	__glibcxx_requires_nonempty();
+	this->_M_erase(begin());
+      }
 
       /**
        *  @brief  Add data to the end of the %list.
@@ -1833,7 +1836,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
        */
       void
       pop_back() _GLIBCXX_NOEXCEPT
-      { this->_M_erase(iterator(this->_M_impl._M_node._M_prev)); }
+      {
+	__glibcxx_requires_nonempty();
+	this->_M_erase(iterator(this->_M_impl._M_node._M_prev));
+      }
 
 #if __cplusplus >= 201103L
       /**
@@ -2384,12 +2390,18 @@ _GLIBCXX_BEGIN_NAMESPACE_CXX11
 	_M_initialize_dispatch(_InputIterator __first, _InputIterator __last,
 			       __false_type)
 	{
+	  bool __notempty = __first != __last;
 	  for (; __first != __last; ++__first)
 #if __cplusplus >= 201103L
 	    emplace_back(*__first);
 #else
 	    push_back(*__first);
 #endif
+	 if (__notempty)
+	   {
+	     if (begin() == end())
+	       __builtin_unreachable();
+	   }
 	}
 
       // Called by list(n,v,a), and the range constructor when it turns out

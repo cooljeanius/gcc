@@ -728,6 +728,12 @@ static const unsigned gpr_save_reg_order[] = {
   S10_REGNUM, S11_REGNUM
 };
 
+/* Order for the (ra, s0-sx) of zcmp_save.  */
+static const unsigned zcmp_save_reg_order[]
+  = {RETURN_ADDR_REGNUM, S0_REGNUM,  S1_REGNUM,	 S2_REGNUM,	S3_REGNUM,
+     S4_REGNUM,		 S5_REGNUM,  S6_REGNUM,	 S7_REGNUM,	S8_REGNUM,
+     S9_REGNUM,		 S10_REGNUM, S11_REGNUM, INVALID_REGNUM};
+
 /* A table describing all the processors GCC knows about.  */
 static const struct riscv_tune_info riscv_tune_info_table[] = {
 #define RISCV_TUNE(TUNE_NAME, PIPELINE_MODEL, TUNE_INFO)	\
@@ -3587,6 +3593,9 @@ riscv_legitimize_move (machine_mode mode, rtx dest, rtx src)
 	  nunits = nunits * 2;
 	}
 
+      /* This test can fail if (for example) we want a HF and Z[v]fh is
+	 not enabled.  In that case we just want to let the standard
+	 expansion path run.  */
       if (riscv_vector::get_vector_mode (smode, nunits).exists (&vmode))
 	{
 	  rtx v = gen_lowpart (vmode, SUBREG_REG (src));
@@ -3636,12 +3645,10 @@ riscv_legitimize_move (machine_mode mode, rtx dest, rtx src)
 	    emit_move_insn (dest, gen_lowpart (GET_MODE (dest), int_reg));
 	  else
 	    emit_move_insn (dest, int_reg);
+	  return true;
 	}
-      else
-	gcc_unreachable ();
-
-      return true;
     }
+
   /* Expand
        (set (reg:QI target) (mem:QI (address)))
      to
@@ -6478,9 +6485,13 @@ riscv_fntype_abi (const_tree fntype)
   /* Implement the vector calling convention.  For more details please
      reference the below link.
      https://github.com/riscv-non-isa/riscv-elf-psabi-doc/pull/389  */
-  if (riscv_return_value_is_vector_type_p (fntype)
-	  || riscv_arguments_is_vector_type_p (fntype)
-	  || riscv_vector_cc_function_p (fntype))
+  bool validate_v_abi_p = false;
+
+  validate_v_abi_p |= riscv_return_value_is_vector_type_p (fntype);
+  validate_v_abi_p |= riscv_arguments_is_vector_type_p (fntype);
+  validate_v_abi_p |= riscv_vector_cc_function_p (fntype);
+
+  if (validate_v_abi_p)
     return riscv_v_abi ();
 
   return default_function_abi;
@@ -6681,8 +6692,20 @@ riscv_legitimize_call_address (rtx addr)
     {
       rtx reg = RISCV_CALL_ADDRESS_TEMP (Pmode);
       riscv_emit_move (reg, addr);
+
+      if (is_zicfilp_p ())
+	{
+	  rtx sw_guarded = RISCV_CALL_ADDRESS_LPAD (Pmode);
+	  emit_insn (gen_set_guarded (Pmode, reg));
+	  return sw_guarded;
+	}
+
       return reg;
     }
+
+  if (is_zicfilp_p () && REG_P (addr))
+    emit_insn (gen_set_lpl (Pmode, const0_rtx));
+
   return addr;
 }
 
@@ -6845,7 +6868,7 @@ riscv_asm_output_opcode (FILE *asm_out_file, const char *p)
 	  any outermost HIGH.
    'R'	Print the low-part relocation associated with OP.
    'C'	Print the integer branch condition for comparison OP.
-   'n'	Print the inverse of the integer branch condition for comparison OP.
+   'r'	Print the inverse of the integer branch condition for comparison OP.
    'A'	Print the atomic operation suffix for memory model OP.
    'I'	Print the LR suffix for memory model OP.
    'J'	Print the SC suffix for memory model OP.
@@ -7004,7 +7027,7 @@ riscv_print_operand (FILE *file, rtx op, int letter)
       fputs (GET_RTX_NAME (code), file);
       break;
 
-    case 'n':
+    case 'r':
       /* The RTL names match the instruction names. */
       fputs (GET_RTX_NAME (reverse_condition (code)), file);
       break;
@@ -7495,6 +7518,9 @@ riscv_save_reg_p (unsigned int regno)
       /* By convention, we assume that gp and tp are safe.  */
       if (regno == GP_REGNUM || regno == THREAD_POINTER_REGNUM)
 	return false;
+
+      if (regno == RETURN_ADDR_REGNUM && is_zicfiss_p ())
+	return true;
 
       /* We must save every register used in this function.  If this is not a
 	 leaf function, then we must save all temporary registers.  */
@@ -8049,7 +8075,7 @@ riscv_is_eh_return_data_register (unsigned int regno)
 
 static void
 riscv_for_each_saved_reg (poly_int64 sp_offset, riscv_save_restore_fn fn,
-			  bool epilogue, bool maybe_eh_return)
+			  bool epilogue, bool maybe_eh_return, bool sibcall_p)
 {
   HOST_WIDE_INT offset, first_fp_offset;
   unsigned int regno, num_masked_fp = 0;
@@ -8135,7 +8161,14 @@ riscv_for_each_saved_reg (poly_int64 sp_offset, riscv_save_restore_fn fn,
 	    }
 	}
 
-      riscv_save_restore_reg (word_mode, regno, offset, fn);
+      if (need_shadow_stack_push_pop_p () && epilogue && !sibcall_p
+	  && !(maybe_eh_return && crtl->calls_eh_return)
+	  && (regno == RETURN_ADDR_REGNUM)
+	  && !cfun->machine->interrupt_handler_p)
+	riscv_save_restore_reg (word_mode, RISCV_PROLOGUE_TEMP_REGNUM,
+				offset, fn);
+      else
+	riscv_save_restore_reg (word_mode, regno, offset, fn);
     }
 
   /* This loop must iterate over the same space as its companion in
@@ -8337,8 +8370,11 @@ riscv_adjust_multi_push_cfi_prologue (int saved_size)
   int offset;
   int saved_cnt = 0;
 
-  if (mask & S10_MASK)
-    mask |= S11_MASK;
+  unsigned int num_multi_push = riscv_multi_push_regs_count (mask);
+  for (unsigned int i = 0; i < num_multi_push; i++) {
+    gcc_assert(zcmp_save_reg_order[i] != INVALID_REGNUM);
+    mask |= 1 << (zcmp_save_reg_order[i] - GP_REG_FIRST);
+  }
 
   for (int regno = GP_REG_LAST; regno >= GP_REG_FIRST; regno--)
     if (BITSET_P (mask & MULTI_PUSH_GPR_MASK, regno - GP_REG_FIRST))
@@ -8729,6 +8765,9 @@ riscv_expand_prologue (void)
   if (cfun->machine->naked_p)
     return;
 
+  if (need_shadow_stack_push_pop_p ())
+    emit_insn (gen_sspush (Pmode, gen_rtx_REG (Pmode, RETURN_ADDR_REGNUM)));
+
   /* prefer multi-push to save-restore libcall.  */
   if (riscv_use_multi_push (frame))
     {
@@ -8772,7 +8811,7 @@ riscv_expand_prologue (void)
 	    = get_multi_push_fpr_mask (multi_push_additional / UNITS_PER_WORD);
 	  frame->fmask &= mask_fprs_push;
 	  riscv_for_each_saved_reg (remaining_size, riscv_save_reg, false,
-				    false);
+				    false, false);
 	  frame->fmask = fmask & ~mask_fprs_push; /* mask for the rest FPRs.  */
 	}
     }
@@ -8823,7 +8862,8 @@ riscv_expand_prologue (void)
 				GEN_INT (-step1));
 	  RTX_FRAME_RELATED_P (emit_insn (insn)) = 1;
 	}
-      riscv_for_each_saved_reg (remaining_size, riscv_save_reg, false, false);
+      riscv_for_each_saved_reg (remaining_size, riscv_save_reg,
+				false, false, false);
     }
 
   /* Undo the above fib.  */
@@ -8985,6 +9025,7 @@ riscv_expand_epilogue (int style)
     = use_multi_pop ? frame->multi_push_adj_base + frame->multi_push_adj_addi
 		    : 0;
   rtx ra = gen_rtx_REG (Pmode, RETURN_ADDR_REGNUM);
+  rtx t0 = gen_rtx_REG (Pmode, RISCV_PROLOGUE_TEMP_REGNUM);
   unsigned th_int_mask = 0;
   rtx insn;
 
@@ -9194,7 +9235,8 @@ riscv_expand_epilogue (int style)
   riscv_for_each_saved_v_reg (step2, riscv_restore_reg, false);
   riscv_for_each_saved_reg (frame->total_size - step2 - libcall_size
 			      - multipop_size,
-			    riscv_restore_reg, true, style == EXCEPTION_RETURN);
+			    riscv_restore_reg, true, style == EXCEPTION_RETURN,
+			    style == SIBCALL_RETURN);
 
   if (th_int_mask && TH_INT_INTERRUPT (cfun))
     {
@@ -9234,7 +9276,8 @@ riscv_expand_epilogue (int style)
 	riscv_for_each_saved_reg (frame->total_size - libcall_size
 				    - multipop_size,
 				  riscv_restore_reg, true,
-				  style == EXCEPTION_RETURN);
+				  style == EXCEPTION_RETURN, false);
+
       /* Undo the above fib.  */
       frame->mask = mask;
       frame->fmask = fmask;
@@ -9259,6 +9302,17 @@ riscv_expand_epilogue (int style)
     emit_insn (gen_add3_insn (stack_pointer_rtx, stack_pointer_rtx,
 			      EH_RETURN_STACKADJ_RTX));
 
+  if (need_shadow_stack_push_pop_p ()
+      && !((style == EXCEPTION_RETURN) && crtl->calls_eh_return))
+    {
+      if (BITSET_P (cfun->machine->frame.mask, RETURN_ADDR_REGNUM)
+	  && style != SIBCALL_RETURN
+	  && !cfun->machine->interrupt_handler_p)
+	emit_insn (gen_sspopchk (Pmode, t0));
+      else
+	emit_insn (gen_sspopchk (Pmode, ra));
+    }
+
   /* Return from interrupt.  */
   if (cfun->machine->interrupt_handler_p)
     {
@@ -9276,7 +9330,15 @@ riscv_expand_epilogue (int style)
 	emit_jump_insn (gen_riscv_uret ());
     }
   else if (style != SIBCALL_RETURN)
-    emit_jump_insn (gen_simple_return_internal (ra));
+    {
+      if (need_shadow_stack_push_pop_p ()
+	  && !((style == EXCEPTION_RETURN) && crtl->calls_eh_return)
+	  && BITSET_P (cfun->machine->frame.mask, RETURN_ADDR_REGNUM)
+	  && !cfun->machine->interrupt_handler_p)
+	emit_jump_insn (gen_simple_return_internal (t0));
+      else
+	emit_jump_insn (gen_simple_return_internal (ra));
+    }
 }
 
 /* Implement EPILOGUE_USES.  */
@@ -9473,7 +9535,8 @@ bool
 riscv_can_use_return_insn (void)
 {
   return (reload_completed && known_eq (cfun->machine->frame.total_size, 0)
-	  && ! cfun->machine->interrupt_handler_p);
+	  && ! cfun->machine->interrupt_handler_p
+	  && ! need_shadow_stack_push_pop_p ());
 }
 
 /* Given that there exists at least one variable that is set (produced)
@@ -10284,6 +10347,55 @@ riscv_file_start (void)
     riscv_emit_attribute ();
 }
 
+void
+riscv_file_end ()
+{
+  file_end_indicate_exec_stack ();
+  unsigned long feature_1_and = 0;
+
+  if (is_zicfilp_p ())
+    feature_1_and |= 0x1 << 0;
+
+  if (is_zicfiss_p ())
+    feature_1_and |= 0x1 << 1;
+
+  if (feature_1_and)
+    {
+      /* Generate .note.gnu.property section.  */
+      switch_to_section (get_section (".note.gnu.property",
+				      SECTION_NOTYPE, NULL));
+
+      /* The program property descriptor is aligned to 4 bytes in 32-bit
+	 objects and 8 bytes in 64-bit objects.  */
+      unsigned p2align = TARGET_64BIT ? 3 : 2;
+
+      fprintf (asm_out_file, "\t.p2align\t%u\n", p2align);
+      /* name length.  */
+      fprintf (asm_out_file, "\t.long\t1f - 0f\n");
+      /* data length.  */
+      fprintf (asm_out_file, "\t.long\t5f - 2f\n");
+      /* note type.  */
+      fprintf (asm_out_file, "\t.long\t5\n");
+      fprintf (asm_out_file, "0:\n");
+      /* vendor name: "GNU".  */
+      fprintf (asm_out_file, "\t.asciz\t\"GNU\"\n");
+      fprintf (asm_out_file, "1:\n");
+
+      /* pr_type.  */
+      fprintf (asm_out_file, "\t.p2align\t3\n");
+      fprintf (asm_out_file, "2:\n");
+      fprintf (asm_out_file, "\t.long\t0xc0000000\n");
+      /* pr_datasz.  */
+      fprintf (asm_out_file, "\t.long\t4f - 3f\n");
+      fprintf (asm_out_file, "3:\n");
+      /* zicfiss, zicfilp.  */
+      fprintf (asm_out_file, "\t.long\t%lx\n", feature_1_and);
+      fprintf (asm_out_file, "4:\n");
+      fprintf (asm_out_file, "\t.p2align\t%u\n", p2align);
+      fprintf (asm_out_file, "5:\n");
+    }
+}
+
 /* Implement TARGET_ASM_OUTPUT_MI_THUNK.  Generate rtl rather than asm text
    in order to avoid duplicating too much logic from elsewhere.  */
 
@@ -10303,6 +10415,9 @@ riscv_output_mi_thunk (FILE *file, tree thunk_fndecl ATTRIBUTE_UNUSED,
 
   /* Mark the end of the (empty) prologue.  */
   emit_note (NOTE_INSN_PROLOGUE_END);
+
+  if (is_zicfilp_p ())
+    emit_insn(gen_lpad (const0_rtx));
 
   /* Determine if we can use a sibcall to call FUNCTION directly.  */
   fnaddr = gen_rtx_MEM (FUNCTION_MODE, XEXP (DECL_RTL (function), 0));
@@ -10528,6 +10643,20 @@ riscv_override_options_internal (struct gcc_options *opts)
 
   /* Convert -march and -mrvv-vector-bits to a chunks count.  */
   riscv_vector_chunks = riscv_convert_vector_chunks (opts);
+
+  if (opts->x_flag_cf_protection != CF_NONE)
+    {
+      if ((opts->x_flag_cf_protection & CF_RETURN) == CF_RETURN
+	  && !TARGET_ZICFISS)
+	error ("%<-fcf-protection%> is not compatible with this target");
+
+      if ((opts->x_flag_cf_protection & CF_BRANCH) == CF_BRANCH
+	  && !TARGET_ZICFILP)
+	error ("%<-fcf-protection%> is not compatible with this target");
+
+      opts->x_flag_cf_protection
+      = (cf_protection_level) (opts->x_flag_cf_protection | CF_SET);
+    }
 }
 
 /* Implement TARGET_OPTION_OVERRIDE.  */
@@ -10770,7 +10899,9 @@ riscv_conditional_register_usage (void)
 	call_used_regs[r] = 1;
     }
 
-  if (!TARGET_HARD_FLOAT)
+  if (TARGET_HARD_FLOAT)
+    global_regs[FRM_REGNUM] = 1;
+  else
     {
       for (int regno = FP_REG_FIRST; regno <= FP_REG_LAST; regno++)
 	fixed_regs[regno] = call_used_regs[regno] = 1;
@@ -10783,7 +10914,9 @@ riscv_conditional_register_usage (void)
 	call_used_regs[regno] = 1;
     }
 
-  if (!TARGET_VECTOR)
+  if (TARGET_VECTOR)
+    global_regs[VXRM_REGNUM] = 1;
+  else
     {
       for (int regno = V_REG_FIRST; regno <= V_REG_LAST; regno++)
 	fixed_regs[regno] = call_used_regs[regno] = 1;
@@ -10815,12 +10948,17 @@ riscv_trampoline_init (rtx m_tramp, tree fndecl, rtx chain_value)
 {
   rtx addr, end_addr, mem;
   uint32_t trampoline[4];
+  uint32_t trampoline_cfi[6];
   unsigned int i;
   HOST_WIDE_INT static_chain_offset, target_function_offset;
+  HOST_WIDE_INT lp_value = 0;
 
   /* Work out the offsets of the pointers from the start of the
      trampoline code.  */
-  gcc_assert (ARRAY_SIZE (trampoline) * 4 == TRAMPOLINE_CODE_SIZE);
+  if (!is_zicfilp_p ())
+    gcc_assert (ARRAY_SIZE (trampoline) * 4 == TRAMPOLINE_CODE_SIZE);
+  else
+    gcc_assert (ARRAY_SIZE (trampoline_cfi) * 4 == TRAMPOLINE_CODE_SIZE);
 
   /* Get pointers to the beginning and end of the code block.  */
   addr = force_reg (Pmode, XEXP (m_tramp, 0));
@@ -10842,6 +10980,17 @@ riscv_trampoline_init (rtx m_tramp, tree fndecl, rtx chain_value)
       unsigned HOST_WIDE_INT lo_chain_code, lo_func_code;
 
       rtx uimm_mask = force_reg (SImode, gen_int_mode (-IMM_REACH, SImode));
+      unsigned insn_count = 0;
+
+      /* Insert lpad, if zicfilp is enabled.  */
+      if (is_zicfilp_p ())
+	{
+	  unsigned HOST_WIDE_INT lpad_code;
+	  lpad_code = OPCODE_AUIPC | (0 << SHIFT_RD) | (lp_value << IMM_BITS);
+	  mem = adjust_address (m_tramp, SImode, 0);
+	  riscv_emit_move (mem, gen_int_mode (lpad_code, SImode));
+	  insn_count++;
+	}
 
       /* 0xfff.  */
       rtx imm12_mask = gen_reg_rtx (SImode);
@@ -10855,11 +11004,14 @@ riscv_trampoline_init (rtx m_tramp, tree fndecl, rtx chain_value)
       hi_chain = riscv_force_binary (SImode, AND, hi_chain,
 				     uimm_mask);
       lui_hi_chain_code = OPCODE_LUI | (STATIC_CHAIN_REGNUM << SHIFT_RD);
+      rtx lui_hi_chain_value = force_reg (SImode, gen_int_mode (lui_hi_chain_code,
+								SImode));
       rtx lui_hi_chain = riscv_force_binary (SImode, IOR, hi_chain,
-					     gen_int_mode (lui_hi_chain_code, SImode));
-
-      mem = adjust_address (m_tramp, SImode, 0);
+					     lui_hi_chain_value);
+      mem = adjust_address (m_tramp, SImode,
+			    insn_count * GET_MODE_SIZE (SImode));
       riscv_emit_move (mem, riscv_swap_instruction (lui_hi_chain));
+      insn_count++;
 
       /* Gen lui t0, hi(func).  */
       rtx hi_func = riscv_force_binary (SImode, PLUS, target_function,
@@ -10870,8 +11022,10 @@ riscv_trampoline_init (rtx m_tramp, tree fndecl, rtx chain_value)
       rtx lui_hi_func = riscv_force_binary (SImode, IOR, hi_func,
 					    gen_int_mode (lui_hi_func_code, SImode));
 
-      mem = adjust_address (m_tramp, SImode, 1 * GET_MODE_SIZE (SImode));
+      mem = adjust_address (m_tramp, SImode,
+			    insn_count * GET_MODE_SIZE (SImode));
       riscv_emit_move (mem, riscv_swap_instruction (lui_hi_func));
+      insn_count++;
 
       /* Gen addi t2, t2, lo(chain).  */
       rtx lo_chain = riscv_force_binary (SImode, AND, chain_value,
@@ -10885,8 +11039,23 @@ riscv_trampoline_init (rtx m_tramp, tree fndecl, rtx chain_value)
       rtx addi_lo_chain = riscv_force_binary (SImode, IOR, lo_chain,
 					      force_reg (SImode, GEN_INT (lo_chain_code)));
 
-      mem = adjust_address (m_tramp, SImode, 2 * GET_MODE_SIZE (SImode));
+      mem = adjust_address (m_tramp, SImode,
+			    insn_count * GET_MODE_SIZE (SImode));
       riscv_emit_move (mem, riscv_swap_instruction (addi_lo_chain));
+      insn_count++;
+
+      /* For zicfilp only, insert lui t2, 1, because use jr t0.  */
+      if (is_zicfilp_p ())
+	{
+	  unsigned HOST_WIDE_INT set_lpl_code;
+	  set_lpl_code  = OPCODE_LUI
+			  | (RISCV_CALL_ADDRESS_LPAD_REGNUM << SHIFT_RD)
+			  | (lp_value << IMM_BITS);
+	  mem = adjust_address (m_tramp, SImode,
+				insn_count * GET_MODE_SIZE (SImode));
+	  riscv_emit_move (mem, gen_int_mode (set_lpl_code, SImode));
+	  insn_count++;
+	}
 
       /* Gen jr t0, lo(func).  */
       rtx lo_func = riscv_force_binary (SImode, AND, target_function,
@@ -10898,7 +11067,7 @@ riscv_trampoline_init (rtx m_tramp, tree fndecl, rtx chain_value)
       rtx jr_lo_func = riscv_force_binary (SImode, IOR, lo_func,
 					   force_reg (SImode, GEN_INT (lo_func_code)));
 
-      mem = adjust_address (m_tramp, SImode, 3 * GET_MODE_SIZE (SImode));
+      mem = adjust_address (m_tramp, SImode, insn_count * GET_MODE_SIZE (SImode));
       riscv_emit_move (mem, riscv_swap_instruction (jr_lo_func));
     }
   else
@@ -10906,29 +11075,65 @@ riscv_trampoline_init (rtx m_tramp, tree fndecl, rtx chain_value)
       static_chain_offset = TRAMPOLINE_CODE_SIZE;
       target_function_offset = static_chain_offset + GET_MODE_SIZE (ptr_mode);
 
-      /* auipc   t2, 0
-	 l[wd]   t0, target_function_offset(t2)
-	 l[wd]   t2, static_chain_offset(t2)
-	 jr      t0
-      */
-      trampoline[0] = OPCODE_AUIPC | (STATIC_CHAIN_REGNUM << SHIFT_RD);
-      trampoline[1] = (Pmode == DImode ? OPCODE_LD : OPCODE_LW)
-		      | (RISCV_PROLOGUE_TEMP_REGNUM << SHIFT_RD)
-		      | (STATIC_CHAIN_REGNUM << SHIFT_RS1)
-		      | (target_function_offset << SHIFT_IMM);
-      trampoline[2] = (Pmode == DImode ? OPCODE_LD : OPCODE_LW)
-		      | (STATIC_CHAIN_REGNUM << SHIFT_RD)
-		      | (STATIC_CHAIN_REGNUM << SHIFT_RS1)
-		      | (static_chain_offset << SHIFT_IMM);
-      trampoline[3] = OPCODE_JALR | (RISCV_PROLOGUE_TEMP_REGNUM << SHIFT_RS1);
-
-      /* Copy the trampoline code.  */
-      for (i = 0; i < ARRAY_SIZE (trampoline); i++)
+      if (!is_zicfilp_p ())
 	{
-	  if (BYTES_BIG_ENDIAN)
-	    trampoline[i] = __builtin_bswap32(trampoline[i]);
-	  mem = adjust_address (m_tramp, SImode, i * GET_MODE_SIZE (SImode));
-	  riscv_emit_move (mem, gen_int_mode (trampoline[i], SImode));
+	  /* auipc   t2, 0
+	     l[wd]   t0, (target_function_offset)(t2)
+	     l[wd]   t2, (static_chain_offset)(t2)
+	     jr      t0
+	  */
+	  trampoline[0] = OPCODE_AUIPC | (STATIC_CHAIN_REGNUM << SHIFT_RD);
+	  trampoline[1] = (Pmode == DImode ? OPCODE_LD : OPCODE_LW)
+			  | (RISCV_PROLOGUE_TEMP_REGNUM << SHIFT_RD)
+			  | (STATIC_CHAIN_REGNUM << SHIFT_RS1)
+			  | (target_function_offset << SHIFT_IMM);
+	  trampoline[2] = (Pmode == DImode ? OPCODE_LD : OPCODE_LW)
+			  | (STATIC_CHAIN_REGNUM << SHIFT_RD)
+			  | (STATIC_CHAIN_REGNUM << SHIFT_RS1)
+			  | (static_chain_offset << SHIFT_IMM);
+	  trampoline[3] = OPCODE_JALR | (RISCV_PROLOGUE_TEMP_REGNUM << SHIFT_RS1);
+
+	  /* Copy the trampoline code.  */
+	  for (i = 0; i < ARRAY_SIZE (trampoline); i++)
+	    {
+	      if (BYTES_BIG_ENDIAN)
+		trampoline[i] = __builtin_bswap32 (trampoline[i]);
+	      mem = adjust_address (m_tramp, SImode, i * GET_MODE_SIZE (SImode));
+	      riscv_emit_move (mem, gen_int_mode (trampoline[i], SImode));
+	    }
+	}
+      else
+	{
+	  /* lpad    1
+	     auipc   t3, 0
+	     l[wd]   t0, (target_function_offset - 4)(t3)
+	     l[wd]   t3, (static_chain_offset - 4)(t3)
+	     lui     t2, 1
+	     jr      t0
+	  */
+	  trampoline_cfi[0] = OPCODE_AUIPC | (0 << SHIFT_RD) | (lp_value << IMM_BITS);
+	  trampoline_cfi[1] = OPCODE_AUIPC | (STATIC_CHAIN_REGNUM << SHIFT_RD);
+	  trampoline_cfi[2] = (Pmode == DImode ? OPCODE_LD : OPCODE_LW)
+			      | (RISCV_PROLOGUE_TEMP_REGNUM << SHIFT_RD)
+			      | (STATIC_CHAIN_REGNUM << SHIFT_RS1)
+			      | ((target_function_offset - 4) << SHIFT_IMM);
+	  trampoline_cfi[3] = (Pmode == DImode ? OPCODE_LD : OPCODE_LW)
+			      | (STATIC_CHAIN_REGNUM << SHIFT_RD)
+			      | (STATIC_CHAIN_REGNUM << SHIFT_RS1)
+			      | ((static_chain_offset - 4) << SHIFT_IMM);
+	  trampoline_cfi[4] = OPCODE_LUI
+			      | (RISCV_CALL_ADDRESS_LPAD_REGNUM << SHIFT_RD)
+			      | (lp_value << IMM_BITS);
+	  trampoline_cfi[5] = OPCODE_JALR | (RISCV_PROLOGUE_TEMP_REGNUM << SHIFT_RS1);
+
+	  /* Copy the trampoline code.  */
+	  for (i = 0; i < ARRAY_SIZE (trampoline_cfi); i++)
+	    {
+	      if (BYTES_BIG_ENDIAN)
+		trampoline_cfi[i] = __builtin_bswap32 (trampoline_cfi[i]);
+	      mem = adjust_address (m_tramp, SImode, i * GET_MODE_SIZE (SImode));
+	      riscv_emit_move (mem, gen_int_mode (trampoline_cfi[i], SImode));
+	    }
 	}
 
       /* Set up the static chain pointer field.  */
@@ -11772,13 +11977,11 @@ riscv_subword_address (rtx mem, rtx *aligned_mem, rtx *shift, rtx *mask,
 /* Leftshift a subword within an SImode register.  */
 
 void
-riscv_lshift_subword (machine_mode mode, rtx value, rtx shift,
+riscv_lshift_subword (machine_mode mode ATTRIBUTE_UNUSED, rtx value, rtx shift,
 		      rtx *shifted_value)
 {
   rtx value_reg = gen_reg_rtx (SImode);
-  emit_move_insn (value_reg, simplify_gen_subreg (SImode, value,
-						  mode, 0));
-
+  emit_move_insn (value_reg, gen_lowpart (SImode, value));
   emit_move_insn (*shifted_value, gen_rtx_ASHIFT (SImode, value_reg,
 						  gen_lowpart (QImode, shift)));
 }
@@ -12457,14 +12660,27 @@ riscv_get_raw_result_mode (int regno)
 /* Generate a REG rtx of Xmode from the given rtx and mode.
    The rtx x can be REG (QI/HI/SI/DI) or const_int.
    The machine_mode mode is the original mode from define pattern.
+   The rtx_code can be ZERO_EXTEND or SIGN_EXTEND.
 
-   If rtx is REG and Xmode, the RTX x will be returned directly.
+   If rtx is REG:
 
-   If rtx is REG and non-Xmode, the zero extended to new REG of Xmode will be
-   returned.
+   1.  If rtx Xmode, the RTX x will be returned directly.
+   2.  If rtx non-Xmode, the value extended into a new REG of Xmode will be
+       returned.
 
-   If rtx is const_int, a new REG rtx will be created to hold the value of
-   const_int and then returned.
+   The scalar ALU like add don't support non-Xmode like QI/HI.  Then the
+   gen_lowpart will have problem here.  For example, when we would like
+   to add -1 (0xff if QImode) and 2 (0x2 if QImode).  The 0xff and 0x2 will
+   be loaded to register for adding.  Aka:
+
+   0xff + 0x2 = 0x101 instead of -1 + 2 = 1.
+
+   Thus we need to sign extend 0xff to 0xffffffffffffffff if Xmode is DImode
+   for correctness.  Similar the unsigned also need zero extend.
+
+   If rtx is const_int:
+
+   1.  A new REG rtx will be created to hold the value of const_int.
 
    According to the gccint doc, the constants generated for modes with fewer
    bits than in HOST_WIDE_INT must be sign extended to full width.  Thus there
@@ -12482,28 +12698,41 @@ riscv_get_raw_result_mode (int regno)
    the REG rtx of Xmode, instead of taking care of these in expand func.  */
 
 static rtx
-riscv_gen_zero_extend_rtx (rtx x, machine_mode mode)
+riscv_extend_to_xmode_reg (rtx x, machine_mode mode, enum rtx_code rcode)
 {
+  gcc_assert (rcode == ZERO_EXTEND || rcode == SIGN_EXTEND);
+
   rtx xmode_reg = gen_reg_rtx (Xmode);
 
-  if (!CONST_INT_P (x))
+  if (CONST_INT_P (x))
     {
       if (mode == Xmode)
-	return x;
+	emit_move_insn (xmode_reg, x);
+      else if (rcode == ZERO_EXTEND)
+	{
+	  /* Combine deliberately does not simplify extensions of constants
+	     (long story).  So try to generate the zero extended constant
+	     efficiently.
 
-      riscv_emit_unary (ZERO_EXTEND, xmode_reg, x);
-      return xmode_reg;
+	     First extract the constant and mask off all the bits not in
+	     MODE.  */
+	  HOST_WIDE_INT val = INTVAL (x);
+	  val &= GET_MODE_MASK (mode);
+
+	  /* X may need synthesis, so do not blindly copy it.  */
+	  xmode_reg = force_reg (Xmode, gen_int_mode (val, Xmode));
+	}
+      else /* SIGN_EXTEND.  */
+	{
+	  rtx x_reg = gen_reg_rtx (mode);
+	  emit_move_insn (x_reg, x);
+	  riscv_emit_unary (rcode, xmode_reg, x_reg);
+	}
     }
-
-  if (mode == Xmode)
-    emit_move_insn (xmode_reg, x);
+  else if (mode == Xmode)
+    return x;
   else
-    {
-      rtx reg_x = gen_reg_rtx (mode);
-
-      emit_move_insn (reg_x, x);
-      riscv_emit_unary (ZERO_EXTEND, xmode_reg, reg_x);
-    }
+    riscv_emit_unary (rcode, xmode_reg, x);
 
   return xmode_reg;
 }
@@ -12524,8 +12753,8 @@ riscv_expand_usadd (rtx dest, rtx x, rtx y)
   machine_mode mode = GET_MODE (dest);
   rtx xmode_sum = gen_reg_rtx (Xmode);
   rtx xmode_lt = gen_reg_rtx (Xmode);
-  rtx xmode_x = riscv_gen_zero_extend_rtx (x, mode);
-  rtx xmode_y = riscv_gen_zero_extend_rtx (y, mode);
+  rtx xmode_x = riscv_extend_to_xmode_reg (x, mode, ZERO_EXTEND);
+  rtx xmode_y = riscv_extend_to_xmode_reg (y, mode, ZERO_EXTEND);
   rtx xmode_dest = gen_reg_rtx (Xmode);
 
   /* Step-1: sum = x + y  */
@@ -12603,8 +12832,8 @@ riscv_expand_ssadd (rtx dest, rtx x, rtx y)
   machine_mode mode = GET_MODE (dest);
   unsigned bitsize = GET_MODE_BITSIZE (mode).to_constant ();
   rtx shift_bits = GEN_INT (bitsize - 1);
-  rtx xmode_x = gen_lowpart (Xmode, x);
-  rtx xmode_y = gen_lowpart (Xmode, y);
+  rtx xmode_x = riscv_extend_to_xmode_reg (x, mode, SIGN_EXTEND);
+  rtx xmode_y = riscv_extend_to_xmode_reg (y, mode, SIGN_EXTEND);
   rtx xmode_sum = gen_reg_rtx (Xmode);
   rtx xmode_dest = gen_reg_rtx (Xmode);
   rtx xmode_xor_0 = gen_reg_rtx (Xmode);
@@ -12659,8 +12888,8 @@ void
 riscv_expand_ussub (rtx dest, rtx x, rtx y)
 {
   machine_mode mode = GET_MODE (dest);
-  rtx xmode_x = riscv_gen_zero_extend_rtx (x, mode);
-  rtx xmode_y = riscv_gen_zero_extend_rtx (y, mode);
+  rtx xmode_x = riscv_extend_to_xmode_reg (x, mode, ZERO_EXTEND);
+  rtx xmode_y = riscv_extend_to_xmode_reg (y, mode, ZERO_EXTEND);
   rtx xmode_lt = gen_reg_rtx (Xmode);
   rtx xmode_minus = gen_reg_rtx (Xmode);
   rtx xmode_dest = gen_reg_rtx (Xmode);
@@ -12707,8 +12936,8 @@ riscv_expand_sssub (rtx dest, rtx x, rtx y)
   machine_mode mode = GET_MODE (dest);
   unsigned bitsize = GET_MODE_BITSIZE (mode).to_constant ();
   rtx shift_bits = GEN_INT (bitsize - 1);
-  rtx xmode_x = gen_lowpart (Xmode, x);
-  rtx xmode_y = gen_lowpart (Xmode, y);
+  rtx xmode_x = riscv_extend_to_xmode_reg (x, mode, SIGN_EXTEND);
+  rtx xmode_y = riscv_extend_to_xmode_reg (y, mode, SIGN_EXTEND);
   rtx xmode_minus = gen_reg_rtx (Xmode);
   rtx xmode_xor_0 = gen_reg_rtx (Xmode);
   rtx xmode_xor_1 = gen_reg_rtx (Xmode);
@@ -12818,7 +13047,7 @@ riscv_expand_sstrunc (rtx dest, rtx src)
   rtx xmode_narrow_min = gen_reg_rtx (Xmode);
   rtx xmode_lt = gen_reg_rtx (Xmode);
   rtx xmode_gt = gen_reg_rtx (Xmode);
-  rtx xmode_src = gen_lowpart (Xmode, src);
+  rtx xmode_src = riscv_extend_to_xmode_reg (src, GET_MODE (src), SIGN_EXTEND);
   rtx xmode_dest = gen_reg_rtx (Xmode);
   rtx xmode_mask = gen_reg_rtx (Xmode);
   rtx xmode_sat = gen_reg_rtx (Xmode);
@@ -13785,6 +14014,27 @@ expand_reversed_crc_using_clmul (scalar_mode crc_mode, scalar_mode data_mode,
   riscv_emit_move (operands[0], gen_lowpart (crc_mode, a0));
 }
 
+bool is_zicfiss_p ()
+{
+  if (TARGET_ZICFISS && (flag_cf_protection & CF_RETURN))
+    return true;
+
+  return false;
+}
+
+bool is_zicfilp_p ()
+{
+  if (TARGET_ZICFILP && (flag_cf_protection & CF_BRANCH))
+    return true;
+
+  return false;
+}
+
+bool need_shadow_stack_push_pop_p ()
+{
+  return is_zicfiss_p () && riscv_save_return_addr_reg_p ();
+}
+
 /* Initialize the GCC target structure.  */
 #undef TARGET_ASM_ALIGNED_HI_OP
 #define TARGET_ASM_ALIGNED_HI_OP "\t.half\t"
@@ -13845,7 +14095,7 @@ expand_reversed_crc_using_clmul (scalar_mode crc_mode, scalar_mode data_mode,
 #undef TARGET_ASM_FILE_START_FILE_DIRECTIVE
 #define TARGET_ASM_FILE_START_FILE_DIRECTIVE true
 #undef TARGET_ASM_FILE_END
-#define TARGET_ASM_FILE_END file_end_indicate_exec_stack
+#define TARGET_ASM_FILE_END riscv_file_end
 
 #undef TARGET_EXPAND_BUILTIN_VA_START
 #define TARGET_EXPAND_BUILTIN_VA_START riscv_va_start

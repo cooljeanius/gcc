@@ -290,7 +290,7 @@ cgraph_node *
 symbol_table::create_empty (void)
 {
   cgraph_count++;
-  return new (ggc_alloc<cgraph_node> ()) cgraph_node (cgraph_max_uid++);
+  return new (ggc_alloc<cgraph_node> ()) cgraph_node ();
 }
 
 /* Register HOOK to be called with DATA on each removed edge.  */
@@ -1708,12 +1708,15 @@ cgraph_update_edges_for_call_stmt (gimple *old_stmt, tree old_decl,
   cgraph_node *node;
 
   gcc_checking_assert (orig);
+  gcc_assert (!orig->thunk);
   cgraph_update_edges_for_call_stmt_node (orig, old_stmt, old_decl, new_stmt);
   if (orig->clones)
     for (node = orig->clones; node != orig;)
       {
-	cgraph_update_edges_for_call_stmt_node (node, old_stmt, old_decl,
-						new_stmt);
+	/* Do not attempt to adjust bodies of yet unexpanded thunks.  */
+	if (!node->thunk)
+	  cgraph_update_edges_for_call_stmt_node (node, old_stmt, old_decl,
+						  new_stmt);
 	if (node->clones)
 	  node = node->clones;
 	else if (node->next_sibling_clone)
@@ -4338,7 +4341,7 @@ test_symbol_table_test ()
       /* Verify that the node has order 0 on both iterations,
 	 and thus that nodes have predictable dump names in selftests.  */
       ASSERT_EQ (node->order, 0);
-      ASSERT_STREQ (node->dump_name (), "test_decl/0");
+      ASSERT_STREQ (node->dump_name (), "test_decl/1");
     }
 }
 

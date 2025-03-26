@@ -2289,7 +2289,26 @@ dump_expr_init_vec (cxx_pretty_printer *pp, vec<constructor_elt, va_gc> *v,
 
   FOR_EACH_CONSTRUCTOR_VALUE (v, idx, value)
     {
-      dump_expr (pp, value, flags | TFF_EXPR_IN_PARENS);
+      if (TREE_CODE (value) == RAW_DATA_CST)
+	for (unsigned i = 0; i < (unsigned) RAW_DATA_LENGTH (value); ++i)
+	  {
+	    if (TYPE_UNSIGNED (TREE_TYPE (value))
+		|| TYPE_PRECISION (TREE_TYPE (value)) > CHAR_BIT)
+	      pp_decimal_int (pp, RAW_DATA_UCHAR_ELT (value, i));
+	    else
+	      pp_decimal_int (pp, RAW_DATA_SCHAR_ELT (value, i));
+	    if (i == RAW_DATA_LENGTH (value) - 1U)
+	      break;
+	    else if (i == 9 && RAW_DATA_LENGTH (value) > 20)
+	      {
+		pp_string (pp, ", ..., ");
+		i = RAW_DATA_LENGTH (value) - 11;
+	      }
+	    else
+	      pp_separate_with_comma (pp);
+	  }
+      else
+	dump_expr (pp, value, flags | TFF_EXPR_IN_PARENS);
       if (idx != v->length () - 1)
 	pp_separate_with_comma (pp);
     }
@@ -3383,7 +3402,8 @@ location_of (tree t)
 	return input_location;
     }
   else if (TREE_CODE (t) == OVERLOAD)
-    t = OVL_FIRST (t);
+    t = (OVL_FIRST (t) != conv_op_marker ? OVL_FIRST (t)
+	 : OVL_FIRST (OVL_CHAIN (t)));
 
   if (DECL_P (t))
     return DECL_SOURCE_LOCATION (t);

@@ -15,7 +15,7 @@ module core.internal.gc.impl.conservative.gc;
 //debug = PARALLEL_PRINTF;      // turn on printf's
 //debug = COLLECT_PRINTF;       // turn on printf's
 //debug = MARK_PRINTF;          // turn on printf's
-//debug = PRINTF_TO_FILE;       // redirect printf's ouptut to file "gcx.log"
+//debug = PRINTF_TO_FILE;       // redirect printf's output to file "gcx.log"
 //debug = LOGGING;              // log allocations / frees
 //debug = MEMSTOMP;             // stomp on memory
 //debug = SENTINEL;             // add underrun/overrrun protection
@@ -43,7 +43,7 @@ import core.internal.spinlock;
 import core.internal.gc.pooltable;
 import core.internal.gc.blkcache;
 
-import cstdlib = core.stdc.stdlib : calloc, free, malloc, realloc;
+import cstdlib = core.stdc.stdlib;
 import core.stdc.string : memcpy, memset, memmove;
 import core.bitop;
 import core.thread;
@@ -90,8 +90,8 @@ private
     {
         // to allow compilation of this module without access to the rt package,
         //  make these functions available from rt.lifetime
-        void rt_finalizeFromGC(void* p, size_t size, uint attr) nothrow;
-        int rt_hasFinalizerInSegment(void* p, size_t size, uint attr, const scope void[] segment) nothrow;
+        void rt_finalizeFromGC(void* p, size_t size, uint attr, const(TypeInfo) typeInfo) nothrow;
+        int rt_hasFinalizerInSegment(void* p, size_t size, const(TypeInfo) typeInfo, const scope void[] segment) nothrow;
 
         // Declared as an extern instead of importing core.exception
         // to avoid inlining - see https://issues.dlang.org/show_bug.cgi?id=13725.
@@ -475,23 +475,39 @@ class ConservativeGC : GC
      */
     void *malloc(size_t size, uint bits = 0, const TypeInfo ti = null) nothrow
     {
-        if (!size)
+        import core.internal.gc.blockmeta;
+
+        if (size == 0)
+        {
+            return null;
+        }
+
+        adjustAttrs(bits, ti);
+
+        immutable padding = __allocPad(size, bits);
+
+        bool overflow;
+        import core.checkedint : addu;
+        immutable needed = addu(size, padding, overflow);
+        if (overflow)
         {
             return null;
         }
 
         size_t localAllocSize = void;
 
-        auto p = runLocked!(mallocNoSync, mallocTime, numMallocs)(size, bits, localAllocSize, ti);
+        auto p = runLocked!(mallocNoSync, mallocTime, numMallocs)(needed, bits, localAllocSize, ti);
 
         invalidate(p[0 .. localAllocSize], 0xF0, true);
 
+        auto ret = setupMetadata(p[0 .. localAllocSize], bits, padding, size, ti);
+
         if (!(bits & BlkAttr.NO_SCAN))
         {
-            memset(p + size, 0, localAllocSize - size);
+            memset(ret.ptr + size, 0, ret.length - size);
         }
 
-        return p;
+        return ret.ptr;
     }
 
 
@@ -527,6 +543,8 @@ class ConservativeGC : GC
 
     BlkInfo qalloc( size_t size, uint bits, const scope TypeInfo ti) nothrow
     {
+        // qalloc should not be used for building metadata-containing blocks,
+        // so avoid all the checking for bits and array padding.
 
         if (!size)
         {
@@ -564,25 +582,45 @@ class ConservativeGC : GC
      */
     void *calloc(size_t size, uint bits = 0, const TypeInfo ti = null) nothrow
     {
+        import core.internal.gc.blockmeta;
+
         if (!size)
         {
             return null;
         }
 
-        size_t localAllocSize = void;
+        adjustAttrs(bits, ti);
 
-        auto p = runLocked!(mallocNoSync, mallocTime, numMallocs)(size, bits, localAllocSize, ti);
-
-        debug (VALGRIND) makeMemUndefined(p[0..size]);
-        invalidate((p + size)[0 .. localAllocSize - size], 0xF0, true);
-
-        memset(p, 0, size);
-        if (!(bits & BlkAttr.NO_SCAN))
+        immutable padding = __allocPad(size, bits);
+        bool overflow;
+        import core.checkedint : addu;
+        immutable needed = addu(size, padding, overflow);
+        if (overflow)
         {
-            memset(p + size, 0, localAllocSize - size);
+            return null;
         }
 
-        return p;
+
+        size_t localAllocSize = void;
+
+        auto p = runLocked!(mallocNoSync, mallocTime, numMallocs)(needed, bits, localAllocSize, ti);
+
+        debug (VALGRIND) makeMemUndefined(p[0..size]);
+
+        auto ret = setupMetadata(p[0 .. localAllocSize], bits, padding, size, ti);
+
+        invalidate((ret.ptr + size)[0 .. ret.length - size], 0xF0, true);
+
+        if (bits & BlkAttr.NO_SCAN)
+        {
+            memset(ret.ptr, 0, size);
+        }
+        else
+        {
+            memset(ret.ptr, 0, ret.length);
+        }
+
+        return ret.ptr;
     }
 
     /**
@@ -595,7 +633,8 @@ class ConservativeGC : GC
      * Params:
      *  p = A pointer to the root of a valid memory block or to null.
      *  size = The desired allocation size in bytes.
-     *  bits = A bitmask of the attributes to set on this block.
+     *  bits = A bitmask of the attributes to set on this block. APPENDABLE and
+     *         FINALIZE are not allowed for realloc.
      *  ti = TypeInfo to describe the memory.
      *
      * Returns:
@@ -607,14 +646,28 @@ class ConservativeGC : GC
      */
     void *realloc(void *p, size_t size, uint bits = 0, const TypeInfo ti = null) nothrow
     {
+        if (bits & (BlkAttr.APPENDABLE | BlkAttr.FINALIZE))
+            // these bits are not allowed. We can't properly manage
+            // reallocation of such blocks.
+            onInvalidMemoryOperationError();
+
         size_t localAllocSize = void;
         auto oldp = p;
 
         p = runLocked!(reallocNoSync, mallocTime, numMallocs)(p, size, bits, localAllocSize, ti);
 
-        if (p && !(bits & BlkAttr.NO_SCAN))
+        if (p)
         {
-            memset(p + size, 0, localAllocSize - size);
+            // invalidate any block info cache we have for the old allocation.
+            import core.internal.gc.blkcache;
+            if (auto bic = __getBlkInfo(oldp)) {
+                *bic = BlkInfo.init;
+            }
+
+            if (!(bits & BlkAttr.NO_SCAN))
+            {
+                memset(p + size, 0, localAllocSize - size);
+            }
         }
 
         return p;
@@ -662,7 +715,8 @@ class ConservativeGC : GC
         void* doMalloc()
         {
             if (!bits)
-                bits = pool.getBits(biti);
+                bits = pool.getBits(biti) &
+                    ~(BlkAttr.APPENDABLE | BlkAttr.FINALIZE | BlkAttr.STRUCTFINAL);
 
             void* p2 = mallocNoSync(size, bits, alloc_size, ti);
             debug (SENTINEL)
@@ -759,7 +813,16 @@ class ConservativeGC : GC
 
     size_t extend(void* p, size_t minsize, size_t maxsize, const TypeInfo ti) nothrow
     {
-        return runLocked!(extendNoSync, extendTime, numExtends)(p, minsize, maxsize, ti);
+        auto result = runLocked!(extendNoSync, extendTime, numExtends)(p, minsize, maxsize, ti);
+        if (result != 0) {
+            // invalidate any block info cache we have for the old allocation.
+            import core.internal.gc.blkcache;
+            if (auto bic = __getBlkInfo(p)) {
+                *bic = BlkInfo.init;
+            }
+        }
+
+        return result;
     }
 
 
@@ -867,14 +930,22 @@ class ConservativeGC : GC
             return;
         }
 
-        return runLocked!(freeNoSync, freeTime, numFrees)(p);
+        auto didFree = runLocked!(freeNoSync, freeTime, numFrees)(p);
+
+        if (didFree) {
+            // invalidate any block info cache we have for the old allocation.
+            import core.internal.gc.blkcache;
+            if (auto bic = __getBlkInfo(p)) {
+                *bic = BlkInfo.init;
+            }
+        }
     }
 
 
     //
     // Implementation of free.
     //
-    private void freeNoSync(void *p) nothrow @nogc
+    private bool freeNoSync(void *p) nothrow @nogc
     {
         debug(PRINTF) printf("Freeing %#zx\n", cast(size_t) p);
         assert (p);
@@ -887,7 +958,7 @@ class ConservativeGC : GC
         // Find which page it is in
         pool = gcx.findPool(p);
         if (!pool)                              // if not one of ours
-            return;                             // ignore
+            return false;                       // ignore
 
         pagenum = pool.pagenumOf(p);
 
@@ -899,11 +970,11 @@ class ConservativeGC : GC
         // Verify that the pointer is at the beginning of a block,
         //  no action should be taken if p is an interior pointer
         if (bin > Bins.B_PAGE) // B_PAGEPLUS or B_FREE
-            return;
+            return false;
         size_t off = (sentinel_sub(p) - pool.baseAddr);
         size_t base = baseOffset(off, bin);
         if (off != base)
-            return;
+            return false;
 
         sentinel_Invariant(p);
         auto q = p;
@@ -928,7 +999,7 @@ class ConservativeGC : GC
         {
             biti = cast(size_t)(p - pool.baseAddr) >> pool.ShiftBy.Small;
             if (pool.freebits.test (biti))
-                return;
+                return false;
             // Add to free list
             List *list = cast(List*)p;
 
@@ -948,6 +1019,8 @@ class ConservativeGC : GC
         pool.clrBits(biti, ~BlkAttr.NONE);
 
         gcx.leakDetector.log_free(sentinel_add(p), ssize);
+
+        return true;
     }
 
 
@@ -2807,9 +2880,13 @@ struct Gcx
 
                         if (pool.finals.nbits && pool.finals.clear(biti))
                         {
+                            import core.internal.gc.blockmeta;
                             size_t size = npages * PAGESIZE - SENTINEL_EXTRA;
+                            size = sentinel_size(q, size);
                             uint attr = pool.getBits(biti);
-                            rt_finalizeFromGC(q, sentinel_size(q, size), attr);
+                            auto ti = __getBlockFinalizerInfo(q, size, attr);
+                            __trimExtents(q, size, attr);
+                            rt_finalizeFromGC(q, size, attr, ti);
                         }
 
                         pool.clrBits(biti, ~BlkAttr.NONE ^ BlkAttr.FINALIZE);
@@ -2924,21 +3001,28 @@ struct Gcx
                             {
                                 immutable biti = base + i;
 
-                                if (!pool.mark.test(biti))
+                                if (pool.mark.test(biti))
+                                    continue;
+
+                                void* q = sentinel_add(p);
+                                sentinel_Invariant(q);
+
+                                if (pool.finals.nbits && pool.finals.test(biti))
                                 {
-                                    void* q = sentinel_add(p);
-                                    sentinel_Invariant(q);
-
-                                    if (pool.finals.nbits && pool.finals.test(biti))
-                                        rt_finalizeFromGC(q, sentinel_size(q, size), pool.getBits(biti));
-
-                                    assert(core.bitop.bt(toFree.ptr, i));
-
-                                    debug(COLLECT_PRINTF) printf("\tcollecting %p\n", p);
-                                    leakDetector.log_free(q, sentinel_size(q, size));
-
-                                    invalidate(p[0 .. size], 0xF3, false);
+                                    import core.internal.gc.blockmeta;
+                                    size_t ssize = sentinel_size(q, size);
+                                    uint attr = pool.getBits(biti);
+                                    auto ti = __getBlockFinalizerInfo(q, ssize, attr);
+                                    __trimExtents(q, ssize, attr);
+                                    rt_finalizeFromGC(q, ssize, attr, ti);
                                 }
+
+                                assert(core.bitop.bt(toFree.ptr, i));
+
+                                debug(COLLECT_PRINTF) printf("\tcollecting %p\n", p);
+                                leakDetector.log_free(q, sentinel_size(q, size));
+
+                                invalidate(p[0 .. size], 0xF3, false);
                             }
                         }
 
@@ -4450,10 +4534,13 @@ struct LargeObjectPool
             size_t size = sentinel_size(p, getSize(pn));
             uint attr = getBits(biti);
 
-            if (!rt_hasFinalizerInSegment(p, size, attr, segment))
+            import core.internal.gc.blockmeta;
+            auto ti = __getBlockFinalizerInfo(p, size, attr);
+            if (!rt_hasFinalizerInSegment(p, size, ti, segment))
                 continue;
 
-            rt_finalizeFromGC(p, size, attr);
+            __trimExtents(p, size, attr);
+            rt_finalizeFromGC(p, size, attr, ti);
 
             clrBits(biti, ~BlkAttr.NONE);
 
@@ -4574,11 +4661,14 @@ struct SmallObjectPool
 
                 auto q = sentinel_add(p);
                 uint attr = getBits(biti);
-                const ssize = sentinel_size(q, size);
-                if (!rt_hasFinalizerInSegment(q, ssize, attr, segment))
+                auto ssize = sentinel_size(q, size);
+                import core.internal.gc.blockmeta;
+                auto ti = __getBlockFinalizerInfo(q, ssize, attr);
+                if (!rt_hasFinalizerInSegment(q, ssize, ti, segment))
                     continue;
 
-                rt_finalizeFromGC(q, ssize, attr);
+                __trimExtents(q, ssize, attr);
+                rt_finalizeFromGC(q, ssize, attr, ti);
 
                 freeBits = true;
                 toFree.set(i);
@@ -4727,7 +4817,7 @@ debug(PRINTF_TO_FILE)
         }
         len += fprintf(gcx_fh, fmt, args);
         fflush(gcx_fh);
-        import core.stdc.string;
+        import core.stdc.string : strlen;
         hadNewline = fmt && fmt[0] && fmt[strlen(fmt) - 1] == '\n';
         return len;
     }
@@ -5193,8 +5283,8 @@ version (D_LP64) unittest
             catch (OutOfMemoryError)
             {
                 // ignore if the system still doesn't have enough virtual memory
-                import core.stdc.stdio;
-                printf("%s(%d): out-of-memory execption ignored, phys_mem = %zd",
+                import core.stdc.stdio : printf;
+                printf("%s(%d): out-of-memory exception ignored, phys_mem = %zd",
                        __FILE__.ptr, __LINE__, phys_mem);
             }
         }
@@ -5248,7 +5338,7 @@ unittest
 unittest
 {
     import core.memory;
-    import core.stdc.stdio;
+    import core.stdc.stdio : printf;
 
     // allocate from large pool
     auto o = GC.malloc(10);
@@ -5324,4 +5414,43 @@ void undefinedWrite(T)(ref T var, T value) nothrow
     }
     else
         var = value;
+}
+
+private void adjustAttrs(ref uint attrs, const TypeInfo ti) nothrow
+{
+    bool hasContext = ti !is null;
+    if((attrs & BlkAttr.FINALIZE) && hasContext && typeid(ti) is typeid(TypeInfo_Struct))
+        attrs |= BlkAttr.STRUCTFINAL;
+    else
+        // STRUCTFINAL now just means "has a context pointer added to the block"
+        attrs &= ~BlkAttr.STRUCTFINAL;
+}
+
+// sets up the array/context pointer metadata based on the block allocated.
+// This is called on any block *creation*, and not on updating the array
+// metadata.
+//
+// The return value is the true data that the user can use.
+private void[] setupMetadata(void[] block, uint bits, size_t padding, size_t used, const TypeInfo ti) nothrow
+{
+    import core.internal.gc.blockmeta;
+    import core.internal.array.utils;
+
+    BlkInfo info = BlkInfo(
+            base: block.ptr,
+            attr: bits,
+            size: block.length
+    );
+
+
+    __setBlockFinalizerInfo(info, ti);
+
+    if (bits & BlkAttr.APPENDABLE) {
+        auto typeInfoSize = (bits & BlkAttr.STRUCTFINAL) ? (void*).sizeof : 0;
+        auto success = __setArrayAllocLengthImpl(info, used, false, size_t.max, typeInfoSize);
+        assert(success);
+        return __arrayStart(info)[0 .. block.length - padding];
+    }
+
+    return block.ptr[0 .. block.length - padding];
 }
