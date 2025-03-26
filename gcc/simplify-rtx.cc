@@ -2655,6 +2655,9 @@ simplify_context::simplify_logical_relational_operation (rtx_code code,
 
   enum rtx_code code0 = GET_CODE (op0);
   enum rtx_code code1 = GET_CODE (op1);
+  machine_mode cmp_mode = GET_MODE (XEXP (op0, 0));
+  if (cmp_mode == VOIDmode)
+    cmp_mode = GET_MODE (XEXP (op0, 1));
 
   /* Assume at first that the comparisons are on integers, and that the
      operands are therefore ordered.  */
@@ -2672,8 +2675,10 @@ simplify_context::simplify_logical_relational_operation (rtx_code code,
     }
   else
     {
-      /* See whether the operands might be unordered.  */
-      if (HONOR_NANS (GET_MODE (XEXP (op0, 0))))
+      /* See whether the operands might be unordered.  Assume that all
+	 results are possible for CC modes, and punt later if we don't get an
+	 always-true or always-false answer.  */
+      if (GET_MODE_CLASS (cmp_mode) == MODE_CC || HONOR_NANS (cmp_mode))
 	all = 15;
       mask0 = comparison_to_mask (code0) & all;
       mask1 = comparison_to_mask (code1) & all;
@@ -2702,6 +2707,9 @@ simplify_context::simplify_logical_relational_operation (rtx_code code,
     code = mask_to_unsigned_comparison (mask);
   else
     {
+      if (GET_MODE_CLASS (cmp_mode) == MODE_CC)
+	return 0;
+
       code = mask_to_comparison (mask);
       /* LTGT and NE are arithmetically equivalent for ordered operands,
 	 with NE being the canonical choice.  */
@@ -4493,6 +4501,60 @@ simplify_context::simplify_binary_operation_1 (rtx_code code,
 	  if (val != INTVAL (op1))
 	    return simplify_gen_binary (code, mode, op0,
 					gen_int_shift_amount (mode, val));
+	}
+
+      /* Simplify:
+
+	   (code:M1
+	     (subreg:M1
+	       ([al]shiftrt:M2
+		 (subreg:M2
+		   (ashift:M1 X C1))
+		 C2))
+	     C3)
+
+	 to:
+
+	   (code:M1
+	     ([al]shiftrt:M1
+	       (ashift:M1 X C1+N)
+	       C2+N)
+	     C3)
+
+	 where M1 is N bits wider than M2.  Optimizing the (subreg:M1 ...)
+	 directly would be arithmetically correct, but restricting the
+	 simplification to shifts by constants is more conservative,
+	 since it is more likely to lead to further simplifications.  */
+      if (is_a<scalar_int_mode> (mode, &int_mode)
+	  && paradoxical_subreg_p (op0)
+	  && is_a<scalar_int_mode> (GET_MODE (SUBREG_REG (op0)), &inner_mode)
+	  && (GET_CODE (SUBREG_REG (op0)) == ASHIFTRT
+	      || GET_CODE (SUBREG_REG (op0)) == LSHIFTRT)
+	  && CONST_INT_P (op1))
+	{
+	  auto xcode = GET_CODE (SUBREG_REG (op0));
+	  rtx xop0 = XEXP (SUBREG_REG (op0), 0);
+	  rtx xop1 = XEXP (SUBREG_REG (op0), 1);
+	  if (SUBREG_P (xop0)
+	      && GET_MODE (SUBREG_REG (xop0)) == mode
+	      && GET_CODE (SUBREG_REG (xop0)) == ASHIFT
+	      && CONST_INT_P (xop1)
+	      && UINTVAL (xop1) < GET_MODE_PRECISION (inner_mode))
+	    {
+	      rtx yop0 = XEXP (SUBREG_REG (xop0), 0);
+	      rtx yop1 = XEXP (SUBREG_REG (xop0), 1);
+	      if (CONST_INT_P (yop1)
+		  && UINTVAL (yop1) < GET_MODE_PRECISION (inner_mode))
+		{
+		  auto bias = (GET_MODE_BITSIZE (int_mode)
+			       - GET_MODE_BITSIZE (inner_mode));
+		  tem = simplify_gen_binary (ASHIFT, mode, yop0,
+					     GEN_INT (INTVAL (yop1) + bias));
+		  tem = simplify_gen_binary (xcode, mode, tem,
+					     GEN_INT (INTVAL (xop1) + bias));
+		  return simplify_gen_binary (code, mode, tem, op1);
+		}
+	    }
 	}
       break;
 

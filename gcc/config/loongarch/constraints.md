@@ -292,12 +292,16 @@
    "@internal"
    (match_operand 0 "low_bitmask_operand"))
 
+(define_constraint "Yy"
+   "@internal"
+   (match_operand 0 "ins_zero_bitmask_operand"))
+
 (define_constraint "YI"
   "@internal
    A replicated vector const in which the replicated value is in the range
    [-512,511]."
   (and (match_code "const_vector")
-       (match_test "loongarch_const_vector_same_int_p (op, mode, -512, 511)")))
+       (match_test "loongarch_const_vector_vrepli (op, mode)")))
 
 (define_constraint "YC"
   "@internal

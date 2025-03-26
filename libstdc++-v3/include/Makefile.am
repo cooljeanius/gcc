@@ -137,6 +137,7 @@ bits_freestanding = \
 	${bits_srcdir}/memoryfwd.h \
 	${bits_srcdir}/monostate.h \
 	${bits_srcdir}/move.h \
+	${bits_srcdir}/ostream.h \
 	${bits_srcdir}/out_ptr.h \
 	${bits_srcdir}/predefined_ops.h \
 	${bits_srcdir}/parse_numbers.h \
@@ -910,6 +911,8 @@ c_compatibility_headers = \
 	${c_compatibility_srcdir}/tgmath.h \
 	${c_compatibility_srcdir}/math.h \
 	${c_compatibility_srcdir}/stdatomic.h \
+	${c_compatibility_srcdir}/stdbit.h \
+	${c_compatibility_srcdir}/stdckdint.h \
 	${c_compatibility_srcdir}/stdlib.h
 endif
 

@@ -748,6 +748,7 @@ datadir = @datadir@
 localedir = $(datadir)/locale
 # Extension (if any) to put in installed man-page filename.
 man1ext = .1
+man3ext = .3
 man7ext = .7
 objext = .o
 exeext = @host_exeext@
@@ -756,6 +757,7 @@ build_exeext = @build_exeext@
 # Directory in which to put man pages.
 mandir = @mandir@
 man1dir = $(mandir)/man1
+man3dir = $(mandir)/man3
 man7dir = $(mandir)/man7
 # Dir for temp files.
 tmpdir = /tmp
@@ -1216,6 +1218,7 @@ LANG_CONFIGUREFRAGS  = @all_lang_configurefrags@
 LANG_MAKEFRAGS = @all_lang_makefrags@
 
 # Used by gcc/jit/Make-lang.in
+LIBGCCJIT_VERSION_NUM = @libgccjit_version@
 LD_VERSION_SCRIPT_OPTION = @ld_version_script_option@
 LD_SONAME_OPTION = @ld_soname_option@
 @ENABLE_DARWIN_AT_RPATH_TRUE@DARWIN_RPATH = @rpath
@@ -1904,8 +1907,12 @@ ifeq (@enable_libgdiagnostics@,yes)
 ALL_HOST_OBJS += $(libgdiagnostics_OBJS) $(SARIF_REPLAY_OBJS)
 endif
 
-BACKEND = libbackend.a main.o libcommon-target.a libcommon.a \
-	$(CPPLIB) $(LIBDECNUMBER)
+# libbackend.a objs that might not be in some cases linked into the compiler,
+# yet they are supposed to be part of the plugin ABI.  See PR116143.
+EXTRA_BACKEND_OBJS = simple-diagnostic-path.o lazy-diagnostic-path.o
+
+BACKEND = $(EXTRA_BACKEND_OBJS) libbackend.a main.o libcommon-target.a \
+	libcommon.a $(CPPLIB) $(LIBDECNUMBER)
 
 # This is defined to "yes" if Tree checking is enabled, which roughly means
 # front-end checking.
@@ -3697,7 +3704,7 @@ TEXI_GCC_FILES = gcc.texi gcc-common.texi gcc-vers.texi frontends.texi	\
 # the *.texi files have changed.
 TEXI_GCCINT_FILES = gccint.texi gcc-common.texi gcc-vers.texi		\
 	 contribute.texi makefile.texi configterms.texi options.texi	\
-	 portability.texi interface.texi passes.texi rtl.texi md.texi	\
+	 portability.texi passes.texi rtl.texi md.texi	\
 	 $(srcdir)/doc/tm.texi hostconfig.texi fragments.texi	\
 	 configfiles.texi collect2.texi headerdirs.texi funding.texi	\
 	 gnu.texi gpl_v3.texi fdl.texi contrib.texi languages.texi	\
@@ -4027,6 +4034,7 @@ installdirs:
 	$(mkinstalldirs) $(DESTDIR)$(includedir)
 	$(mkinstalldirs) $(DESTDIR)$(infodir)
 	$(mkinstalldirs) $(DESTDIR)$(man1dir)
+	$(mkinstalldirs) $(DESTDIR)$(man3dir)
 	$(mkinstalldirs) $(DESTDIR)$(man7dir)
 
 PLUGIN_HEADERS = $(TREE_H) $(CONFIG_H) $(SYSTEM_H) coretypes.h $(TM_H) \
@@ -4215,9 +4223,10 @@ libgdiagnostics.install-common: installdirs libgdiagnostics.install-headers
 endif
 endif
 
+SARIF_REPLAY_INSTALL_NAME := $(shell echo sarif-replay|sed '$(program_transform_name)')
 install-libgdiagnostics: libgdiagnostics.install-common sarif-replay
-	-rm -f $(DESTDIR)$(bindir)/sarif-replay
-	-$(INSTALL_PROGRAM) sarif-replay $(DESTDIR)$(bindir)/sarif-replay
+	-rm -f $(DESTDIR)$(bindir)/$(SARIF_REPLAY_INSTALL_NAME)$(exeext)
+	-$(INSTALL_PROGRAM) sarif-replay $(DESTDIR)$(bindir)/$(SARIF_REPLAY_INSTALL_NAME)$(exeext)
 
 # Install the info files.
 # $(INSTALL_DATA) might be a relative pathname, so we can't cd into srcdir

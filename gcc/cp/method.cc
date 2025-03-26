@@ -1597,7 +1597,7 @@ build_comparison_op (tree fndecl, bool defining, tsubst_flags_t complain)
 	      /* Some other array, will need runtime loop.  */
 	      else
 		{
-		  idx = force_target_expr (sizetype, maxval, complain);
+		  idx = get_internal_target_expr (maxval);
 		  loop_indexes = tree_cons (idx, NULL_TREE, loop_indexes);
 		}
 	      expr_type = TREE_TYPE (expr_type);
@@ -1634,6 +1634,18 @@ build_comparison_op (tree fndecl, bool defining, tsubst_flags_t complain)
 	{
 	  rettype = common_comparison_type (comps);
 	  apply_deduced_return_type (fndecl, rettype);
+	}
+      tree retvaleq;
+      if (code == EQ_EXPR)
+	retvaleq = boolean_true_node;
+      else
+	{
+	  tree seql = lookup_comparison_result (cc_strong_ordering,
+						"equal", complain);
+	  retvaleq = build_static_cast (input_location, rettype, seql,
+					complain);
+	  if (retvaleq == error_mark_node)
+	    bad = true;
 	}
       if (bad)
 	{
@@ -1722,19 +1734,7 @@ build_comparison_op (tree fndecl, bool defining, tsubst_flags_t complain)
 	    }
 	}
       if (defining)
-	{
-	  tree val;
-	  if (code == EQ_EXPR)
-	    val = boolean_true_node;
-	  else
-	    {
-	      tree seql = lookup_comparison_result (cc_strong_ordering,
-						    "equal", complain);
-	      val = build_static_cast (input_location, rettype, seql,
-				       complain);
-	    }
-	  finish_return_stmt (val);
-	}
+	finish_return_stmt (retvaleq);
     }
   else if (code == NE_EXPR)
     {

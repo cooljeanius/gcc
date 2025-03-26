@@ -34,12 +34,22 @@ along with GCC; see the file COPYING3.  If not see
 
 
 /* Stubs for GGC referenced through instantiations triggered by hash-map.  */
-void *ggc_internal_cleared_alloc (size_t, void (*)(void *),
-				  size_t, size_t MEM_STAT_DECL)
+void *
+ggc_internal_cleared_alloc (size_t, void (*)(void *),
+			    size_t, size_t MEM_STAT_DECL)
 {
   return NULL;
 }
-void ggc_free (void *)
+
+void *
+ggc_internal_cleared_alloc_no_dtor (size_t, void (*)(void *),
+				    size_t, size_t MEM_STAT_DECL)
+{
+  return NULL;
+}
+
+void
+ggc_free (void *)
 {
 }
 
@@ -890,8 +900,8 @@ define_dump_logs (bool gimple, FILE *f)
 
   for (unsigned i = 0; i < dbg_line_numbers.length () - 1; i++)
     {
-      if (i % 20 == 0)
-	fprintf (f, "\n\t");
+      if (i % 10 == 0)
+	fprintf (f, "\n\t/* %d */ ", i);
 
       fprintf (f, "%d, ", dbg_line_numbers[i]);
     }

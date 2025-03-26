@@ -1664,16 +1664,23 @@ gfc_omp_finish_clause (tree c, gimple_seq *pre_p, bool openacc)
       tree size = create_tmp_var (gfc_array_index_type);
       tree elemsz = TYPE_SIZE_UNIT (gfc_get_element_type (type));
       elemsz = fold_convert (gfc_array_index_type, elemsz);
-      if (GFC_TYPE_ARRAY_AKIND (type) == GFC_ARRAY_ALLOCATABLE
-	  || GFC_TYPE_ARRAY_AKIND (type) == GFC_ARRAY_POINTER
-	  || GFC_TYPE_ARRAY_AKIND (type) == GFC_ARRAY_POINTER_CONT)
+      enum gfc_array_kind akind = GFC_TYPE_ARRAY_AKIND (type);
+      if (akind == GFC_ARRAY_ALLOCATABLE
+	  || akind == GFC_ARRAY_POINTER
+	  || akind == GFC_ARRAY_POINTER_CONT
+	  || akind == GFC_ARRAY_ASSUMED_RANK_ALLOCATABLE
+	  || akind == GFC_ARRAY_ASSUMED_RANK_POINTER
+	  || akind == GFC_ARRAY_ASSUMED_RANK_POINTER_CONT)
 	{
 	  stmtblock_t cond_block;
 	  tree tem, then_b, else_b, zero, cond;
 
+	  int rank = ((akind == GFC_ARRAY_ASSUMED_RANK_ALLOCATABLE
+		       || akind == GFC_ARRAY_ASSUMED_RANK_POINTER
+		       || akind == GFC_ARRAY_ASSUMED_RANK_POINTER_CONT)
+		      ? -1 : GFC_TYPE_ARRAY_RANK (type));
 	  gfc_init_block (&cond_block);
-	  tem = gfc_full_array_size (&cond_block, decl,
-				     GFC_TYPE_ARRAY_RANK (type));
+	  tem = gfc_full_array_size (&cond_block, unshare_expr (decl), rank);
 	  gfc_add_modify (&cond_block, size, tem);
 	  gfc_add_modify (&cond_block, size,
 			  fold_build2 (MULT_EXPR, gfc_array_index_type,
@@ -1683,7 +1690,7 @@ gfc_omp_finish_clause (tree c, gimple_seq *pre_p, bool openacc)
 	  zero = build_int_cst (gfc_array_index_type, 0);
 	  gfc_add_modify (&cond_block, size, zero);
 	  else_b = gfc_finish_block (&cond_block);
-	  tem = gfc_conv_descriptor_data_get (decl);
+	  tem = gfc_conv_descriptor_data_get (unshare_expr (decl));
 	  tem = fold_convert (pvoid_type_node, tem);
 	  cond = fold_build2_loc (input_location, NE_EXPR,
 				  boolean_type_node, tem, null_pointer_node);
@@ -1701,10 +1708,13 @@ gfc_omp_finish_clause (tree c, gimple_seq *pre_p, bool openacc)
 	  stmtblock_t cond_block;
 	  tree then_b;
 
+	  int rank = ((akind == GFC_ARRAY_ASSUMED_RANK
+		       || akind == GFC_ARRAY_ASSUMED_RANK_CONT)
+		      ? -1 : GFC_TYPE_ARRAY_RANK (type));
 	  gfc_init_block (&cond_block);
 	  gfc_add_modify (&cond_block, size,
-			  gfc_full_array_size (&cond_block, decl,
-					       GFC_TYPE_ARRAY_RANK (type)));
+			  gfc_full_array_size (&cond_block, unshare_expr (decl),
+					       rank));
 	  gfc_add_modify (&cond_block, size,
 			  fold_build2 (MULT_EXPR, gfc_array_index_type,
 				       size, elemsz));
@@ -1715,9 +1725,12 @@ gfc_omp_finish_clause (tree c, gimple_seq *pre_p, bool openacc)
 	}
       else
 	{
+	  int rank = ((akind == GFC_ARRAY_ASSUMED_RANK
+		       || akind == GFC_ARRAY_ASSUMED_RANK_CONT)
+		      ? -1 : GFC_TYPE_ARRAY_RANK (type));
 	  gfc_add_modify (&block, size,
-			  gfc_full_array_size (&block, decl,
-					       GFC_TYPE_ARRAY_RANK (type)));
+			  gfc_full_array_size (&block, unshare_expr (decl),
+					       rank));
 	  gfc_add_modify (&block, size,
 			  fold_build2 (MULT_EXPR, gfc_array_index_type,
 				       size, elemsz));
@@ -2777,9 +2790,6 @@ gfc_trans_omp_clauses (stmtblock_t *block, gfc_omp_clauses *clauses,
 	case OMP_LIST_USE:
 	  clause_code = OMP_CLAUSE_USE;
 	  goto add_clause;
-	case OMP_LIST_DESTROY:
-	  clause_code = OMP_CLAUSE_DESTROY;
-	  goto add_clause;
 	case OMP_LIST_INTEROP:
 	  clause_code = OMP_CLAUSE_INTEROP;
 	  goto add_clause;
@@ -2788,6 +2798,22 @@ gfc_trans_omp_clauses (stmtblock_t *block, gfc_omp_clauses *clauses,
 	  omp_clauses
 	    = gfc_trans_omp_variable_list (clause_code, n, omp_clauses,
 					   declare_simd);
+	  break;
+
+	case OMP_LIST_DESTROY:
+	  for (; n != NULL; n = n->next)
+	    if (n->sym->attr.referenced)
+	      {
+		tree t = gfc_trans_omp_variable (n->sym, declare_simd);
+		if (t != error_mark_node)
+		  {
+		    tree node
+		      = build_omp_clause (input_location, OMP_CLAUSE_DESTROY);
+		    OMP_CLAUSE_DECL (node) = t;
+		    TREE_ADDRESSABLE (OMP_CLAUSE_DECL (node)) = 1;
+		    omp_clauses = gfc_trans_add_clause (node, omp_clauses);
+		  }
+	      }
 	  break;
 
 	case OMP_LIST_INIT:
@@ -2803,6 +2829,7 @@ gfc_trans_omp_clauses (stmtblock_t *block, gfc_omp_clauses *clauses,
 		  tree node = build_omp_clause (input_location,
 						OMP_CLAUSE_INIT);
 		  OMP_CLAUSE_DECL (node) = t;
+		  TREE_ADDRESSABLE (OMP_CLAUSE_DECL (node)) = 1;
 		  if (n->u.init.target)
 		    OMP_CLAUSE_INIT_TARGET (node) = 1;
 		  if (n->u.init.targetsync)
@@ -3345,7 +3372,8 @@ gfc_trans_omp_clauses (stmtblock_t *block, gfc_omp_clauses *clauses,
 		  if (openacc && n->sym->ts.type == BT_CLASS)
 		    {
 		      if (n->sym->attr.optional)
-			sorry ("optional class parameter");
+			sorry_at (gfc_get_location (&n->where),
+				  "optional class parameter");
 		      tree ptr = gfc_class_data_get (decl);
 		      ptr = build_fold_indirect_ref (ptr);
 		      OMP_CLAUSE_DECL (node) = ptr;
@@ -3761,7 +3789,8 @@ gfc_trans_omp_clauses (stmtblock_t *block, gfc_omp_clauses *clauses,
 			    gcc_assert (!ref->next);
 			}
 		      else
-			sorry ("unhandled expression type");
+			sorry_at (gfc_get_location (&n->where),
+				  "unhandled expression type");
 		    }
 
 		  tree inner = se.expr;
@@ -4041,7 +4070,7 @@ gfc_trans_omp_clauses (stmtblock_t *block, gfc_omp_clauses *clauses,
 		    gcc_unreachable ();
 		}
 	      else
-		sorry ("unhandled expression");
+		sorry_at (gfc_get_location (&n->where), "unhandled expression");
 
 	      finalize_map_clause:
 
@@ -8494,6 +8523,8 @@ gfc_trans_omp_directive (gfc_code *code)
     case EXEC_OMP_MASTER_TASKLOOP:
     case EXEC_OMP_MASTER_TASKLOOP_SIMD:
       return gfc_trans_omp_master_masked_taskloop (code, code->op);
+    case EXEC_OMP_METADIRECTIVE:
+      return gfc_trans_omp_metadirective (code);
     case EXEC_OMP_ORDERED:
       return gfc_trans_omp_ordered (code);
     case EXEC_OMP_PARALLEL:
@@ -8587,8 +8618,104 @@ gfc_trans_omp_declare_simd (gfc_namespace *ns)
     }
 }
 
+/* Translate the context selector list GFC_SELECTORS, using WHERE as the
+   locus for error messages.  */
+
+static tree
+gfc_trans_omp_set_selector (gfc_omp_set_selector *gfc_selectors, locus where)
+{
+  tree set_selectors = NULL_TREE;
+  gfc_omp_set_selector *oss;
+
+  for (oss = gfc_selectors; oss; oss = oss->next)
+    {
+      tree selectors = NULL_TREE;
+      gfc_omp_selector *os;
+      enum omp_tss_code set = oss->code;
+      gcc_assert (set != OMP_TRAIT_SET_INVALID);
+
+      for (os = oss->trait_selectors; os; os = os->next)
+	{
+	  tree scoreval = NULL_TREE;
+	  tree properties = NULL_TREE;
+	  gfc_omp_trait_property *otp;
+	  enum omp_ts_code sel = os->code;
+
+	  /* Per the spec, "Implementations can ignore specified
+	     selectors that are not those described in this section";
+	     however, we  must record such selectors because they
+	     cause match failures.  */
+	  if (sel == OMP_TRAIT_INVALID)
+	    {
+	      selectors = make_trait_selector (sel, NULL_TREE, NULL_TREE,
+					       selectors);
+	      continue;
+	    }
+
+	  for (otp = os->properties; otp; otp = otp->next)
+	    {
+	      switch (otp->property_kind)
+		{
+		case OMP_TRAIT_PROPERTY_DEV_NUM_EXPR:
+		case OMP_TRAIT_PROPERTY_BOOL_EXPR:
+		  {
+		    tree expr = NULL_TREE;
+		    gfc_se se;
+		    gfc_init_se (&se, NULL);
+		    gfc_conv_expr (&se, otp->expr);
+		    expr = se.expr;
+		    properties = make_trait_property (NULL_TREE, expr,
+						      properties);
+		  }
+		  break;
+		case OMP_TRAIT_PROPERTY_ID:
+		  properties
+		    = make_trait_property (get_identifier (otp->name),
+					   NULL_TREE, properties);
+		  break;
+		case OMP_TRAIT_PROPERTY_NAME_LIST:
+		  {
+		    tree prop = OMP_TP_NAMELIST_NODE;
+		    tree value = NULL_TREE;
+		    if (otp->is_name)
+		      value = get_identifier (otp->name);
+		    else
+		      value = gfc_conv_constant_to_tree (otp->expr);
+
+		    properties = make_trait_property (prop, value,
+						      properties);
+		  }
+		  break;
+		case OMP_TRAIT_PROPERTY_CLAUSE_LIST:
+		  properties = gfc_trans_omp_clauses (NULL, otp->clauses,
+						      where, true);
+		  break;
+		default:
+		  gcc_unreachable ();
+		}
+	    }
+
+	  if (os->score)
+	    {
+	      gfc_se se;
+	      gfc_init_se (&se, NULL);
+	      gfc_conv_expr (&se, os->score);
+	      scoreval = se.expr;
+	    }
+
+	  selectors = make_trait_selector (sel, scoreval,
+					   properties, selectors);
+	}
+      set_selectors = make_trait_set_selector (set, selectors, set_selectors);
+    }
+  return set_selectors;
+}
+
+/* If 'ns' points to a formal namespace in an interface, ns->parent == NULL;
+   hence, parent_ns is used instead.  */
+
 void
-gfc_trans_omp_declare_variant (gfc_namespace *ns)
+gfc_trans_omp_declare_variant (gfc_namespace *ns, gfc_namespace *parent_ns)
 {
   tree base_fn_decl = ns->proc_name->backend_decl;
   gfc_namespace *search_ns = ns;
@@ -8601,7 +8728,10 @@ gfc_trans_omp_declare_variant (gfc_namespace *ns)
 	 current namespace.  */
       if (!odv)
 	{
-	  search_ns = search_ns->parent;
+	  if (!search_ns->parent && search_ns == ns)
+	    search_ns = parent_ns;
+	  else
+	    search_ns = search_ns->parent;
 	  if (search_ns)
 	    next = search_ns->omp_declare_variant;
 	  continue;
@@ -8622,13 +8752,14 @@ gfc_trans_omp_declare_variant (gfc_namespace *ns)
 	  if (!search_ns->proc_name->attr.function
 	      && !search_ns->proc_name->attr.subroutine)
 	    gfc_error ("The base name for %<declare variant%> must be "
-		       "specified at %L ", &odv->where);
+		       "specified at %L", &odv->where);
 	  else
 	    error_found = false;
 	}
       else
 	{
 	  if (!search_ns->contained
+	      && !odv->base_proc_symtree->n.sym->attr.use_assoc
 	      && strcmp (odv->base_proc_symtree->name,
 			 ns->proc_name->name))
 	    gfc_error ("The base name at %L does not match the name of the "
@@ -8659,93 +8790,16 @@ gfc_trans_omp_declare_variant (gfc_namespace *ns)
       /* Ignore directives that do not apply to the current procedure.  */
       if ((odv->base_proc_symtree == NULL && search_ns != ns)
 	  || (odv->base_proc_symtree != NULL
-	      && strcmp (odv->base_proc_symtree->name, ns->proc_name->name)))
+	      && !ns->proc_name->attr.use_assoc
+	      && strcmp (odv->base_proc_symtree->name, ns->proc_name->name))
+	  || (odv->base_proc_symtree != NULL
+	      && ns->proc_name->attr.use_assoc
+	      && strcmp (odv->base_proc_symtree->n.sym->name,
+			 ns->proc_name->name)))
 	continue;
 
-      tree set_selectors = NULL_TREE;
-      gfc_omp_set_selector *oss;
-
-      for (oss = odv->set_selectors; oss; oss = oss->next)
-	{
-	  tree selectors = NULL_TREE;
-	  gfc_omp_selector *os;
-	  enum omp_tss_code set = oss->code;
-	  gcc_assert (set != OMP_TRAIT_SET_INVALID);
-
-	  for (os = oss->trait_selectors; os; os = os->next)
-	    {
-	      tree scoreval = NULL_TREE;
-	      tree properties = NULL_TREE;
-	      gfc_omp_trait_property *otp;
-	      enum omp_ts_code sel = os->code;
-
-	      /* Per the spec, "Implementations can ignore specified
-		 selectors that are not those described in this section";
-		 however, we  must record such selectors because they
-		 cause match failures.  */
-	      if (sel == OMP_TRAIT_INVALID)
-		{
-		  selectors = make_trait_selector (sel, NULL_TREE, NULL_TREE,
-						   selectors);
-		  continue;
-		}
-
-	      for (otp = os->properties; otp; otp = otp->next)
-		{
-		  switch (otp->property_kind)
-		    {
-		    case OMP_TRAIT_PROPERTY_DEV_NUM_EXPR:
-		    case OMP_TRAIT_PROPERTY_BOOL_EXPR:
-		      {
-			gfc_se se;
-			gfc_init_se (&se, NULL);
-			gfc_conv_expr (&se, otp->expr);
-			properties = make_trait_property (NULL_TREE, se.expr,
-							  properties);
-		      }
-		      break;
-		    case OMP_TRAIT_PROPERTY_ID:
-		      properties
-			= make_trait_property (get_identifier (otp->name),
-					       NULL_TREE, properties);
-		      break;
-		    case OMP_TRAIT_PROPERTY_NAME_LIST:
-		      {
-			tree prop = OMP_TP_NAMELIST_NODE;
-			tree value = NULL_TREE;
-			if (otp->is_name)
-			  value = get_identifier (otp->name);
-			else
-			  value = gfc_conv_constant_to_tree (otp->expr);
-
-			properties = make_trait_property (prop, value,
-							  properties);
-		      }
-		      break;
-		    case OMP_TRAIT_PROPERTY_CLAUSE_LIST:
-		      properties = gfc_trans_omp_clauses (NULL, otp->clauses,
-							  odv->where, true);
-		      break;
-		    default:
-		      gcc_unreachable ();
-		    }
-		}
-
-	      if (os->score)
-		{
-		  gfc_se se;
-		  gfc_init_se (&se, NULL);
-		  gfc_conv_expr (&se, os->score);
-		  scoreval = se.expr;
-		}
-
-	      selectors	= make_trait_selector (sel, scoreval,
-					       properties, selectors);
-	    }
-	  set_selectors = make_trait_set_selector (set, selectors,
-						   set_selectors);
-	}
-
+      tree set_selectors = gfc_trans_omp_set_selector (odv->set_selectors,
+						       odv->where);
       const char *variant_proc_name = odv->variant_proc_symtree->name;
       gfc_symbol *variant_proc_sym = odv->variant_proc_symtree->n.sym;
       if (variant_proc_sym == NULL || variant_proc_sym->attr.implicit_type)
@@ -8760,7 +8814,8 @@ gfc_trans_omp_declare_variant (gfc_namespace *ns)
 	  continue;
 	}
       set_selectors = omp_check_context_selector
-	(gfc_get_location (&odv->where), set_selectors, false);
+	(gfc_get_location (&odv->where), set_selectors,
+	 OMP_CTX_DECLARE_VARIANT);
       if (set_selectors != error_mark_node)
 	{
 	  if (!variant_proc_sym->attr.implicit_type
@@ -8777,6 +8832,34 @@ gfc_trans_omp_declare_variant (gfc_namespace *ns)
 		   == NULL_TREE)
 	    {
 	      char err[256];
+	      gfc_formal_arglist *last_arg = NULL, *extra_arg = NULL;
+	      int nappend_args = 0;
+	      if (odv->append_args_list)
+		{
+		  gfc_formal_arglist *arg;
+		  int nargs = 0;
+		  for (arg = gfc_sym_get_dummy_args (ns->proc_name);
+		       arg; arg = arg->next)
+		    nargs++;
+
+		  last_arg = gfc_sym_get_dummy_args (variant_proc_sym);
+		  for (int i = 1 ; i < nargs && last_arg; i++)
+		    last_arg = last_arg->next;
+		  if (nargs == 0)
+		    {
+		      extra_arg = last_arg;
+		      last_arg = NULL;
+		      variant_proc_sym->formal = NULL;
+		    }
+		  else if (last_arg)
+		    {
+		      extra_arg = last_arg->next;
+		      last_arg->next = NULL;
+		    }
+		  for (gfc_omp_namelist *n = odv->append_args_list; n != NULL;
+		       n = n->next)
+		    nappend_args++;
+		}
 	      if (!gfc_compare_interfaces (ns->proc_name, variant_proc_sym,
 					   variant_proc_sym->name, 0, 1,
 					   err, sizeof (err), NULL, NULL))
@@ -8785,18 +8868,73 @@ gfc_trans_omp_declare_variant (gfc_namespace *ns)
 			     "incompatible types: %s",
 			     variant_proc_name, ns->proc_name->name,
 			     &odv->where, err);
+		  if (nappend_args)
+		    inform (gfc_get_location (&odv->append_args_list->where),
+			    "%<append_args%> clause implies that %qs has %d "
+			    "dummy arguments of integer type with "
+			    "%<omp_interop_kind%> kind", variant_proc_name,
+			    nappend_args);
+		  variant_proc_sym = NULL;
+		}
+	      if (last_arg)
+		last_arg->next = extra_arg;
+	      else if (extra_arg)
+		variant_proc_sym->formal = extra_arg;
+	      locus *loc = (odv->append_args_list
+			    ? &odv->append_args_list->where :  &odv->where);
+	      int nextra_arg = 0;
+	      for (; extra_arg; extra_arg = extra_arg->next)
+		{
+		  nextra_arg++;
+		  if (!variant_proc_sym)
+		    continue;
+		  if (extra_arg->sym->ts.type != BT_INTEGER
+		      || extra_arg->sym->ts.kind != gfc_index_integer_kind
+		      || extra_arg->sym->attr.dimension
+		      || extra_arg->sym->attr.codimension
+		      || extra_arg->sym->attr.pointer
+		      || extra_arg->sym->attr.allocatable
+		      || extra_arg->sym->attr.proc_pointer)
+		    {
+		      gfc_error ("%qs at %L must be a nonpointer, "
+				 "nonallocatable scalar integer dummy argument "
+				 "of %<omp_interop_kind%> kind as it utilized "
+				 "with the %<append_args%> clause at %L",
+				 extra_arg->sym->name,
+				 &extra_arg->sym->declared_at, loc);
+		      variant_proc_sym = NULL;
+		    }
+		  if (extra_arg->sym->attr.optional)
+		    {
+		      gfc_error ("%qs at %L with OPTIONAL attribute "
+				 "not support when utilized with the "
+				 "%<append_args%> clause at %L",
+				 extra_arg->sym->name,
+				 &extra_arg->sym->declared_at, loc);
+		      variant_proc_sym = NULL;
+		    }
+		}
+	      if (variant_proc_sym && nappend_args != nextra_arg)
+		{
+		  gfc_error ("%qs at %L has %d but requires %d "
+			     "%<omp_interop_kind%> kind dummy arguments as it "
+			     "is utilized with the %<append_args%> clause at "
+			     "%L", variant_proc_sym->name,
+			     &variant_proc_sym->declared_at, nextra_arg,
+			     nappend_args, loc);
 		  variant_proc_sym = NULL;
 		}
 	    }
-	  if (odv->adjust_args_list != NULL
+	  if ((odv->adjust_args_list != NULL || odv->append_args_list != NULL)
 	      && omp_get_context_selector (set_selectors,
 					   OMP_TRAIT_SET_CONSTRUCT,
 					   OMP_TRAIT_CONSTRUCT_DISPATCH)
 		   == NULL_TREE)
 	    {
-	      gfc_error ("an %<adjust_args%> clause can only be specified if "
+	      gfc_error ("the %qs clause can only be specified if "
 			 "the %<dispatch%> selector of the construct "
 			 "selector set appears in the %<match%> clause at %L",
+			 odv->adjust_args_list ? "adjust_args" : "append_args",
 			 &odv->where);
 	      variant_proc_sym = NULL;
 	    }
@@ -8812,57 +8950,253 @@ gfc_trans_omp_declare_variant (gfc_namespace *ns)
 	      if (omp_context_selector_matches (set_selectors,
 						NULL_TREE, false))
 		{
+		  tree need_device_ptr_list = NULL_TREE;
+		  tree need_device_addr_list = NULL_TREE;
+		  tree append_args_tree = NULL_TREE;
 		  tree id = get_identifier ("omp declare variant base");
 		  tree variant = gfc_get_symbol_decl (variant_proc_sym);
 		  DECL_ATTRIBUTES (base_fn_decl)
 		    = tree_cons (id, build_tree_list (variant, set_selectors),
 				 DECL_ATTRIBUTES (base_fn_decl));
-
-		  // Handle adjust_args
-		  tree need_device_ptr_list = make_node (TREE_LIST);
+		  int arg_idx_offset = 0;
+		  if (gfc_return_by_reference (ns->proc_name))
+		    {
+		      arg_idx_offset++;
+		      if (ns->proc_name->ts.type == BT_CHARACTER)
+			arg_idx_offset++;
+		    }
+		  int nargs = 0;
+		  for (gfc_formal_arglist *arg
+			= gfc_sym_get_dummy_args (ns->proc_name);
+		       arg; arg = arg->next)
+		    nargs++;
+		  if (odv->append_args_list)
+		    {
+		      int append_arg_no = arg_idx_offset + nargs;
+		      tree last_arg = NULL_TREE;
+		      for (gfc_omp_namelist *n = odv->append_args_list;
+			   n != NULL; n = n->next)
+			{
+			  tree pref = NULL_TREE;
+			  if (n->u.init.len)
+			    {
+			      pref = build_string (n->u.init.len,
+						   n->u2.init_interop);
+			      TREE_TYPE (pref) = build_array_type_nelts (
+						   unsigned_char_type_node,
+						   n->u.init.len);
+			    }
+			  /* Save location, (target + target sync) and
+			     prefer_type list in a tree list.  */
+			  tree t = build_tree_list (n->u.init.target
+						    ? boolean_true_node
+						    : boolean_false_node,
+						    n->u.init.targetsync
+						    ? boolean_true_node
+						    : boolean_false_node);
+			  t = build1_loc (gfc_get_location (&n->where),
+					  NOP_EXPR, void_type_node, t);
+			  t = build_tree_list (t, pref);
+			  if (append_args_tree)
+			    {
+			      TREE_CHAIN (last_arg) = t;
+			      last_arg = t;
+			    }
+			  else
+			    append_args_tree = last_arg = t;
+			}
+		      /* Store as 'purpose' = arg number to be used for inserting
+			 and 'value' = list of interop items.  */
+		      append_args_tree = build_tree_list (
+					   build_int_cst (integer_type_node,
+							  append_arg_no),
+					   append_args_tree);
+		    }
 		  vec<gfc_symbol *> adjust_args_list = vNULL;
 		  for (gfc_omp_namelist *arg_list = odv->adjust_args_list;
 		       arg_list != NULL; arg_list = arg_list->next)
 		    {
-		      if (!arg_list->sym->attr.dummy)
+		      int from, to;
+		      if (arg_list->expr == NULL || arg_list->sym)
+			from = ((arg_list->u.adj_args.omp_num_args_minus
+				 || arg_list->u.adj_args.omp_num_args_plus)
+				? nargs : 1);
+		      else
 			{
-			  gfc_error (
-			    "list item %qs at %L is not a dummy argument",
-			    arg_list->sym->name, &arg_list->where);
-			  continue;
+			  if (arg_list->u.adj_args.omp_num_args_plus)
+			    mpz_add_ui (arg_list->expr->value.integer,
+					arg_list->expr->value.integer, nargs);
+			  if (arg_list->u.adj_args.omp_num_args_minus)
+			    mpz_ui_sub (arg_list->expr->value.integer, nargs,
+					arg_list->expr->value.integer);
+			  if (mpz_sgn (arg_list->expr->value.integer) <= 0)
+			    {
+			      gfc_warning (OPT_Wopenmp,
+					   "Expected positive argument index "
+					   "at %L", &arg_list->where);
+			      from = 1;
+			    }
+			  else
+			    from
+			      = (mpz_fits_sint_p (arg_list->expr->value.integer)
+				 ? mpz_get_si (arg_list->expr->value.integer)
+				 : INT_MAX);
+			  if (from > nargs)
+			    gfc_warning (OPT_Wopenmp,
+					 "Argument index at %L exceeds number "
+					 "of arguments %d", &arg_list->where,
+					 nargs);
 			}
-		      if (adjust_args_list.contains (arg_list->sym))
+		      locus loc = arg_list->where;
+		      if (!arg_list->u.adj_args.range_start)
+			to = from;
+		      else
 			{
-			  gfc_error ("%qs at %L is specified more than once",
-				     arg_list->sym->name, &arg_list->where);
-			  continue;
+			  loc = gfc_get_location_range (&arg_list->where, 0,
+							&arg_list->where, 0,
+							&arg_list->next->where);
+			  if (arg_list->next->expr == NULL)
+			    to = nargs;
+			  else
+			    {
+			      if (arg_list->next->u.adj_args.omp_num_args_plus)
+				mpz_add_ui (arg_list->next->expr->value.integer,
+					    arg_list->next->expr->value.integer,
+					    nargs);
+			      if (arg_list->next->u.adj_args.omp_num_args_minus)
+				mpz_ui_sub (arg_list->next->expr->value.integer,
+					    nargs,
+					    arg_list->next->expr->value.integer);
+			      if (mpz_sgn (arg_list->next->expr->value.integer)
+				  <= 0)
+				{
+				  gfc_warning (OPT_Wopenmp,
+					       "Expected positive argument "
+					       "index at %L", &loc);
+				  to = 0;
+				}
+			      else
+				to = mpz_get_si (
+				       arg_list->next->expr->value.integer);
+			    }
+			  if (from > to && to != 0)
+			    gfc_warning (OPT_Wopenmp,
+					 "Upper argument index smaller than "
+					 "lower one at %L", &loc);
+			  if (to > nargs)
+			    to = nargs;
+			  arg_list = arg_list->next;
 			}
-		      adjust_args_list.safe_push (arg_list->sym);
-		      if (arg_list->u.need_device_ptr)
+		      if (from > nargs)
+			continue;
+		      /* Change to zero based index.  */
+		      from--; to--;
+		      gfc_formal_arglist *arg = ns->proc_name->formal;
+		      if (!arg_list->sym && to >= from)
+			for (int idx = 0; idx < from; idx++)
+			  arg = arg->next;
+		      for (int idx = from; idx <= to; idx++)
 			{
-			  int idx;
-			  gfc_formal_arglist *arg;
-			  for (arg = ns->proc_name->formal, idx = 0;
-			       arg != NULL; arg = arg->next, idx++)
-			    if (arg->sym == arg_list->sym)
-			      break;
-			  gcc_assert (arg != NULL);
-			  need_device_ptr_list = chainon (
-			    need_device_ptr_list,
-			    build_tree_list (
-			      NULL_TREE,
-			      build_int_cst (
-				integer_type_node,
-				idx))); // Store 0-based argument index,
-					// as in gimplify_call_expr
+			  if (idx > from)
+			    arg = arg->next;
+			  if (arg_list->sym)
+			    {
+			      for (arg = ns->proc_name->formal, idx = 0;
+				   arg != NULL; arg = arg->next, idx++)
+				if (arg->sym == arg_list->sym)
+				  break;
+			      if (!arg || !arg_list->sym->attr.dummy)
+				{
+				  gfc_error ("List item %qs at %L, declared at "
+					     "%L, is not a dummy argument",
+					     arg_list->sym->name, &loc,
+					     &arg_list->sym->declared_at);
+				  continue;
+				}
+			    }
+			  if (arg_list->u.adj_args.need_ptr
+			      && (arg->sym->ts.f90_type != BT_VOID
+				  || !arg->sym->ts.u.derived->ts.is_iso_c
+				  || (arg->sym->ts.u.derived->intmod_sym_id
+				      != ISOCBINDING_PTR)
+				  || arg->sym->attr.dimension))
+			    {
+			      gfc_error ("Argument %qs at %L to list item in "
+					 "%<need_device_ptr%> at %L must be a "
+					 "scalar of TYPE(C_PTR)",
+					 arg->sym->name,
+					 &arg->sym->declared_at, &loc);
+			      if (!arg->sym->attr.value)
+				inform (gfc_get_location (&loc),
+					"Consider using %<need_device_addr%> "
+					"instead");
+			      continue;
+			    }
+			  if (arg_list->u.adj_args.need_addr
+			      && arg->sym->attr.value)
+			    {
+			      gfc_error ("Argument %qs at %L to list item in "
+					 "%<need_device_addr%> at %L must not "
+					 "have the VALUE attribute",
+					 arg->sym->name,
+					 &arg->sym->declared_at, &loc);
+			      continue;
+			    }
+			  if (adjust_args_list.contains (arg->sym))
+			    {
+			      gfc_error ("%qs at %L is specified more than "
+					 "once", arg->sym->name, &loc);
+			      continue;
+			    }
+			  adjust_args_list.safe_push (arg->sym);
+
+			  if (arg_list->u.adj_args.need_addr)
+			    {
+			      /* TODO: Has to to support OPTIONAL and array
+				 descriptors; should check for CLASS, coarrays?
+				 Reject "abc" and 123 as actual arguments (in
+				 gimplify.cc or in the FE? Reject noncontiguous
+				 actuals?  Cf. also PR C++/118859.
+				 Also check array-valued type(c_ptr).  */
+			      static bool warned = false;
+			      if (!warned)
+				sorry_at (gfc_get_location (&loc),
+					  "%<need_device_addr%> not yet "
+					  "supported");
+			      warned = true;
+			      continue;
+			    }
+			  if (arg_list->u.adj_args.need_ptr
+			      || arg_list->u.adj_args.need_addr)
+			    {
+			      // Store 0-based argument index,
+			      // as in gimplify_call_expr
+			      tree t
+				= build_tree_list (
+				    NULL_TREE,
+				    build_int_cst (integer_type_node,
+						   idx + arg_idx_offset));
+			      if (arg_list->u.adj_args.need_ptr)
+				need_device_ptr_list
+				  = chainon (need_device_ptr_list, t);
+			      else
+				need_device_addr_list
+				  = chainon (need_device_addr_list, t);
+			    }
 			}
 		    }
-
-		  DECL_ATTRIBUTES (variant) = tree_cons (
-		    get_identifier ("omp declare variant variant args"),
-		    build_tree_list (need_device_ptr_list,
-				     NULL_TREE /*need_device_addr */),
-		    DECL_ATTRIBUTES (variant));
+		  tree t = NULL_TREE;
+		  if (need_device_ptr_list
+		      || need_device_addr_list
+		      || append_args_tree)
+		    {
+		      t = build_tree_list (need_device_ptr_list,
+					   need_device_addr_list),
+		      TREE_CHAIN (t) = append_args_tree;
+		      DECL_ATTRIBUTES (variant) = tree_cons (
+			get_identifier ("omp declare variant variant args"), t,
+			DECL_ATTRIBUTES (variant));
+		    }
 		}
 	    }
 	}
@@ -8904,4 +9238,55 @@ gfc_omp_call_is_alloc (tree ptr)
       fn = build_fn_decl ("GOMP_is_alloc", fn);
     }
   return build_call_expr_loc (input_location, fn, 1, ptr);
+}
+
+tree
+gfc_trans_omp_metadirective (gfc_code *code)
+{
+  gfc_omp_variant *variant = code->ext.omp_variants;
+
+  tree metadirective_tree = make_node (OMP_METADIRECTIVE);
+  SET_EXPR_LOCATION (metadirective_tree, gfc_get_location (&code->loc));
+  TREE_TYPE (metadirective_tree) = void_type_node;
+  OMP_METADIRECTIVE_VARIANTS (metadirective_tree) = NULL_TREE;
+
+  tree tree_body = NULL_TREE;
+
+  while (variant)
+    {
+      tree ctx = gfc_trans_omp_set_selector (variant->selectors,
+					     variant->where);
+      ctx = omp_check_context_selector (gfc_get_location (&variant->where),
+					ctx, OMP_CTX_METADIRECTIVE);
+      if (ctx == error_mark_node)
+	return error_mark_node;
+
+      /* If the selector doesn't match, drop the whole variant.  */
+      if (!omp_context_selector_matches (ctx, NULL_TREE, false))
+	{
+	  variant = variant->next;
+	  continue;
+	}
+
+      gfc_code *next_code = variant->code->next;
+      if (next_code && tree_body == NULL_TREE)
+	tree_body = gfc_trans_code (next_code);
+
+      if (next_code)
+	variant->code->next = NULL;
+      tree directive = gfc_trans_code (variant->code);
+      if (next_code)
+	variant->code->next = next_code;
+
+      tree body = next_code ? tree_body : NULL_TREE;
+      tree omp_variant = make_omp_metadirective_variant (ctx, directive, body);
+      OMP_METADIRECTIVE_VARIANTS (metadirective_tree)
+	= chainon (OMP_METADIRECTIVE_VARIANTS (metadirective_tree),
+		   omp_variant);
+      variant = variant->next;
+    }
+
+  /* TODO: Resolve the metadirective here if possible.   */
+
+  return metadirective_tree;
 }
