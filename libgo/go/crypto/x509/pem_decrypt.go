@@ -79,6 +79,11 @@ var rfc1423Algos = []rfc1423Algo{{
 // deriveKey uses a key derivation function to stretch the password into a key
 // with the number of bits our cipher requires. This algorithm was derived from
 // the OpenSSL source.
+//
+// NOTE: This is legacy-compatible RFC 1423/OpenSSL key derivation, which uses
+// MD5 and is cryptographically weak for password-based key derivation. It is
+// retained only for interoperability with existing encrypted PEM blocks.
+// New applications should use stronger formats/KDFs.
 func (c rfc1423Algo) deriveKey(password, salt []byte) []byte {
 	hash := md5.New()
 	out := make([]byte, c.keySize)
