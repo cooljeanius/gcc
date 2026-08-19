@@ -1,6 +1,6 @@
 /* m2rte.cc a plugin to detect runtime exceptions at compiletime.
 
-Copyright (C) 2017-2025 Free Software Foundation, Inc.
+Copyright (C) 2017-2026 Free Software Foundation, Inc.
 Contributed by Gaius Mulley <gaius@glam.ac.uk>.
 
 This file is part of GNU Modula-2.
@@ -41,7 +41,6 @@ along with GNU Modula-2; see the file COPYING3.  If not see
 #include "context.h"
 
 #include "rtegraph.h"
-extern bool ggc_force_collect;
 extern void ggc_collect (void);
 
 #undef DEBUG_BASICBLOCK

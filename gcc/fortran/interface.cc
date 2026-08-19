@@ -1,5 +1,5 @@
 /* Deal with interfaces.
-   Copyright (C) 2000-2025 Free Software Foundation, Inc.
+   Copyright (C) 2000-2026 Free Software Foundation, Inc.
    Contributed by Andy Vaught
 
 This file is part of GCC.
@@ -211,11 +211,15 @@ gfc_match_generic_spec (interface_type *type,
       *op = dtio_op (buffer);
       if (*op == INTRINSIC_FORMATTED)
 	{
+	  if (flag_default_integer)
+	    goto conflict;
 	  strcpy (name, gfc_code2string (dtio_procs, DTIO_RF));
 	  *type = INTERFACE_DTIO;
 	}
       if (*op == INTRINSIC_UNFORMATTED)
 	{
+	  if (flag_default_integer)
+	    goto conflict;
 	  strcpy (name, gfc_code2string (dtio_procs, DTIO_RUF));
 	  *type = INTERFACE_DTIO;
 	}
@@ -228,11 +232,15 @@ gfc_match_generic_spec (interface_type *type,
       *op = dtio_op (buffer);
       if (*op == INTRINSIC_FORMATTED)
 	{
+	  if (flag_default_integer)
+	    goto conflict;
 	  strcpy (name, gfc_code2string (dtio_procs, DTIO_WF));
 	  *type = INTERFACE_DTIO;
 	}
       if (*op == INTRINSIC_UNFORMATTED)
 	{
+	  if (flag_default_integer)
+	    goto conflict;
 	  strcpy (name, gfc_code2string (dtio_procs, DTIO_WUF));
 	  *type = INTERFACE_DTIO;
 	}
@@ -249,6 +257,11 @@ gfc_match_generic_spec (interface_type *type,
 
   *type = INTERFACE_NAMELESS;
   return MATCH_YES;
+
+conflict:
+  gfc_error ("Sorry: -fdefault-integer-8 option is not supported with "
+	     "user-defined input/output at %C");
+  return MATCH_ERROR;
 
 syntax:
   gfc_error ("Syntax error in generic specification at %C");
@@ -452,11 +465,20 @@ gfc_match_end_interface (void)
 
     case INTERFACE_DTIO:
     case INTERFACE_GENERIC:
+      /* If a use-associated symbol is renamed, check the local_name.   */
+      const char *local_name = current_interface.sym->name;
+
+      if (current_interface.sym->attr.use_assoc
+	  && current_interface.sym->attr.use_rename
+	  && current_interface.sym->ns->use_stmts->rename
+	  && (current_interface.sym->ns->use_stmts->rename->local_name[0]
+	      != '\0'))
+	local_name = current_interface.sym->ns->use_stmts->rename->local_name;
+
       if (type != current_interface.type
-	  || strcmp (current_interface.sym->name, name) != 0)
+	  || strcmp (local_name, name) != 0)
 	{
-	  gfc_error ("Expecting %<END INTERFACE %s%> at %C",
-		     current_interface.sym->name);
+	  gfc_error ("Expecting %<END INTERFACE %s%> at %C", local_name);
 	  m = MATCH_ERROR;
 	}
 
@@ -1353,8 +1375,8 @@ generic_correspondence (gfc_formal_arglist *f1, gfc_formal_arglist *f2,
 }
 
 
-static int
-symbol_rank (gfc_symbol *sym)
+int
+gfc_symbol_rank (gfc_symbol *sym)
 {
   gfc_array_spec *as = NULL;
 
@@ -1376,7 +1398,7 @@ gfc_check_dummy_characteristics (gfc_symbol *s1, gfc_symbol *s2,
 				 int err_len)
 {
   if (s1 == NULL || s2 == NULL)
-    return s1 == s2 ? true : false;
+    return s1 == s2;
 
   if (s1->attr.proc == PROC_ST_FUNCTION || s2->attr.proc == PROC_ST_FUNCTION)
     {
@@ -1398,82 +1420,87 @@ gfc_check_dummy_characteristics (gfc_symbol *s1, gfc_symbol *s2,
       if (!compare_rank (s1, s2))
 	{
 	  snprintf (errmsg, err_len, "Rank mismatch in argument '%s' (%i/%i)",
-		    s1->name, symbol_rank (s1), symbol_rank (s2));
+		    s1->name, gfc_symbol_rank (s1), gfc_symbol_rank (s2));
 	  return false;
 	}
     }
 
-  /* Check INTENT.  */
-  if (s1->attr.intent != s2->attr.intent && !s1->attr.artificial
-      && !s2->attr.artificial)
-    {
-      snprintf (errmsg, err_len, "INTENT mismatch in argument '%s'",
-		s1->name);
-      return false;
-    }
+  /* A lot of information is missing for artificially generated
+     formal arguments, let's not look into that.  */
 
-  /* Check OPTIONAL attribute.  */
-  if (s1->attr.optional != s2->attr.optional)
+  if (!s1->attr.artificial && !s2->attr.artificial)
     {
-      snprintf (errmsg, err_len, "OPTIONAL mismatch in argument '%s'",
-		s1->name);
-      return false;
-    }
+      /* Check INTENT.  */
+      if (s1->attr.intent != s2->attr.intent)
+	{
+	  snprintf (errmsg, err_len, "INTENT mismatch in argument '%s'",
+		    s1->name);
+	  return false;
+	}
 
-  /* Check ALLOCATABLE attribute.  */
-  if (s1->attr.allocatable != s2->attr.allocatable)
-    {
-      snprintf (errmsg, err_len, "ALLOCATABLE mismatch in argument '%s'",
-		s1->name);
-      return false;
-    }
+      /* Check OPTIONAL attribute.  */
+      if (s1->attr.optional != s2->attr.optional)
+	{
+	  snprintf (errmsg, err_len, "OPTIONAL mismatch in argument '%s'",
+		    s1->name);
+	  return false;
+	}
 
-  /* Check POINTER attribute.  */
-  if (s1->attr.pointer != s2->attr.pointer)
-    {
-      snprintf (errmsg, err_len, "POINTER mismatch in argument '%s'",
-		s1->name);
-      return false;
-    }
+      /* Check ALLOCATABLE attribute.  */
+      if (s1->attr.allocatable != s2->attr.allocatable)
+	{
+	  snprintf (errmsg, err_len, "ALLOCATABLE mismatch in argument '%s'",
+		    s1->name);
+	  return false;
+	}
 
-  /* Check TARGET attribute.  */
-  if (s1->attr.target != s2->attr.target)
-    {
-      snprintf (errmsg, err_len, "TARGET mismatch in argument '%s'",
-		s1->name);
-      return false;
-    }
+      /* Check POINTER attribute.  */
+      if (s1->attr.pointer != s2->attr.pointer)
+	{
+	  snprintf (errmsg, err_len, "POINTER mismatch in argument '%s'",
+		    s1->name);
+	  return false;
+	}
 
-  /* Check ASYNCHRONOUS attribute.  */
-  if (s1->attr.asynchronous != s2->attr.asynchronous)
-    {
-      snprintf (errmsg, err_len, "ASYNCHRONOUS mismatch in argument '%s'",
-		s1->name);
-      return false;
-    }
+      /* Check TARGET attribute.  */
+      if (s1->attr.target != s2->attr.target)
+	{
+	  snprintf (errmsg, err_len, "TARGET mismatch in argument '%s'",
+		    s1->name);
+	  return false;
+	}
 
-  /* Check CONTIGUOUS attribute.  */
-  if (s1->attr.contiguous != s2->attr.contiguous)
-    {
-      snprintf (errmsg, err_len, "CONTIGUOUS mismatch in argument '%s'",
-		s1->name);
-      return false;
-    }
+      /* Check ASYNCHRONOUS attribute.  */
+      if (s1->attr.asynchronous != s2->attr.asynchronous)
+	{
+	  snprintf (errmsg, err_len, "ASYNCHRONOUS mismatch in argument '%s'",
+		    s1->name);
+	  return false;
+	}
 
-  /* Check VALUE attribute.  */
-  if (s1->attr.value != s2->attr.value)
-    {
-      snprintf (errmsg, err_len, "VALUE mismatch in argument '%s'",
-		s1->name);
-      return false;
-    }
+      /* Check CONTIGUOUS attribute.  */
+      if (s1->attr.contiguous != s2->attr.contiguous)
+	{
+	  snprintf (errmsg, err_len, "CONTIGUOUS mismatch in argument '%s'",
+		    s1->name);
+	  return false;
+	}
 
-  /* Check VOLATILE attribute.  */
-  if (s1->attr.volatile_ != s2->attr.volatile_)
-    {
-      snprintf (errmsg, err_len, "VOLATILE mismatch in argument '%s'",
-		s1->name);
-      return false;
+      /* Check VALUE attribute.  */
+      if (s1->attr.value != s2->attr.value)
+	{
+	  snprintf (errmsg, err_len, "VALUE mismatch in argument '%s'",
+		    s1->name);
+	  return false;
+	}
+
+      /* Check VOLATILE attribute.  */
+      if (s1->attr.volatile_ != s2->attr.volatile_)
+	{
+	  snprintf (errmsg, err_len, "VOLATILE mismatch in argument '%s'",
+		    s1->name);
+	  return false;
+	}
     }
 
   /* Check interface of dummy procedures.  */
@@ -1527,6 +1554,13 @@ gfc_check_dummy_characteristics (gfc_symbol *s1, gfc_symbol *s2,
       int i, compval;
       gfc_expr *shape1, *shape2;
 
+      if (s1->as->rank != s2->as->rank)
+	{
+	  snprintf (errmsg, err_len, "Rank mismatch in argument '%s' (%i/%i)",
+		    s1->name, s1->as->rank, s2->as->rank);
+	  return false;
+	}
+
       /* Sometimes the ambiguity between deferred shape and assumed shape
 	 does not get resolved in module procedures, where the only explicit
 	 declaration of the dummy is in the interface.  */
@@ -1540,7 +1574,9 @@ gfc_check_dummy_characteristics (gfc_symbol *s1, gfc_symbol *s2,
 	      s2->as->lower[i] = gfc_copy_expr (s1->as->lower[i]);
 	}
 
-      if (s1->as->type != s2->as->type)
+      if (s1->as->type != s2->as->type
+	  && !(s1->as->type == AS_DEFERRED
+	       && s2->as->type == AS_ASSUMED_SHAPE))
 	{
 	  snprintf (errmsg, err_len, "Shape mismatch in argument '%s'",
 		    s1->name);
@@ -1631,7 +1667,7 @@ gfc_check_result_characteristics (gfc_symbol *s1, gfc_symbol *s2,
   if (!compare_rank (r1, r2))
     {
       snprintf (errmsg, err_len, "Rank mismatch in function result (%i/%i)",
-		symbol_rank (r1), symbol_rank (r2));
+		gfc_symbol_rank (r1), gfc_symbol_rank (r2));
       return false;
     }
 
@@ -1922,7 +1958,7 @@ gfc_compare_interfaces (gfc_symbol *s1, gfc_symbol *s2, const char *name2,
 		if (errmsg != NULL)
 		  snprintf (errmsg, err_len, "Rank mismatch in argument "
 			    "'%s' (%i/%i)", f1->sym->name,
-			    symbol_rank (f1->sym), symbol_rank (f2->sym));
+			    gfc_symbol_rank (f1->sym), gfc_symbol_rank (f2->sym));
 		return false;
 	      }
 	    if ((gfc_option.allow_std & GFC_STD_F2008)
@@ -2441,12 +2477,12 @@ compare_parameter (gfc_symbol *formal, gfc_expr *actual,
 	return false;
 
       if (ranks_must_agree
-	  && symbol_rank (formal) != actual->rank
-	  && symbol_rank (formal) != -1)
+	  && gfc_symbol_rank (formal) != actual->rank
+	  && gfc_symbol_rank (formal) != -1)
 	{
 	  if (where)
 	    argument_rank_mismatch (formal->name, &actual->where,
-				    symbol_rank (formal), actual->rank,
+				    gfc_symbol_rank (formal), actual->rank,
 				    NULL);
 	  return false;
 	}
@@ -2534,15 +2570,39 @@ compare_parameter (gfc_symbol *formal, gfc_expr *actual,
 		  gfc_find_symbol (actual_name, gsym->ns, 0, &global_asym);
 		  if (global_asym != NULL)
 		    {
-		      gcc_assert (formal->attr.function);
-		      if (!gfc_compare_types (&global_asym->ts, &formal->ts))
+		      if (formal->attr.subroutine)
 			{
-			  gfc_error ("Type mismatch at %L passing global "
-				     "function %qs declared at %L (%s/%s)",
-				     &actual->where, actual_name, &gsym->where,
-				     gfc_typename (&global_asym->ts),
-				     gfc_dummy_typename (&formal->ts));
+			  gfc_error ("Mismatch between subroutine and "
+				     "function at %L", &actual->where);
 			  return false;
+			}
+		      else if (formal->attr.function)
+			{
+			  gfc_typespec ts;
+
+			  if (global_asym->result)
+			    ts = global_asym->result->ts;
+			  else
+			    ts = global_asym->ts;
+
+			  if (!gfc_compare_types (&ts,
+						  &formal->ts))
+			    {
+			      gfc_error ("Type mismatch at %L passing global "
+					 "function %qs declared at %L (%s/%s)",
+					 &actual->where, actual_name,
+					 &gsym->where,
+					 gfc_typename (&global_asym->ts),
+					 gfc_dummy_typename (&formal->ts));
+			      return false;
+			    }
+			}
+		      else
+			{
+			  /* The global symbol is a function.  Set the formal
+			     argument accordingly.  */
+			  formal->attr.function = 1;
+			  formal->ts = global_asym->ts;
 			}
 		    }
 		}
@@ -2632,7 +2692,7 @@ compare_parameter (gfc_symbol *formal, gfc_expr *actual,
 
   /* TS29113 C407c; F2018 C711.  */
   if (actual->ts.type == BT_ASSUMED
-      && symbol_rank (formal) == -1
+      && gfc_symbol_rank (formal) == -1
       && actual->rank != -1
       && !(actual->symtree->n.sym->as
 	   && actual->symtree->n.sym->as->type == AS_ASSUMED_SHAPE))
@@ -2811,7 +2871,7 @@ compare_parameter (gfc_symbol *formal, gfc_expr *actual,
     }
 
   /* If the rank is the same or the formal argument has assumed-rank.  */
-  if (symbol_rank (formal) == actual->rank || symbol_rank (formal) == -1)
+  if (gfc_symbol_rank (formal) == actual->rank || gfc_symbol_rank (formal) == -1)
     return true;
 
   rank_check = where != NULL && !is_elemental && formal_as
@@ -2856,7 +2916,7 @@ compare_parameter (gfc_symbol *formal, gfc_expr *actual,
 	    where_formal = NULL;
 
 	  argument_rank_mismatch (formal->name, &actual->where,
-				  symbol_rank (formal), actual->rank,
+				  gfc_symbol_rank (formal), actual->rank,
 				  where_formal);
 	}
       return false;
@@ -2959,7 +3019,7 @@ compare_parameter (gfc_symbol *formal, gfc_expr *actual,
 	    where_formal = NULL;
 
 	  argument_rank_mismatch (formal->name, &actual->where,
-				  symbol_rank (formal), actual->rank,
+				  gfc_symbol_rank (formal), actual->rank,
 				  where_formal);
 	}
       return false;
@@ -2969,14 +3029,16 @@ compare_parameter (gfc_symbol *formal, gfc_expr *actual,
 }
 
 
-/* Returns the storage size of a symbol (formal argument) or
-   zero if it cannot be determined.  */
+/* Returns the storage size of a symbol (formal argument) or sets argument
+   size_known to false if it cannot be determined.  */
 
 static unsigned long
-get_sym_storage_size (gfc_symbol *sym)
+get_sym_storage_size (gfc_symbol *sym, bool *size_known)
 {
   int i;
   unsigned long strlen, elements;
+
+  *size_known = false;
 
   if (sym->ts.type == BT_CHARACTER)
     {
@@ -2990,8 +3052,11 @@ get_sym_storage_size (gfc_symbol *sym)
   else
     strlen = 1;
 
-  if (symbol_rank (sym) == 0)
-    return strlen;
+  if (gfc_symbol_rank (sym) == 0)
+    {
+      *size_known = true;
+      return strlen;
+    }
 
   elements = 1;
   if (sym->as->type != AS_EXPLICIT)
@@ -3008,23 +3073,28 @@ get_sym_storage_size (gfc_symbol *sym)
 		  - mpz_get_si (sym->as->lower[i]->value.integer) + 1L;
     }
 
+  *size_known = true;
+
   return strlen*elements;
 }
 
 
-/* Returns the storage size of an expression (actual argument) or
-   zero if it cannot be determined. For an array element, it returns
-   the remaining size as the element sequence consists of all storage
+/* Returns the storage size of an expression (actual argument) or sets argument
+   size_known to false if it cannot be determined.  For an array element, it
+   returns the remaining size as the element sequence consists of all storage
    units of the actual argument up to the end of the array.  */
 
 static unsigned long
-get_expr_storage_size (gfc_expr *e)
+get_expr_storage_size (gfc_expr *e, bool *size_known, long int *charlen)
 {
   int i;
   long int strlen, elements;
   long int substrlen = 0;
   bool is_str_storage = false;
   gfc_ref *ref;
+
+  *size_known = false;
+  *charlen = -1;
 
   if (e == NULL)
     return 0;
@@ -3040,12 +3110,16 @@ get_expr_storage_size (gfc_expr *e)
 	strlen = e->value.character.length;
       else
 	return 0;
+      *charlen = strlen;
     }
   else
     strlen = 1; /* Length per element.  */
 
   if (e->rank == 0 && !e->ref)
-    return strlen;
+    {
+      *size_known = true;
+      return strlen;
+    }
 
   elements = 1;
   if (!e->ref)
@@ -3054,7 +3128,10 @@ get_expr_storage_size (gfc_expr *e)
 	return 0;
       for (i = 0; i < e->rank; i++)
 	elements *= mpz_get_si (e->shape[i]);
-      return elements*strlen;
+      {
+	*size_known = true;
+	return elements*strlen;
+      }
     }
 
   for (ref = e->ref; ref; ref = ref->next)
@@ -3193,6 +3270,8 @@ get_expr_storage_size (gfc_expr *e)
 	}
     }
 
+  *size_known = true;
+
   if (substrlen)
     return (is_str_storage) ? substrlen + (elements-1)*strlen
 			    : elements*strlen;
@@ -3288,12 +3367,14 @@ gfc_compare_actual_formal (gfc_actual_arglist **ap, gfc_formal_arglist *formal,
   gfc_formal_arglist *f;
   int i, n, na;
   unsigned long actual_size, formal_size;
+  long int charlen;
   bool full_array = false;
   gfc_array_ref *actual_arr_ref;
   gfc_array_spec *fas, *aas;
   bool pointer_dummy, pointer_arg, allocatable_arg;
   bool procptr_dummy, optional_dummy, allocatable_dummy;
-
+  bool actual_size_known = false;
+  bool formal_size_known = false;
   bool ok = true;
 
   actual = *ap;
@@ -3382,7 +3463,11 @@ gfc_compare_actual_formal (gfc_actual_arglist **ap, gfc_formal_arglist *formal,
 	  return false;
 	}
       else
-	a->associated_dummy = get_nonintrinsic_dummy_arg (f);
+	{
+	  if (a->associated_dummy)
+	    free (a->associated_dummy);
+	  a->associated_dummy = get_nonintrinsic_dummy_arg (f);
+	}
 
       if (a->expr == NULL)
 	{
@@ -3542,20 +3627,39 @@ gfc_compare_actual_formal (gfc_actual_arglist **ap, gfc_formal_arglist *formal,
 	  && (mpz_cmp (a->expr->ts.u.cl->length->value.integer,
 		       f->sym->ts.u.cl->length->value.integer) != 0))
 	{
+	  long actual_len, formal_len;
+	  actual_len = mpz_get_si (a->expr->ts.u.cl->length->value.integer);
+	  formal_len = mpz_get_si (f->sym->ts.u.cl->length->value.integer);
+
 	  if (where && (f->sym->attr.pointer || f->sym->attr.allocatable))
-	    gfc_warning (0, "Character length mismatch (%ld/%ld) between actual "
-			 "argument and pointer or allocatable dummy argument "
-			 "%qs at %L",
-			 mpz_get_si (a->expr->ts.u.cl->length->value.integer),
-			 mpz_get_si (f->sym->ts.u.cl->length->value.integer),
-			 f->sym->name, &a->expr->where);
+	    {
+	      /* Emit a warning for -std=legacy and an error otherwise. */
+	      if (gfc_option.warn_std == 0)
+		gfc_warning (0, "Character length mismatch (%ld/%ld) between "
+			     "actual argument and pointer or allocatable "
+			     "dummy argument %qs at %L", actual_len, formal_len,
+			     f->sym->name, &a->expr->where);
+	      else
+		gfc_error ("Character length mismatch (%ld/%ld) between "
+			   "actual argument and pointer or allocatable "
+			   "dummy argument %qs at %L", actual_len, formal_len,
+			   f->sym->name, &a->expr->where);
+	    }
 	  else if (where)
-	    gfc_warning (0, "Character length mismatch (%ld/%ld) between actual "
-			 "argument and assumed-shape dummy argument %qs "
-			 "at %L",
-			 mpz_get_si (a->expr->ts.u.cl->length->value.integer),
-			 mpz_get_si (f->sym->ts.u.cl->length->value.integer),
-			 f->sym->name, &a->expr->where);
+	    {
+	      /* Emit a warning for -std=legacy and an error otherwise. */
+	      if (gfc_option.warn_std == 0)
+		gfc_warning (0, "Character length mismatch (%ld/%ld) between "
+			     "actual argument and assumed-shape dummy argument "
+			     "%qs at %L", actual_len, formal_len,
+			     f->sym->name, &a->expr->where);
+	      else
+		gfc_error ("Character length mismatch (%ld/%ld) between "
+			   "actual argument and assumed-shape dummy argument "
+			   "%qs at %L", actual_len, formal_len,
+			   f->sym->name, &a->expr->where);
+
+	    }
 	  ok = false;
 	  goto match;
 	}
@@ -3580,21 +3684,82 @@ gfc_compare_actual_formal (gfc_actual_arglist **ap, gfc_formal_arglist *formal,
       if (a->expr->expr_type == EXPR_NULL && a->expr->ts.type == BT_UNKNOWN)
 	goto skip_size_check;
 
-      actual_size = get_expr_storage_size (a->expr);
-      formal_size = get_sym_storage_size (f->sym);
-      if (actual_size != 0 && actual_size < formal_size
+      actual_size = get_expr_storage_size (a->expr, &actual_size_known, &charlen);
+      formal_size = get_sym_storage_size (f->sym, &formal_size_known);
+
+      /* If the formal is a scalar character variable, use the charlen of the
+	 actual.  */
+      if (actual_size_known && formal_size_known && charlen >= 0
+	  && a->expr->ts.type == BT_CHARACTER
+	  && f->sym->attr.flavor != FL_PROCEDURE
+	  && !f->sym->attr.dimension)
+	actual_size = charlen;
+
+      if (actual_size_known && formal_size_known
+	  && actual_size != formal_size
+	  && a->expr->ts.type == BT_CHARACTER
+	  && f->sym->attr.flavor != FL_PROCEDURE)
+	{
+	  /* F2018:15.5.2.4:
+	     (3) "The length type parameter values of a present actual argument
+	     shall agree with the corresponding ones of the dummy argument that
+	     are not assumed, except for the case of the character length
+	     parameter of an actual argument of type character with default
+	     kind or C character kind associated with a dummy argument that is
+	     not assumed-shape or assumed-rank."
+
+	     (4) "If a present scalar dummy argument is of type character with
+	     default kind or C character kind, the length len of the dummy
+	     argument shall be less than or equal to the length of the actual
+	     argument.  The dummy argument becomes associated with the leftmost
+	     len characters of the actual argument.  If a present array dummy
+	     argument is of type character with default kind or C character
+	     kind and is not assumed-shape or assumed-rank, it becomes
+	     associated with the leftmost characters of the actual argument
+	     element sequence."
+
+	     As an extension we treat kind=4 character similarly to kind=1.  */
+
+	  if (actual_size > formal_size)
+	    {
+	      if (a->expr->ts.type == BT_CHARACTER && where
+		  && (!f->sym->as || f->sym->as->type == AS_EXPLICIT))
+		gfc_warning (OPT_Wcharacter_truncation,
+			     "Character length of actual argument longer "
+			     "than of dummy argument %qs (%lu/%lu) at %L",
+			     f->sym->name, actual_size, formal_size,
+			     &a->expr->where);
+	      goto skip_size_check;
+	    }
+
+	  if (a->expr->ts.type == BT_CHARACTER && where && !f->sym->as)
+	    {
+	      /* Emit warning for -std=legacy/gnu and an error otherwise. */
+	      if (gfc_notification_std (GFC_STD_LEGACY) == ERROR)
+		{
+		  gfc_error ("Character length of actual argument shorter "
+			     "than of dummy argument %qs (%lu/%lu) at %L",
+			     f->sym->name, actual_size, formal_size,
+			     &a->expr->where);
+		  ok = false;
+		  goto match;
+		}
+	      else
+		gfc_warning (0, "Character length of actual argument shorter "
+			     "than of dummy argument %qs (%lu/%lu) at %L",
+			     f->sym->name, actual_size, formal_size,
+			     &a->expr->where);
+	      goto skip_size_check;
+	    }
+	}
+
+      if (actual_size_known && formal_size_known
+	  && actual_size < formal_size
+	  && f->sym->as
 	  && a->expr->ts.type != BT_PROCEDURE
 	  && f->sym->attr.flavor != FL_PROCEDURE)
 	{
-	  if (a->expr->ts.type == BT_CHARACTER && !f->sym->as && where)
-	    {
-	      gfc_warning (0, "Character length of actual argument shorter "
-			   "than of dummy argument %qs (%lu/%lu) at %L",
-			   f->sym->name, actual_size, formal_size,
-			   &a->expr->where);
-	      goto skip_size_check;
-	    }
-          else if (where)
+	  if (where)
 	    {
 	      /* Emit a warning for -std=legacy and an error otherwise. */
 	      if (gfc_option.warn_std == 0)
@@ -3648,6 +3813,24 @@ gfc_compare_actual_formal (gfc_actual_arglist **ap, gfc_formal_arglist *formal,
 	  if (where)
 	    gfc_error ("Expected a procedure for argument %qs at %L",
 		       f->sym->name, &a->expr->where);
+	  ok = false;
+	  goto match;
+	}
+
+      /* F23:15.5.2.5, para 2: A procedure pointer actual argument cannot correspond
+	 to a data-object dummy argument (reverse of the two checks above).
+	 Only flag EXPR_VARIABLE to avoid false positives on function calls
+	 through procedure pointer components (e.g. o%f(args)).  */
+      if (!f->sym->attr.proc_pointer
+	  && f->sym->attr.flavor != FL_PROCEDURE
+	  && a->expr->expr_type == EXPR_VARIABLE
+	  && (a->expr->symtree->n.sym->attr.proc_pointer
+	      || gfc_is_proc_ptr_comp (a->expr)))
+	{
+	  if (where)
+	    gfc_error ("Procedure pointer actual argument at %L cannot "
+		       "be passed to data-object dummy argument %qs",
+		       &a->expr->where, f->sym->name);
 	  ok = false;
 	  goto match;
 	}
@@ -3898,11 +4081,19 @@ gfc_compare_actual_formal (gfc_actual_arglist **ap, gfc_formal_arglist *formal,
 	      goto match;
 	    }
 	}
-
+      /* F2023: 15.5.2.5 Ordinary dummy variables:
+	 "(21) If the procedure is nonelemental, the dummy argument does not
+	 have the VALUE attribute, and the actual argument is an array section
+	 having a vector subscript, the dummy argument is not definable and
+	 shall not have the ASYNCHRONOUS, INTENT (OUT), INTENT (INOUT), or
+	 VOLATILE attributes."
+       */
       if ((f->sym->attr.intent == INTENT_OUT
 	   || f->sym->attr.intent == INTENT_INOUT
 	   || f->sym->attr.volatile_
 	   || f->sym->attr.asynchronous)
+	  && !f->sym->attr.value
+	  && !is_elemental
 	  && gfc_has_vector_subscript (a->expr))
 	{
 	  if (where)
@@ -3968,6 +4159,28 @@ gfc_compare_actual_formal (gfc_actual_arglist **ap, gfc_formal_arglist *formal,
 	    gfc_error ("Pointer-array actual argument at %L requires "
 		       "an assumed-shape or pointer-array dummy "
 		       "argument %qs due to VOLATILE attribute",
+		       &a->expr->where,f->sym->name);
+	  ok = false;
+	  goto match;
+	}
+
+      /* C_LOC/C_FUNLOC from ISO_C_BINDING as actual argument can only be
+	 passed to a dummy argument of matching type C_PTR/C_FUNPTR.  */
+      if (a->expr->expr_type == EXPR_FUNCTION
+	  && a->expr->ts.type == BT_VOID
+	  && a->expr->symtree->n.sym
+	  && a->expr->symtree->n.sym->from_intmod == INTMOD_ISO_C_BINDING
+	  && (f->sym->ts.type != BT_DERIVED
+	      || f->sym->ts.u.derived->from_intmod != INTMOD_ISO_C_BINDING
+	      || !((a->expr->symtree->n.sym->intmod_sym_id == ISOCBINDING_FUNLOC
+		    && f->sym->ts.u.derived->intmod_sym_id == ISOCBINDING_FUNPTR)
+		   || (a->expr->symtree->n.sym->intmod_sym_id == ISOCBINDING_LOC
+		       && f->sym->ts.u.derived->intmod_sym_id == ISOCBINDING_PTR))))
+	{
+	  if (where)
+	    gfc_error ("ISO_C_BINDING function actual argument at %L "
+		       "requires dummy argument %qs to have a matching "
+		       "type from ISO_C_BINDING",
 		       &a->expr->where,f->sym->name);
 	  ok = false;
 	  goto match;
@@ -4039,6 +4252,45 @@ gfc_compare_actual_formal (gfc_actual_arglist **ap, gfc_formal_arglist *formal,
 
   if (*ap == NULL && n > 0)
     *ap = new_arg[0];
+
+  if (!in_statement_function)
+    for (f = formal, i = 0; f; f = f->next, i++)
+      {
+	if (new_arg[i]->expr)
+	  {
+	    gfc_expr *e = new_arg[i]->expr;
+
+	    if (f->sym->attr.value)
+	      {
+		gfc_value_used_expr (e, VALUE_VALUE_ARG);
+		continue;
+	      }
+	    switch (f->sym->attr.intent)
+	      {
+	      case INTENT_OUT:
+		{
+		  gfc_expr_set_at (e, &e->where, VALUE_INTENT_OUT);
+		  if (f->sym->attr.allocatable)
+		    gfc_used_in_allocate_expr (e, &e->where, ALLOCATED_ARG);
+
+		}
+		break;
+
+	      case INTENT_IN:
+		gfc_value_used_expr (e, VALUE_INTENT_IN);
+		break;
+
+	      case INTENT_INOUT:
+	      case INTENT_UNKNOWN:
+		gfc_value_set_and_used (e, &e->where, VALUE_ARG,
+					VALUE_MAYBE_USED);
+
+		if (f->sym->attr.allocatable)
+		  gfc_used_in_allocate_expr (e, &e->where, ALLOCATED_ARG);
+		break;
+	      }
+	  }
+    }
 
   return true;
 }
@@ -4454,7 +4706,7 @@ gfc_procedure_use (gfc_symbol *sym, gfc_actual_arglist **ap, locus *where)
 
 	  /* TS 29113, C407b.  */
 	  if (a->expr && a->expr->expr_type == EXPR_VARIABLE
-	      && symbol_rank (a->expr->symtree->n.sym) == -1)
+	      && gfc_symbol_rank (a->expr->symtree->n.sym) == -1)
 	    {
 	      gfc_error ("Assumed-rank argument requires an explicit interface "
 			 "at %L", &a->expr->where);
@@ -4462,6 +4714,12 @@ gfc_procedure_use (gfc_symbol *sym, gfc_actual_arglist **ap, locus *where)
 	      return false;
 	    }
 	}
+
+      if (implicit)
+	for (a = *ap; a; a = a->next)
+	  if (a->expr)
+	    gfc_value_set_and_used (a->expr, &a->expr->where, VALUE_ARG,
+				    VALUE_MAYBE_USED);
 
       return true;
     }
@@ -4630,7 +4888,7 @@ find_symtree0 (gfc_symtree *root, gfc_symbol *sym)
 {
   gfc_symtree * st;
 
-  if (root->n.sym == sym)
+  if (root == NULL || root->n.sym == sym)
     return root;
 
   st = NULL;
@@ -4663,6 +4921,14 @@ gfc_find_sym_in_symtree (gfc_symbol *sym)
       st = find_symtree0 (ns->sym_root, sym);
       if (st)
 	return st;
+
+      /* Search user-defined operators.  */
+      if (ns->uop_root && sym->attr.function)
+	{
+	  st = find_symtree0 (ns->uop_root, sym);
+	  if (st)
+	    return st;
+	}
     }
   gfc_internal_error ("Unable to find symbol %qs", sym->name);
   /* Not reached.  */
@@ -4704,6 +4970,10 @@ matching_typebound_op (gfc_expr** tb_base,
 	else
 	  derived = base->expr->ts.u.derived;
 
+	/* A use associated derived type is resolvable during parsing.  */
+	if (derived && derived->attr.use_assoc && !gfc_current_ns->resolved)
+	  gfc_resolve_symbol (derived);
+
 	if (op == INTRINSIC_USER)
 	  {
 	    gfc_symtree* tb_uop;
@@ -4738,6 +5008,13 @@ matching_typebound_op (gfc_expr** tb_base,
 		gfc_symbol* target;
 		gfc_actual_arglist* argcopy;
 		bool matches;
+
+		/* If expression matching comes here during parsing, eg. when
+		   parsing ASSOCIATE, generic TBPs have not yet been resolved
+		   and g->specific will not have been set. Wait for expression
+		   resolution by returning NULL.  */
+		if (!g->specific && !gfc_current_ns->resolved)
+		  return NULL;
 
 		gcc_assert (g->specific);
 		if (g->specific->error)
@@ -5827,6 +6104,12 @@ gfc_get_formal_from_actual_arglist (gfc_symbol *sym,
   gfc_symbol *s;
   char name[GFC_MAX_SYMBOL_LEN + 1];
   static int var_num;
+
+  /* Do not infer the formal from actual arguments if we are dealing with
+     classes.  */
+
+  if (sym->ts.type == BT_CLASS)
+    return;
 
   f = &sym->formal;
   for (a = actual_args; a != NULL; a = a->next)

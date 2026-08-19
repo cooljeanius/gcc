@@ -1,4 +1,5 @@
 ! { dg-additional-options "-fmax-errors=1000" }
+! { dg-additional-options "-Wno-deprecated-openmp" }
 module my_omp_lib
   use iso_c_binding, only: c_intptr_t
   !use omp_lib
@@ -51,7 +52,7 @@ integer, parameter :: prm=5
 !$omp allocate(used) allocator(omp_pteam_mem_alloc)  ! { dg-error "Argument 'used' at .1. to declarative !.OMP ALLOCATE shall be in the same scope as the variable declaration" }
 !$omp allocate(n) allocator(omp_pteam_mem_alloc) ! { dg-error "Unexpected dummy argument 'n' as argument at .1. to declarative !.OMP ALLOCATE" }
 
-!$omp allocate (x) align(128) ! { dg-error "'x' at .1. is part of the common block '/com1/' and may only be specificed implicitly via the named common block" }
+!$omp allocate (x) align(128) ! { dg-error "'x' at .1. is part of the common block '/com1/' and may only be specified implicitly via the named common block" }
 
 !$omp allocate (a, b, a) allocator (omp_pteam_mem_alloc) ! { dg-error "Duplicated variable 'a' in !.OMP ALLOCATE" }
 contains
@@ -72,9 +73,9 @@ common /com4/ y,z
 allocatable :: q
 pointer :: b
 !$omp allocate (c, d) allocator (omp_pteam_mem_alloc)
-!$omp allocate (/com4/) allocator (omp_pteam_mem_alloc)
+!$omp allocate (/com4/) allocator (omp_low_lat_mem_alloc)
 !$omp allocate (c) allocator (omp_pteam_mem_alloc) ! { dg-error "Duplicated variable 'c' in !.OMP ALLOCATE" }
-!$omp allocate (/com4/) allocator (omp_pteam_mem_alloc) ! { dg-error "Duplicated common block '/com4/' in !.OMP ALLOCATE" }
+!$omp allocate (/com4/) allocator (omp_low_lat_mem_alloc) ! { dg-error "Duplicated common block '/com4/' in !.OMP ALLOCATE" }
 
 !$omp allocate(q,x)  ! { dg-error "Unexpected allocatable variable 'q' at .1. in declarative !.OMP ALLOCATE directive" }
 !$omp allocate(b,e)  ! { dg-error "Unexpected pointer variable 'b' at .1. in declarative !.OMP ALLOCATE directive" }

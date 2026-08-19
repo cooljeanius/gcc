@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2025 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -26,44 +26,14 @@
 #include "rust-location.h"
 #include "rust-diagnostics.h"
 #include "rust-keyword-values.h"
+#include "rust-cloneable.h"
+#include "rust-ast-identifier.h"
 
 namespace Rust {
 // TODO: remove typedefs and make actual types for these
 typedef int TupleIndex;
 struct Session;
 struct MacroExpander;
-
-class Identifier
-{
-public:
-  // Create dummy identifier
-  Identifier () : ident (""), loc (UNDEF_LOCATION) {}
-  // Create identifier with dummy location
-  Identifier (std::string ident, location_t loc = UNDEF_LOCATION)
-    : ident (ident), loc (loc)
-  {}
-  // Create identifier from token
-  Identifier (const_TokenPtr token)
-    : ident (token->get_str ()), loc (token->get_locus ())
-  {}
-
-  Identifier (const Identifier &) = default;
-  Identifier (Identifier &&) = default;
-  Identifier &operator= (const Identifier &) = default;
-  Identifier &operator= (Identifier &&) = default;
-
-  location_t get_locus () const { return loc; }
-  const std::string &as_string () const { return ident; }
-
-  bool empty () const { return ident.empty (); }
-
-private:
-  std::string ident;
-  location_t loc;
-};
-
-std::ostream &
-operator<< (std::ostream &os, Identifier const &i);
 
 namespace AST {
 // foward decl: ast visitor
@@ -76,6 +46,38 @@ public:
   virtual ~Visitable () = default;
   virtual void accept_vis (ASTVisitor &vis) = 0;
 };
+
+/**
+ * Base function for reconstructing and asserting that the new NodeId is
+ * different from the old NodeId. It then wraps the given pointer into a unique
+ * pointer and returns it.
+ */
+template <typename T>
+std::unique_ptr<T>
+reconstruct_base (const T *instance)
+{
+  auto *reconstructed = instance->reconstruct_impl ();
+
+  rust_assert (reconstructed->get_node_id () != instance->get_node_id ());
+
+  return std::unique_ptr<T> (reconstructed);
+}
+
+/**
+ * Reconstruct multiple items in a vector
+ */
+template <typename T>
+std::vector<std::unique_ptr<T>>
+reconstruct_vec (const std::vector<std::unique_ptr<T>> &to_reconstruct)
+{
+  std::vector<std::unique_ptr<T>> reconstructed;
+  reconstructed.reserve (to_reconstruct.size ());
+
+  for (const auto &elt : to_reconstruct)
+    reconstructed.emplace_back (std::unique_ptr<T> (elt->reconstruct_impl ()));
+
+  return reconstructed;
+}
 
 // Delimiter types - used in macros and whatever.
 enum DelimType
@@ -146,17 +148,6 @@ class Token : public TokenTree, public MacroMatch
 {
   // A token is a kind of token tree (except delimiter tokens)
   // A token is a kind of MacroMatch (except $ and delimiter tokens)
-#if 0
-  // TODO: improve member variables - current ones are the same as lexer token
-  // Token kind.
-  TokenId token_id;
-  // Token location.
-  location_t locus;
-  // Associated text (if any) of token.
-  std::string str;
-  // Token type hint (if any).
-  PrimitiveCoreType type_hint;
-#endif
 
   const_TokenPtr tok_ref;
 
@@ -171,53 +162,7 @@ public:
     return std::unique_ptr<Token> (clone_token_impl ());
   }
 
-#if 0
-  /* constructor from general text - avoid using if lexer const_TokenPtr is
-   * available */
-  Token (TokenId token_id, location_t locus, std::string str,
-	 PrimitiveCoreType type_hint)
-    : token_id (token_id), locus (locus), str (std::move (str)),
-      type_hint (type_hint)
-  {}
-#endif
-  // not doable with new implementation - will have to make a const_TokenPtr
-
   // Constructor from lexer const_TokenPtr
-#if 0
-  /* TODO: find workaround for std::string being nullptr - probably have to
-   * introduce new method in lexer Token, or maybe make conversion method
-   * there */
-  Token (const_TokenPtr lexer_token_ptr)
-    : token_id (lexer_token_ptr->get_id ()),
-      locus (lexer_token_ptr->get_locus ()), str (""),
-      type_hint (lexer_token_ptr->get_type_hint ())
-  {
-    // FIXME: change to "should have str" later?
-    if (lexer_token_ptr->has_str ())
-      {
-	str = lexer_token_ptr->get_str ();
-
-	// DEBUG
-	rust_debug ("ast token created with str '%s'", str.c_str ());
-      }
-    else
-      {
-	// FIXME: is this returning correct thing?
-	str = lexer_token_ptr->get_token_description ();
-
-	// DEBUG
-	rust_debug ("ast token created with string '%s'", str.c_str ());
-      }
-
-    // DEBUG
-    if (lexer_token_ptr->should_have_str () && !lexer_token_ptr->has_str ())
-      {
-	rust_debug (
-		 "BAD: for token '%s', should have string but does not!",
-		 lexer_token_ptr->get_token_description ());
-      }
-  }
-#endif
   Token (const_TokenPtr lexer_tok_ptr) : tok_ref (std::move (lexer_tok_ptr)) {}
 
   bool is_string_lit () const
@@ -227,6 +172,7 @@ public:
       case STRING_LITERAL:
       case BYTE_STRING_LITERAL:
       case RAW_STRING_LITERAL:
+      case C_STRING_LITERAL:
 	return true;
       default:
 	return false;
@@ -245,6 +191,7 @@ public:
   std::vector<std::unique_ptr<Token>> to_token_stream () const override;
 
   TokenId get_id () const { return tok_ref->get_id (); }
+  bool should_have_str () const { return tok_ref->should_have_str (); }
   const std::string &get_str () const { return tok_ref->get_str (); }
 
   location_t get_locus () const { return tok_ref->get_locus (); }
@@ -289,6 +236,7 @@ public:
     BYTE,
     BYTE_STRING,
     RAW_STRING,
+    C_STRING,
     INT,
     FLOAT,
     BOOL,
@@ -398,15 +346,15 @@ class SimplePath
 
 public:
   // Constructor
-  SimplePath (std::vector<SimplePathSegment> path_segments,
-	      bool has_opening_scope_resolution = false,
-	      location_t locus = UNDEF_LOCATION)
+  explicit SimplePath (std::vector<SimplePathSegment> path_segments,
+		       bool has_opening_scope_resolution = false,
+		       location_t locus = UNDEF_LOCATION)
     : opening_scope_resolution (has_opening_scope_resolution),
       segments (std::move (path_segments)), locus (locus),
       node_id (Analysis::Mappings::get ().get_next_node_id ())
   {}
 
-  SimplePath (Identifier ident)
+  explicit SimplePath (Identifier ident)
     : opening_scope_resolution (false),
       segments ({SimplePathSegment (ident.as_string (), ident.get_locus ())}),
       locus (ident.get_locus ()),
@@ -495,37 +443,20 @@ private:
   SimplePath in_path;
   location_t locus;
 
-  // should this store location info?
-
-public:
-  // Creates a Visibility - TODO make constructor protected or private?
   Visibility (VisType vis_type, SimplePath in_path, location_t locus)
     : vis_type (vis_type), in_path (std::move (in_path)), locus (locus)
   {}
 
+public:
   VisType get_vis_type () const { return vis_type; }
 
-  // Returns whether visibility is in an error state.
-  bool is_error () const
-  {
-    return vis_type == PUB_IN_PATH && in_path.is_empty ();
-  }
-
   // Returns whether a visibility has a path
-  bool has_path () const { return !is_error () && vis_type >= PUB_CRATE; }
+  bool has_path () const { return vis_type >= PUB_CRATE; }
 
   // Returns whether visibility is public or not.
-  bool is_public () const { return vis_type != PRIV && !is_error (); }
+  bool is_public () const { return vis_type != PRIV; }
 
   location_t get_locus () const { return locus; }
-
-  // empty?
-  // Creates an error visibility.
-  static Visibility create_error ()
-  {
-    return Visibility (PUB_IN_PATH, SimplePath::create_empty (),
-		       UNDEF_LOCATION);
-  }
 
   // Unique pointer custom clone function
   /*std::unique_ptr<Visibility> clone_visibility() const {
@@ -600,9 +531,8 @@ protected:
 
 // aka Attr
 // Attribute AST representation
-struct Attribute
+class Attribute : public Visitable
 {
-private:
   SimplePath path;
 
   // bool has_attr_input;
@@ -611,6 +541,8 @@ private:
   location_t locus;
 
   bool inner_attribute;
+
+  NodeId node_id;
 
   // TODO: maybe a variable storing whether attr input is parsed or not
 
@@ -622,7 +554,8 @@ public:
   Attribute (SimplePath path, std::unique_ptr<AttrInput> input,
 	     location_t locus = UNDEF_LOCATION, bool inner_attribute = false)
     : path (std::move (path)), attr_input (std::move (input)), locus (locus),
-      inner_attribute (inner_attribute)
+      inner_attribute (inner_attribute),
+      node_id (Analysis::Mappings::get ().get_next_node_id ())
   {}
 
   bool is_derive () const;
@@ -657,9 +590,17 @@ public:
   // Returns whether the attribute is considered an "empty" attribute.
   bool is_empty () const { return attr_input == nullptr && path.is_empty (); }
 
+  // Returns whether the attribute has no input
+  bool empty_input () const { return !attr_input; }
+
   location_t get_locus () const { return locus; }
 
   AttrInput &get_attr_input () const { return *attr_input; }
+
+  void set_attr_input (std::unique_ptr<AST::AttrInput> input)
+  {
+    attr_input = std::move (input);
+  }
 
   /* e.g.:
       #![crate_type = "lib"]
@@ -717,10 +658,12 @@ public:
 
   bool is_inner_attribute () const { return inner_attribute; }
 
-  // no visitor pattern as not currently polymorphic
+  void accept_vis (ASTVisitor &vis) override;
 
   const SimplePath &get_path () const { return path; }
   SimplePath &get_path () { return path; }
+
+  NodeId get_node_id () { return node_id; }
 
   // Call to parse attribute body to meta item syntax.
   void parse_attr_to_meta_item ();
@@ -751,8 +694,8 @@ class AttrInput : public Visitable
 public:
   enum AttrInputType
   {
+    EXPR,
     LITERAL,
-    MACRO,
     META_ITEM,
     TOKEN_TREE,
   };
@@ -1015,6 +958,7 @@ public:
   }
 
   DelimType get_delim_type () const { return delim_type; }
+  location_t get_locus () const { return locus; }
 };
 
 /* Forward decl - definition moved to rust-expr.h as it requires LiteralExpr
@@ -1030,7 +974,7 @@ public:
     Path,
     Word,
     NameValueStr,
-    PathLit,
+    PathExpr,
     Seq,
     ListPaths,
     ListNameValueStr,
@@ -1048,7 +992,7 @@ public:
 class MetaItemLitExpr;
 
 // Forward decl - defined in rust-expr.h
-class MetaItemPathLit;
+class MetaItemPathExpr;
 
 // Forward decl - defined in rust-macro.h
 class MetaItemPath;
@@ -1094,7 +1038,9 @@ public:
 
   virtual void mark_for_strip () = 0;
   virtual bool is_marked_for_strip () const = 0;
-  NodeId get_node_id () const { return node_id; }
+
+  // TODO: put this in a virtual base class?
+  virtual NodeId get_node_id () const { return node_id; }
 
   virtual Kind get_stmt_kind () = 0;
 
@@ -1172,6 +1118,19 @@ protected:
   Item *clone_stmt_impl () const final override { return clone_item_impl (); }
 };
 
+class GlobContainer
+{
+public:
+  enum class Kind
+  {
+    Crate,
+    Module,
+    Enum,
+  };
+
+  virtual Kind get_glob_container_kind () const = 0;
+};
+
 // Item that supports visibility - abstract base class
 class VisItem : public Item
 {
@@ -1247,6 +1206,8 @@ public:
     FieldAccess,
     Closure,
     Block,
+    ConstExpr,
+    ConstBlock,
     Continue,
     Break,
     Range,
@@ -1260,8 +1221,10 @@ public:
     Await,
     AsyncBlock,
     InlineAsm,
+    LlvmInlineAsm,
     Identifier,
     FormatArgs,
+    OffsetOf,
     MacroInvocation,
     Borrow,
     Dereference,
@@ -1273,6 +1236,7 @@ public:
     TypeCast,
     Assignment,
     CompoundAssignment,
+    Try,
   };
 
   virtual Kind get_expr_kind () const = 0;
@@ -1461,11 +1425,37 @@ class TraitBound;
 class Type : public Visitable
 {
 public:
+  enum Kind
+  {
+    MacroInvocation,
+    TypePath,
+    QualifiedPathInType,
+    ImplTrait,
+    TraitObject,
+    Parenthesised,
+    ImplTraitTypeOneBound,
+    TraitObjectTypeOneBound,
+    Tuple,
+    Never,
+    RawPointer,
+    Reference,
+    Array,
+    Slice,
+    Inferred,
+    BareFunction,
+  };
+
+  virtual Kind get_type_kind () const = 0;
+
   // Unique pointer custom clone function
   std::unique_ptr<Type> clone_type () const
   {
     return std::unique_ptr<Type> (clone_type_impl ());
   }
+
+  // Similar to `clone_type`, but generates a new instance of the node with a
+  // different NodeId
+  std::unique_ptr<Type> reconstruct () const { return reconstruct_base (this); }
 
   // virtual destructor
   virtual ~Type () {}
@@ -1484,12 +1474,15 @@ public:
 
   virtual location_t get_locus () const = 0;
 
-  NodeId get_node_id () const { return node_id; }
+  // TODO: put this in a virtual base class?
+  virtual NodeId get_node_id () const { return node_id; }
+  virtual Type *reconstruct_impl () const = 0;
 
 protected:
   Type () : node_id (Analysis::Mappings::get ().get_next_node_id ()) {}
+  Type (NodeId node_id) : node_id (node_id) {}
 
-  // Clone function implementation as pure virtual method
+  // Clone and reconstruct function implementations as pure virtual methods
   virtual Type *clone_type_impl () const = 0;
 
   NodeId node_id;
@@ -1504,6 +1497,13 @@ public:
   {
     return std::unique_ptr<TypeNoBounds> (clone_type_no_bounds_impl ());
   }
+
+  std::unique_ptr<TypeNoBounds> reconstruct () const
+  {
+    return reconstruct_base (this);
+  }
+
+  virtual TypeNoBounds *reconstruct_impl () const override = 0;
 
 protected:
   // Clone function implementation as pure virtual method
@@ -1539,6 +1539,11 @@ public:
     return std::unique_ptr<TypeParamBound> (clone_type_param_bound_impl ());
   }
 
+  std::unique_ptr<TypeParamBound> reconstruct () const
+  {
+    return reconstruct_base (this);
+  }
+
   virtual std::string as_string () const = 0;
 
   NodeId get_node_id () const { return node_id; }
@@ -1547,10 +1552,14 @@ public:
 
   virtual TypeParamBoundType get_bound_type () const = 0;
 
+  virtual TypeParamBound *reconstruct_impl () const = 0;
+
 protected:
   // Clone function implementation as pure virtual method
   virtual TypeParamBound *clone_type_param_bound_impl () const = 0;
 
+  TypeParamBound () : node_id (Analysis::Mappings::get ().get_next_node_id ())
+  {}
   TypeParamBound (NodeId node_id) : node_id (node_id) {}
 
   NodeId node_id;
@@ -1587,17 +1596,9 @@ public:
       lifetime_name (std::move (name)), locus (locus)
   {}
 
-  // Creates an "error" lifetime.
-  static Lifetime error () { return Lifetime (NAMED, ""); }
-
   static Lifetime elided () { return Lifetime (WILDCARD, ""); }
 
   // Returns true if the lifetime is in an error state.
-  bool is_error () const
-  {
-    return lifetime_type == NAMED && lifetime_name.empty ();
-  }
-
   std::string as_string () const override;
 
   void accept_vis (ASTVisitor &vis) override;
@@ -1619,6 +1620,10 @@ protected:
   Lifetime *clone_type_param_bound_impl () const override
   {
     return new Lifetime (node_id, lifetime_type, lifetime_name, locus);
+  }
+  Lifetime *reconstruct_impl () const override
+  {
+    return new Lifetime (lifetime_type, lifetime_name, locus);
   }
 };
 
@@ -1688,15 +1693,6 @@ public:
   // Returns whether the lifetime param has an outer attribute.
   bool has_outer_attribute () const { return !outer_attrs.empty (); }
 
-  // Creates an error state lifetime param.
-  static LifetimeParam create_error ()
-  {
-    return LifetimeParam (Lifetime::error (), {}, {}, UNDEF_LOCATION);
-  }
-
-  // Returns whether the lifetime param is in an error state.
-  bool is_error () const { return lifetime.is_error (); }
-
   // Constructor
   LifetimeParam (Lifetime lifetime, std::vector<Lifetime> lifetime_bounds,
 		 AST::AttrVec outer_attrs, location_t locus)
@@ -1742,6 +1738,8 @@ public:
   virtual bool is_marked_for_strip () const = 0;
 
   virtual location_t get_locus () const = 0;
+
+  virtual NodeId get_node_id () const = 0;
 };
 
 // Item used in trait declarations - abstract base class
@@ -1772,7 +1770,7 @@ public:
     return std::unique_ptr<TraitItem> (clone_associated_item_impl ());
   }
 
-  NodeId get_node_id () const { return node_id; }
+  NodeId get_node_id () const override { return node_id; }
   location_t get_locus () const override { return locus; }
 };
 
@@ -1886,7 +1884,6 @@ public:
   {
     parsed_items = std::move (new_items);
   }
-  // TODO: mutable getter seems kinda dodgy
   std::vector<std::unique_ptr<MetaItemInner>> &get_meta_items ()
   {
     return parsed_items;
@@ -1900,18 +1897,19 @@ public:
 class SingleASTNode : public Visitable
 {
 public:
-  enum NodeType
+  enum class Kind
   {
-    EXPRESSION,
-    ITEM,
-    STMT,
-    EXTERN,
-    ASSOC_ITEM,
-    TYPE,
+    Expr,
+    Item,
+    Stmt,
+    Extern,
+    Assoc,
+    Type,
+    Pattern,
   };
 
 private:
-  NodeType kind;
+  Kind kind;
 
   // FIXME make this a union
   std::unique_ptr<Expr> expr;
@@ -1920,30 +1918,35 @@ private:
   std::unique_ptr<ExternalItem> external_item;
   std::unique_ptr<AssociatedItem> assoc_item;
   std::unique_ptr<Type> type;
+  std::unique_ptr<Pattern> pattern;
 
 public:
   SingleASTNode (std::unique_ptr<Expr> expr)
-    : kind (EXPRESSION), expr (std::move (expr))
+    : kind (Kind::Expr), expr (std::move (expr))
   {}
 
   SingleASTNode (std::unique_ptr<Item> item)
-    : kind (ITEM), item (std::move (item))
+    : kind (Kind::Item), item (std::move (item))
   {}
 
   SingleASTNode (std::unique_ptr<Stmt> stmt)
-    : kind (STMT), stmt (std::move (stmt))
+    : kind (Kind::Stmt), stmt (std::move (stmt))
   {}
 
   SingleASTNode (std::unique_ptr<ExternalItem> item)
-    : kind (EXTERN), external_item (std::move (item))
+    : kind (Kind::Extern), external_item (std::move (item))
   {}
 
   SingleASTNode (std::unique_ptr<AssociatedItem> item)
-    : kind (ASSOC_ITEM), assoc_item (std::move (item))
+    : kind (Kind::Assoc), assoc_item (std::move (item))
   {}
 
   SingleASTNode (std::unique_ptr<Type> type)
-    : kind (TYPE), type (std::move (type))
+    : kind (Kind::Type), type (std::move (type))
+  {}
+
+  SingleASTNode (std::unique_ptr<Pattern> pattern)
+    : kind (Kind::Pattern), pattern (std::move (pattern))
   {}
 
   SingleASTNode (SingleASTNode const &other);
@@ -1953,23 +1956,23 @@ public:
   SingleASTNode (SingleASTNode &&other) = default;
   SingleASTNode &operator= (SingleASTNode &&other) = default;
 
-  NodeType get_kind () const { return kind; }
+  Kind get_kind () const { return kind; }
 
   std::unique_ptr<Expr> &get_expr ()
   {
-    rust_assert (kind == EXPRESSION);
+    rust_assert (kind == Kind::Expr);
     return expr;
   }
 
   std::unique_ptr<Item> &get_item ()
   {
-    rust_assert (kind == ITEM);
+    rust_assert (kind == Kind::Item);
     return item;
   }
 
   std::unique_ptr<Stmt> &get_stmt ()
   {
-    rust_assert (kind == STMT);
+    rust_assert (kind == Kind::Stmt);
     return stmt;
   }
 
@@ -2014,6 +2017,12 @@ public:
     return std::move (type);
   }
 
+  std::unique_ptr<Pattern> take_pattern ()
+  {
+    rust_assert (!is_error ());
+    return std::move (pattern);
+  }
+
   void accept_vis (ASTVisitor &vis) override;
 
   bool is_error ();
@@ -2022,7 +2031,7 @@ public:
 };
 
 // A crate AST object - holds all the data for a single compilation unit
-struct Crate
+struct Crate final : public GlobContainer
 {
   std::vector<Attribute> inner_attrs;
   // dodgy spacing required here
@@ -2082,6 +2091,9 @@ public:
     // TODO: is this the best way to do this?
   }
 
+  void inject_extern_crate (std::string name);
+  void inject_inner_attribute (Attribute attribute);
+
   NodeId get_node_id () const { return node_id; }
   const std::vector<Attribute> &get_inner_attrs () const { return inner_attrs; }
   std::vector<Attribute> &get_inner_attrs () { return inner_attrs; }
@@ -2095,9 +2107,27 @@ public:
   {
     items = std::move (new_items);
   }
+
+  GlobContainer::Kind get_glob_container_kind () const override
+  {
+    return GlobContainer::Kind::Crate;
+  }
 };
 
 } // namespace AST
+
+template <> struct CloneableDelegate<std::unique_ptr<AST::Pattern>>
+{
+  static std::unique_ptr<AST::Pattern>
+  clone (const std::unique_ptr<AST::Pattern> &other)
+  {
+    if (other == nullptr)
+      return nullptr;
+    else
+      return other->clone_pattern ();
+  }
+};
+
 } // namespace Rust
 
 namespace std {
@@ -2109,6 +2139,19 @@ template <> struct less<Rust::Identifier>
     return lhs.as_string () < rhs.as_string ();
   }
 };
+
+template <> struct hash<Rust::Identifier>
+{
+  std::size_t operator() (const Rust::Identifier &k) const
+  {
+    using std::hash;
+    using std::size_t;
+    using std::string;
+
+    return hash<string> () (k.as_string ()) ^ (hash<int> () (k.get_locus ()));
+  }
+};
+
 } // namespace std
 
 #endif

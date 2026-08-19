@@ -1,5 +1,5 @@
 /* Fibonacci heap for GNU compiler.
-   Copyright (C) 1998-2025 Free Software Foundation, Inc.
+   Copyright (C) 1998-2026 Free Software Foundation, Inc.
    Contributed by Daniel Berlin (dan@cgsoftware.com).
    Re-implemented in C++ by Martin Liska <mliska@suse.cz>
 
@@ -258,7 +258,7 @@ private:
   /* Remove NODE from PARENT's child list.  */
   void cut (fibonacci_node_t *node, fibonacci_node_t *parent);
 
-  /* Process cut of node Y and do it recursivelly.  */
+  /* Process cut of node Y and do it recursively.  */
   void cascading_cut (fibonacci_node_t *y);
 
   /* Extract minimum node from the heap.  */
@@ -281,7 +281,7 @@ private:
 
   /* Allocator used to hold nodes.  */
   pool_allocator *m_allocator;
-  /* True if alocator is owned by the current heap only.  */
+  /* True if allocator is owned by the current heap only.  */
   bool m_own_allocator;
 };
 
@@ -569,7 +569,7 @@ fibonacci_heap<K,V>::cut (fibonacci_node<K,V> *node,
   node->m_mark = 0;
 }
 
-/* Process cut of node Y and do it recursivelly.  */
+/* Process cut of node Y and do it recursively.  */
 
 template<class K, class V>
 void

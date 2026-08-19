@@ -1,6 +1,6 @@
 /* Implementation of the GETENV g77, and
    GET_ENVIRONMENT_VARIABLE F2003, intrinsics. 
-   Copyright (C) 2004-2025 Free Software Foundation, Inc.
+   Copyright (C) 2004-2026 Free Software Foundation, Inc.
    Contributed by Janne Blomqvist.
 
 This file is part of the GNU Fortran 95 runtime library (libgfortran).
@@ -69,7 +69,7 @@ PREFIX(getenv) (char * name, char * value, gfc_charlen_type name_len,
 /* GET_ENVIRONMENT_VARIABLE (name, [value, length, status, trim_name])
    is a F2003 intrinsic for getting an environment variable.  */
 
-/* Status codes specifyed by the standard. */
+/* Status codes specified by the standard. */
 #define GFC_SUCCESS 0
 #define GFC_VALUE_TOO_SHORT -1
 #define GFC_NAME_DOES_NOT_EXIST 1

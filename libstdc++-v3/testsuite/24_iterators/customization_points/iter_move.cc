@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2025 Free Software Foundation, Inc.
+// Copyright (C) 2019-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -157,9 +157,20 @@ test_pr106612()
   static_assert( std::same_as<decltype(std::ranges::iter_move(I3{})), F> );
 }
 
+void
+test_pr119469()
+{
+  // rvalue references to function types are weird.
+  using F = int();
+  static_assert( std::same_as<std::iter_rvalue_reference_t<F>, F&> );
+  static_assert( std::same_as<std::iter_rvalue_reference_t<F&>, F&> );
+  static_assert( std::same_as<std::iter_rvalue_reference_t<F&&>, F&> );
+}
+
 int
 main()
 {
   test01();
   test_adl();
+  test_pr119469();
 }

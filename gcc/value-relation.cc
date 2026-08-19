@@ -1,5 +1,5 @@
 /* Header file for the value range relational processing.
-   Copyright (C) 2020-2025 Free Software Foundation, Inc.
+   Copyright (C) 2020-2026 Free Software Foundation, Inc.
    Contributed by Andrew MacLeod <amacleod@redhat.com>
 
 This file is part of GCC.
@@ -202,12 +202,6 @@ adjust_equivalence_range (vrange &range)
     }
  }
 
-// This vector maps a relation to the equivalent tree code.
-
-static const tree_code relation_to_code [VREL_LAST] = {
-  ERROR_MARK, ERROR_MARK, LT_EXPR, LE_EXPR, GT_EXPR, GE_EXPR, EQ_EXPR,
-  NE_EXPR };
-
 // Given an equivalence set EQUIV, set all the bits in B that are still valid
 // members of EQUIV in basic block BB.
 
@@ -327,6 +321,10 @@ equiv_oracle::equiv_oracle ()
   m_self_equiv.safe_grow_cleared (num_ssa_names + 1);
   m_partial.create (0);
   m_partial.safe_grow_cleared (num_ssa_names + 1);
+  // Create a bitmap to avoid registering multiple equivalences from a LHS.
+  // See PR 124809.
+  m_lhs_equiv_set_p = BITMAP_ALLOC (&m_bitmaps);
+  bitmap_tree_view (m_lhs_equiv_set_p);
 }
 
 // Destruct an equivalency oracle.
@@ -340,9 +338,10 @@ equiv_oracle::~equiv_oracle ()
   bitmap_obstack_release (&m_bitmaps);
 }
 
-// Add a partial equivalence R between OP1 and OP2.
+// Add a partial equivalence R between OP1 and OP2.  Return false if no
+// new relation is added.
 
-void
+bool
 equiv_oracle::add_partial_equiv (relation_kind r, tree op1, tree op2)
 {
   int v1 = SSA_NAME_VERSION (op1);
@@ -365,10 +364,10 @@ equiv_oracle::add_partial_equiv (relation_kind r, tree op1, tree op2)
       // being re-evaluated, or the def was used before being registered.
       // In either case, if PE2 has an entry, we simply do nothing.
       if (pe2.members)
-	return;
+	return false;
       // If there are no uses of op2, do not register.
       if (has_zero_uses (op2))
-	return;
+	return false;
       // PE1 is the LHS and already has members, so everything in the set
       // should be a slice of PE2 rather than PE1.
       pe2.code = pe_min (r, pe1.code);
@@ -382,13 +381,13 @@ equiv_oracle::add_partial_equiv (relation_kind r, tree op1, tree op2)
 	  m_partial[x].code = pe_min (m_partial[x].code, pe2.code);
 	}
       bitmap_set_bit (pe1.members, v2);
-      return;
+      return true;
     }
   if (pe2.members)
     {
       // If there are no uses of op1, do not register.
       if (has_zero_uses (op1))
-	return;
+	return false;
       pe1.ssa_base = pe2.ssa_base;
       // If pe2 is a 16 bit value, but only an 8 bit copy, we can't be any
       // more than an 8 bit equivalence here, so choose MIN value.
@@ -400,11 +399,11 @@ equiv_oracle::add_partial_equiv (relation_kind r, tree op1, tree op2)
     {
       // If there are no uses of either operand, do not register.
       if (has_zero_uses (op1) || has_zero_uses (op2))
-	return;
+	return false;
       // Neither name has an entry, simply create op1 as slice of op2.
       pe2.code = bits_to_pe (TYPE_PRECISION (TREE_TYPE (op2)));
       if (pe2.code == VREL_VARYING)
-	return;
+	return false;
       pe2.ssa_base = op2;
       pe2.members = BITMAP_ALLOC (&m_bitmaps);
       bitmap_set_bit (pe2.members, v2);
@@ -413,6 +412,7 @@ equiv_oracle::add_partial_equiv (relation_kind r, tree op1, tree op2)
       pe1.members = pe2.members;
       bitmap_set_bit (pe1.members, v1);
     }
+  return true;
 }
 
 // Return the set of partial equivalences associated with NAME.  The bitmap
@@ -621,25 +621,56 @@ equiv_oracle::register_initial_def (tree ssa)
   add_equiv_to_block (bb, equiv_set);
 }
 
+// Clear the equivalence lists and partial equivalencs for NAME.
+
+void
+equiv_oracle::clear (tree name)
+{
+  unsigned v = SSA_NAME_VERSION (name);
+  // Remove v from any equivalences.
+  if (bitmap_bit_p (m_equiv_set, v))
+    {
+      basic_block bb;
+      FOR_EACH_BB_FN (bb, cfun)
+	{
+	  unsigned bbi = bb->index;
+	  if (bbi >= m_equiv.length ())
+	    continue;
+	  if (!m_equiv[bbi])
+	    continue;
+	  equiv_chain *ptr = m_equiv[bbi]->find (v);
+	  if (ptr)
+	    {
+	      bitmap_clear_bit (ptr->m_names, v);
+	      bitmap_clear_bit (m_equiv[bbi]->m_names, v);
+	    }
+	}
+      bitmap_clear_bit (m_equiv_set, v);
+    }
+  // Eliminate any partial equivs.
+  if (v < m_partial.length ())
+    m_partial[v].members = NULL;
+}
+
+
 // Register an equivalence between SSA1 and SSA2 in block BB.
 // The equivalence oracle maintains a vector of equivalencies indexed by basic
 // block. When an equivalence between SSA1 and SSA2 is registered in block BB,
 // a query is made as to what equivalences both names have already, and
 // any preexisting equivalences are merged to create a single equivalence
 // containing all the ssa_names in this basic block.
+// Return false if no new relation is added.
 
-void
+bool
 equiv_oracle::record (basic_block bb, relation_kind k, tree ssa1, tree ssa2)
 {
   // Process partial equivalencies.
   if (relation_partial_equiv_p (k))
-    {
-      add_partial_equiv (k, ssa1, ssa2);
-      return;
-    }
+    return add_partial_equiv (k, ssa1, ssa2);
+
   // Only handle equality relations.
   if (k != VREL_EQ)
-    return;
+    return false;
 
   unsigned v1 = SSA_NAME_VERSION (ssa1);
   unsigned v2 = SSA_NAME_VERSION (ssa2);
@@ -656,7 +687,7 @@ equiv_oracle::record (basic_block bb, relation_kind k, tree ssa1, tree ssa2)
 
   // Check if they are the same set
   if (equiv_1 && equiv_1 == equiv_2)
-    return;
+    return false;
 
   bitmap equiv_set;
 
@@ -680,9 +711,10 @@ equiv_oracle::record (basic_block bb, relation_kind k, tree ssa1, tree ssa2)
   // A non-null return is a bitmap that is to be added to the current
   // block as a new equivalence.
   if (!equiv_set)
-    return;
+    return false;
 
   add_equiv_to_block (bb, equiv_set);
+  return true;
 }
 
 // Add an equivalency record in block BB containing bitmap EQUIV_SET.
@@ -780,15 +812,20 @@ equiv_oracle::dump (FILE *f) const
 
 
 // --------------------------------------------------------------------------
-// Negate the current relation.
+
+// Adjust the relation by Swapping the operands and relation.
 
 void
-value_relation::negate ()
+value_relation::swap ()
 {
-  related = relation_negate (related);
+  related = relation_swap (related);
+  tree tmp = name1;
+  name1 = name2;
+  name2 = tmp;
 }
 
 // Perform an intersection between 2 relations. *this &&= p.
+// Return false if the relations cannot be intersected.
 
 bool
 value_relation::intersect (value_relation &p)
@@ -951,6 +988,79 @@ public:
   relation_chain *m_next;
 };
 
+// Given relation record PTR in block BB, return the next relation in the
+// list.  If PTR is NULL, retrieve the first relation in BB.
+// If NAME is sprecified, return only relations which include NAME.
+// Return NULL when there are no relations left.
+
+relation_chain *
+dom_oracle::next_relation (basic_block bb, relation_chain *ptr,
+			   tree name) const
+{
+  relation_chain *p;
+  // No value_relation pointer is used to initialize the iterator.
+  if (!ptr)
+    {
+      int bbi = bb->index;
+      if (bbi >= (int)m_relations.length())
+	return NULL;
+      else
+	p = m_relations[bbi].m_head;
+    }
+  else
+    p = ptr->m_next;
+
+  if (name)
+    for ( ; p; p = p->m_next)
+      if (p->op1 () == name || p->op2 () == name)
+	break;
+  return p;
+}
+
+// Instantiate a block relation iterator to iterate over the relations
+// on exit from block BB in ORACLE.  Limit this to relations involving NAME
+// if specified.  Return the first such relation in VR if there is one.
+
+block_relation_iterator::block_relation_iterator (const relation_oracle *oracle,
+						  basic_block bb,
+						  value_relation &vr,
+						  tree name)
+{
+  m_oracle = oracle;
+  m_bb = bb;
+  m_name = name;
+  m_ptr = oracle->next_relation (bb, NULL, m_name);
+  if (m_ptr)
+    {
+      m_done = false;
+      vr = *m_ptr;
+    }
+  else
+    m_done = true;
+}
+
+// Retrieve the next relation from the iterator and return it in VR.
+
+void
+block_relation_iterator::get_next_relation (value_relation &vr)
+{
+  m_ptr = m_oracle->next_relation (m_bb, m_ptr, m_name);
+  if (m_ptr)
+    {
+      vr = *m_ptr;
+      if (m_name)
+	{
+	  if (vr.op1 () != m_name)
+	    {
+	      gcc_checking_assert (vr.op2 () == m_name);
+	      vr.swap ();
+	    }
+	}
+    }
+  else
+    m_done = true;
+}
+
 // ------------------------------------------------------------------------
 
 // Find the relation between any ssa_name in B1 and any name in B2 in LIST.
@@ -1000,9 +1110,60 @@ dom_oracle::~dom_oracle ()
   m_relations.release ();
 }
 
-// Register relation K between ssa_name OP1 and OP2 on STMT.
+// Remove any relations with NAME from this list.
 
 void
+relation_chain_head::clear (tree name)
+{
+  unsigned v = SSA_NAME_VERSION (name);
+  if (!m_names || !bitmap_bit_p (m_names, v))
+    return;
+
+  relation_chain *ptr, *last = NULL;;
+
+  for (ptr = m_head; ptr; ptr = ptr->m_next)
+    {
+      tree op1 = ptr->op1 ();
+      tree op2 = ptr->op2 ();
+      // Delink any elements with NAME.
+      if (op1 == name || op2 == name)
+	{
+	  if (!last)
+	    m_head = ptr->m_next;
+	  else
+	    last->m_next = ptr->m_next;
+	}
+      else
+	last = ptr;
+    }
+  // And remove name from the possible relations in this block bitfield.
+  bitmap_clear_bit (m_names, v);
+}
+
+// Remove any relations involving NAME from the DOM oracle
+
+void
+dom_oracle::clear (tree name)
+{
+  equiv_oracle::clear (name);
+  unsigned v = SSA_NAME_VERSION (name);
+  if (bitmap_bit_p (m_relation_set, v))
+    {
+      basic_block bb;
+      FOR_EACH_BB_FN (bb, cfun)
+	{
+	  if (bb->index >= (int)m_relations.length())
+	    continue;
+	  m_relations[bb->index].clear (name);
+	}
+      bitmap_clear_bit (m_relation_set, v);
+    }
+}
+
+// Register relation K between ssa_name OP1 and OP2 on STMT.
+// Return false if no new relation is added.
+
+bool
 relation_oracle::record (gimple *stmt, relation_kind k, tree op1, tree op2)
 {
   gcc_checking_assert (TREE_CODE (op1) == SSA_NAME);
@@ -1011,16 +1172,7 @@ relation_oracle::record (gimple *stmt, relation_kind k, tree op1, tree op2)
 
   // Don't register lack of a relation.
   if (k == VREL_VARYING)
-    return;
-
-  if (dump_file && (dump_flags & TDF_DETAILS))
-    {
-      value_relation vr (k, op1, op2);
-      fprintf (dump_file, " Registering value_relation ");
-      vr.dump (dump_file);
-      fprintf (dump_file, " (bb%d) at ", gimple_bb (stmt)->index);
-      print_gimple_stmt (dump_file, stmt, 0, TDF_SLIM);
-    }
+    return false;
 
   // If an equivalence is being added between a PHI and one of its arguments
   // make sure that that argument is not defined in the same block.
@@ -1034,22 +1186,34 @@ relation_oracle::record (gimple *stmt, relation_kind k, tree op1, tree op2)
       if (phi_def == op2)
 	arg = op1;
       if (gimple_bb (stmt) == gimple_bb (SSA_NAME_DEF_STMT (arg)))
-	{
-	  if (dump_file && (dump_flags & TDF_DETAILS))
-	    {
-	      fprintf (dump_file, "  Not registered due to ");
-	      print_generic_expr (dump_file, arg, TDF_SLIM);
-	      fprintf (dump_file, " being defined in the same block.\n");
-	    }
-	  return;
-	}
+	return false;
     }
-  record (gimple_bb (stmt), k, op1, op2);
+
+  // If the LHS of a statement has already been processed and an equivalence
+  // registered, do not register another one.  See PR 124809.
+  if (m_lhs_equiv_set_p && relation_equiv_p (k)
+      && gimple_get_lhs (stmt) == op1)
+    {
+      if (!bitmap_set_bit (m_lhs_equiv_set_p, SSA_NAME_VERSION (op1)))
+	return false;
+    }
+  bool ret = record (gimple_bb (stmt), k, op1, op2);
+
+  if (ret && dump_file && (dump_flags & TDF_DETAILS))
+    {
+      value_relation vr (k, op1, op2);
+      fprintf (dump_file, " Registering value_relation ");
+      vr.dump (dump_file);
+      fprintf (dump_file, " (bb%d) at ", gimple_bb (stmt)->index);
+      print_gimple_stmt (dump_file, stmt, 0, TDF_SLIM);
+    }
+  return ret;
 }
 
 // Register relation K between ssa_name OP1 and OP2 on edge E.
+// Return false if no new relation is added.
 
-void
+bool
 relation_oracle::record (edge e, relation_kind k, tree op1, tree op2)
 {
   gcc_checking_assert (TREE_CODE (op1) == SSA_NAME);
@@ -1058,63 +1222,71 @@ relation_oracle::record (edge e, relation_kind k, tree op1, tree op2)
   // Do not register lack of relation, or blocks which have more than
   // edge E for a predecessor.
   if (k == VREL_VARYING || !single_pred_p (e->dest))
-    return;
+    return false;
 
-  if (dump_file && (dump_flags & TDF_DETAILS))
+  bool ret = record (e->dest, k, op1, op2);
+
+  if (ret && dump_file && (dump_flags & TDF_DETAILS))
     {
       value_relation vr (k, op1, op2);
       fprintf (dump_file, " Registering value_relation ");
       vr.dump (dump_file);
       fprintf (dump_file, " on (%d->%d)\n", e->src->index, e->dest->index);
     }
-
-  record (e->dest, k, op1, op2);
+  return ret;
 }
 
 // Register relation K between OP! and OP2 in block BB.
 // This creates the record and searches for existing records in the dominator
-// tree to merge with.
+// tree to merge with.  Return false if no new relation is added.
 
-void
+bool
 dom_oracle::record (basic_block bb, relation_kind k, tree op1, tree op2)
 {
   // If the 2 ssa_names are the same, do nothing.  An equivalence is implied,
   // and no other relation makes sense.
   if (op1 == op2)
-    return;
+    return false;
 
   // Equivalencies are handled by the equivalence oracle.
   if (relation_equiv_p (k))
-    equiv_oracle::record (bb, k, op1, op2);
+    return equiv_oracle::record (bb, k, op1, op2);
   else
     {
       // if neither op1 nor op2 are in a relation before this is registered,
       // there will be no transitive.
       bool check = bitmap_bit_p (m_relation_set, SSA_NAME_VERSION (op1))
 		   || bitmap_bit_p (m_relation_set, SSA_NAME_VERSION (op2));
-      relation_chain *ptr = set_one_relation (bb, k, op1, op2);
+      relation_chain *ptr = search_and_merge_relation (bb, k, op1, op2);
       if (ptr && check
 	  && (m_relations[bb->index].m_num_relations
 	      < param_relation_block_limit))
 	register_transitives (bb, *ptr);
+      return ptr != NULL;
     }
 }
 
-// Register relation K between OP! and OP2 in block BB.
-// This creates the record and searches for existing records in the dominator
-// tree to merge with.  Return the record, or NULL if no record was created.
+// Register relation K between OP1 and OP2 in block BB by creating a new
+// record.  It is an error for there to be an existing record.
+// Return the record, or NULL if no record was created.
 
 relation_chain *
-dom_oracle::set_one_relation (basic_block bb, relation_kind k, tree op1,
-			      tree op2)
+dom_oracle::create_relation_in_bb (basic_block bb, relation_kind k, tree op1,
+				   tree op2)
 {
-  gcc_checking_assert (k != VREL_VARYING && k != VREL_EQ);
-
-  value_relation vr(k, op1, op2);
   int bbi = bb->index;
 
   if (bbi >= (int)m_relations.length())
     m_relations.safe_grow_cleared (last_basic_block_for_fn (cfun) + 1);
+
+  if (m_relations[bbi].m_num_relations >= param_relation_block_limit)
+    return NULL;
+  m_relations[bbi].m_num_relations++;
+  // Check for an existing relation further up the DOM chain.
+  // By including dominating relations, The first one found in any search
+  // will be the aggregate of all the previous ones.
+
+  relation_chain *ptr;
 
   // Summary bitmap indicating what ssa_names have relations in this BB.
   bitmap bm = m_relations[bbi].m_names;
@@ -1123,57 +1295,64 @@ dom_oracle::set_one_relation (basic_block bb, relation_kind k, tree op1,
   unsigned v1 = SSA_NAME_VERSION (op1);
   unsigned v2 = SSA_NAME_VERSION (op2);
 
-  relation_kind curr;
+  // Assert there is no existing relation.
+  gcc_checking_assert (find_relation_block (bbi, op1, op2, NULL)
+		       == VREL_VARYING);
+
+  bitmap_set_bit (bm, v1);
+  bitmap_set_bit (bm, v2);
+  bitmap_set_bit (m_relation_set, v1);
+  bitmap_set_bit (m_relation_set, v2);
+
+  ptr = (relation_chain *) obstack_alloc (&m_chain_obstack,
+					  sizeof (relation_chain));
+  ptr->set_relation (k, op1, op2);
+  ptr->m_next = m_relations[bbi].m_head;
+  m_relations[bbi].m_head = ptr;
+  return ptr;
+}
+
+// Register relation K between OP1 and OP2 in block BB by searching the
+// dominator tree for any existing record to merge with.  If there were
+// none, create a new record.
+// Return the record, or NULL if no record was found or created.
+
+relation_chain *
+dom_oracle::search_and_merge_relation (basic_block bb, relation_kind k,
+				       tree op1, tree op2)
+{
+  gcc_checking_assert (k != VREL_VARYING && k != VREL_EQ);
+
   relation_chain *ptr;
-  curr = find_relation_block (bbi, v1, v2, &ptr);
-  // There is an existing relation in this block, just intersect with it.
+  relation_kind curr = find_relation_block (bb->index, op1, op2, &ptr);
+
+  // If there is an existing relation in this block, just intersect with it.
   if (curr != VREL_VARYING)
     {
-      if (dump_file && (dump_flags & TDF_DETAILS))
-	{
-	  fprintf (dump_file, "    Intersecting with existing ");
-	  ptr->dump (dump_file);
-	}
-      // Check into whether we can simply replace the relation rather than
-      // intersecting it.  This may help with some optimistic iterative
-      // updating algorithms.
-      bool new_rel = ptr->intersect (vr);
-      if (dump_file && (dump_flags & TDF_DETAILS))
-	{
-	  fprintf (dump_file, " to produce ");
-	  ptr->dump (dump_file);
-	  fprintf (dump_file, " %s.\n", new_rel ? "Updated" : "No Change");
-	}
-      // If there was no change, return no record..
-      if (!new_rel)
+      // If there was no change, return no record.
+      value_relation vr (k, op1, op2);
+      if (!ptr->intersect (vr))
 	return NULL;
+      return ptr;
     }
-  else
+
+  // Create the relation in this block.
+  ptr = create_relation_in_bb (bb, k, op1, op2);
+  if (ptr)
     {
-      if (m_relations[bbi].m_num_relations >= param_relation_block_limit)
-	{
-	  if (dump_file && (dump_flags & TDF_DETAILS))
-	    fprintf (dump_file, "  Not registered due to bb being full\n");
-	  return NULL;
-	}
-      m_relations[bbi].m_num_relations++;
       // Check for an existing relation further up the DOM chain.
       // By including dominating relations, The first one found in any search
       // will be the aggregate of all the previous ones.
-      curr = find_relation_dom (bb, v1, v2);
+      curr = find_relation_dom (get_immediate_dominator (CDI_DOMINATORS, bb),
+				op1, op2);
       if (curr != VREL_VARYING)
-	k = relation_intersect (curr, k);
-
-      bitmap_set_bit (bm, v1);
-      bitmap_set_bit (bm, v2);
-      bitmap_set_bit (m_relation_set, v1);
-      bitmap_set_bit (m_relation_set, v2);
-
-      ptr = (relation_chain *) obstack_alloc (&m_chain_obstack,
-					      sizeof (relation_chain));
-      ptr->set_relation (k, op1, op2);
-      ptr->m_next = m_relations[bbi].m_head;
-      m_relations[bbi].m_head = ptr;
+	{
+	  curr = relation_intersect (curr, k);
+	  // Intersect the new relation with the existing one, unless the
+	  // result is UNDEFINED.  Then just leave it.
+	  if (curr != k && curr != VREL_UNDEFINED)
+	    ptr->set_relation (curr, op1, op2);
+	}
     }
   return ptr;
 }
@@ -1272,8 +1451,8 @@ dom_oracle::register_transitives (basic_block root_bb,
 		  // further processing is already reflected above it.
 		  // When we ran into the limit of relations on root_bb
 		  // we can give up as well.
-		  if (!set_one_relation (root_bb, nr.kind (),
-					 nr.op1 (), nr.op2 ()))
+		  if (!search_and_merge_relation (root_bb, nr.kind (),
+						  nr.op1 (), nr.op2 ()))
 		    return;
 		  if (dump_file && (dump_flags & TDF_DETAILS))
 		    {
@@ -1334,7 +1513,7 @@ dom_oracle::query (basic_block bb, const_bitmap b1, const_bitmap b2)
 // is found, return a pointer to the chain object in OBJ.
 
 relation_kind
-dom_oracle::find_relation_block (int bb, unsigned v1, unsigned v2,
+dom_oracle::find_relation_block (int bb, tree ssa1, tree ssa2,
 				     relation_chain **obj) const
 {
   if (bb >= (int)m_relations.length())
@@ -1344,6 +1523,9 @@ dom_oracle::find_relation_block (int bb, unsigned v1, unsigned v2,
   if (!bm)
     return VREL_VARYING;
 
+  unsigned v1 = SSA_NAME_VERSION (ssa1);
+  unsigned v2 = SSA_NAME_VERSION (ssa2);
+
   // If both b1 and b2 aren't referenced in this block, cant be a relation
   if (!bitmap_bit_p (bm, v1) || !bitmap_bit_p (bm, v2))
     return VREL_VARYING;
@@ -1351,15 +1533,15 @@ dom_oracle::find_relation_block (int bb, unsigned v1, unsigned v2,
   relation_chain *ptr;
   for (ptr = m_relations[bb].m_head; ptr ; ptr = ptr->m_next)
     {
-      unsigned op1 = SSA_NAME_VERSION (ptr->op1 ());
-      unsigned op2 = SSA_NAME_VERSION (ptr->op2 ());
-      if (v1 == op1 && v2 == op2)
+      tree op1 = ptr->op1 ();
+      tree op2 = ptr->op2 ();
+      if (ssa1 == op1 && ssa2 == op2)
 	{
 	  if (obj)
 	    *obj = ptr;
 	  return ptr->kind ();
 	}
-      if (v1 == op2 && v2 == op1)
+      if (ssa1 == op2 && ssa2 == op1)
 	{
 	  if (obj)
 	    *obj = ptr;
@@ -1370,25 +1552,162 @@ dom_oracle::find_relation_block (int bb, unsigned v1, unsigned v2,
   return VREL_VARYING;
 }
 
+// See if a relation can be found between SSA1 and SSA2 in basic block BB based
+// on values as they exist in basic block ORIG.   This will only occur
+// if SSA1 and SSA2 occur in the same statement together.
+
+relation_kind
+dom_oracle::recomputed_relation (basic_block orig_bb, edge e, tree ssa1,
+				 tree ssa2) const
+{
+  if (ssa1 == ssa2)
+    return VREL_EQ;
+  gori_map *gori_ssa = get_range_query (cfun)->gori_ssa ();
+  if (!gori_ssa)
+    return VREL_VARYING;
+
+  // If SSA1 and SSA2 are not BOTH exported from the block, theres no relation.
+  basic_block bb = e->src;
+  if (!gori_ssa->is_export_p (ssa1, bb) || !gori_ssa->is_export_p (ssa2, bb))
+    return VREL_VARYING;
+
+  // Verify the edge is a range generating edge.
+  gimple_outgoing_range &gori = get_range_query (cfun)->gori ();
+  int_range_max edge_range;
+  gimple *stmt = gori.edge_range_p (edge_range, e);
+  if (!stmt)
+    return VREL_VARYING;
+
+  // Scan back thru the dependency chain recalculating values as if they are
+  // in ORIG_BB, and see if we can find a statement with both op1 and op2
+  // which generates a relation.
+
+  value_range lhs_range (edge_range);
+
+  while (stmt)
+    {
+      bool ret;
+      gimple_range_op_handler handler (stmt);
+      if (!handler)
+	return VREL_VARYING;
+
+      tree op1 = handler.operand1 ();
+      tree op2 = handler.operand2 ();
+      value_range op1_range (TREE_TYPE (op1));
+      value_range op2_range;
+
+      // Check if this is the statment we are looking for!
+      bool match = (op1 == ssa1 && op2 == ssa2);
+      bool match_rev = (op2 == ssa1 && op1 == ssa2);
+      if (match || match_rev)
+	{
+	  gcc_checking_assert (op2);
+	  op2_range.set_range_class (TREE_TYPE (op2));
+	  // Pick up the ranges at ORIG_BB, and see if a relation is generated.
+	  get_range_query (cfun)->range_on_entry (op1_range, orig_bb, op1);
+	  get_range_query (cfun)->range_on_entry (op2_range, orig_bb, op2);
+	  relation_kind relation = handler.op1_op2_relation (lhs_range,
+							      op1_range,
+							      op2_range);
+	  // If the operands are reversed, swap the relation.
+	  if (match_rev)
+	    relation = relation_swap (relation);
+	  return relation;
+	}
+
+      // Now determine if one of the operands has both SSA1 and SSA2 in
+      // the dependency chain.  Thats the path we want to follow.
+      bool op1_dep = gimple_range_ssa_p (op1)
+		     && gori_ssa->in_chain_p (ssa1, op1)
+		     && gori_ssa->in_chain_p (ssa2, op1);
+      bool op2_dep = gimple_range_ssa_p (op2)
+		     && gori_ssa->in_chain_p (ssa1, op2)
+		     && gori_ssa->in_chain_p (ssa2, op2);
+      // If there are no dependencies with both names, or both sides have
+      // both names, simply bail.
+      if (op1_dep == op2_dep)
+	return VREL_VARYING;
+
+      if (op1_dep)
+	{
+	  // If operand 1 is the chain we are interested in, calcualte its
+	  // range based on LHS_RANGE.
+	  if (!op2)
+	    ret = handler.calc_op1 (op1_range, lhs_range);
+	  else
+	    {
+	      // Pick up the range of op2 as it occurs in the original block.
+	      // and calculate a range for op1.
+	      op2_range.set_range_class (TREE_TYPE (op2));
+	      get_range_query (cfun)->range_on_entry (op2_range, orig_bb, op2);
+	      ret = handler.calc_op1 (op1_range, lhs_range, op2_range);
+	    }
+	  // If we failed to calculate a range for op1, bail.
+	  if (!ret)
+	    return VREL_VARYING;
+
+	  // op1_range will now become the LHS_RANGE for the def statement.
+	  lhs_range = op1_range;
+	  stmt = SSA_NAME_DEF_STMT (op1);
+	}
+      else if (op2_dep)
+	{
+	  // Pick up the range of op1 as it occurs in the original block.
+	  // and calcalute a range for op2.
+	  op2_range.set_range_class (TREE_TYPE (op2));
+	  get_range_query (cfun)->range_on_entry (op1_range, orig_bb, op1);
+	  ret = handler.calc_op2 (op2_range, lhs_range, op1_range);
+	  // If we failed to calculate a range for op1, bail.
+	  if (!ret)
+	    return VREL_VARYING;
+
+	  // op2_range will now become the LHS_RANGE for the def statement.
+	  lhs_range = op2_range;
+	  stmt = SSA_NAME_DEF_STMT (op2);
+	}
+      else
+	gcc_unreachable ();
+
+      // Bail if this ssa-name is defined outside this block.
+      if (!stmt || gimple_bb (stmt) != e->src)
+	return VREL_VARYING;
+    }
+  return VREL_VARYING;
+}
+
 // Find a relation between SSA version V1 and V2 in the dominator tree
 // starting with block BB
 
 relation_kind
-dom_oracle::find_relation_dom (basic_block bb, unsigned v1, unsigned v2) const
+dom_oracle::find_relation_dom (basic_block start_bb, tree ssa1, tree ssa2) const
 {
   relation_kind r;
+  unsigned v1 = SSA_NAME_VERSION (ssa1);
+  unsigned v2 = SSA_NAME_VERSION (ssa2);
   // IF either name does not occur in a relation anywhere, there isn't one.
   if (!bitmap_bit_p (m_relation_set, v1) || !bitmap_bit_p (m_relation_set, v2))
     return VREL_VARYING;
-
-  for ( ; bb; bb = get_immediate_dominator (CDI_DOMINATORS, bb))
+  edge outgoing_edge = NULL;
+  for (basic_block bb = start_bb;
+       bb;
+       bb = get_immediate_dominator (CDI_DOMINATORS, bb))
     {
-      r = find_relation_block (bb->index, v1, v2);
+      r = find_relation_block (bb->index, ssa1, ssa2);
+      // Now check if recomputed values on the outgoing edge might create
+      // a relation.
+      if (r == VREL_VARYING && outgoing_edge)
+	{
+	  gcc_checking_assert (outgoing_edge->src == bb);
+	  r = recomputed_relation (start_bb, outgoing_edge, ssa1, ssa2);
+	}
       if (r != VREL_VARYING)
 	return r;
+
+      // If the dominator is not the only predecessor to this block, there is
+      // unlikely to be a viable relation available.
+      outgoing_edge = single_pred_p (bb) ? single_pred_edge (bb) : NULL;
     }
   return VREL_VARYING;
-
 }
 
 // Query if there is a relation between SSA1 and SS2 in block BB or a
@@ -1420,7 +1739,7 @@ dom_oracle::query (basic_block bb, tree ssa1, tree ssa2)
     return kind;
 
   // Initially look for a direct relationship and just return that.
-  kind = find_relation_dom (bb, v1, v2);
+  kind = find_relation_dom (bb, ssa1, ssa2);
   if (kind != VREL_VARYING)
     return kind;
 
@@ -1441,11 +1760,11 @@ dom_oracle::dump (FILE *f, basic_block bb) const
   if (!m_relations[bb->index].m_names)
     return;
 
-  relation_chain *ptr = m_relations[bb->index].m_head;
-  for (; ptr; ptr = ptr->m_next)
+  value_relation vr;
+  FOR_EACH_RELATION_BB (this, bb, vr)
     {
       fprintf (f, "Relational : ");
-      ptr->dump (f);
+      vr.dump (f);
       fprintf (f, "\n");
     }
 }
@@ -1491,6 +1810,22 @@ path_oracle::~path_oracle ()
   bitmap_obstack_release (&m_bitmaps);
 }
 
+// Clear any range info and relations associated with NAME.
+
+void
+path_oracle::clear (tree name)
+{
+  if (m_root)
+    m_root->clear (name);
+
+  m_relations.clear (name);
+
+  unsigned v = SSA_NAME_VERSION (name);
+  equiv_chain *ptr = m_equiv.find (v);
+  if (ptr)
+    bitmap_clear_bit (ptr->m_names, v);
+}
+
 // Return the equiv set for SSA, and if there isn't one, check for equivs
 // starting in block BB.
 
@@ -1513,9 +1848,9 @@ path_oracle::equiv_set (tree ssa, basic_block bb)
 }
 
 // Register an equivalence between SSA1 and SSA2 resolving unknowns from
-// block BB.
+// block BB.  Return false if no new equivalence was added.
 
-void
+bool
 path_oracle::register_equiv (basic_block bb, tree ssa1, tree ssa2)
 {
   const_bitmap equiv_1 = equiv_set (ssa1, bb);
@@ -1523,7 +1858,7 @@ path_oracle::register_equiv (basic_block bb, tree ssa1, tree ssa2)
 
   // Check if they are the same set, if so, we're done.
   if (bitmap_equal_p (equiv_1, equiv_2))
-    return;
+    return false;
 
   // Don't mess around, simply create a new record and insert it first.
   bitmap b = BITMAP_ALLOC (&m_bitmaps);
@@ -1537,6 +1872,7 @@ path_oracle::register_equiv (basic_block bb, tree ssa1, tree ssa2)
   ptr->m_next = m_equiv.m_next;
   m_equiv.m_next = ptr;
   bitmap_ior_into (m_equiv.m_names, b);
+  return true;
 }
 
 // Register killing definition of an SSA_NAME.
@@ -1586,41 +1922,43 @@ path_oracle::killing_def (tree ssa)
 }
 
 // Register relation K between SSA1 and SSA2, resolving unknowns by
-// querying from BB.
+// querying from BB.  Return false if no new relation is registered.
 
-void
+bool
 path_oracle::record (basic_block bb, relation_kind k, tree ssa1, tree ssa2)
 {
   // If the 2 ssa_names are the same, do nothing.  An equivalence is implied,
   // and no other relation makes sense.
   if (ssa1 == ssa2)
-    return;
+    return false;
 
-  if (dump_file && (dump_flags & TDF_DETAILS))
+  relation_kind curr = query (bb, ssa1, ssa2);
+  if (curr != VREL_VARYING)
+    k = relation_intersect (curr, k);
+
+  bool ret;
+  if (k == VREL_EQ)
+    ret = register_equiv (bb, ssa1, ssa2);
+  else
+    {
+      bitmap_set_bit (m_relations.m_names, SSA_NAME_VERSION (ssa1));
+      bitmap_set_bit (m_relations.m_names, SSA_NAME_VERSION (ssa2));
+      relation_chain *ptr = (relation_chain *) obstack_alloc (&m_chain_obstack,
+							  sizeof (relation_chain));
+      ptr->set_relation (k, ssa1, ssa2);
+      ptr->m_next = m_relations.m_head;
+      m_relations.m_head = ptr;
+      ret = true;
+    }
+
+  if (ret && dump_file && (dump_flags & TDF_DETAILS))
     {
       value_relation vr (k, ssa1, ssa2);
       fprintf (dump_file, " Registering value_relation (path_oracle) ");
       vr.dump (dump_file);
       fprintf (dump_file, " (root: bb%d)\n", bb->index);
     }
-
-  relation_kind curr = query (bb, ssa1, ssa2);
-  if (curr != VREL_VARYING)
-    k = relation_intersect (curr, k);
-
-  if (k == VREL_EQ)
-    {
-      register_equiv (bb, ssa1, ssa2);
-      return;
-    }
-
-  bitmap_set_bit (m_relations.m_names, SSA_NAME_VERSION (ssa1));
-  bitmap_set_bit (m_relations.m_names, SSA_NAME_VERSION (ssa2));
-  relation_chain *ptr = (relation_chain *) obstack_alloc (&m_chain_obstack,
-						      sizeof (relation_chain));
-  ptr->set_relation (k, ssa1, ssa2);
-  ptr->m_next = m_relations.m_head;
-  m_relations.m_head = ptr;
+  return ret;
 }
 
 // Query for a relationship between equiv set B1 and B2, resolving unknowns
@@ -1640,6 +1978,7 @@ path_oracle::query (basic_block bb, const_bitmap b1, const_bitmap b2)
       || bitmap_intersect_p (m_killed_defs, b2))
     return k;
 
+  // Query the root oracle for relations with path local equivalencies.
   if (k == VREL_VARYING && m_root)
     k = m_root->query (bb, b1, b2);
 
@@ -1663,7 +2002,12 @@ path_oracle::query (basic_block bb, tree ssa1, tree ssa2)
   if (bitmap_bit_p (equiv_1, v2) && bitmap_bit_p (equiv_2, v1))
     return VREL_EQ;
 
-  return query (bb, equiv_1, equiv_2);
+  relation_kind rel = query (bb, equiv_1, equiv_2);
+
+  // If the path relation query fails, check for relations in the root oracle.
+  if (rel == VREL_VARYING && m_root)
+      rel = m_root->query (bb, ssa1, ssa2);
+  return rel;
 }
 
 // Reset any relations registered on this path.  ORACLE is the root

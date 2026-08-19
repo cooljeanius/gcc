@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2025, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -27,16 +27,13 @@ with Alloc;
 with Aspects;        use Aspects;
 with Atree;          use Atree;
 with Debug;          use Debug;
-with Einfo;          use Einfo;
 with Einfo.Entities; use Einfo.Entities;
 with Einfo.Utils;    use Einfo.Utils;
 with Elists;         use Elists;
 with Errout;         use Errout;
 with Exp_Ch6;        use Exp_Ch6;
 with Exp_Ch7;        use Exp_Ch7;
-with Exp_Tss;        use Exp_Tss;
 with Exp_Util;       use Exp_Util;
-with Fname;          use Fname;
 with Fname.UF;       use Fname.UF;
 with Lib;            use Lib;
 with Namet;          use Namet;
@@ -49,11 +46,10 @@ with Sem_Ch10;       use Sem_Ch10;
 with Sem_Ch12;       use Sem_Ch12;
 with Sem_Prag;       use Sem_Prag;
 with Sem_Res;        use Sem_Res;
-with Sem_Util;       use Sem_Util;
-with Sinfo;          use Sinfo;
 with Sinfo.Nodes;    use Sinfo.Nodes;
 with Sinfo.Utils;    use Sinfo.Utils;
 with Sinput;         use Sinput;
+with Sinput.L;       use Sinput.L;
 with Snames;         use Snames;
 with Stand;          use Stand;
 with Table;
@@ -151,7 +147,7 @@ package body Inline is
    function Node_Hash (Id : Node_Id) return Node_Header_Num;
    --  Simple hash function for Node_Ids
 
-   package To_Pending_Instantiations is new GNAT.Htable.Simple_HTable
+   package To_Pending_Instantiations is new GNAT.HTable.Simple_HTable
      (Header_Num => Node_Header_Num,
       Element    => Int,
       No_Element => -1,
@@ -287,10 +283,6 @@ package body Inline is
    --  Return the entity node for the unit containing E. Always return the spec
    --  for a package.
 
-   function Has_Initialized_Type (E : Entity_Id) return Boolean;
-   --  If a candidate for inlining contains type declarations for types with
-   --  nontrivial initialization procedures, they are not worth inlining.
-
    function Has_Single_Return (N : Node_Id) return Boolean;
    --  In general we cannot inline functions that return unconstrained type.
    --  However, we can handle such functions if all return statements return
@@ -318,8 +310,10 @@ package body Inline is
    --    Depends
    --    Exceptional_Cases
    --    Exit_Cases
+   --    Modifies
    --    Postcondition
    --    Precondition
+   --    Program_Exit
    --    Refined_Global
    --    Refined_Depends
    --    Refined_Post
@@ -757,14 +751,15 @@ package body Inline is
       --  an instance whose body will be analyzed anyway or the subprogram was
       --  generated as a body by the compiler (for example an initialization
       --  procedure) or its declaration was provided along with the body (for
-      --  example an expression function) and it does not declare types with
-      --  nontrivial initialization procedures.
+      --  example an expression function). Note that we need to test again the
+      --  Is_Inlined flag because Analyze_Subprogram_Body_Helper may have reset
+      --  it if the body contains excluded declarations or statements.
 
       if (Is_Inlined (Pack)
            or else Is_Generic_Instance (Pack)
            or else Nkind (Decl) = N_Subprogram_Body
            or else Present (Corresponding_Body (Decl)))
-        and then not Has_Initialized_Type (E)
+        and then Is_Inlined (E)
       then
          Register_Backend_Inlined_Subprogram (E);
 
@@ -1005,9 +1000,9 @@ package body Inline is
          end loop;
 
          --  The list of inlined subprograms is an overestimate, because it
-         --  includes inlined functions called from functions that are compiled
-         --  as part of an inlined package, but are not themselves called. An
-         --  accurate computation of just those subprograms that are needed
+         --  includes inlined subprograms called from subprograms that are
+         --  declared in an inlined package, but are not themselves called.
+         --  An accurate computation of just those subprograms that are needed
          --  requires that we perform a transitive closure over the call graph,
          --  starting from calls in the main compilation unit.
 
@@ -1060,7 +1055,9 @@ package body Inline is
                E : constant Subprogram_Kind_Id := Inlined.Table (Index).Name;
 
             begin
-               if Is_Called (E) and then not Is_Ignored_Ghost_Entity (E) then
+               if Is_Called (E)
+                 and then not Is_Ignored_Ghost_Entity_In_Codegen (E)
+               then
                   Add_Inlined_Subprogram (E);
                end if;
             end;
@@ -1222,6 +1219,17 @@ package body Inline is
       end if;
 
       if Has_Excluded_Declaration (Spec_Id, Declarations (N)) then
+         return;
+      end if;
+
+      --  Do not inline ghost functions, because inlined functions are
+      --  difficult to detect and we must do it to reject exceptions propagated
+      --  from ghost calls to ordinary code.
+
+      if Ekind (Spec_Id) = E_Function
+        and then Is_Ghost_Entity (Spec_Id)
+      then
+         Cannot_Inline ("cannot inline & (ghost function)?", N, Spec_Id);
          return;
       end if;
 
@@ -1421,7 +1429,7 @@ package body Inline is
            and then not Same_Type (Etype (F), Etype (A))
            and then
              (Is_By_Reference_Type (Etype (A))
-               or else Is_Limited_Type (Etype (A)))
+              or else Is_Limited_Type (Etype (A)))
          then
             return False;
          end if;
@@ -1469,6 +1477,11 @@ package body Inline is
       --  with an address clause, which could become illegal in SPARK after
       --  inlining, if the address clause mentions a constant view of a mutable
       --  object at call site.
+
+      function Has_Formal_Of_UU_Type
+        (Id : Entity_Id) return Boolean;
+      --  Returns true if the subprogram has at least one formal parameter of
+      --  an unchecked conversion type.
 
       function Has_Formal_Or_Result_Of_Deep_Type
         (Id : Entity_Id) return Boolean;
@@ -1573,6 +1586,35 @@ package body Inline is
          return Check_All_Constants_With_Address_Clause
            (Body_Node) = Abandon;
       end Has_Constant_With_Address_Clause;
+
+      ---------------------------
+      -- Has_Formal_Of_UU_Type --
+      ---------------------------
+
+      function Has_Formal_Of_UU_Type
+        (Id : Entity_Id) return Boolean
+      is
+         Subp_Id    : constant Entity_Id := Ultimate_Alias (Id);
+         Formal     : Entity_Id;
+         Formal_Typ : Entity_Id;
+
+      begin
+         --  Inspect all parameters of the subprogram looking for a formal
+         --  of an unchecked union type.
+
+         Formal := First_Formal (Subp_Id);
+         while Present (Formal) loop
+            Formal_Typ := Etype (Formal);
+
+            if Is_Unchecked_Union (Formal_Typ) then
+               return True;
+            end if;
+
+            Next_Formal (Formal);
+         end loop;
+
+         return False;
+      end Has_Formal_Of_UU_Type;
 
       ---------------------------------------
       -- Has_Formal_Or_Result_Of_Deep_Type --
@@ -2059,6 +2101,14 @@ package body Inline is
       elsif Has_Formal_Or_Result_Of_Deep_Type (Id) then
          return False;
 
+      --  Do not inline calls if a parameter has an uncked union type as
+      --  inlining might cause an object to have inferrable discriminants
+      --  while it would not be the case without inlining, resulting in
+      --  checks for UU restrictions being missed.
+
+      elsif Has_Formal_Of_UU_Type (Id) then
+         return False;
+
       --  Do not inline subprograms which may be traversal functions. Such
       --  inlining introduces temporary variables of named access type for
       --  which assignments are move instead of borrow/observe, possibly
@@ -2112,7 +2162,6 @@ package body Inline is
       Suppress_Info : Boolean := False)
    is
       Inline_Prefix : constant String := "cannot inline";
-
       function Starts_With (S, Prefix : String) return Boolean is
         (S (S'First .. S'First + Prefix'Length - 1) = Prefix);
 
@@ -2158,7 +2207,8 @@ package body Inline is
          elsif GNATprove_Mode then
             Set_Is_Inlined_Always (Subp, False);
 
-            if Debug_Flag_Underscore_F and not Suppress_Info then
+            if GNATprove_Inline_Failure_Msg and not Suppress_Info
+            then
                Error_Msg_NE (Msg, N, Subp);
             end if;
 
@@ -3277,27 +3327,6 @@ package body Inline is
                    Expression          => New_A);
 
             else
-               --  In GNATprove mode, make an explicit copy of input
-               --  parameters when formal and actual types differ, to make
-               --  sure any check on the type conversion will be issued.
-               --  The legality of the copy is ensured by calling first
-               --  Call_Can_Be_Inlined_In_GNATprove_Mode.
-
-               if GNATprove_Mode
-                 and then Ekind (F) /= E_Out_Parameter
-                 and then not Same_Type (Etype (F), Etype (A))
-               then
-                  pragma Assert (not Is_By_Reference_Type (Etype (A)));
-                  pragma Assert (not Is_Limited_Type (Etype (A)));
-
-                  Append_To (Decls,
-                    Make_Object_Declaration (Loc,
-                      Defining_Identifier => Make_Temporary (Loc, 'C'),
-                      Constant_Present    => True,
-                      Object_Definition   => New_Occurrence_Of (Temp_Typ, Loc),
-                      Expression          => New_Copy_Tree (New_A)));
-               end if;
-
                Decl :=
                  Make_Object_Renaming_Declaration (Loc,
                    Defining_Identifier => Temp,
@@ -3377,15 +3406,6 @@ package body Inline is
       --  be performed in a separate pass, using an instantiation of the
       --  previous subprogram over aspect specifications reachable from N.
 
-      function Process_Sloc (Nod : Node_Id) return Traverse_Result;
-      --  If the call being expanded is that of an internal subprogram, set the
-      --  sloc of the generated block to that of the call itself, so that the
-      --  expansion is skipped by the "next" command in gdb. Same processing
-      --  for a subprogram in a predefined file, e.g. Ada.Tags. If
-      --  Debug_Generated_Code is true, suppress this change to simplify our
-      --  own development. Same in GNATprove mode, to ensure that warnings and
-      --  diagnostics point to the proper location.
-
       procedure Reset_Dispatching_Calls (N : Node_Id);
       --  In subtree N search for occurrences of dispatching calls that use the
       --  Ada 2005 Object.Operation notation and the object is a formal of the
@@ -3395,10 +3415,6 @@ package body Inline is
       procedure Rewrite_Function_Call (N : Node_Id; Blk : Node_Id);
       --  If the function body is a single expression, replace call with
       --  expression, else insert block appropriately.
-
-      procedure Rewrite_Procedure_Call (N : Node_Id; Blk : Node_Id);
-      --  If procedure body has no local variables, inline body without
-      --  creating block, otherwise rewrite call with block.
 
       ---------------------
       -- Make_Exit_Label --
@@ -3648,22 +3664,6 @@ package body Inline is
       procedure Replace_Formals_In_Aspects is
         new Traverse_Proc (Process_Formals_In_Aspects);
 
-      ------------------
-      -- Process_Sloc --
-      ------------------
-
-      function Process_Sloc (Nod : Node_Id) return Traverse_Result is
-      begin
-         if not Debug_Generated_Code then
-            Set_Sloc (Nod, Sloc (N));
-            Set_Comes_From_Source (Nod, False);
-         end if;
-
-         return OK;
-      end Process_Sloc;
-
-      procedure Reset_Slocs is new Traverse_Proc (Process_Sloc);
-
       ------------------------------
       --  Reset_Dispatching_Calls --
       ------------------------------
@@ -3784,35 +3784,6 @@ package body Inline is
          end if;
       end Rewrite_Function_Call;
 
-      ----------------------------
-      -- Rewrite_Procedure_Call --
-      ----------------------------
-
-      procedure Rewrite_Procedure_Call (N : Node_Id; Blk : Node_Id) is
-         HSS : constant Node_Id := Handled_Statement_Sequence (Blk);
-
-      begin
-         --  If there is a transient scope for N, this will be the scope of the
-         --  actions for N, and the statements in Blk need to be within this
-         --  scope. For example, they need to have visibility on the constant
-         --  declarations created for the formals.
-
-         --  If N needs no transient scope, and if there are no declarations in
-         --  the inlined body, we can do a little optimization and insert the
-         --  statements for the body directly after N, and rewrite N to a
-         --  null statement, instead of rewriting N into a full-blown block
-         --  statement.
-
-         if not Scope_Is_Transient
-           and then Is_Empty_List (Declarations (Blk))
-         then
-            Insert_List_After (N, Statements (HSS));
-            Rewrite (N, Make_Null_Statement (Loc));
-         else
-            Rewrite (N, Blk);
-         end if;
-      end Rewrite_Procedure_Call;
-
    --  Start of processing for Expand_Inlined_Call
 
    begin
@@ -3828,6 +3799,17 @@ package body Inline is
          Is_Unc_Decl := Nkind (Parent (N)) = N_Object_Declaration
                           and then Is_Unc;
       end if;
+
+      --  Inlining function calls returning an object of unconstrained type as
+      --  function actuals or in a return statement is not supported: a
+      --  temporary variable will be declared of unconstrained type without
+      --  initializing expression.
+
+      pragma Assert
+        (not Uses_Back_End
+           or else Nkind (Parent (N)) not in
+             N_Function_Call | N_Simple_Return_Statement
+           or else not Is_Unc);
 
       --  Check for an illegal attempt to inline a recursive procedure. If the
       --  subprogram has parameters this is detected when trying to supply a
@@ -4077,6 +4059,7 @@ package body Inline is
             --  Replace call with temporary and create its declaration
 
             Temp := Make_Temporary (Loc, 'C');
+            Mutate_Ekind (Temp, E_Constant);
             Set_Is_Internal (Temp);
 
             --  For the unconstrained case, the generated temporary has the
@@ -4194,13 +4177,6 @@ package body Inline is
       Replace_Formals_In_Aspects (Blk);
       Set_Parent (Blk, N);
 
-      if GNATprove_Mode then
-         null;
-
-      elsif not Comes_From_Source (Subp) or else Is_Predef then
-         Reset_Slocs (Blk);
-      end if;
-
       if Is_Unc_Decl then
 
          --  No action needed since return statement has been already removed
@@ -4271,7 +4247,7 @@ package body Inline is
       end;
 
       if Ekind (Subp) = E_Procedure then
-         Rewrite_Procedure_Call (N, Blk);
+         Rewrite (N, Blk);
 
       else
          Rewrite_Function_Call (N, Blk);
@@ -4578,35 +4554,6 @@ package body Inline is
       return False;
    end Has_Excluded_Statement;
 
-   --------------------------
-   -- Has_Initialized_Type --
-   --------------------------
-
-   function Has_Initialized_Type (E : Entity_Id) return Boolean is
-      E_Body : constant Node_Id := Subprogram_Body (E);
-      Decl   : Node_Id;
-
-   begin
-      if No (E_Body) then -- imported subprogram
-         return False;
-
-      else
-         Decl := First (Declarations (E_Body));
-         while Present (Decl) loop
-            if Nkind (Decl) = N_Full_Type_Declaration
-              and then Comes_From_Source (Decl)
-              and then Present (Init_Proc (Defining_Identifier (Decl)))
-            then
-               return True;
-            end if;
-
-            Next (Decl);
-         end loop;
-      end if;
-
-      return False;
-   end Has_Initialized_Type;
-
    -----------------------
    -- Has_Single_Return --
    -----------------------
@@ -4748,15 +4695,34 @@ package body Inline is
 
    procedure Inline_Static_Function_Call (N : Node_Id; Subp : Entity_Id) is
 
+      Decls        : constant List_Id := New_List;
+      Func_Expr    : constant Node_Id :=
+        Expression_Of_Expression_Function (Subp);
+      Expr_Copy    : constant Node_Id := New_Copy_Tree (Func_Expr);
+      S_Adjustment : Sloc_Adjustment;
+
+      function Adjust_Node (Nod : Node_Id) return Traverse_Result;
+      --  Update the child node with the instantiation adjustment information
+      --  for error messages and mark the node as not coming from source to
+      --  avoid spurious resolution errors in inlined code.
+
       function Replace_Formal (N : Node_Id) return Traverse_Result;
       --  Replace each occurrence of a formal with the
       --  corresponding actual, using the mapping created
       --  by Establish_Actual_Mapping_For_Inlined_Call.
 
-      function Reset_Sloc (Nod : Node_Id) return Traverse_Result;
-      --  Reset the Sloc of a node to that of the call itself, so that errors
-      --  will be flagged on the call to the static expression function itself
-      --  rather than on the expression of the function's declaration.
+      -----------------
+      -- Adjust_Node --
+      -----------------
+
+      function Adjust_Node (Nod : Node_Id) return Traverse_Result is
+      begin
+         Adjust_Instantiation_Sloc (Nod, S_Adjustment);
+         Set_Comes_From_Source (Nod, False);
+         return OK;
+      end Adjust_Node;
+
+      procedure Adjust_Nodes is new Traverse_Proc (Adjust_Node);
 
       --------------------
       -- Replace_Formal --
@@ -4792,82 +4758,67 @@ package body Inline is
 
       procedure Replace_Formals is new Traverse_Proc (Replace_Formal);
 
-      ------------------
-      -- Process_Sloc --
-      ------------------
-
-      function Reset_Sloc (Nod : Node_Id) return Traverse_Result is
-      begin
-         Set_Sloc (Nod, Sloc (N));
-         Set_Comes_From_Source (Nod, False);
-
-         return OK;
-      end Reset_Sloc;
-
-      procedure Reset_Slocs is new Traverse_Proc (Reset_Sloc);
-
    --  Start of processing for Inline_Static_Function_Call
 
    begin
-      pragma Assert (Is_Static_Function_Call (N));
+      --  Register the call in the list of inlined calls
 
-      declare
-         Decls     : constant List_Id := New_List;
-         Func_Expr : constant Node_Id :=
-                       Expression_Of_Expression_Function (Subp);
-         Expr_Copy : constant Node_Id := New_Copy_Tree (Func_Expr);
+      Append_New_Elmt (N, To => Inlined_Calls);
 
-      begin
-         --  Create a mapping from formals to actuals, also creating temps in
-         --  Decls, when needed, to hold the actuals.
+      --  Create a mapping from formals to actuals, also creating temps in
+      --  Decls, when needed, to hold the actuals.
 
-         Establish_Actual_Mapping_For_Inlined_Call (N, Subp, Decls, Func_Expr);
+      Establish_Actual_Mapping_For_Inlined_Call (N, Subp, Decls, Func_Expr);
 
-         --  Ensure that the copy has the same parent as the call (this seems
-         --  to matter when GNATprove_Mode is set and there are nested static
-         --  calls; prevents blowups in Insert_Actions, though it's not clear
-         --  exactly why this is needed???).
+      --  Calculate the Adjustment for the inlined call
 
-         Set_Parent (Expr_Copy, Parent (N));
+      Create_Instantiation_Source
+        (N, Subp, S_Adjustment, Inlined_Body => True);
 
-         Insert_Actions (N, Decls);
+      --  Ensure that the copy has the same parent as the call (this seems
+      --  to matter when GNATprove_Mode is set and there are nested static
+      --  calls; prevents blowups in Insert_Actions, though it's not clear
+      --  exactly why this is needed???).
 
-         --  Now substitute actuals for their corresponding formal references
-         --  within the expression.
+      Set_Parent (Expr_Copy, Parent (N));
 
-         Replace_Formals (Expr_Copy);
+      Insert_Actions (N, Decls);
 
-         Reset_Slocs (Expr_Copy);
+      --  Now substitute actuals for their corresponding formal references
+      --  within the expression.
 
-         --  Apply a qualified expression with the function's result subtype,
-         --  to ensure that we check the expression against any constraint
-         --  or predicate, which will cause the call to be illegal if the
-         --  folded expression doesn't satisfy them. (The predicate case
-         --  might not get checked if the subtype hasn't been frozen yet,
-         --  which can happen if this static expression happens to be what
-         --  causes the freezing, because Has_Static_Predicate doesn't get
-         --  set on the subtype until it's frozen and Build_Predicates is
-         --  called. It's not clear how to address this case. ???)
+      Replace_Formals (Expr_Copy);
 
-         Rewrite (Expr_Copy,
-           Make_Qualified_Expression (Sloc (Expr_Copy),
-             Subtype_Mark =>
-               New_Occurrence_Of (Etype (N), Sloc (Expr_Copy)),
-             Expression =>
-               Relocate_Node (Expr_Copy)));
+      Adjust_Nodes (Expr_Copy);
 
-         Set_Etype (Expr_Copy, Etype (N));
+      --  Apply a qualified expression with the function's result subtype,
+      --  to ensure that we check the expression against any constraint
+      --  or predicate, which will cause the call to be illegal if the
+      --  folded expression doesn't satisfy them. (The predicate case
+      --  might not get checked if the subtype hasn't been frozen yet,
+      --  which can happen if this static expression happens to be what
+      --  causes the freezing, because Has_Static_Predicate doesn't get
+      --  set on the subtype until it's frozen and Build_Predicates is
+      --  called. It's not clear how to address this case. ???)
 
-         Analyze_And_Resolve (Expr_Copy, Etype (N));
+      Rewrite
+        (Expr_Copy,
+         Make_Qualified_Expression
+           (Sloc         => Sloc (Expr_Copy),
+            Subtype_Mark => New_Occurrence_Of (Etype (N), Sloc (Expr_Copy)),
+            Expression   => Relocate_Node (Expr_Copy)));
 
-         --  Finally rewrite the function call as the folded static result
+      Set_Etype (Expr_Copy, Etype (N));
 
-         Rewrite (N, Expr_Copy);
+      Analyze_And_Resolve (Expr_Copy, Etype (N));
 
-         --  Cleanup mapping between formals and actuals for other expansions
+      --  Finally rewrite the function call as the folded static result
 
-         Reset_Actual_Mapping_For_Inlined_Call (Subp);
-      end;
+      Rewrite (N, Expr_Copy);
+
+      --  Cleanup mapping between formals and actuals for other expansions
+
+      Reset_Actual_Mapping_For_Inlined_Call (Subp);
    end Inline_Static_Function_Call;
 
    ------------------------
@@ -4922,11 +4873,17 @@ package body Inline is
               and then Ekind (Info.Fin_Scop) = E_Package_Body
             then
                Set_In_Package_Body (Spec_Entity (Info.Fin_Scop), True);
+               Instantiate_Package_Body (Info);
+               Set_In_Package_Body (Spec_Entity (Info.Fin_Scop), False);
+            else
+               Instantiate_Package_Body (Info);
             end if;
 
-            Instantiate_Package_Body (Info);
+            --  No need to generate cleanups if the main unit is generic
 
-            if Present (Info.Fin_Scop) then
+            if Present (Info.Fin_Scop)
+               and then not Is_Generic_Unit (Main_Unit_Entity)
+            then
                Scop := Info.Fin_Scop;
 
                --  If the enclosing finalization scope is dynamic, the instance
@@ -4939,12 +4896,6 @@ package body Inline is
                end if;
 
                Add_Scope_To_Clean (Scop);
-
-               --  Reset the In_Package_Body flag if it was set above
-
-               if Ekind (Info.Fin_Scop) = E_Package_Body then
-                  Set_In_Package_Body (Spec_Entity (Info.Fin_Scop), False);
-               end if;
             end if;
 
          --  For subprogram instances, always instantiate the body
@@ -4964,10 +4915,6 @@ package body Inline is
          Expander_Active := (Operating_Mode = Opt.Generate_Code);
          Push_Scope (Standard_Standard);
          To_Clean := New_Elmt_List;
-
-         if Is_Generic_Unit (Cunit_Entity (Main_Unit)) then
-            Start_Generic;
-         end if;
 
          --  A body instantiation may generate additional instantiations, so
          --  the following loop must scan to the end of a possibly expanding
@@ -5007,16 +4954,10 @@ package body Inline is
             Pending_Instantiations.Init;
          end if;
 
-         --  We can now complete the cleanup actions of scopes that contain
-         --  pending instantiations (skipped for generic units, since we
-         --  never need any cleanups in generic units).
+         --  Expand the cleanup actions of scopes that contain instantiations
 
-         if Expander_Active
-           and then not Is_Generic_Unit (Main_Unit_Entity)
-         then
+         if Expander_Active then
             Cleanup_Scopes;
-         elsif Is_Generic_Unit (Cunit_Entity (Main_Unit)) then
-            End_Generic;
          end if;
 
          Pop_Scope;
@@ -5269,8 +5210,10 @@ package body Inline is
                                         | Name_Depends
                                         | Name_Exceptional_Cases
                                         | Name_Exit_Cases
+                                        | Name_Modifies
                                         | Name_Postcondition
                                         | Name_Precondition
+                                        | Name_Program_Exit
                                         | Name_Refined_Global
                                         | Name_Refined_Depends
                                         | Name_Refined_Post

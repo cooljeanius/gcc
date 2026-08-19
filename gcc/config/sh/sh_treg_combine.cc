@@ -1,6 +1,6 @@
 /* An SH specific RTL pass that tries to combine comparisons and redundant
    condition code register stores across multiple basic blocks.
-   Copyright (C) 2013-2025 Free Software Foundation, Inc.
+   Copyright (C) 2013-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -57,7 +57,7 @@ checking whether the ccreg is set before the conditional branch
 by testing another register for != 0, which was set by a ccreg store.
 This can be optimized by eliminating the redundant comparison and
 inverting the branch condition.  There can be multiple comparisons in
-different basic blocks that all end up in the redunant test insn before the
+different basic blocks that all end up in the redundant test insn before the
 conditional branch.  Some example RTL ...
 
 Example 1)
@@ -945,10 +945,7 @@ sh_treg_combine::make_not_reg_insn (rtx dst_reg, rtx src_reg) const
   else
     gcc_unreachable ();
 
-  rtx i = get_insns ();
-  end_sequence ();
-
-  return i;
+  return end_sequence ();
 }
 
 rtx_insn *
@@ -1088,7 +1085,7 @@ sh_treg_combine::try_combine_comparisons (cbranch_trace& trace,
     {
       int i_empty_count = i->setcc.empty () + i->cstore.empty ();
 
-      // A completly empty entry is OK (could be the BB of the cbranch).
+      // A completely empty entry is OK (could be the BB of the cbranch).
       if (i_empty_count == 2)
 	continue;
 
@@ -1264,7 +1261,7 @@ sh_treg_combine::try_eliminate_cstores (cbranch_trace& trace,
   for (std::list<bb_entry>::const_iterator i = trace.bb_entries.begin ();
        i != trace.bb_entries.end (); ++i)
     {
-      // A completly empty entry is OK (could be the BB of the cbranch).
+      // A completely empty entry is OK (could be the BB of the cbranch).
       if (i->setcc.empty () && i->cstore.empty ())
 	continue;
 

@@ -94,8 +94,10 @@ ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
 am__aclocal_m4_deps = $(top_srcdir)/../config/acx.m4 \
 	$(top_srcdir)/../config/asmcfi.m4 \
 	$(top_srcdir)/../config/cet.m4 \
+	$(top_srcdir)/../config/clang-plugin.m4 \
 	$(top_srcdir)/../config/depstand.m4 \
 	$(top_srcdir)/../config/enable.m4 \
+	$(top_srcdir)/../config/gcc-plugin.m4 \
 	$(top_srcdir)/../config/lead-dot.m4 \
 	$(top_srcdir)/../config/multi.m4 \
 	$(top_srcdir)/../config/override.m4 \
@@ -179,7 +181,6 @@ am__define_uniq_tagged_files = \
 ETAGS = etags
 CTAGS = ctags
 ACLOCAL = @ACLOCAL@
-ALLOCA = @ALLOCA@
 AMTAR = @AMTAR@
 AM_DEFAULT_VERBOSITY = @AM_DEFAULT_VERBOSITY@
 AM_LTLDFLAGS = @AM_LTLDFLAGS@
@@ -213,6 +214,8 @@ ECHO_T = @ECHO_T@
 EGREP = @EGREP@
 EXEEXT = @EXEEXT@
 FFI_EXEC_TRAMPOLINE_TABLE = @FFI_EXEC_TRAMPOLINE_TABLE@
+FFI_VERSION_NUMBER = @FFI_VERSION_NUMBER@
+FFI_VERSION_STRING = @FFI_VERSION_STRING@
 FGREP = @FGREP@
 GREP = @GREP@
 HAVE_LONG_DOUBLE = @HAVE_LONG_DOUBLE@
@@ -228,6 +231,7 @@ LIBOBJS = @LIBOBJS@
 LIBS = @LIBS@
 LIBTOOL = @LIBTOOL@
 LIPO = @LIPO@
+LLVM_CONFIG = @LLVM_CONFIG@
 LN_S = @LN_S@
 LTLIBOBJS = @LTLIBOBJS@
 MAINT = @MAINT@
@@ -260,6 +264,7 @@ TARGET = @TARGET@
 TARGETDIR = @TARGETDIR@
 TARGET_OBJ = @TARGET_OBJ@
 VERSION = @VERSION@
+WASM64_MEMORY64 = @WASM64_MEMORY64@
 abs_builddir = @abs_builddir@
 abs_srcdir = @abs_srcdir@
 abs_top_builddir = @abs_top_builddir@
@@ -267,6 +272,7 @@ abs_top_srcdir = @abs_top_srcdir@
 ac_ct_CC = @ac_ct_CC@
 ac_ct_CXX = @ac_ct_CXX@
 ac_ct_DUMPBIN = @ac_ct_DUMPBIN@
+ac_ct_READELF = @ac_ct_READELF@
 am__include = @am__include@
 am__leading_dot = @am__leading_dot@
 am__quote = @am__quote@
@@ -315,6 +321,7 @@ target_alias = @target_alias@
 target_cpu = @target_cpu@
 target_os = @target_os@
 target_vendor = @target_vendor@
+tmake_file = @tmake_file@
 toolexecdir = @toolexecdir@
 toolexeclibdir = @toolexeclibdir@
 top_build_prefix = @top_build_prefix@

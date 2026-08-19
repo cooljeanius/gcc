@@ -1,5 +1,5 @@
 /* Common declarations for all of libgfortran.
-   Copyright (C) 2002-2025 Free Software Foundation, Inc.
+   Copyright (C) 2002-2026 Free Software Foundation, Inc.
    Contributed by Paul Brook <paul@nowt.org>, and
    Andy Vaught <andy@xena.eas.asu.edu>
 
@@ -36,6 +36,14 @@ see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
 #  define gfc_printf __printf__
 #endif
 
+/* Handle unsupported C99 length modifiers.  */
+#if defined(__hpux__)
+/* size_t is unsigned long on HP-UX.  */
+#define FLM_Z "l"
+#else
+#define FLM_Z "z"
+#endif
+
 /* config.h MUST be first because it can affect system headers.  */
 #include "config.h"
 
@@ -46,6 +54,18 @@ see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
 #include <float.h>
 #include <stdarg.h>
 #include <stdbool.h>
+
+#if HAVE_STRING_H
+#include <string.h>
+#endif
+
+/* Use libquadlib math routines.  HP-UX on PA-RISC uses the 16-byte
+IEEE format for long double but doesn't implement any of the standard
+mathmetical routines.  However, since the long double and __float128
+types are identical, we can use the routines in libquadmath.  */
+#if defined(__hpux__) && defined(__hppa__)
+#define USE_LIBQUADLIB
+#endif
 
 #if HAVE_COMPLEX_H
 /* Must appear before math.h on VMS systems.  */
@@ -913,6 +933,11 @@ internal_proto(xcalloc);
 
 extern void *xrealloc (void *, size_t);
 internal_proto(xrealloc);
+
+extern void cfi_deep_copy_array (gfc_array_void *,
+				 gfc_array_void *,
+				 void (*copy_element) (void *, void *));
+export_proto(cfi_deep_copy_array);
 
 /* environ.c */
 

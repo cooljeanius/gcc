@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 /* Definitions of target machine for GNU compiler,
    for IBM RS/6000 POWER running AIX.
-   Copyright (C) 2000-2025 Free Software Foundation, Inc.
+   Copyright (C) 2000-2026 Free Software Foundation, Inc.
 
    This file is part of GCC.
 
@@ -97,7 +97,7 @@
    and __GLOBAL_AIXD_{libname} and are exported from each shared library.
 
    collect2 will detect these symbols when they exist in shared libraries that
-   the current program is being linked against.  All such initiliser functions
+   the current program is being linked against.  All such initialiser functions
    will be called prior to the constructors of the current program, and
    finaliser functions called after destructors.
 
@@ -176,6 +176,10 @@
 
 #undef ASM_DEFAULT_SPEC
 #define ASM_DEFAULT_SPEC ""
+
+#ifdef HAVE_AIX_AS
+#define ASM_V_SPEC "%{v} %{w:-W}"
+#endif
 
 /* Tell the assembler to assume that all undefined names are external.
 
@@ -281,4 +285,6 @@
 #undef SUBTARGET_DRIVER_SELF_SPECS
 #define SUBTARGET_DRIVER_SELF_SPECS	\
 "%{m64:-maix64} %<m64",			\
-"%{m32:-maix32} %<m32"
+"%{m32:-maix32} %<m32",			\
+"%{fstack-protector*: %<fstack-protector* \
+   %estack-protector not supported on AIX}"

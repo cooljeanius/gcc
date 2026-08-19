@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2025, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -26,7 +26,6 @@
 --  Processing for intrinsic subprogram declarations
 
 with Atree;          use Atree;
-with Einfo;          use Einfo;
 with Einfo.Entities; use Einfo.Entities;
 with Einfo.Utils;    use Einfo.Utils;
 with Errout;         use Errout;
@@ -36,7 +35,6 @@ with Opt;            use Opt;
 with Sem_Aux;        use Sem_Aux;
 with Sem_Eval;       use Sem_Eval;
 with Sem_Util;       use Sem_Util;
-with Sinfo;          use Sinfo;
 with Sinfo.Nodes;    use Sinfo.Nodes;
 with Sinfo.Utils;    use Sinfo.Utils;
 with Snames;         use Snames;
@@ -311,6 +309,16 @@ package body Sem_Intr is
       Nam  : Name_Id;
 
    begin
+      --  Intrinsic subprograms will be accompanied by a pragma, either a one
+      --  that comes from source, or a one that comes from translating the
+      --  corresponding aspect. Generic intrinsics subprograms don't have such
+      --  a pragma; only their instances have.
+
+      pragma Assert
+        (if Is_Subprogram (E)
+         then Present (Import_Pragma (E))
+         else Is_Generic_Subprogram (E));
+
       if Present (Spec)
         and then Present (Generic_Parent (Spec))
       then
@@ -343,7 +351,9 @@ package body Sem_Intr is
       --  they are doing, and do not write or generate junk use of intrinsic.
 
       elsif not Comes_From_Source (E)
-        or else not Comes_From_Source (N)
+        or else (Is_Subprogram (E)
+                   and then not Comes_From_Source (N)
+                   and then not From_Aspect_Specification (Import_Pragma (E)))
         or else In_Predefined_Unit (N)
       then
          null;
@@ -455,7 +465,7 @@ package body Sem_Intr is
       --  For modular type, modulus must be 2**8, 2**16, 2**32, or 2**64.
       --  Don't apply to generic types, since we may not have a modulus value.
 
-      elsif Is_Modular_Integer_Type (Typ1)
+      elsif Has_Modular_Operations (Typ1)
         and then not Is_Generic_Type (Typ1)
         and then Modulus (Typ1) /= Uint_2 ** 8
         and then Modulus (Typ1) /= Uint_2 ** 16

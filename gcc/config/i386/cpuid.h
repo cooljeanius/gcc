@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2007-2025 Free Software Foundation, Inc.
+ * Copyright (C) 2007-2026 Free Software Foundation, Inc.
  *
  * This file is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -71,6 +71,10 @@
 /* %ebx  */
 #define bit_CLZERO	(1 << 0)
 #define bit_WBNOINVD	(1 << 9)
+
+/* Extended Features (%eax == 0x80000021) */
+/* %eax */
+#define bit_AMD_PREFETCHI (1 << 20)
 
 /* Extended Features Leaf (%eax == 7, %ecx == 0) */
 /* %ebx */
@@ -163,11 +167,16 @@
 #define bit_AESKLE	( 1<<0 )
 #define bit_WIDEKL	( 1<<2 )
 
+/* Sub leaf (%eax == 0x21) */
+#define bit_AVX512BMM	( 1<<23 )
+
+/* AVX10 sub leaf (%eax == 0x24, %ecx == 1) */
+/* %ecx */
+#define bit_AVX10V2AUX	(1 << 3)
+
 /* AMX sub leaf (%eax == 0x1e, %ecx == 1) */
 /* %eax */
 #define bit_AMX_FP8	(1 << 4)
-#define bit_AMX_TRANSPOSE	(1 << 5)
-#define bit_AMX_TF32	(1 << 6)
 #define bit_AMX_AVX512  (1 << 7)
 #define bit_AMX_MOVRS	(1 << 8)
 
@@ -229,6 +238,10 @@
 #define signature_SHANGHAI_ecx	0x20206961
 #define signature_SHANGHAI_edx	0x68676e61
 
+#define signature_HYGON_ebx	0x6f677948
+#define signature_HYGON_ecx	0x656e6975
+#define signature_HYGON_edx	0x6e65476e
+
 #ifndef __x86_64__
 /* At least one cpu (Winchip 2) does not set %ebx and %ecx
    for cpuid leaf 1. Forcibly zero the two registers before
@@ -257,17 +270,19 @@
 			: "0" (level), "2" (count))
 
 
-/* Return highest supported input value for cpuid instruction.  ext can
-   be either 0x0 or 0x80000000 to return highest supported value for
-   basic or extended cpuid information.  Function returns 0 if cpuid
+/* Return highest supported input value for cpuid instruction.  leaf can
+   be either 0xXXX, 0x40000XXX, 0x80000XXX, or 0xC000XXX to return
+   highest supported value for basic, hypervisor, extended, or
+   Centaur/Zhaoxin cpuid information.  Function returns 0 if cpuid
    is not supported or whatever cpuid returns in eax register.  If sig
    pointer is non-null, then first four bytes of the signature
    (as found in ebx register) are returned in location pointed by sig.  */
 
 static __inline unsigned int
-__get_cpuid_max (unsigned int __ext, unsigned int *__sig)
+__get_cpuid_max (unsigned int __leaf, unsigned int *__sig)
 {
   unsigned int __eax, __ebx, __ecx, __edx;
+  unsigned int __ext = __leaf & 0xC0000000;
 
 #ifndef __x86_64__
   /* See if we can use cpuid.  On AMD64 we always can.  */
@@ -324,8 +339,7 @@ __get_cpuid (unsigned int __leaf,
 	     unsigned int *__eax, unsigned int *__ebx,
 	     unsigned int *__ecx, unsigned int *__edx)
 {
-  unsigned int __ext = __leaf & 0x80000000;
-  unsigned int __maxlevel = __get_cpuid_max (__ext, 0);
+  unsigned int __maxlevel = __get_cpuid_max (__leaf, 0);
 
   if (__maxlevel == 0 || __maxlevel < __leaf)
     return 0;
@@ -341,8 +355,7 @@ __get_cpuid_count (unsigned int __leaf, unsigned int __subleaf,
 		   unsigned int *__eax, unsigned int *__ebx,
 		   unsigned int *__ecx, unsigned int *__edx)
 {
-  unsigned int __ext = __leaf & 0x80000000;
-  unsigned int __maxlevel = __get_cpuid_max (__ext, 0);
+  unsigned int __maxlevel = __get_cpuid_max (__leaf, 0);
 
   if (__builtin_expect (__maxlevel == 0, 0) || __maxlevel < __leaf)
     return 0;

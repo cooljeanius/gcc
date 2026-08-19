@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1999-2025, Free Software Foundation, Inc.         --
+--          Copyright (C) 1999-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -31,8 +31,10 @@
 
 --  This is the default version of this package
 
---  Note: this unit must be compiled using -fno-optimize-sibling-calls.
---  See comment below in body of Call_Chain for details on the reason.
+--  Note: To preserve the correctness of "Skip_Frames" processing,
+--  subprogram calls here must materialize as subprogram calls (and
+--  frames) at the machine level, so inlining and sibling call
+--  optimizations must be prevented for this unit.
 
 package body System.Traceback is
 

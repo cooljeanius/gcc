@@ -1,5 +1,5 @@
 ;; ARM VFP instruction patterns
-;; Copyright (C) 2003-2025 Free Software Foundation, Inc.
+;; Copyright (C) 2003-2026 Free Software Foundation, Inc.
 ;; Written by CodeSourcery.
 ;;
 ;; This file is part of GCC.
@@ -276,10 +276,10 @@
 ;; is chosen with length 2 when the instruction is predicated for
 ;; arm_restrict_it.
 (define_insn "*thumb2_movsi_vfp"
-  [(set (match_operand:SI 0 "nonimmediate_operand" "=rk,r,l,r,r,l,*hk,m,*m,*t,\
-						    r,*t,*t,*Uv, Up, r,Uf,r")
-	(match_operand:SI 1 "general_operand" "rk,I,Py,K,j,mi,*mi,l,*hk,r,*t,\
-					       *t,*UvTu,*t, r, Up,r,Uf"))]
+  [(set (match_operand:SI 0 "nonimmediate_operand"
+	 "=rk,r,l, r,r,l, *hk,m,*m, *t,r,*t,*t,	  *Uv,Up,r, Uf,r")
+	(match_operand:SI 1 "general_operand"
+	 "rk, I,Py,K,j,mi,*mi,l,*hk,r, t,*t,*UvTu,*t, r, Up,r, Uf"))]
   "TARGET_THUMB2 && TARGET_VFP_BASE
    && (   s_register_operand (operands[0], SImode)
        || s_register_operand (operands[1], SImode))"
@@ -424,12 +424,12 @@
     case 6: /* S register from immediate.  */
       return \"vmov.f16\\t%0, %1\t%@ __<fporbf>\";
     case 7: /* S register from memory.  */
-      if (TARGET_HAVE_MVE)
+      if (!auto_inc_p (XEXP (operands[1], 0)))
 	return \"vldr.16\\t%0, %1\";
       else
 	return \"vld1.16\\t{%z0}, %A1\";
     case 8: /* Memory from S register.  */
-      if (TARGET_HAVE_MVE)
+      if (!auto_inc_p (XEXP (operands[0], 0)))
 	return \"vstr.16\\t%1, %0\";
       else
 	return \"vst1.16\\t{%z1}, %A0\";

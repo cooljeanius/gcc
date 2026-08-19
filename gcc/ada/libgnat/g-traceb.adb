@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---                      Copyright (C) 1999-2025, AdaCore                    --
+--                      Copyright (C) 1999-2026, AdaCore                    --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -31,6 +31,9 @@
 
 --  Run-time non-symbolic traceback support
 
+--  As for System.Traceback, inlining and sibling call optimizations
+--  must be prevented within this unit.
+
 with System.Traceback;
 
 package body GNAT.Traceback is
@@ -44,7 +47,9 @@ package body GNAT.Traceback is
       Len       : out Natural)
    is
    begin
-      System.Traceback.Call_Chain (Traceback, Traceback'Length, Len);
+      --  Request skipping this frame + that of our callee
+      System.Traceback.Call_Chain
+        (Traceback, Traceback'Length, Len, Skip_Frames => 2);
    end Call_Chain;
 
    function Call_Chain

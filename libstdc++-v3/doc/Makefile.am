@@ -1,6 +1,6 @@
 ## Makefile for the doc subdirectory of the GNU C++ Standard library.
 ##
-## Copyright (C) 2008-2025 Free Software Foundation, Inc.
+## Copyright (C) 2008-2026 Free Software Foundation, Inc.
 ##
 ## This file is part of the libstdc++ version 3 distribution.
 ## Process this file with automake to produce Makefile.in.
@@ -357,6 +357,7 @@ xml_sources_manual = \
 	${xml_dir}/manual/support.xml \
 	${xml_dir}/manual/test.xml \
 	${xml_dir}/manual/test_policy_data_structures.xml \
+	${xml_dir}/manual/time.xml \
 	${xml_dir}/manual/using.xml \
 	${xml_dir}/manual/using_exceptions.xml \
 	${xml_dir}/manual/utilities.xml \

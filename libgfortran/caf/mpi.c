@@ -1,5 +1,5 @@
 /* MPI implementation of GNU Fortran Coarray Library
-   Copyright (C) 2011-2025 Free Software Foundation, Inc.
+   Copyright (C) 2011-2026 Free Software Foundation, Inc.
    Contributed by Tobias Burnus <burnus@net-b.de>
 
 This file is part of the GNU Fortran Coarray Runtime Library (libcaf).
@@ -72,7 +72,7 @@ caf_runtime_error (const char *message, ...)
    MPI initialization happened before; otherwise MPI_Initialized
    had to be used.  As the MPI library might modify the command-line
    arguments, the routine should be called before the run-time
-   libaray is initialized.  */
+   library is initialized.  */
 
 void
 _gfortran_caf_init (int *argc, char ***argv)

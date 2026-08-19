@@ -1,4 +1,4 @@
-/* Copyright (C) 1989-2025 Free Software Foundation, Inc.
+/* Copyright (C) 1989-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -87,6 +87,21 @@ see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
    Just ignore it.  */
 #if defined (__sequent__) && defined (_PTRDIFF_T_)
 #undef _PTRDIFF_T_
+#endif
+
+/* When modular code is enabled with macOS SDKs from version 15, the
+   include guards are set in the includers of this code, rather than as
+   part of it.  This means the we must unset them or the intended code
+   here will be bypassed (resulting in undefined values).  */
+#if defined (__APPLE__)
+# if defined(__has_feature) && __has_feature(modules)
+#  if defined (__need_ptrdiff_t)
+#   undef __PTRDIFF_T
+#  endif
+#  if defined (__need_size_t)
+#   undef __SIZE_T
+#  endif
+# endif
 #endif
 
 /* On VxWorks, <type/vxTypesBase.h> may have defined macros like

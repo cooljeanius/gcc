@@ -1,5 +1,5 @@
 /* High-level loop manipulation functions.
-   Copyright (C) 2004-2025 Free Software Foundation, Inc.
+   Copyright (C) 2004-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -89,12 +89,14 @@ insert_iv_increment (gimple_stmt_iterator *incr_pos, bool after,
    INCR_POS (after it if AFTER is true, before it otherwise).  INCR_POS and
    AFTER can be computed using standard_iv_increment_position.  The ssa versions
    of the variable before and after increment will be stored in VAR_BEFORE and
-   VAR_AFTER (unless they are NULL).  */
+   VAR_AFTER (unless they are NULL).  If LOOP_INVARIANT is true then the
+   calculation step will be added to the pre-header.  Otherwise, the step
+   calculation is added to incr_pos.  */
 
 void
 create_iv (tree base, tree_code incr_op, tree step, tree var, class loop *loop,
 	   gimple_stmt_iterator *incr_pos, bool after, tree *var_before,
-	   tree *var_after)
+	   tree *var_after, bool loop_invariant)
 {
   gphi *phi;
   tree initial, step1;
@@ -133,9 +135,7 @@ create_iv (tree base, tree_code incr_op, tree step, tree var, class loop *loop,
 	}
       else
 	{
-	  bool ovf;
-
-	  if (!tree_expr_nonnegative_warnv_p (step, &ovf)
+	  if (!tree_expr_nonnegative_p (step)
 	      && may_negate_without_overflow_p (step))
 	    {
 	      incr_op = (incr_op == PLUS_EXPR ? MINUS_EXPR : PLUS_EXPR);
@@ -152,13 +152,18 @@ create_iv (tree base, tree_code incr_op, tree step, tree var, class loop *loop,
 	step = fold_build1 (NEGATE_EXPR, TREE_TYPE (step), step);
       incr_op = POINTER_PLUS_EXPR;
     }
-  /* Gimplify the step if necessary.  We put the computations in front of the
-     loop (i.e. the step should be loop invariant).  */
-  step = force_gimple_operand (step, &stmts, true, NULL_TREE);
-  if (stmts)
-    gsi_insert_seq_on_edge_immediate (pe, stmts);
 
   gimple_seq incr_stmts = nullptr;
+  /* Gimplify the step if necessary.  */
+  if (loop_invariant)
+    {
+      step = force_gimple_operand (step, &stmts, true, NULL_TREE);
+      if (stmts)
+	gsi_insert_seq_on_edge_immediate (pe, stmts);
+    }
+  else
+    step = force_gimple_operand (step, &incr_stmts, true, NULL_TREE);
+
   gimple_seq_add_stmt (&incr_stmts,
 		       gimple_build_assign (va, incr_op, vb, step));
   insert_iv_increment (incr_pos, after, incr_stmts);

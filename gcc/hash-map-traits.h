@@ -1,5 +1,5 @@
 /* A hash map traits.
-   Copyright (C) 2015-2025 Free Software Foundation, Inc.
+   Copyright (C) 2015-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -20,7 +20,7 @@ along with GCC; see the file COPYING3.  If not see
 #ifndef HASH_MAP_TRAITS_H
 #define HASH_MAP_TRAITS_H
 
-/* Bacause mem-stats.h uses default hashmap traits, we have to
+/* Because mem-stats.h uses default hashmap traits, we have to
    put the class to this separate header file.  */
 
 #include "hash-traits.h"

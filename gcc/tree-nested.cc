@@ -1,5 +1,5 @@
 /* Nested function decomposition for GIMPLE.
-   Copyright (C) 2004-2025 Free Software Foundation, Inc.
+   Copyright (C) 2004-2026 Free Software Foundation, Inc.
 
    This file is part of GCC.
 
@@ -36,6 +36,7 @@
 #include "gimplify.h"
 #include "gimple-iterator.h"
 #include "gimple-walk.h"
+#include "gimple-fold.h"
 #include "tree-cfg.h"
 #include "explow.h"
 #include "langhooks.h"
@@ -411,7 +412,11 @@ lookup_field_for_decl (struct nesting_info *info, tree decl,
 	  SET_DECL_ALIGN (field, DECL_ALIGN (decl));
 	  DECL_USER_ALIGN (field) = DECL_USER_ALIGN (decl);
 	  DECL_IGNORED_P (field) = DECL_IGNORED_P (decl);
-	  DECL_NONADDRESSABLE_P (field) = !TREE_ADDRESSABLE (decl);
+	  /* Even if the address of the DECL is not needed, when it is of an
+	     aggregate type, it may contain addressable fields whose address
+	     will be taken later.  */
+	  DECL_NONADDRESSABLE_P (field)
+	    = !TREE_ADDRESSABLE (decl) && !AGGREGATE_TYPE_P (TREE_TYPE (decl));
 	  TREE_THIS_VOLATILE (field) = TREE_THIS_VOLATILE (decl);
 	  copy_warning (field, decl);
 
@@ -1411,6 +1416,7 @@ convert_nonlocal_omp_clauses (tree *pclauses, struct walk_stmt_info *wi)
 	case OMP_CLAUSE_DEPEND:
 	case OMP_CLAUSE_DOACROSS:
 	case OMP_CLAUSE_DEVICE:
+	case OMP_CLAUSE_DYN_GROUPPRIVATE:
 	case OMP_CLAUSE_NUM_TEAMS:
 	case OMP_CLAUSE_THREAD_LIMIT:
 	case OMP_CLAUSE_SAFELEN:
@@ -1796,6 +1802,8 @@ convert_nonlocal_reference_stmt (gimple_stmt_iterator *gsi, bool *handled_ops_p,
       break;
 
     case GIMPLE_OMP_TARGET:
+      walk_body (convert_nonlocal_reference_stmt, convert_nonlocal_reference_op,
+		 info, gimple_omp_target_iterator_loops_ptr (stmt));
       if (!is_gimple_omp_offloaded (stmt))
 	{
 	  save_suppress = info->suppress_expansion;
@@ -2190,6 +2198,7 @@ convert_local_omp_clauses (tree *pclauses, struct walk_stmt_info *wi)
 	case OMP_CLAUSE_DEPEND:
 	case OMP_CLAUSE_DOACROSS:
 	case OMP_CLAUSE_DEVICE:
+	case OMP_CLAUSE_DYN_GROUPPRIVATE:
 	case OMP_CLAUSE_NUM_TEAMS:
 	case OMP_CLAUSE_THREAD_LIMIT:
 	case OMP_CLAUSE_SAFELEN:
@@ -2517,6 +2526,9 @@ convert_local_reference_stmt (gimple_stmt_iterator *gsi, bool *handled_ops_p,
       break;
 
     case GIMPLE_OMP_TARGET:
+      walk_body (convert_local_reference_stmt, convert_local_reference_op, info,
+		 gimple_omp_target_iterator_loops_ptr (stmt));
+
       if (!is_gimple_omp_offloaded (stmt))
 	{
 	  save_suppress = info->suppress_expansion;
@@ -2875,6 +2887,12 @@ convert_tramp_reference_stmt (gimple_stmt_iterator *gsi, bool *handled_ops_p,
     {
     case GIMPLE_CALL:
       {
+	tree decl = gimple_call_fndecl (stmt);
+	if (decl && fndecl_built_in_p (decl, BUILT_IN_NORMAL)
+	    && (DECL_FUNCTION_CODE (decl) == BUILT_IN_CALL_CODE_ADDRESS
+		|| DECL_FUNCTION_CODE (decl) == BUILT_IN_CALL_STATIC_CHAIN))
+	  break;
+
 	/* Only walk call arguments, lest we generate trampolines for
 	   direct calls.  */
 	unsigned long i, nargs = gimple_call_num_args (stmt);
@@ -2898,6 +2916,8 @@ convert_tramp_reference_stmt (gimple_stmt_iterator *gsi, bool *handled_ops_p,
 	  *handled_ops_p = false;
 	  return NULL_TREE;
 	}
+      walk_body (convert_tramp_reference_stmt, convert_tramp_reference_op,
+		 info, gimple_omp_target_iterator_loops_ptr (stmt));
       /* FALLTHRU */
     case GIMPLE_OMP_PARALLEL:
     case GIMPLE_OMP_TASK:
@@ -2985,10 +3005,40 @@ convert_gimple_call (gimple_stmt_iterator *gsi, bool *handled_ops_p,
   switch (gimple_code (stmt))
     {
     case GIMPLE_CALL:
-      if (gimple_call_chain (stmt))
-	break;
       decl = gimple_call_fndecl (stmt);
       if (!decl)
+	break;
+      if (fndecl_built_in_p (decl, BUILT_IN_NORMAL)
+	  && (DECL_FUNCTION_CODE (decl) == BUILT_IN_CALL_CODE_ADDRESS
+	      || DECL_FUNCTION_CODE (decl) == BUILT_IN_CALL_STATIC_CHAIN))
+	{
+	  tree d = gimple_call_arg (stmt, 0);
+	  if (TREE_CODE (d) != ADDR_EXPR
+	      || FUNCTION_DECL != TREE_CODE (TREE_OPERAND (d, 0)))
+	    break;
+	  tree ret = null_pointer_node;
+	  if (DECL_FUNCTION_CODE (decl) == BUILT_IN_CALL_CODE_ADDRESS)
+	    {
+	      /* Return code pointer.  */
+	      ret = build_addr (TREE_OPERAND (d, 0));
+	      TREE_NO_TRAMPOLINE (ret) = 1;
+	    }
+	  else
+	    {
+	      decl = TREE_OPERAND (d, 0);
+	      target_context = decl_function_context (decl);
+	      if (target_context && DECL_STATIC_CHAIN (decl))
+		{
+		  /* Return static chain.  */
+		  info->static_chain_added
+		    |= (1 << (info->context != target_context));
+		  ret = get_static_chain (info, target_context, &wi->gsi);
+		}
+	    }
+	  replace_call_with_value (gsi, ret);
+	  break;
+	}
+      if (gimple_call_chain (stmt))
 	break;
       target_context = decl_function_context (decl);
       if (target_context && DECL_STATIC_CHAIN (decl))
@@ -3388,7 +3438,7 @@ fixup_vla_decls (tree block)
 bool
 fold_mem_refs (tree *const &e, void *data ATTRIBUTE_UNUSED)
 {
-  tree *ref_p = CONST_CAST2 (tree *, const tree *, (const tree *)e);
+  tree *ref_p = const_cast<tree *> (e);
   *ref_p = fold (*ref_p);
   return true;
 }

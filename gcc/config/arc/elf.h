@@ -1,6 +1,6 @@
 /* Target macros for arc*-elf targets.
 
-   Copyright (C) 2017-2025 Free Software Foundation, Inc.
+   Copyright (C) 2017-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -74,7 +74,7 @@ along with GCC; see the file COPYING3.  If not see
 #undef TARGET_ASM_FILE_END
 #define TARGET_ASM_FILE_END arc_file_end
 
-/* If no specs file is enforced, default to nosys libarary.  */
+/* If no specs file is enforced, default to nosys library.  */
 #undef LINK_GCC_C_SEQUENCE_SPEC
 #define LINK_GCC_C_SEQUENCE_SPEC				\
   "--start-group %G %{!specs=*:%{!nolibc:-lc -lnosys}} --end-group"

@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 S p e c                                  --
 --                                                                          --
---          Copyright (C) 1992-2025, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -30,7 +30,13 @@
 --  content of entities in the tree, so this package is used for routines that
 --  require more than minimal semantic knowledge.
 
+--  However, this package is in the closure of the binder executable. If you're
+--  looking for the home of a new helper function that uses significant
+--  semantic knowledge, Sem_Util, which is not in the closure of the binder
+--  executable, will be a more convenient place.
+
 with Alloc;
+with Einfo.Entities; use Einfo.Entities;
 with Namet; use Namet;
 with Table;
 with Types; use Types;
@@ -105,7 +111,7 @@ package Sem_Aux is
    --  this is equivalent to First_Entity. The exception arises for tagged
    --  types, where the tag itself is prepended to the front of the entity
    --  chain, so the First_Discriminant function steps past the tag if it is
-   --  present.  When called on a private type with unknown discriminants, the
+   --  present. When called on a private type with unknown discriminants, the
    --  function always returns Empty.
 
    --  WARNING: There is a matching C declaration of this subprogram in fe.h
@@ -270,9 +276,8 @@ package Sem_Aux is
 
    function Initialization_Suppressed (Typ : Entity_Id) return Boolean;
    pragma Inline (Initialization_Suppressed);
-   --  Returns True if initialization should be suppressed for the given type
-   --  or subtype. This is true if Suppress_Initialization is set either for
-   --  the subtype itself, or for the corresponding base type.
+   --  True if Suppress_Initialization is set either for Typ or for its base
+   --  type. This is unrelated to pragma Import.
 
    function Is_Body (N : Node_Id) return Boolean with Inline;
    --  Determine whether an arbitrary node denotes a body
@@ -314,20 +319,24 @@ package Sem_Aux is
    --  should be cleaned up???
 
    function Is_Immutably_Limited_Type (Ent : Entity_Id) return Boolean;
-   --  Implements definition in Ada 2012 RM-7.5 (8.1/3). This differs from the
-   --  following predicate in that an untagged record with immutably limited
-   --  components is NOT by itself immutably limited. This matters, e.g. when
-   --  checking the legality of an access to the current instance.
+   --  Ent is any entity. True if and only if Ent is a type that's immutably
+   --  limited as defined by RM 7.5 (8.1/3).
 
    function Is_Inherently_Limited_Type (Ent : Entity_Id) return Boolean;
-   --  Ent is any entity. True for a type that is "inherently" limited (i.e.
-   --  cannot become nonlimited). From the Ada 2005 RM-7.5(8.1/2), "a type with
-   --  a part that is of a task, protected, or explicitly limited record type".
-   --  These are the types that are defined as return-by-reference types in Ada
-   --  95 (see RM95-6.5(11-16)). In Ada 2005, these are the types that require
-   --  build-in-place for function calls. Note that build-in-place is allowed
-   --  for other types, too. This is also used for identifying pure procedures
-   --  whose calls should not be eliminated (RM 10.2.1(18/2)).
+   --  Ent is any entity. True if and only if Ent is a type such that objects
+   --  of type Ent must be built in place because of RM 7.6 (17.2/3).
+   --
+   --  Note that Is_Immutably_Limited_Type => Is_Inherently_Limited_Type holds,
+   --  but the reverse implication doesn't. For example with
+   --
+   --     type T1 is limited null record;
+   --
+   --     type T2 is record
+   --        C : T1;
+   --     end record;
+   --
+   --  Is_Inherently_Limited_Type (T2) = True and
+   --  Is_Immutably_Limited_Type (T2) = False.
 
    function Nearest_Ancestor (Typ : Entity_Id) return Entity_Id;
    --  Given a subtype Typ, this function finds out the nearest ancestor from
@@ -404,6 +413,19 @@ package Sem_Aux is
    pragma Inline (Ultimate_Alias);
    --  Return the last entity in the chain of aliased entities of Prim. If Prim
    --  has no alias return Prim.
+
+   function Unique_Component_Name
+     (Component : Record_Field_Kind_Id) return Name_Id;
+   --  Usually, a record type cannot have two components with the same name.
+   --  But in the case of a component declared in an extension of a tagged
+   --  private (or private extension) parent type, it is possible that some
+   --  ancestor type also has a (non-visible) component with the same name.
+   --  In the common case, this function simply returns the Chars attribute
+   --  of its argument.
+   --  But in the multiple-components-with-the-same-name case, it appends
+   --  a uniquifying suffix. The result in this case will not be a
+   --  syntactically valid Ada identifier, but it will be a syntactically
+   --  valid C identifier.
 
    function Unit_Declaration_Node (Unit_Id : Entity_Id) return Node_Id;
    --  Unit_Id is the simple name of a program unit, this function returns the

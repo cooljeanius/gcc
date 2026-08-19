@@ -1,5 +1,5 @@
 /* CPP Library - lexical analysis.
-   Copyright (C) 2000-2025 Free Software Foundation, Inc.
+   Copyright (C) 2000-2026 Free Software Foundation, Inc.
    Contributed by Per Bothner, 1994-95.
    Based on CCCP program by Paul Rubin, June 1986
    Adapted to ANSI C, Richard Stallman, Jan 1987
@@ -653,7 +653,7 @@ search_line_fast (const uchar *s, const uchar *end ATTRIBUTE_UNUSED)
 #define AARCH64_MIN_PAGE_SIZE 4096
 
 static const uchar *
-search_line_fast (const uchar *s, const uchar *end ATTRIBUTE_UNUSED)
+search_line_neon (const uchar *s, const uchar *end ATTRIBUTE_UNUSED)
 {
   const uint8x16_t repl_nl = vdupq_n_u8 ('\n');
   const uint8x16_t repl_cr = vdupq_n_u8 ('\r');
@@ -735,6 +735,106 @@ done:
   return (((((uintptr_t) p) < (uintptr_t) s) ? s : (const uchar *)p)
 	  + __builtin_ctz (found));
 }
+
+#ifdef HAVE_SVE2
+#include <arm_sve.h>
+#include <sys/auxv.h>
+
+#ifndef HWCAP_SVE
+#define HWCAP_SVE (1 << 22)
+#endif
+#ifndef HWCAP2_SVE2
+#define HWCAP2_SVE2 (1 << 1)
+#endif
+
+/* A version of the fast scanner using SVE2.
+
+   Every 128-bit segment of NEEDLES holds the four characters we are
+   looking for.  MATCH reports, for each byte of the data, whether it
+   occurs anywhere in the segment it lines up with, so a single
+   instruction does the work of the four compares and three ORs above,
+   and its condition flags drive the loop branch with no horizontal
+   reduction.  BRKB and CNTP then convert the result predicate straight
+   into a byte index, in place of the bitmask the Neon version has to
+   build and move to a general register.
+
+   Unlike the Neon version this one needs neither alignment nor a
+   page-crossing test.  Full-vector loads run while S is at or below
+   END rounded down to a vector boundary, so they may extend a little
+   past *END into the tail padding; a single predicated vector then
+   covers any remainder.  The newline that _cpp_convert_input forces
+   at *END still terminates the scan.
+
+   The loop consumes svcntb () bytes per iteration, so it scales with the
+   implemented vector length.  */
+
+static const uchar * __attribute__ ((target ("+sve2")))
+search_line_sve2 (const uchar *s, const uchar *end)
+{
+  /* Order within a segment is irrelevant to MATCH, which tests set
+     membership, so this needs no adjustment for big-endian.  */
+  const uint32_t chars = ((uint32_t) '\n' | ((uint32_t) '\r' << 8)
+			  | ((uint32_t) '\\' << 16) | ((uint32_t) '?' << 24));
+  const svuint8_t needles = svreinterpret_u8_u32 (svdup_n_u32 (chars));
+  const svbool_t all = svptrue_b8 ();
+  const uint64_t vl = svcntb ();
+  svuint8_t data;
+  svbool_t match;
+  uintptr_t limit;
+
+  /* Unaligned loads, potentially using padding after the final newline.  */
+  static_assert (CPP_BUFFER_PADDING >= 256, "");
+
+  /* Align END down to a vector boundary so the loop can consume on
+     average half a vector more near the end.  */
+  limit = (uintptr_t) end & -vl;
+
+  while ((uintptr_t) s <= limit)
+    {
+      data = svld1_u8 (all, s);
+      match = svmatch_u8 (all, data, needles);
+      if (svptest_any (all, match))
+	return s + svcntp_b8 (all, svbrkb_b_z (all, match));
+      s += vl;
+    }
+
+  /* What is left, up to and including *END, which _cpp_convert_input
+     forces to a newline.  That guarantees a match, so no further test is
+     needed.  */
+  svbool_t pg = svwhilele_b8_u64 ((uintptr_t) s, (uintptr_t) end);
+  data = svld1_u8 (pg, s);
+  match = svmatch_u8 (pg, data, needles);
+  return s + svcntp_b8 (pg, svbrkb_b_z (pg, match));
+}
+
+static bool lexer_has_sve2;
+
+#define HAVE_init_vectorized_lexer 1
+static inline void
+init_vectorized_lexer (void)
+{
+  /* MATCH aside, the scanner is built from base SVE instructions, so both
+     features have to be present.  Some virtual machines advertise SVE2
+     without SVE, and there even the leading CNTB traps.  */
+  lexer_has_sve2 = ((getauxval (AT_HWCAP) & HWCAP_SVE) != 0
+		    && (getauxval (AT_HWCAP2) & HWCAP2_SVE2) != 0);
+}
+
+#endif
+
+/* Dispatch with a plain predictable branch rather than a function
+   pointer, so that the Neon version can still be inlined here.  */
+
+static inline const uchar *
+search_line_fast (const uchar *s, const uchar *end)
+{
+#ifdef HAVE_SVE2
+  if (lexer_has_sve2)
+    return search_line_sve2 (s, end);
+#endif
+  return search_line_neon (s, end);
+}
+
 
 #elif defined (__ARM_NEON)
 #include "arm_neon.h"
@@ -1353,6 +1453,8 @@ get_location_for_byte_range_in_cur_line (cpp_reader *pfile,
 					 const unsigned char *const start,
 					 size_t num_bytes)
 {
+  if (pfile->forced_token_location)
+    return pfile->forced_token_location;
   gcc_checking_assert (num_bytes > 0);
 
   /* CPP_BUF_COLUMN and linemap_position_for_column both refer
@@ -2035,6 +2137,7 @@ warn_about_normalization (cpp_reader *pfile,
       /* If possible, create a location range for the token.  */
       if (loc >= RESERVED_LOCATION_COUNT
 	  && token->type != CPP_EOF
+	  && !pfile->forced_token_location
 	  /* There must be no line notes to process.  */
 	  && (!(pfile->buffer->cur
 		>= pfile->buffer->notes[pfile->buffer->cur_note].pos
@@ -2628,7 +2731,7 @@ lex_raw_string (cpp_reader *pfile, cpp_token *token, const uchar *base)
 
 	  case '\n':
 	    /* This can happen for ??/<NEWLINE> when trigraphs are not
-	       being interpretted.  */
+	       being interpreted.  */
 	    gcc_checking_assert (!CPP_OPTION (pfile, trigraphs));
 	    note->type = 0;
 	    note++;
@@ -2711,8 +2814,9 @@ lex_raw_string (cpp_reader *pfile, cpp_token *token, const uchar *base)
 		       || c == '!' || c == '=' || c == ','
 		       || c == '"' || c == '\''
 		       || ((c == '$' || c == '@' || c == '`')
-			   && CPP_OPTION (pfile, cplusplus)
-			   && CPP_OPTION (pfile, lang) > CLK_CXX23)))
+			   && (CPP_OPTION (pfile, cplusplus)
+			       ? CPP_OPTION (pfile, lang) > CLK_CXX23
+			       : CPP_OPTION (pfile, low_ucns)))))
 	    prefix[prefix_len++] = c;
 	  else
 	    {
@@ -3504,6 +3608,7 @@ cpp_maybe_module_directive (cpp_reader *pfile, cpp_token *result)
   cpp_token *keyword = peek;
   cpp_hashnode *(&n_modules)[spec_nodes::M_HWM][2] = pfile->spec_nodes.n_modules;
   int header_count = 0;
+  bool eol = false;
 
   /* Make sure the incoming state is as we expect it.  This way we
      can restore it using constants.  */
@@ -3563,10 +3668,10 @@ cpp_maybe_module_directive (cpp_reader *pfile, cpp_token *result)
      tokens.  C++ keywords are not yet relevant.  */
   if (peek->type == CPP_NAME
       || peek->type == CPP_COLON
-      ||  (header_count
-	   ? (peek->type == CPP_LESS
-	      || (peek->type == CPP_STRING && peek->val.str.text[0] != 'R')
-	      || peek->type == CPP_HEADER_NAME)
+      || (header_count
+	  ? (peek->type == CPP_LESS
+	     || (peek->type == CPP_STRING && peek->val.str.text[0] != 'R')
+	     || peek->type == CPP_HEADER_NAME)
 	   : peek->type == CPP_SEMICOLON))
     {
       pfile->state.pragma_allow_expansion = !CPP_OPTION (pfile, preprocessed);
@@ -3669,6 +3774,15 @@ cpp_maybe_module_directive (cpp_reader *pfile, cpp_token *result)
 		      peek->flags |= NO_DOT_COLON;
 		      break;
 		    }
+		  else if (peek->type == CPP_PRAGMA_EOL)
+		    {
+		      /* This is a broken module-directive; undo the clearing
+			 of in_deferred_pragma from _cpp_lex_direct so callers
+			 don't crash, and make sure we process the EOL again.  */
+		      pfile->state.in_deferred_pragma = true;
+		      eol = true;
+		      break;
+		    }
 		  else
 		    break;
 		}
@@ -3688,22 +3802,19 @@ cpp_maybe_module_directive (cpp_reader *pfile, cpp_token *result)
       pfile->state.in_deferred_pragma = false;
       /* Do not let this remain on.  */
       pfile->state.angled_headers = false;
+      /* If we saw EOL, we should drop it, because this isn't a module
+	 control-line after all.  */
+      eol = peek->type == CPP_PRAGMA_EOL;
     }
 
   /* In either case we want to backup the peeked tokens.  */
-  if (backup)
+  if (backup && (!eol || backup > 1))
     {
-      /* If we saw EOL, we should drop it, because this isn't a module
-	 control-line after all.  */
-      bool eol = peek->type == CPP_PRAGMA_EOL;
-      if (!eol || backup > 1)
-	{
-	  /* Put put the peeked tokens back  */
-	  _cpp_backup_tokens_direct (pfile, backup);
-	  /* But if the last one was an EOL, forget it.  */
-	  if (eol)
-	    pfile->lookaheads--;
-	}
+      /* Put the peeked tokens back.  */
+      _cpp_backup_tokens_direct (pfile, backup);
+      /* But if the last one was an EOL, forget it.  */
+      if (eol)
+	pfile->lookaheads--;
     }
 }
 
@@ -4310,6 +4421,10 @@ _cpp_lex_direct (cpp_reader *pfile)
 	  else
 	    result->flags |= COLON_SCOPE;
 	}
+      else if (*buffer->cur == ']'
+	       && CPP_OPTION (pfile, cplusplus)
+	       && CPP_OPTION (pfile, lang) >= CLK_GNUCXX26)
+	buffer->cur++, result->type = CPP_CLOSE_SPLICE;
       else if (*buffer->cur == '>' && CPP_OPTION (pfile, digraphs))
 	{
 	  buffer->cur++;
@@ -4321,7 +4436,15 @@ _cpp_lex_direct (cpp_reader *pfile)
     case '*': IF_NEXT_IS ('=', CPP_MULT_EQ, CPP_MULT); break;
     case '=': IF_NEXT_IS ('=', CPP_EQ_EQ, CPP_EQ); break;
     case '!': IF_NEXT_IS ('=', CPP_NOT_EQ, CPP_NOT); break;
-    case '^': IF_NEXT_IS ('=', CPP_XOR_EQ, CPP_XOR); break;
+    case '^':
+      result->type = CPP_XOR;
+      if (*buffer->cur == '=')
+	buffer->cur++, result->type = CPP_XOR_EQ;
+      else if (*buffer->cur == '^'
+	       && CPP_OPTION (pfile, cplusplus)
+	       && CPP_OPTION (pfile, lang) >= CLK_GNUCXX26)
+	buffer->cur++, result->type = CPP_REFLECT_OP;
+      break;
     case '#': IF_NEXT_IS ('#', CPP_PASTE, CPP_HASH); result->val.token_no = 0; break;
 
     case '?': result->type = CPP_QUERY; break;
@@ -4329,7 +4452,24 @@ _cpp_lex_direct (cpp_reader *pfile)
     case ',': result->type = CPP_COMMA; break;
     case '(': result->type = CPP_OPEN_PAREN; break;
     case ')': result->type = CPP_CLOSE_PAREN; break;
-    case '[': result->type = CPP_OPEN_SQUARE; break;
+    case '[':
+      result->type = CPP_OPEN_SQUARE;
+      /* C++ [lex.pptoken]/4.3: "Otherwise, if the next three characters are
+	 [:: and the subsequent character is not :, or if the next three
+	 characters are [:>, the [ is treated as a preprocessing token by
+	 itself and not as the first character of the preprocessing token [:."
+	 Also, the tokens [: and :] cannot be composed from digraphs.  */
+      if (*buffer->cur == ':'
+	  && CPP_OPTION (pfile, cplusplus)
+	  && CPP_OPTION (pfile, lang) >= CLK_GNUCXX26)
+	{
+	  if ((buffer->cur[1] == ':' && buffer->cur[2] != ':')
+	      || buffer->cur[1] == '>')
+	    break;
+	  else
+	    buffer->cur++, result->type = CPP_OPEN_SPLICE;
+	}
+      break;
     case ']': result->type = CPP_CLOSE_SQUARE; break;
     case '{': result->type = CPP_OPEN_BRACE; break;
     case '}': result->type = CPP_CLOSE_BRACE; break;
@@ -4400,7 +4540,8 @@ _cpp_lex_direct (cpp_reader *pfile)
 
   /* Potentially convert the location of the token to a range.  */
   if (result->src_loc >= RESERVED_LOCATION_COUNT
-      && result->type != CPP_EOF)
+      && result->type != CPP_EOF
+      && !pfile->forced_token_location)
     {
       /* Ensure that any line notes are processed, so that we have the
 	 correct physical line/column for the end-point of the token even
@@ -5375,7 +5516,7 @@ cpp_directive_only_process (cpp_reader *pfile,
 
 	    case '\\':
 	      /* <backslash><newline> is removed, and doesn't undo any
-		 preceeding escape or whatnot.  */
+		 preceding escape or whatnot.  */
 	      if (*pos == '\n')
 		{
 		  pos++;
@@ -5458,7 +5599,13 @@ cpp_directive_only_process (cpp_reader *pfile,
 		    switch (c)
 		      {
 		      case '\\':
-			esc = true;
+			if (esc)
+			  {
+			    star = false;
+			    esc = false;
+			  }
+			else
+			  esc = true;
 			break;
 
 		      case '\r':
@@ -5489,7 +5636,7 @@ cpp_directive_only_process (cpp_reader *pfile,
 			break;
 
 		      case '/':
-			if (star)
+			if (star && !esc)
 			  goto done_comment;
 			/* FALLTHROUGH  */
 

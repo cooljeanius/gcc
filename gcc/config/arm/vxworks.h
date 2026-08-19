@@ -1,6 +1,6 @@
 /* Definitions of target machine for GCC,
    for ARM with targeting the VXWorks run time environment.
-   Copyright (C) 1999-2025 Free Software Foundation, Inc.
+   Copyright (C) 1999-2026 Free Software Foundation, Inc.
 
    Contributed by: Mike Stump <mrs@wrs.com>
    Brought up to date by CodeSourcery, LLC.
@@ -143,7 +143,7 @@ see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
    8K is reserved in the stack to propagate exceptions in case of overflow.  */
 #define STACK_CHECK_PROTECT 8192
 
-/* Unless overridded by the target options, the default is little-endian.  */
+/* Unless overridden by the target options, the default is little-endian.  */
 #define TARGET_ENDIAN_DEFAULT 0
 
 /* The VxWorks environment on ARM is llvm based and we need to link

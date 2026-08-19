@@ -1,5 +1,5 @@
 /* Tree switch conversion for GNU compiler.
-   Copyright (C) 2017-2025 Free Software Foundation, Inc.
+   Copyright (C) 2017-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -35,7 +35,7 @@ enum cluster_type
 
 /* Abstract base class for representing a cluster of cases.
 
-   Here is the inheritance hierarachy, and the enum_cluster_type
+   Here is the inheritance hierarchy, and the enum_cluster_type
    values for the concrete subclasses:
 
    cluster
@@ -312,7 +312,7 @@ as a single bit test:
 	if ((1<<x) & ((1<<4)|(1<<6)|(1<<9)|(1<<11)))
 
 This transformation is only applied if the number of case targets is small,
-if CST constains at least 3 bits, and "1 << x" is cheap.  The bit tests are
+if CST contains at least 3 bits, and "1 << x" is cheap.  The bit tests are
 performed in "word_mode".
 
 The following example shows the code the transformation generates:
@@ -423,19 +423,9 @@ public:
      can build a bit test.  */
   static bool can_be_handled (unsigned HOST_WIDE_INT range, unsigned uniq);
 
-  /* Return true when cluster starting at START and ending at END (inclusive)
-     can build a bit test.  */
-  static bool can_be_handled (const vec<cluster *> &clusters, unsigned start,
-			      unsigned end);
-
   /* Return true when COUNT of cases of UNIQ labels is beneficial for bit test
      transformation.  */
   static bool is_beneficial (unsigned count, unsigned uniq);
-
-  /* Return true if cluster starting at START and ending at END (inclusive)
-     is profitable transformation.  */
-  static bool is_beneficial (const vec<cluster *> &clusters, unsigned start,
-			     unsigned end);
 
 /* Split the basic block at the statement pointed to by GSIP, and insert
    a branch to the target basic block of E_TRUE conditional on tree
@@ -566,7 +556,6 @@ class case_bit_test
 public:
   wide_int mask;
   basic_block target_bb;
-  tree label;
   int bits;
   profile_probability prob;
 

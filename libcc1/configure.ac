@@ -1,4 +1,4 @@
-dnl   Copyright (C) 2014-2025 Free Software Foundation, Inc.
+dnl   Copyright (C) 2014-2026 Free Software Foundation, Inc.
 dnl
 dnl This file is part of GCC.
 dnl
@@ -20,7 +20,7 @@ AC_INIT([libcc1], [version-unused])
 AC_CONFIG_SRCDIR([libcc1.cc])
 AC_CONFIG_HEADER(cc1plugin-config.h)
 
-AC_CANONICAL_SYSTEM
+AC_CANONICAL_TARGET
 AC_USE_SYSTEM_EXTENSIONS
 # Determine the noncanonical target name, for directory use.
 ACX_NONCANONICAL_TARGET
@@ -36,7 +36,6 @@ AM_INIT_AUTOMAKE([1.11.1 foreign no-dist no-define -Wall -Wno-portability])
 AM_MAINTAINER_MODE
 
 LT_INIT([disable-static])
-AM_PROG_LIBTOOL
 AC_PROG_CXX
 
 visibility=
@@ -48,6 +47,7 @@ AC_SUBST(visibility)
 GCC_CET_HOST_FLAGS(CET_HOST_FLAGS)
 AC_SUBST(CET_HOST_FLAGS)
 
+AC_CHECK_HEADERS(libgen.h)
 AC_CHECK_DECLS([basename])
 
 GCC_BASE_VER

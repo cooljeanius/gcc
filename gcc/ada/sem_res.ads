@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 S p e c                                  --
 --                                                                          --
---          Copyright (C) 1992-2025, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -133,6 +133,12 @@ package Sem_Res is
    --  own type. For now we assume that the prefix cannot be overloaded and
    --  the name of the entry plays no role in the resolution.
 
+   procedure Resolve_Implicit_Dereference (P : Node_Id);
+   --  Called when P is the prefix of an indexed component, or of a selected
+   --  component, or of a slice. If P is of an access type, we unconditionally
+   --  rewrite it as an explicit dereference. This ensures that the expander
+   --  and the code generator have a fully explicit tree to work with.
+
    procedure Resolve_Membership_Equality (N : Node_Id; Typ : Entity_Id);
    --  Resolve the equality operator in an individual membership test
 
@@ -147,6 +153,13 @@ package Sem_Res is
    --  actual parameter and N = Operand). Returns a Boolean result indicating
    --  whether the conversion is legal. Reports errors in the case of illegal
    --  conversions, unless Report_Errs is False.
+
+   function Valid_Tagged_Conversion
+     (N           : Node_Id;
+      Target_Type : Entity_Id;
+      Opnd_Type   : Entity_Id;
+      Report_Errs : Boolean := True) return Boolean;
+   --  Specific version of Valid_Conversion for when Target_Type is tagged
 
 private
    procedure Resolve_Implicit_Type (N : Node_Id) renames Resolve;

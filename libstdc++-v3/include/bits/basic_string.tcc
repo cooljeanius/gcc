@@ -1,6 +1,6 @@
 // Components for manipulating sequences of characters -*- C++ -*-
 
-// Copyright (C) 1997-2025 Free Software Foundation, Inc.
+// Copyright (C) 1997-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -139,14 +139,14 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
   template<typename _CharT, typename _Traits, typename _Alloc>
     _GLIBCXX20_CONSTEXPR
-    typename basic_string<_CharT, _Traits, _Alloc>::pointer
+    typename basic_string<_CharT, _Traits, _Alloc>::_Alloc_result
     basic_string<_CharT, _Traits, _Alloc>::
-    _M_create(size_type& __capacity, size_type __old_capacity)
+    _M_create_plus(size_type __capacity, size_type __old_capacity)
     {
       // _GLIBCXX_RESOLVE_LIB_DEFECTS
       // 83.  String::npos vs. string::max_size()
       if (__capacity > max_size())
-	std::__throw_length_error(__N("basic_string::_M_create"));
+	std::__throw_length_error(__N("basic_string::_M_create_plus"));
 
       // The below implements an exponential growth policy, necessary to
       // meet amortized linear time requirements of the library: see
@@ -161,7 +161,19 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       // NB: Need an array of char_type[__capacity], plus a terminating
       // null char_type() element.
-      return _S_allocate(_M_get_allocator(), __capacity + 1);
+      return _S_allocate_at_least(_M_get_allocator(), __capacity + 1);
+    }
+
+  // This must remain for ABI stability, though unused in current code.
+  template<typename _CharT, typename _Traits, typename _Alloc>
+    _GLIBCXX20_CONSTEXPR
+    typename basic_string<_CharT, _Traits, _Alloc>::pointer
+    basic_string<_CharT, _Traits, _Alloc>::
+    _M_create(size_type& __capacity, size_type __old_capacity)
+    {
+      _Alloc_result __r = _M_create_plus(__capacity, __old_capacity);
+      __capacity = __r.__count - 1;  // Leave room for NUL.
+      return __r.__ptr;
     }
 
   // NB: This is the special case for Input Iterators, used in
@@ -203,14 +215,15 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	    if (__len == __capacity)
 	      {
 		// Allocate more space.
-		__capacity = __len + 1;
-		pointer __another = _M_create(__capacity, __len);
-		this->_S_copy(__another, _M_data(), __len);
+		_Alloc_result __another = _M_create_plus(__len + 1, __len);
+		__capacity = __another.__count - 1; // Leave room for NUL.
+		this->_S_copy(__another.__ptr, _M_data(), __len);
 		_M_dispose();
-		_M_data(__another);
+		_M_data(__another.__ptr);
 		_M_capacity(__capacity);
 	      }
-	    traits_type::assign(_M_data()[__len++], *__beg);
+	    traits_type::assign(_M_data()[__len++],
+				static_cast<_CharT>(*__beg));
 	    ++__beg;
 	  }
 
@@ -230,10 +243,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	size_type __dnew = static_cast<size_type>(std::distance(__beg, __end));
 
 	if (__dnew > size_type(_S_local_capacity))
-	  {
-	    _M_data(_M_create(__dnew, size_type(0)));
-	    _M_capacity(__dnew);
-	  }
+	  _M_create_and_place(__dnew, size_type(0));
 	else
 	  _M_init_local_buf();
 
@@ -263,10 +273,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     _M_construct(size_type __n, _CharT __c)
     {
       if (__n > size_type(_S_local_capacity))
-	{
-	  _M_data(_M_create(__n, size_type(0)));
-	  _M_capacity(__n);
-	}
+	_M_create_and_place(__n, size_type(0));
       else
 	_M_init_local_buf();
 
@@ -275,6 +282,60 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       _M_set_length(__n);
     }
+
+  // Length of string constructed is easier to propagate inter-procedurally
+  // than difference between iterators.
+  template<typename _CharT, typename _Traits, typename _Alloc>
+    template<bool _Terminated>
+    _GLIBCXX20_CONSTEXPR
+    void
+    basic_string<_CharT, _Traits, _Alloc>::
+    _M_construct(const _CharT* __str, size_type __n)
+    {
+      if (__n > size_type(_S_local_capacity))
+	_M_create_and_place(__n, size_type(0));
+      else
+	_M_init_local_buf();
+
+      if (__n || _Terminated)
+	this->_S_copy(_M_data(), __str, __n + _Terminated);
+
+      _M_length(__n);
+      if (!_Terminated)
+	traits_type::assign(_M_data()[__n], _CharT());
+    }
+
+#if __cplusplus >= 202302L
+  template<typename _CharT, typename _Traits, typename _Alloc>
+    constexpr void
+    basic_string<_CharT, _Traits, _Alloc>::
+    _M_construct(basic_string&& __str, size_type __pos,  size_type __n)
+    {
+      const _CharT* __start = __str._M_data() + __pos;
+      if (__n <= _S_local_capacity)
+	{
+	  _M_init_local_buf();
+	  traits_type::copy(_M_local_buf, __start, __n);
+	  _M_set_length(__n);
+	  return;
+	}
+
+      if constexpr (!allocator_traits<_Alloc>::is_always_equal::value)
+	if (get_allocator() != __str.get_allocator())
+	  {
+	    _M_construct<false>(__start, __n);
+	    return;
+	  }
+
+      _M_data(__str._M_data());
+      _M_capacity(__str._M_allocated_capacity);
+      __str._M_data(__str._M_use_local_data());
+      __str._M_set_length(0);
+
+      _S_move(_M_data(), _M_data() + __pos, __n);
+      _M_set_length(__n);
+    }
+#endif // C++23
 
   template<typename _CharT, typename _Traits, typename _Alloc>
     _GLIBCXX20_CONSTEXPR
@@ -289,11 +350,11 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
 	  if (__rsize > __capacity)
 	    {
-	      size_type __new_capacity = __rsize;
-	      pointer __tmp = _M_create(__new_capacity, __capacity);
+	      // if _M_create_plus throws, there is no effect.
+	      _Alloc_result __tmp = _M_create_plus(__rsize, __capacity);
 	      _M_dispose();
-	      _M_data(__tmp);
-	      _M_capacity(__new_capacity);
+	      _M_data(__tmp.__ptr);
+	      _M_capacity(__tmp.__count - 1);
 	    }
 
 	  if (__rsize)
@@ -317,11 +378,11 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       if (__res <= __capacity)
 	return;
 
-      pointer __tmp = _M_create(__res, __capacity);
-      this->_S_copy(__tmp, _M_data(), length() + 1);
+      _Alloc_result __r = _M_create_plus(__res, __capacity);
+      this->_S_copy(__r.__ptr, _M_data(), length() + 1);
       _M_dispose();
-      _M_data(__tmp);
-      _M_capacity(__res);
+      _M_data(__r.__ptr);
+      _M_capacity(__r.__count - 1);  // Leave room for NUL.
     }
 
   template<typename _CharT, typename _Traits, typename _Alloc>
@@ -334,19 +395,19 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       const size_type __how_much = length() - __pos - __len1;
 
       size_type __new_capacity = length() + __len2 - __len1;
-      pointer __r = _M_create(__new_capacity, capacity());
+      _Alloc_result __r = _M_create_plus(__new_capacity, capacity());
 
       if (__pos)
-	this->_S_copy(__r, _M_data(), __pos);
+	this->_S_copy(__r.__ptr, _M_data(), __pos);
       if (__s && __len2)
-	this->_S_copy(__r + __pos, __s, __len2);
+	this->_S_copy(__r.__ptr + __pos, __s, __len2);
       if (__how_much)
-	this->_S_copy(__r + __pos + __len2,
+	this->_S_copy(__r.__ptr + __pos + __len2,
 		      _M_data() + __pos + __len1, __how_much);
 
       _M_dispose();
-      _M_data(__r);
-      _M_capacity(__new_capacity);
+      _M_data(__r.__ptr);
+      _M_capacity(__r.__count - 1);  // Leave room for NUL.
     }
 
   template<typename _CharT, typename _Traits, typename _Alloc>
@@ -381,16 +442,24 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  this->_S_copy(_M_local_buf, _M_data(), __length + 1);
 	  _M_destroy(__capacity);
 	  _M_data(_M_local_data());
+	  return;
 	}
 #if __cpp_exceptions
-      else if (__length < __capacity)
+#ifdef __glibcxx_allocate_at_least  // C++23
+      const size_type __limit =
+	(__STDCPP_DEFAULT_NEW_ALIGNMENT__ - 1) / sizeof(_CharT);
+#else
+      const size_type __limit = 0;
+#endif
+      if (__capacity - __length > __limit )
 	try
 	  {
-	    pointer __tmp = _S_allocate(_M_get_allocator(), __length + 1);
-	    this->_S_copy(__tmp, _M_data(), __length + 1);
+	    _Alloc_result __r = _S_allocate_at_least(
+	      _M_get_allocator(), __length + 1);
+	    this->_S_copy(__r.__ptr, _M_data(), __length + 1);
 	    _M_dispose();
-	    _M_data(__tmp);
-	    _M_capacity(__length);
+	    _M_data(__r.__ptr);
+	    _M_capacity(__r.__count - 1);  // reserve room for NUL.
 	  }
 	catch (const __cxxabiv1::__forced_unwind&)
 	  { throw; }
@@ -530,7 +599,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 #if __cpp_lib_is_constant_evaluated
 	  if (std::is_constant_evaluated())
 	    {
-	      auto __newp = _S_allocate(_M_get_allocator(), __new_size);
+	      auto __newp =
+		_S_allocate_at_least(_M_get_allocator(), __new_size).__ptr;
 	      _S_copy(__newp, this->_M_data(), __pos);
 	      _S_copy(__newp + __pos, __s, __len2);
 	      _S_copy(__newp + __pos + __len2, __p + __len1, __how_much);
@@ -619,7 +689,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 #endif // C++11
 
 #endif  // _GLIBCXX_USE_CXX11_ABI
-   
+
 #if __glibcxx_constexpr_string >= 201907L
 # define _GLIBCXX_STRING_CONSTEXPR constexpr
 #else
@@ -858,7 +928,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	      // Avoid reallocation for common case.
 	      __str.erase();
 	      _CharT __buf[128];
-	      __size_type __len = 0;	      
+	      __size_type __len = 0;
 	      const streamsize __w = __in.width();
 	      const __size_type __n = __w > 0 ? static_cast<__size_type>(__w)
 		                              : __str.max_size();
@@ -973,12 +1043,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   // Inhibit implicit instantiations for required instantiations,
   // which are defined via explicit instantiations elsewhere.
 #if _GLIBCXX_EXTERN_TEMPLATE
-  // The explicit instantiation definitions in src/c++11/string-inst.cc and
-  // src/c++17/string-inst.cc only instantiate the members required for C++17
-  // and earlier standards (so not C++20's starts_with and ends_with).
-  // Suppress the explicit instantiation declarations for C++20, so C++20
+  // The explicit instantiation definitions in src/c++11/string-inst.cc,
+  // src/c++17/string-inst.cc and src/c++20/string-inst.cc only instantiate
+  // the members required for C++20 and earlier standards (so not C++23's
+  // contains).
+  // Suppress the explicit instantiation declarations for C++23, so C++23
   // code will implicitly instantiate std::string and std::wstring as needed.
-# if __cplusplus <= 201703L && _GLIBCXX_EXTERN_TEMPLATE > 0
+# if __cplusplus <= 202002L && _GLIBCXX_EXTERN_TEMPLATE > 0
   extern template class basic_string<char>;
 # elif ! _GLIBCXX_USE_CXX11_ABI
   // Still need to prevent implicit instantiation of the COW empty rep,
@@ -986,7 +1057,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   extern template basic_string<char>::size_type
     basic_string<char>::_Rep::_S_empty_rep_storage[];
 # elif _GLIBCXX_EXTERN_TEMPLATE > 0
-  // Export _M_replace_cold even for C++20.
+  // Export _M_replace_cold even for C++23.
   extern template void
     basic_string<char>::_M_replace_cold(char *, size_type, const char*,
 					const size_type, const size_type);
@@ -1006,13 +1077,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     getline(basic_istream<char>&, string&);
 
 #ifdef _GLIBCXX_USE_WCHAR_T
-# if __cplusplus <= 201703L && _GLIBCXX_EXTERN_TEMPLATE > 0
+# if __cplusplus <= 202002L && _GLIBCXX_EXTERN_TEMPLATE > 0
   extern template class basic_string<wchar_t>;
 # elif ! _GLIBCXX_USE_CXX11_ABI
   extern template basic_string<wchar_t>::size_type
     basic_string<wchar_t>::_Rep::_S_empty_rep_storage[];
 # elif _GLIBCXX_EXTERN_TEMPLATE > 0
-  // Export _M_replace_cold even for C++20.
+  // Export _M_replace_cold even for C++23.
   extern template void
     basic_string<wchar_t>::_M_replace_cold(wchar_t*, size_type, const wchar_t*,
 					   const size_type, const size_type);

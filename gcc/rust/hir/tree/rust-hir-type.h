@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2025 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -57,7 +57,7 @@ public:
   ImplTraitType (ImplTraitType &&other) = default;
   ImplTraitType &operator= (ImplTraitType &&other) = default;
 
-  std::string as_string () const override;
+  std::string to_string () const override;
   std::vector<std::unique_ptr<TypeParamBound>> &get_type_param_bounds ()
   {
     return type_param_bounds;
@@ -96,7 +96,7 @@ public:
   TraitObjectType (TraitObjectType &&other) = default;
   TraitObjectType &operator= (TraitObjectType &&other) = default;
 
-  std::string as_string () const override;
+  std::string to_string () const override;
   bool get_has_dyn () { return has_dyn; }
   void accept_vis (HIRFullVisitor &vis) override;
   void accept_vis (HIRTypeVisitor &vis) override;
@@ -150,9 +150,9 @@ public:
   ParenthesisedType (ParenthesisedType &&other) = default;
   ParenthesisedType &operator= (ParenthesisedType &&other) = default;
 
-  std::string as_string () const override
+  std::string to_string () const override
   {
-    return "(" + type_in_parens->as_string () + ")";
+    return "(" + type_in_parens->to_string () + ")";
   }
 
   // Creates a trait bound (clone of this one's trait bound) - HACK
@@ -187,7 +187,7 @@ public:
   TupleType (TupleType &&other) = default;
   TupleType &operator= (TupleType &&other) = default;
 
-  std::string as_string () const override;
+  std::string to_string () const override;
 
   void accept_vis (HIRFullVisitor &vis) override;
   void accept_vis (HIRTypeVisitor &vis) override;
@@ -228,7 +228,7 @@ protected:
 public:
   NeverType (Analysis::NodeMapping mappings, location_t locus);
 
-  std::string as_string () const override { return "! (never type)"; }
+  std::string to_string () const override { return "! (never type)"; }
 
   void accept_vis (HIRFullVisitor &vis) override;
   void accept_vis (HIRTypeVisitor &vis) override;
@@ -256,7 +256,7 @@ public:
   RawPointerType (RawPointerType &&other) = default;
   RawPointerType &operator= (RawPointerType &&other) = default;
 
-  std::string as_string () const override;
+  std::string to_string () const override;
 
   void accept_vis (HIRFullVisitor &vis) override;
   void accept_vis (HIRTypeVisitor &vis) override;
@@ -291,7 +291,7 @@ protected:
 class ReferenceType : public TypeNoBounds
 {
   // bool has_lifetime; // TODO: handle in lifetime or something?
-  Lifetime lifetime;
+  tl::optional<Lifetime> lifetime;
 
   Mutability mut;
   std::unique_ptr<Type> type;
@@ -301,12 +301,12 @@ public:
   bool is_mut () const { return mut == Mutability::Mut; }
 
   // Returns whether the reference has a lifetime.
-  bool has_lifetime () const { return !lifetime.is_error (); }
+  bool has_lifetime () const { return lifetime.has_value (); }
 
   // Constructor
   ReferenceType (Analysis::NodeMapping mappings, Mutability mut,
 		 std::unique_ptr<Type> type_no_bounds, location_t locus,
-		 Lifetime lifetime);
+		 tl::optional<Lifetime> lifetime);
 
   // Copy constructor with custom clone method
   ReferenceType (ReferenceType const &other);
@@ -318,12 +318,13 @@ public:
   ReferenceType (ReferenceType &&other) = default;
   ReferenceType &operator= (ReferenceType &&other) = default;
 
-  std::string as_string () const override;
+  std::string to_string () const override;
 
   void accept_vis (HIRFullVisitor &vis) override;
   void accept_vis (HIRTypeVisitor &vis) override;
 
-  Lifetime &get_lifetime () { return lifetime; }
+  Lifetime &get_lifetime () { return lifetime.value (); }
+  const Lifetime &get_lifetime () const { return lifetime.value (); }
 
   Mutability get_mut () const { return mut; }
 
@@ -366,7 +367,7 @@ public:
   ArrayType (ArrayType &&other) = default;
   ArrayType &operator= (ArrayType &&other) = default;
 
-  std::string as_string () const override;
+  std::string to_string () const override;
 
   void accept_vis (HIRFullVisitor &vis) override;
   void accept_vis (HIRTypeVisitor &vis) override;
@@ -409,7 +410,7 @@ public:
   SliceType (SliceType &&other) = default;
   SliceType &operator= (SliceType &&other) = default;
 
-  std::string as_string () const override;
+  std::string to_string () const override;
 
   void accept_vis (HIRFullVisitor &vis) override;
   void accept_vis (HIRTypeVisitor &vis) override;
@@ -452,7 +453,7 @@ protected:
 public:
   InferredType (Analysis::NodeMapping mappings, location_t locus);
 
-  std::string as_string () const override;
+  std::string to_string () const override;
 
   void accept_vis (HIRFullVisitor &vis) override;
   void accept_vis (HIRTypeVisitor &vis) override;
@@ -493,7 +494,7 @@ public:
   MaybeNamedParam (MaybeNamedParam &&other) = default;
   MaybeNamedParam &operator= (MaybeNamedParam &&other) = default;
 
-  std::string as_string () const;
+  std::string to_string () const;
 
   // Returns whether the param is in an error state.
   bool is_error () const { return param_type == nullptr; }
@@ -552,7 +553,7 @@ public:
   BareFunctionType (BareFunctionType &&other) = default;
   BareFunctionType &operator= (BareFunctionType &&other) = default;
 
-  std::string as_string () const override;
+  std::string to_string () const override;
 
   void accept_vis (HIRFullVisitor &vis) override;
   void accept_vis (HIRTypeVisitor &vis) override;

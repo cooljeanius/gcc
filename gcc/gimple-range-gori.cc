@@ -1,5 +1,5 @@
 /* Gimple range GORI functions.
-   Copyright (C) 2017-2025 Free Software Foundation, Inc.
+   Copyright (C) 2017-2026 Free Software Foundation, Inc.
    Contributed by Andrew MacLeod <amacleod@redhat.com>
    and Aldy Hernandez <aldyh@redhat.com>.
 
@@ -295,6 +295,21 @@ range_def_chain::get_def_chain (tree name)
   return m_def_chain[v].bm;
 }
 
+// Clear def chain info for NAME.
+
+void
+range_def_chain::clear (tree name)
+{
+  unsigned v = SSA_NAME_VERSION (name);
+  if (v >= m_def_chain.length ())
+    return;
+
+  m_def_chain[v].ssa1 = 0;
+  m_def_chain[v].ssa2 = 0;
+  m_def_chain[v].bm = NULL;
+  get_def_chain (name);
+}
+
 // Dump what we know for basic block BB to file F.
 
 void
@@ -381,6 +396,28 @@ gori_map::exports (basic_block bb)
   if (bb->index >= (signed int)m_outgoing.length () || !m_outgoing[bb->index])
     calculate_gori (bb);
   return m_outgoing[bb->index];
+}
+
+// Return the bitmap vector of all exports AND their dependencies from BB
+// in TMPBIT.  Calculate if necessary.  Return TMPBIT.
+
+bitmap
+gori_map::exports_and_deps (basic_block bb, bitmap tmpbit)
+{
+  if (bb->index >= (signed int)m_outgoing.length () || !m_outgoing[bb->index])
+    calculate_gori (bb);
+  bitmap_copy (tmpbit, m_outgoing[bb->index]);
+  if (!bitmap_empty_p (tmpbit))
+    {
+      tree name;
+      FOR_EACH_GORI_EXPORT_NAME (this, bb, name)
+	{
+	  bitmap dep = get_def_chain (name);
+	  if (dep)
+	    bitmap_ior_into (tmpbit, dep);
+	}
+    }
+  return tmpbit;
 }
 
 // Return the bitmap vector of all imports to BB.  Calculate if necessary.
@@ -635,7 +672,7 @@ gori_compute::compute_operand_range (vrange &r, gimple *stmt,
   tree op1 = gimple_range_ssa_p (handler.operand1 ());
   tree op2 = gimple_range_ssa_p (handler.operand2 ());
 
-  // If there is a relation betwen op1 and op2, use it instead as it is
+  // If there is a relation between op1 and op2, use it instead as it is
   // likely to be more applicable.
   if (op1 && op2)
     {
@@ -750,7 +787,7 @@ gori_compute::compute_operand_range (vrange &r, gimple *stmt,
   gimple *src_stmt;
   if (op1_in_chain)
     {
-      vr.set_type (TREE_TYPE (op1));
+      vr.set_range_class (TREE_TYPE (op1));
       if (!compute_operand1_range (vr, handler, lhs, src, vrel_ptr))
 	return false;
       src_stmt = SSA_NAME_DEF_STMT (op1);
@@ -758,7 +795,7 @@ gori_compute::compute_operand_range (vrange &r, gimple *stmt,
   else
     {
       gcc_checking_assert (op2_in_chain);
-      vr.set_type (TREE_TYPE (op2));
+      vr.set_range_class (TREE_TYPE (op2));
       if (!compute_operand2_range (vr, handler, lhs, src, vrel_ptr))
 	return false;
       src_stmt = SSA_NAME_DEF_STMT (op2);
@@ -1296,7 +1333,7 @@ gori_compute::compute_operand1_and_operand2_range (vrange &r,
     return false;
 
   // Now get the range thru op1.
-  vr.set_type (TREE_TYPE (handler.operand1 ()));
+  vr.set_range_class (TREE_TYPE (handler.operand1 ()));
   if (!compute_operand1_range (vr, handler, lhs, src, rel))
     return false;
   src_stmt = SSA_NAME_DEF_STMT (handler.operand1 ());
@@ -1325,9 +1362,10 @@ gori_compute::may_recompute_p (tree name, basic_block bb, int depth)
   if (!dep1)
     return false;
 
-  // Don't recalculate PHIs or statements with side_effects.
+  // Only recalculate range-op statements that are recomputable.
   gimple *s = SSA_NAME_DEF_STMT (name);
-  if (is_a<gphi *> (s) || gimple_has_side_effects (s))
+  gimple_range_op_handler handler (s);
+  if (!handler || !handler.recomputable_p ())
     return false;
 
   if (!dep2)
@@ -1569,14 +1607,14 @@ gori_stmt_info::gori_stmt_info (vrange &lhs, gimple *stmt, range_query *q)
   fur_stmt src (stmt, q);
   if (op1)
     {
-      op1_range.set_type (TREE_TYPE (op1));
+      op1_range.set_range_class (TREE_TYPE (op1));
       src.get_operand (op1_range, op1);
     }
 
-  // And satisfy the second operand for single op satements.
+  // And satisfy the second operand for single op statements.
   if (op2)
     {
-      op2_range.set_type (TREE_TYPE (op2));
+      op2_range.set_range_class (TREE_TYPE (op2));
       src.get_operand (op2_range, op2);
     }
   else if (op1)
@@ -1602,14 +1640,14 @@ gori_calc_operands (vrange &lhs, gimple *stmt, ssa_cache &r, range_query *q)
   // If there was already a range, leave it and do no further evaluation.
   if (si.ssa1 && !r.has_range (si.ssa1))
     {
-      tmp.set_type (TREE_TYPE (si.ssa1));
+      tmp.set_range_class (TREE_TYPE (si.ssa1));
       if (si.calc_op1 (tmp, lhs, si.op2_range))
 	si.op1_range.intersect (tmp);
       if (!si.op1_range.varying_p ())
 	{
 	  r.set_range (si.ssa1, si.op1_range);
 	  gimple *src = SSA_NAME_DEF_STMT (si.ssa1);
-	  // If defintion is in the same basic lock, evaluate it.
+	  // If definition is in the same basic block, evaluate it.
 	  if (src && gimple_bb (src) == gimple_bb (stmt))
 	    gori_calc_operands (si.op1_range, src, r, q);
 	}
@@ -1617,7 +1655,7 @@ gori_calc_operands (vrange &lhs, gimple *stmt, ssa_cache &r, range_query *q)
 
   if (si.ssa2 && !r.has_range (si.ssa2))
     {
-      tmp.set_type (TREE_TYPE (si.ssa2));
+      tmp.set_range_class (TREE_TYPE (si.ssa2));
       if (si.calc_op2 (tmp, lhs, si.op1_range))
 	si.op2_range.intersect (tmp);
       if (!si.op2_range.varying_p ())
@@ -1631,7 +1669,7 @@ gori_calc_operands (vrange &lhs, gimple *stmt, ssa_cache &r, range_query *q)
 }
 
 // Use ssa_cache R as a repository for all outgoing ranges on edge E that
-// can be calculated.  Use Q to establish starting edge ranges anbd to resolve
+// can be calculated.  Use Q to establish starting edge ranges and to resolve
 // operand values.  If Q is NULL use the current range
 // query available to the system.
 
@@ -1653,12 +1691,12 @@ gori_on_edge (ssa_cache &r, edge e, range_query *q)
 
 // Helper for GORI_NAME_ON_EDGE which uses query Q to determine if STMT
 // provides a range for NAME, and returns it in R if so. If it does not,
-// continue processing feeding statments until we run out of statements
+// continue processing feeding statements until we run out of statements
 // or fine a range for NAME.
 
 bool
 gori_name_helper (vrange &r, tree name, vrange &lhs, gimple *stmt,
-		  range_query *q)
+		  range_query *q, int depth = 0)
 {
   struct gori_stmt_info si(lhs, stmt, q);
   if (!si)
@@ -1669,29 +1707,34 @@ gori_name_helper (vrange &r, tree name, vrange &lhs, gimple *stmt,
   if (si.ssa2 == name)
     return si.calc_op2 (r, lhs, si.op1_range);
 
+  // Limit the exponential growth via the logical depth limit.
+  if (si.ssa1 && si.ssa2)
+    if (++depth >= param_ranger_logical_depth)
+      return false;
+
   value_range tmp;
   // Now evaluate operand ranges, and set them in the edge cache.
   // If there was already a range, leave it and do no further evaluation.
   if (si.ssa1)
     {
-      tmp.set_type (TREE_TYPE (si.ssa1));
+      tmp.set_range_class (TREE_TYPE (si.ssa1));
       if (si.calc_op1 (tmp, lhs, si.op2_range))
 	si.op1_range.intersect (tmp);
       gimple *src = SSA_NAME_DEF_STMT (si.ssa1);
-      // If defintion is in the same basic lock, evaluate it.
+      // If definition is in the same basic block, evaluate it.
       if (src && gimple_bb (src) == gimple_bb (stmt))
-	if (gori_name_helper (r, name, si.op1_range, src, q))
+	if (gori_name_helper (r, name, si.op1_range, src, q, depth))
 	  return true;
     }
 
   if (si.ssa2)
     {
-      tmp.set_type (TREE_TYPE (si.ssa2));
+      tmp.set_range_class (TREE_TYPE (si.ssa2));
       if (si.calc_op2 (tmp, lhs, si.op1_range))
 	si.op2_range.intersect (tmp);
       gimple *src = SSA_NAME_DEF_STMT (si.ssa2);
       if (src && gimple_bb (src) == gimple_bb (stmt))
-	if (gori_name_helper (r, name, si.op2_range, src, q))
+	if (gori_name_helper (r, name, si.op2_range, src, q, depth))
 	  return true;
     }
   return false;

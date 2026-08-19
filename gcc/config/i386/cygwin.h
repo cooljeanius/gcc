@@ -1,6 +1,6 @@
 /* Operating system specific defines to be used when targeting GCC for
    hosting on Windows32, using a Unix style C library and tools.
-   Copyright (C) 1995-2025 Free Software Foundation, Inc.
+   Copyright (C) 1995-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -107,10 +107,10 @@ along with GCC; see the file COPYING3.  If not see
 #if defined (USE_CYGWIN_LIBSTDCXX_WRAPPERS)
 
 #if USE_CYGWIN_LIBSTDCXX_WRAPPERS
-/* Default on, only explict -mno disables.  */
+/* Default on, only explicit -mno disables.  */
 #define CXX_WRAP_SPEC_OPT "!mno-use-libstdc-wrappers"
 #else
-/* Default off, only explict -m enables.  */
+/* Default off, only explicit -m enables.  */
 #define CXX_WRAP_SPEC_OPT "muse-libstdc-wrappers"
 #endif
 

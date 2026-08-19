@@ -2,7 +2,7 @@
 // { dg-require-cstdint "" }
 // { dg-options "-fchar8_t" }
 
-// Copyright (C) 2017-2025 Free Software Foundation, Inc.
+// Copyright (C) 2017-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -62,6 +62,9 @@ template<typename T, typename R>
     VERIFY( char_type::tinyness_before == impl_type::tinyness_before );
     VERIFY( char_type::round_style == impl_type::round_style );
   }
+
+// { dg-warning "has_denorm' is deprecated" "" { target c++23 } 52 }
+// { dg-warning "has_denorm_loss' is deprecated" "" { target c++23 } 53 }
 
 int main()
 {

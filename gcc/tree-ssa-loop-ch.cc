@@ -1,5 +1,5 @@
 /* Loop header copying on trees.
-   Copyright (C) 2004-2025 Free Software Foundation, Inc.
+   Copyright (C) 2004-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -44,7 +44,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "tree-ssa-loop-niter.h"
 #include "tree-scalar-evolution.h"
 
-/* Return path query insteance for testing ranges of statements
+/* Return path query instance for testing ranges of statements
    in headers of LOOP contained in basic block BB.
    Use RANGER instance.  */
 
@@ -171,7 +171,7 @@ loop_combined_static_and_iv_p (class loop *loop,
   return gimple_uid (SSA_NAME_DEF_STMT (op)) & 4;
 }
 
-/* Decision about posibility of copying a given header.  */
+/* Decision about possibility of copying a given header.  */
 
 enum ch_decision
 {
@@ -185,19 +185,23 @@ enum ch_decision
   /* We want to copy.  */
   ch_win,
   /* We want to copy and we will eliminate loop exit.  */
-  ch_win_invariant_exit
+  ch_win_invariant_exit,
+  
 };
 
 /* Check whether we should duplicate HEADER of LOOP.  At most *LIMIT
    instructions should be duplicated, limit is decreased by the actual
-   amount.  */
+   amount.  In the case of *CANBE_NEVEREXECUTED, if there is a exit edge
+   of the HEADER that is most likely never executed then consider that
+   as invariant and continue. Set *CANBE_NEVEREXECUTED to false otherwise.  */
 
 static ch_decision
 should_duplicate_loop_header_p (basic_block header, class loop *loop,
 				gimple_ranger *ranger,
 				int *limit,
 				hash_set <edge> *invariant_exits,
-				hash_set <edge> *static_exits)
+				hash_set <edge> *static_exits,
+				bool *canbe_neverexecuted)
 {
   gimple_stmt_iterator bsi;
 
@@ -229,7 +233,7 @@ should_duplicate_loop_header_p (basic_block header, class loop *loop,
     {
       if (dump_file && (dump_flags & TDF_DETAILS))
 	fprintf (dump_file,
-		 "  Not duplicating bb %i: it has mutiple predecestors.\n",
+		 "  Not duplicating bb %i: it has multiple predecestors.\n",
 		 header->index);
       return ch_impossible;
     }
@@ -323,12 +327,12 @@ should_duplicate_loop_header_p (basic_block header, class loop *loop,
 	     size costs.
 
 	     Similarly static computations will be optimized out in the
-	     duplicatd header.  */
+	     duplicated header.  */
 	  if (inv || static_p)
 	    continue;
 
 	  /* Match the following:
-	     _1 = i_1 < 10   <- static condtion
+	     _1 = i_1 < 10   <- static condition
 	     _2 = n != 0     <- loop invariant condition
 	     _3 = _1 & _2    <- combined static and iv statement.  */
 	  tree_code code;
@@ -368,7 +372,7 @@ should_duplicate_loop_header_p (basic_block header, class loop *loop,
 	code_size_cost = true;
       if (dump_file && (dump_flags & TDF_DETAILS))
 	fprintf (dump_file,
-		 "    Acconting stmt as %i insns\n", insns);
+		 "    Accounting stmt as %i insns\n", insns);
       if (*limit < 0)
 	{
 	  if (dump_file && (dump_flags & TDF_DETAILS))
@@ -396,7 +400,7 @@ should_duplicate_loop_header_p (basic_block header, class loop *loop,
 
   /* Combined conditional is a result of if combining:
 
-     _1 = i_1 < 10   <- static condtion
+     _1 = i_1 < 10   <- static condition
      _2 = n != 0     <- loop invariant condition
      _3 = _1 & _2    <- combined static and iv statement
      if (_3 != 0)    <- combined conditional
@@ -453,13 +457,35 @@ should_duplicate_loop_header_p (basic_block header, class loop *loop,
 	      {
 		if (dump_file && (dump_flags & TDF_DETAILS))
 		  fprintf (dump_file,
-			   "    Will elliminate invariant exit %i->%i\n",
+			   "    Will eliminate invariant exit %i->%i\n",
 			   e->src->index, e->dest->index);
 		invariant_exits->add (e);
 	      }
 	}
       return ch_win_invariant_exit;
     }
+  if (!static_exit && *canbe_neverexecuted)
+    {
+      /* See if one of the edges are an exit edge that is probable
+         never executed.
+	 If so treat it as invariant exit win.  */
+      edge e;
+      edge_iterator ei;
+      bool hasone = false;
+      FOR_EACH_EDGE (e, ei, header->succs)
+	if (loop_exit_edge_p (loop, e)
+	    && probably_never_executed_edge_p (cfun, e))
+	  {
+	    hasone = true;
+	    if (dump_file && (dump_flags & TDF_DETAILS))
+	      fprintf (dump_file,
+		       "    `never executed` exit %i->%i\n",
+		       e->src->index, e->dest->index);
+	  }
+      if (hasone)
+	return ch_win_invariant_exit;
+    }
+  *canbe_neverexecuted = false;
 
   /* If the static exit fully optimize out, it is win to "duplicate"
      it.
@@ -474,7 +500,7 @@ should_duplicate_loop_header_p (basic_block header, class loop *loop,
   *limit -= insns;
   if (dump_file && (dump_flags & TDF_DETAILS))
     fprintf (dump_file,
-	     "    Acconting stmt as %i insns\n", insns);
+	     "    Accounting stmt as %i insns\n", insns);
   if (*limit < 0)
     {
       if (dump_file && (dump_flags & TDF_DETAILS))
@@ -711,7 +737,7 @@ public:
   /* opt_pass methods: */
   bool gate (function *) final override { return flag_tree_ch != 0; }
 
-  /* Initialize and finalize loop structures, copying headers inbetween.  */
+  /* Initialize and finalize loop structures, copying headers in between.  */
   unsigned int execute (function *) final override;
 
   opt_pass * clone () final override { return new pass_ch (m_ctxt); }
@@ -846,10 +872,12 @@ ch_base::copy_headers (function *fun)
       auto_vec <ch_decision, 32> decision;
       hash_set <edge> *invariant_exits = new hash_set <edge>;
       hash_set <edge> *static_exits = new hash_set <edge>;
+      bool canbe_neverexecuted = true;
       while ((ret = should_duplicate_loop_header_p (header, loop, ranger,
 						    &remaining_limit,
 						    invariant_exits,
-						    static_exits))
+						    static_exits,
+						    &canbe_neverexecuted))
 	     != ch_impossible)
 	{
 	  nheaders++;
@@ -990,50 +1018,6 @@ ch_base::copy_headers (function *fun)
       delete candidate.static_exits;
       delete candidate.invariant_exits;
       copied.safe_push (std::make_pair (entry, loop));
-
-      /* If the loop has the form "for (i = j; i < j + 10; i++)" then
-	 this copying can introduce a case where we rely on undefined
-	 signed overflow to eliminate the preheader condition, because
-	 we assume that "j < j + 10" is true.  We don't want to warn
-	 about that case for -Wstrict-overflow, because in general we
-	 don't warn about overflow involving loops.  Prevent the
-	 warning by setting the no_warning flag in the condition.  */
-      if (warn_strict_overflow > 0)
-	{
-	  unsigned int i;
-
-	  for (i = 0; i < n_bbs; ++i)
-	    {
-	      gimple_stmt_iterator bsi;
-
-	      for (bsi = gsi_start_bb (copied_bbs[i]);
-		   !gsi_end_p (bsi);
-		   gsi_next (&bsi))
-		{
-		  gimple *stmt = gsi_stmt (bsi);
-		  if (gimple_code (stmt) == GIMPLE_COND)
-		    {
-		      tree lhs = gimple_cond_lhs (stmt);
-		      if (gimple_cond_code (stmt) != EQ_EXPR
-			  && gimple_cond_code (stmt) != NE_EXPR
-			  && INTEGRAL_TYPE_P (TREE_TYPE (lhs))
-			  && TYPE_OVERFLOW_UNDEFINED (TREE_TYPE (lhs)))
-			suppress_warning (stmt, OPT_Wstrict_overflow_);
-		    }
-		  else if (is_gimple_assign (stmt))
-		    {
-		      enum tree_code rhs_code = gimple_assign_rhs_code (stmt);
-		      tree rhs1 = gimple_assign_rhs1 (stmt);
-		      if (TREE_CODE_CLASS (rhs_code) == tcc_comparison
-			  && rhs_code != EQ_EXPR
-			  && rhs_code != NE_EXPR
-			  && INTEGRAL_TYPE_P (TREE_TYPE (rhs1))
-			  && TYPE_OVERFLOW_UNDEFINED (TREE_TYPE (rhs1)))
-			suppress_warning (stmt, OPT_Wstrict_overflow_);
-		    }
-		}
-	    }
-	}
 
       /* Update header of the loop.  */
       loop->header = header;

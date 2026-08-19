@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 S p e c                                  --
 --                                                                          --
---          Copyright (C) 1993-2025, Free Software Foundation, Inc.         --
+--          Copyright (C) 1993-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- This specification is derived from the Ada Reference Manual for use with --
 -- GNAT. The copyright notice above, and the license provisions that follow --
@@ -45,9 +45,11 @@
 
 pragma Assertion_Policy (Pre => Ignore);
 
+with System.Parameters;
+
 package Interfaces.C.Strings with
   SPARK_Mode     => On,
-  Abstract_State => (C_Memory),
+  Abstract_State => (C_Memory, (C_Addresses with Synchronous)),
   Initializes    => (C_Memory),
   Always_Terminates
 is
@@ -62,8 +64,9 @@ is
    --  coming from who knows where, it seems a good idea to turn off any
    --  strict aliasing assumptions for this type.
 
-   type chars_ptr is private;
-   pragma Preelaborable_Initialization (chars_ptr);
+   type chars_ptr is private
+   with
+     Preelaborable_Initialization;
 
    type chars_ptr_array is array (size_t range <>) of aliased chars_ptr;
 
@@ -80,13 +83,13 @@ is
    function New_Char_Array (Chars : char_array) return chars_ptr with
      Volatile_Function,
      Post   => New_Char_Array'Result /= Null_Ptr,
-     Global => (Input => C_Memory);
+     Global => (Input => (C_Memory, C_Addresses));
    --  Copy the contents of Chars into a newly allocated chars_ptr
 
    function New_String (Str : String) return chars_ptr with
      Volatile_Function,
      Post   => New_String'Result /= Null_Ptr,
-     Global => (Input => C_Memory);
+     Global => (Input => (C_Memory, C_Addresses));
    --  Copy the contents of Str into a newly allocated chars_ptr
 
    procedure Free (Item : in out chars_ptr) with
@@ -100,6 +103,17 @@ is
 
    --  The Value functions copy the contents of a chars_ptr object
    --  into a char_array/String.
+   --  There is a guard for a storage error on an object declaration for
+   --  an array type with a modular index type with the size of
+   --  Long_Long_Integer. The special processing is needed in this case
+   --  to compute reliably the size of the object, and eventually, to
+   --  raise Storage_Error, when wrap-around arithmetic might compute
+   --  a meangingless size for the object.
+   --
+   --  The guard raises Storage_Error when
+   --
+   --    (Arr'Last / 2 - Arr'First / 2) > (2 ** 30)
+   --
    function Value (Item : chars_ptr) return char_array with
      Pre    => Item /= Null_Ptr,
      Global => (Input => C_Memory);

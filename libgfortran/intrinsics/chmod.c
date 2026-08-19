@@ -1,5 +1,5 @@
 /* Implementation of the CHMOD intrinsic.
-   Copyright (C) 2006-2025 Free Software Foundation, Inc.
+   Copyright (C) 2006-2026 Free Software Foundation, Inc.
    Contributed by François-Xavier Coudert <coudert@clipper.ens.fr>
 
 This file is part of the GNU Fortran runtime library (libgfortran).
@@ -98,7 +98,7 @@ chmod_internal (char *file, char *mode, gfc_charlen_type mode_len)
 #endif
 
 #ifdef HAVE_UMASK
-  /* Obtain the umask without distroying the setting.  */
+  /* Obtain the umask without destroying the setting.  */
   mode_mask = 0;
   mode_mask = umask (mode_mask);
   (void) umask (mode_mask);

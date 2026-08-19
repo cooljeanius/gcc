@@ -1,5 +1,5 @@
 /* Target Definitions for NVPTX.
-   Copyright (C) 2014-2025 Free Software Foundation, Inc.
+   Copyright (C) 2014-2026 Free Software Foundation, Inc.
    Contributed by Bernd Schmidt <bernds@codesourcery.com>
 
    This file is part of GCC.
@@ -31,9 +31,8 @@
 #define OPTION_DEFAULT_SPECS \
   { "arch", "%{!misa=*:-misa=%(VALUE)}" }, \
 
-/* Assembler supports '-v' option; handle similar to
-   '../../gcc.cc:asm_options', 'HAVE_GNU_AS'.  */
-#define ASM_SPEC "%{v}"
+/* Assembler only supports '-v' option.  */
+#define ASM_V_SPEC "%{v}"
 
 #define STARTFILE_SPEC "%{mmainkernel:crt0.o%s}"
 
@@ -99,8 +98,10 @@
 
 /* There are no 'TARGET_PTX_3_1' and smaller conditionals: our baseline is
    PTX ISA Version 3.1.  */
+#define TARGET_PTX_4_0 (ptx_version_option >= PTX_VERSION_4_0)
 #define TARGET_PTX_4_1 (ptx_version_option >= PTX_VERSION_4_1)
 #define TARGET_PTX_4_2 (ptx_version_option >= PTX_VERSION_4_2)
+#define TARGET_PTX_5_0 (ptx_version_option >= PTX_VERSION_5_0)
 #define TARGET_PTX_6_0 (ptx_version_option >= PTX_VERSION_6_0)
 #define TARGET_PTX_6_3 (ptx_version_option >= PTX_VERSION_6_3)
 #define TARGET_PTX_7_0 (ptx_version_option >= PTX_VERSION_7_0)

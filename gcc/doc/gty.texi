@@ -1,4 +1,4 @@
-@c Copyright (C) 2002-2025 Free Software Foundation, Inc.
+@c Copyright (C) 2002-2026 Free Software Foundation, Inc.
 @c This is part of the GCC manual.
 @c For copying conditions, see the file gcc.texi.
 
@@ -252,7 +252,7 @@ from a process reading PCH.
 @item for_user
 
 Use this to mark types that need to be marked by user gc routines, but are not
-refered to in a template argument.  So if you have some user gc type T1 and a
+referred to in a template argument.  So if you have some user gc type T1 and a
 non user gc type T2 you can give T2 the for_user option so that the marking
 functions for T1 can call non mangled functions to mark T2.
 

@@ -247,23 +247,17 @@ version (StdUnittest)
  *   $(LI it has a 'bool isUniformRandom' field readable in CTFE)
  * )
  */
-template isUniformRNG(Rng, ElementType)
-{
-    enum bool isUniformRNG = .isUniformRNG!Rng &&
-        is(std.range.primitives.ElementType!Rng == ElementType);
-}
+enum isUniformRNG(Rng, ElementType) = .isUniformRNG!Rng &&
+	is(std.range.primitives.ElementType!Rng == ElementType);
 
 /**
  * ditto
  */
-template isUniformRNG(Rng)
-{
-    enum bool isUniformRNG = isInputRange!Rng &&
-        is(typeof(
-        {
-            static assert(Rng.isUniformRandom); //tag
-        }));
-}
+enum isUniformRNG(Rng) = isInputRange!Rng &&
+	is(typeof(
+	{
+        static assert(Rng.isUniformRandom); //tag
+    }));
 
 ///
 @safe unittest
@@ -311,29 +305,23 @@ template isUniformRNG(Rng)
  *   $(LI it has a 'seed(ElementType)' function)
  * )
  */
-template isSeedable(Rng, SeedType)
-{
-    enum bool isSeedable = isUniformRNG!(Rng) &&
-        is(typeof(
-        {
-            Rng r = void;              // can define a Rng object
-            SeedType s = void;
-            r.seed(s); // can seed a Rng
-        }));
-}
+enum isSeedable(Rng, SeedType) = isUniformRNG!(Rng) &&
+	is(typeof(
+    {
+        Rng r = void;              ///< can define a Rng object
+        SeedType s = void; ///< Dummy doc to silence D-scanner.
+        r.seed(s); // can seed a Rng
+    }));
 
 ///ditto
-template isSeedable(Rng)
-{
-    enum bool isSeedable = isUniformRNG!Rng &&
-        is(typeof(
-        {
-            Rng r = void;                     // can define a Rng object
-            alias SeedType = typeof(r.front);
-            SeedType s = void;
-            r.seed(s); // can seed a Rng
-        }));
-}
+enum isSeedable(Rng) = isUniformRNG!Rng &&
+	is(typeof(
+    {
+        Rng r = void;                     ///< can define a Rng object
+        alias SeedType = typeof(r.front);
+        SeedType s = void; ///< Dummy doc to silence D-scanner.
+        r.seed(s); // can seed a Rng
+    }));
 
 ///
 @safe unittest
@@ -1773,43 +1761,9 @@ else
 }
 
 version (linux)
-{
-    // `getrandom()` was introduced in Linux 3.17.
-
-    // Shim for missing bindings in druntime
-    version (none)
-        import core.sys.linux.sys.random : getrandom;
-    else
-    {
-        import core.sys.posix.sys.types : ssize_t;
-        extern extern(C) ssize_t getrandom(
-            void* buf,
-            size_t buflen,
-            uint flags,
-        ) @system nothrow @nogc;
-    }
-}
-
+    version = SeedUseGetEntropy;
 version (Windows)
-{
-    pragma(lib, "Bcrypt.lib");
-
-    private bool bcryptGenRandom(T)(out T result) @trusted
-    {
-        import core.sys.windows.windef : PUCHAR, ULONG;
-        import core.sys.windows.ntdef : NT_SUCCESS;
-        import core.sys.windows.bcrypt : BCryptGenRandom, BCRYPT_USE_SYSTEM_PREFERRED_RNG;
-
-        const gotRandom = BCryptGenRandom(
-            null,
-            cast(PUCHAR) &result,
-            ULONG(T.sizeof),
-            BCRYPT_USE_SYSTEM_PREFERRED_RNG,
-        );
-
-        return NT_SUCCESS(gotRandom);
-    }
-}
+    version = SeedUseGetEntropy;
 
 /**
 A "good" seed for initializing random number engines. Initializing
@@ -1851,35 +1805,14 @@ how excellent the source of entropy is.
 */
 @property uint unpredictableSeed() @trusted nothrow @nogc
 {
-    version (linux)
+    version (SeedUseGetEntropy)
     {
+        import std.internal.entropy : crashOnError, EntropySource, getEntropy;
+
         uint buffer;
-
-        /*
-            getrandom(2):
-            If the _urandom_ source has been initialized, reads of up to
-            256 bytes will always return as many bytes as requested and
-            will not be interrupted by signals. No such guarantees apply
-            for larger buffer sizes.
-            */
-        static assert(buffer.sizeof <= 256);
-
-        const status = (() @trusted => getrandom(&buffer, buffer.sizeof, 0))();
-        assert(status == buffer.sizeof);
-
+        const status = (() @trusted => getEntropy(&buffer, buffer.sizeof, EntropySource.tryAll))();
+        crashOnError(status);
         return buffer;
-    }
-    else version (Windows)
-    {
-        uint result;
-        if (!bcryptGenRandom!uint(result))
-        {
-            version (none)
-                return fallbackSeed();
-            else
-                assert(false, "BCryptGenRandom() failed.");
-        }
-        return result;
     }
     else version (AnyARC4Random)
     {
@@ -1930,35 +1863,14 @@ if (isUnsigned!UIntType)
         /// ditto
         @property UIntType unpredictableSeed() @nogc nothrow @trusted
         {
-            version (linux)
+            version (SeedUseGetEntropy)
             {
+                import std.internal.entropy : crashOnError, EntropySource, getEntropy;
+
                 UIntType buffer;
-
-                /*
-                    getrandom(2):
-                    If the _urandom_ source has been initialized, reads of up to
-                    256 bytes will always return as many bytes as requested and
-                    will not be interrupted by signals. No such guarantees apply
-                    for larger buffer sizes.
-                 */
-                static assert(buffer.sizeof <= 256);
-
-                const status = (() @trusted => getrandom(&buffer, buffer.sizeof, 0))();
-                assert(status == buffer.sizeof);
-
+                const status = (() @trusted => getEntropy(&buffer, buffer.sizeof, EntropySource.tryAll))();
+                crashOnError(status);
                 return buffer;
-            }
-            else version (Windows)
-            {
-                UIntType result;
-                if (!bcryptGenRandom!UIntType(result))
-                {
-                    version (none)
-                        return fallbackSeed();
-                    else
-                        assert(false, "BCryptGenRandom() failed.");
-                }
-                return result;
             }
             else version (AnyARC4Random)
             {

@@ -5,26 +5,14 @@ dnl Check whether the target supports __sync_*_compare_and_swap.
 AC_DEFUN([LIBGOMP_CHECK_SYNC_BUILTINS], [
   AC_CACHE_CHECK([whether the target supports __sync_*_compare_and_swap],
 		 libgomp_cv_have_sync_builtins, [
-  AC_TRY_LINK([], [int foo; __sync_val_compare_and_swap(&foo, 0, 1);],
-	      libgomp_cv_have_sync_builtins=yes, libgomp_cv_have_sync_builtins=no)])
+  AC_LINK_IFELSE(
+    [AC_LANG_PROGRAM([[]],
+		     [[int foo; __sync_val_compare_and_swap(&foo, 0, 1);]])],
+    [libgomp_cv_have_sync_builtins=yes],
+    [libgomp_cv_have_sync_builtins=no])])
   if test $libgomp_cv_have_sync_builtins = yes; then
     AC_DEFINE(HAVE_SYNC_BUILTINS, 1,
 	      [Define to 1 if the target supports __sync_*_compare_and_swap])
-  fi])
-
-dnl Check whether the target supports hidden visibility.
-AC_DEFUN([LIBGOMP_CHECK_ATTRIBUTE_VISIBILITY], [
-  AC_CACHE_CHECK([whether the target supports hidden visibility],
-		 libgomp_cv_have_attribute_visibility, [
-  save_CFLAGS="$CFLAGS"
-  CFLAGS="$CFLAGS -Werror"
-  AC_TRY_COMPILE([void __attribute__((visibility("hidden"))) foo(void) { }],
-		 [], libgomp_cv_have_attribute_visibility=yes,
-		 libgomp_cv_have_attribute_visibility=no)
-  CFLAGS="$save_CFLAGS"])
-  if test $libgomp_cv_have_attribute_visibility = yes; then
-    AC_DEFINE(HAVE_ATTRIBUTE_VISIBILITY, 1,
-      [Define to 1 if the target supports __attribute__((visibility(...))).])
   fi])
 
 dnl Check whether the target supports dllexport
@@ -33,9 +21,11 @@ AC_DEFUN([LIBGOMP_CHECK_ATTRIBUTE_DLLEXPORT], [
 		 libgomp_cv_have_attribute_dllexport, [
   save_CFLAGS="$CFLAGS"
   CFLAGS="$CFLAGS -Werror"
-  AC_TRY_COMPILE([void __attribute__((dllexport)) foo(void) { }],
-		 [], libgomp_cv_have_attribute_dllexport=yes,
-		 libgomp_cv_have_attribute_dllexport=no)
+  AC_COMPILE_IFELSE(
+    [AC_LANG_PROGRAM([[void __attribute__((dllexport)) foo(void) { }]],
+		     [[]])],
+    [libgomp_cv_have_attribute_dllexport=yes],
+    [libgomp_cv_have_attribute_dllexport=no])
   CFLAGS="$save_CFLAGS"])
   if test $libgomp_cv_have_attribute_dllexport = yes; then
     AC_DEFINE(HAVE_ATTRIBUTE_DLLEXPORT, 1,
@@ -46,10 +36,13 @@ dnl Check whether the target supports symbol aliases.
 AC_DEFUN([LIBGOMP_CHECK_ATTRIBUTE_ALIAS], [
   AC_CACHE_CHECK([whether the target supports symbol aliases],
 		 libgomp_cv_have_attribute_alias, [
-  AC_TRY_LINK([
+  AC_LINK_IFELSE(
+    [AC_LANG_PROGRAM([[
 void foo(void) { }
-extern void bar(void) __attribute__((alias("foo")));],
-    [bar();], libgomp_cv_have_attribute_alias=yes, libgomp_cv_have_attribute_alias=no)])
+extern void bar(void) __attribute__((alias("foo")));]],
+		     [[bar();]])],
+    [libgomp_cv_have_attribute_alias=yes],
+    [libgomp_cv_have_attribute_alias=no])])
   if test $libgomp_cv_have_attribute_alias = yes; then
     AC_DEFINE(HAVE_ATTRIBUTE_ALIAS, 1,
       [Define to 1 if the target supports __attribute__((alias(...))).])
@@ -79,7 +72,7 @@ dnl See docs/html/17_intro/configury.html#enable for documentation.
 dnl
 m4_define([LIBGOMP_ENABLE],[dnl
 m4_define([_g_switch],[--enable-$1])dnl
-m4_define([_g_help],[AC_HELP_STRING(_g_switch$3,[$4 @<:@default=$2@:>@])])dnl
+m4_define([_g_help],[AS_HELP_STRING(_g_switch$3,[$4 @<:@default=$2@:>@])])dnl
  AC_ARG_ENABLE($1,_g_help,
   m4_bmatch([$5],
    [^permit ],
@@ -118,6 +111,7 @@ dnl Sets:
 dnl  with_gnu_ld
 dnl  libgomp_ld_is_gold (possibly)
 dnl  libgomp_ld_is_mold (possibly)
+dnl  libgomp_ld_is_wild (possibly)
 dnl  libgomp_gnu_ld_version (possibly)
 dnl
 dnl The last will be a single integer, e.g., version 1.23.45.0.67.89 will
@@ -151,10 +145,13 @@ AC_DEFUN([LIBGOMP_CHECK_LINKER_FEATURES], [
   # does some of this, but throws away the result.
   libgomp_ld_is_gold=no
   libgomp_ld_is_mold=no
+  libgomp_ld_is_wild=no
   if $LD --version 2>/dev/null | grep 'GNU gold'> /dev/null 2>&1; then
     libgomp_ld_is_gold=yes
   elif $LD --version 2>/dev/null | grep 'mold'> /dev/null 2>&1; then
     libgomp_ld_is_mold=yes
+  elif $LD --version 2>/dev/null | grep 'Wild'> /dev/null 2>&1; then
+    libgomp_ld_is_wild=yes
   fi
   changequote(,)
   ldver=`$LD --version 2>/dev/null |
@@ -181,14 +178,14 @@ AC_DEFUN([LIBGOMP_CHECK_LINKER_FEATURES], [
     # .eh_frame and now some of the glibc sections for iconv).
     # Bzzzzt.  Thanks for playing, maybe next time.
     AC_MSG_CHECKING([for ld that supports -Wl,--gc-sections])
-    AC_TRY_RUN([
+    AC_RUN_IFELSE([AC_LANG_SOURCE([[
      int main(void)
      {
        try { throw 1; }
        catch (...) { };
        return 0;
      }
-    ], [ac_sectionLDflags=yes],[ac_sectionLDflags=no], [ac_sectionLDflags=yes])
+    ]])], [ac_sectionLDflags=yes],[ac_sectionLDflags=no], [ac_sectionLDflags=yes])
     if test "$ac_test_CFLAGS" = set; then
       CFLAGS="$ac_save_CFLAGS"
     else
@@ -263,7 +260,7 @@ if test x$enable_symvers = xsun ; then
     *)
       # Unlikely to work.
       AC_MSG_WARN([=== You have requested Sun symbol versioning, but])
-      AC_MSG_WARN([=== you are not targetting Solaris 2.])
+      AC_MSG_WARN([=== you are not targeting Solaris 2.])
       AC_MSG_WARN([=== Symbol versioning will be disabled.])
       enable_symvers=no
       ;;
@@ -275,7 +272,8 @@ if test $enable_symvers != no; then
   AC_MSG_CHECKING([for shared libgcc])
   ac_save_CFLAGS="$CFLAGS"
   CFLAGS=' -lgcc_s'
-  AC_TRY_LINK(, [return 0;], libgomp_shared_libgcc=yes, libgomp_shared_libgcc=no)
+  AC_LINK_IFELSE([AC_LANG_PROGRAM([[]], [[return 0;]])],
+		 [libgomp_shared_libgcc=yes], [libgomp_shared_libgcc=no])
   CFLAGS="$ac_save_CFLAGS"
   if test $libgomp_shared_libgcc = no; then
     cat > conftest.c <<EOF
@@ -290,7 +288,8 @@ changequote([,])dnl
     rm -f conftest.c conftest.so
     if test x${libgomp_libgcc_s_suffix+set} = xset; then
       CFLAGS=" -lgcc_s$libgomp_libgcc_s_suffix"
-      AC_TRY_LINK(, [return 0;], libgomp_shared_libgcc=yes)
+      AC_LINK_IFELSE([AC_LANG_PROGRAM([[]], [[return 0;]])],
+		     [libgomp_shared_libgcc=yes])
       CFLAGS="$ac_save_CFLAGS"
     fi
   fi
@@ -311,6 +310,8 @@ if test $enable_symvers != no && test $libgomp_shared_libgcc = yes; then
     elif test $libgomp_ld_is_gold = yes ; then
       enable_symvers=gnu
     elif test $libgomp_ld_is_mold = yes ; then
+      enable_symvers=gnu
+    elif test $libgomp_ld_is_wild = yes ; then
       enable_symvers=gnu
     else
       # The right tools, the right setup, but too old.  Fallbacks?
@@ -344,9 +345,11 @@ fi
 
 AC_CACHE_CHECK([whether the target supports .symver directive],
 	       libgomp_cv_have_as_symver_directive, [
-  AC_TRY_COMPILE([void foo (void); __asm (".symver foo, bar@SYMVER");],
-		 [], libgomp_cv_have_as_symver_directive=yes,
-		 libgomp_cv_have_as_symver_directive=no)])
+  AC_COMPILE_IFELSE(
+    [AC_LANG_PROGRAM([[void foo (void); __asm (".symver foo, bar@SYMVER");]],
+		     [[]])],
+    [libgomp_cv_have_as_symver_directive=yes],
+    [libgomp_cv_have_as_symver_directive=no])])
 if test $libgomp_cv_have_as_symver_directive = yes; then
   AC_DEFINE(HAVE_AS_SYMVER_DIRECTIVE, 1,
     [Define to 1 if the target assembler supports .symver directive.])

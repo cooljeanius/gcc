@@ -1,5 +1,5 @@
 /* Map (unsigned int) keys to (source file, line, column) triples.
-   Copyright (C) 2001-2025 Free Software Foundation, Inc.
+   Copyright (C) 2001-2026 Free Software Foundation, Inc.
 
 This program is free software; you can redistribute it and/or modify it
 under the terms of the GNU General Public License as published by the
@@ -142,7 +142,7 @@ enum lc_reason
              |   This packing scheme means we effectively have
              |     (column_bits - range_bits)
              |   of bits for the columns, typically (12 - 5) = 7, for 128
-             |   columns; longer line widths are accomodated by starting a
+             |   columns; longer line widths are accommodated by starting a
              |   new ordmap with a higher column_bits.
              |
              | ordmap[2]->start_location-1   | Final location in ordmap 1
@@ -878,6 +878,12 @@ public:
      built-in tokens.  */
   location_t builtin_location;
 
+  /* The special location value to be used for tokens originating on the
+     command line.  This is currently only needed by the C-family front ends
+     for PCH support; if it would be used for another purpose in the future,
+     then other libcpp-using front ends may need to set it as well.  */
+  location_t cmdline_location;
+
   /* The default value of range_bits in ordinary line maps.  */
   unsigned int default_range_bits;
 
@@ -1065,6 +1071,15 @@ extern location_t linemap_line_start
 /* Allocate a raw block of line maps, zero initialized.  */
 extern line_map *line_map_new_raw (line_maps *, bool, line_map_uint_t);
 
+/* Return the location_t at which a new line map with RANGE_BITS range bits
+   would begin, if it needs to begin at least at START_LOC.  */
+inline location_t
+linemap_next_start_location (location_t start_loc, int range_bits)
+{
+  const auto mask = (location_t (1) << range_bits) - 1;
+  return (start_loc + mask) & ~mask;
+}
+
 /* Add a mapping of logical source line to physical source file and
    line number. This function creates an "ordinary map", which is a
    map that records locations of tokens that are not part of macro
@@ -1081,6 +1096,17 @@ extern line_map *line_map_new_raw (line_maps *, bool, line_map_uint_t);
 extern const line_map *linemap_add
   (class line_maps *, enum lc_reason, unsigned int sysp,
    const char *to_file, linenum_type to_line);
+
+/* Create a map with exactly the requested parameters.  Not intended for general
+   use, but useful for applications that need to work with linemap internals
+   directly.  NUM_LINES is the number of lines this map should be able to hold;
+   this just ensures that set->highest_location is set properly so that the next
+   added map will leave sufficient room for NUM_LINES lines in this map.  */
+extern line_map_ordinary *
+linemap_add_raw_map (line_maps *set, lc_reason reason, location_t start_loc,
+		     unsigned int sysp, int column_and_range_bits,
+		     int range_bits, const char *to_file, linenum_type to_line,
+		     line_map_uint_t num_lines);
 
 /* Create a macro map.  A macro map encodes source locations of tokens
    that are part of a macro replacement-list, at a macro expansion
@@ -1111,6 +1137,10 @@ extern location_t linemap_module_loc
 extern void linemap_module_reparent
   (line_maps *, location_t loc, location_t new_parent);
 
+/* TRUE iff the location comes from a module import.  */
+extern bool linemap_location_from_module_p
+  (const line_maps *, location_t);
+
 /* Restore the linemap state such that the map at LWM-1 continues.
    Return start location of the new map.  */
 extern location_t linemap_module_restore
@@ -1118,10 +1148,8 @@ extern location_t linemap_module_restore
 
 /* Given a logical source location, returns the map which the
    corresponding (source file, line, column) triplet can be deduced
-   from. Since the set is built chronologically, the logical lines are
-   monotonic increasing, and so the list is sorted and we can use a
-   binary search. If no line map have been allocated yet, this
-   function returns NULL.  */
+   from.  Since the start_location of each map is monotonic increasing,
+   this can be done with binary search.  */
 extern const line_map *linemap_lookup
   (const line_maps *, location_t);
 
@@ -1280,7 +1308,7 @@ linemap_location_before_p (const line_maps *set,
   return linemap_compare_locations (set, loc_a, loc_b) >= 0;
 }
 
-typedef struct
+struct expanded_location
 {
   /* The name of the source file involved.  */
   const char *file;
@@ -1294,7 +1322,18 @@ typedef struct
 
   /* In a system header?. */
   bool sysp;
-} expanded_location;
+};
+
+extern bool
+operator== (const expanded_location &a,
+	    const expanded_location &b);
+inline bool
+operator!= (const expanded_location &a,
+	    const expanded_location &b)
+{
+  return !(a == b);
+}
+
 
 /* This is enum is used by the function linemap_resolve_location
    below.  The meaning of the values is explained in the comment of
@@ -1444,11 +1483,11 @@ void line_table_dump (FILE *, const line_maps *,
 
 /* An enum for distinguishing the various parts within a location_t.  */
 
-enum location_aspect
+enum class location_aspect
 {
-  LOCATION_ASPECT_CARET,
-  LOCATION_ASPECT_START,
-  LOCATION_ASPECT_FINISH
+  caret,
+  start,
+  finish
 };
 
 /* The rich_location class requires a way to expand location_t instances.

@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2025, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -33,7 +33,6 @@ with Elists;
 with Errout;         use Errout;
 with Exp_CG;
 with Fmap;
-with Fname;          use Fname;
 with Fname.UF;       use Fname.UF;
 with Frontend;
 with Ghost;          use Ghost;
@@ -65,7 +64,6 @@ with Sem_Eval;
 with Sem_Prag;
 with Sem_Type;
 with Set_Targ;
-with Sinfo;          use Sinfo;
 with Sinfo.Nodes;    use Sinfo.Nodes;
 with Sinput;         use Sinput;
 with Sinput.L;       use Sinput.L;
@@ -83,6 +81,7 @@ with Uname;          use Uname;
 with Urealp;
 with Usage;
 with Validsw;        use Validsw;
+with VAST;
 with Warnsw;         use Warnsw;
 
 with System.Assertions;
@@ -173,6 +172,12 @@ procedure Gnat1drv is
 
       if Debug_Flag_Underscore_AA then
          Disable_ALI_File := True;
+      end if;
+
+      --  -gnatd_o disables backend overflow checks on target; used for testing
+
+      if Debug_Flag_Underscore_O then
+         Backend_Overflow_Checks_On_Target := False;
       end if;
 
       --  -gnatd.E sets Error_To_Warning mode, causing selected error messages
@@ -503,11 +508,6 @@ procedure Gnat1drv is
 
          Operating_Mode := Check_Semantics;
 
-         --  Enable assertions, since they give valuable extra information for
-         --  formal verification.
-
-         Assertions_Enabled := True;
-
          --  Disable validity checks, since it generates code raising
          --  exceptions for invalid data, which confuses GNATprove. Invalid
          --  data is directly detected by GNATprove's flow analysis.
@@ -526,12 +526,6 @@ procedure Gnat1drv is
              Warnings_Package.Warning_Doc_Switch =>
                Warnsw.Warning_Doc_Switch,
              others => False));
-
-         --  Suppress the generation of name tables for enumerations, which are
-         --  not needed for formal verification, and fall outside the SPARK
-         --  subset (use of pointers).
-
-         Global_Discard_Names := True;
 
          --  Suppress the expansion of tagged types and dispatching calls,
          --  which lead to the generation of non-SPARK code (use of pointers),
@@ -982,7 +976,7 @@ procedure Gnat1drv is
    --  Local variables
 
    Back_End_Mode : Back_End.Back_End_Mode_Type;
-   Ecode         : Exit_Code_Type;
+   Ecode         : Exit_Code_Type := E_Success;
 
    Main_Unit_Kind : Node_Kind;
    --  Kind of main compilation unit node
@@ -1169,9 +1163,10 @@ begin
       --  Exit with errors if the main source could not be parsed
 
       if Sinput.Main_Source_File <= No_Source_File then
+         Ecode := E_Errors;
          Errout.Finalize (Last_Call => True);
-         Errout.Output_Messages;
-         Exit_Program (E_Errors);
+         Errout.Output_Messages (Ecode);
+         Exit_Program (Ecode);
       end if;
 
       Main_Unit_Node := Cunit (Main_Unit);
@@ -1198,9 +1193,27 @@ begin
       Errout.Finalize (Last_Call => False);
 
       if Compilation_Errors then
+         Ecode := E_Errors;
+
+         if GNATprove_Mode then
+            Atree.Lock;
+            Elists.Lock;
+            Fname.UF.Lock;
+            Ghost.Lock;
+            Inline.Lock;
+            Lib.Lock;
+            Namet.Lock;
+            Nlists.Lock;
+            Sem.Lock;
+            Sinput.Lock;
+            Stringt.Lock;
+
+            Back_End.Call_Back_End (Declarations_Only);
+         end if;
+
          Treepr.Tree_Dump;
          Errout.Finalize (Last_Call => True);
-         Errout.Output_Messages;
+         Errout.Output_Messages (Ecode);
          Namet.Finalize;
 
          --  Generate ALI file if specially requested
@@ -1209,7 +1222,7 @@ begin
             Write_ALI (Object => False);
          end if;
 
-         Exit_Program (E_Errors);
+         Exit_Program (Ecode);
       end if;
 
       --  Case of no code required to be generated, exit indicating no error
@@ -1217,7 +1230,7 @@ begin
       if Original_Operating_Mode = Check_Syntax then
          Treepr.Tree_Dump;
          Errout.Finalize (Last_Call => True);
-         Errout.Output_Messages;
+         Errout.Output_Messages (Ecode);
          Namet.Finalize;
          Check_Rep_Info;
 
@@ -1350,7 +1363,15 @@ begin
             --  Exit the gnat driver with success, otherwise external builders
             --  such as gnatmake and gprbuild will treat the compilation of an
             --  ignored Ghost unit as a failure. Be sure we produce an empty
-            --  object file for the unit.
+            --  object file for the unit, while indicating for the ALI file
+            --  generation that neither spec or body has elaboration code
+            --  (which in ordinary compilation is indicated in Gigi).
+
+            Set_Has_No_Elaboration_Code (Main_Unit_Node);
+
+            if Present (Library_Unit (Main_Unit_Node)) then
+               Set_Has_No_Elaboration_Code (Library_Unit (Main_Unit_Node));
+            end if;
 
             Ecode := E_Success;
             Back_End.Gen_Or_Update_Object_File;
@@ -1407,7 +1428,7 @@ begin
 
          Post_Compilation_Validation_Checks;
          Errout.Finalize (Last_Call => True);
-         Errout.Output_Messages;
+         Errout.Output_Messages (Ecode);
          Treepr.Tree_Dump;
 
          --  Generate ALI file if specially requested, or for missing subunits,
@@ -1440,6 +1461,10 @@ begin
          end if;
       end if;
 
+      --  Verify the validity of the tree (if enabled)
+
+      VAST.VAST_If_Enabled;
+
       --  In -gnatc mode we only do annotation if -gnatR is also set, or if
       --  -gnatwz is enabled (default setting) and there is an unchecked
       --  conversion that involves a type whose size is not statically known,
@@ -1461,7 +1486,7 @@ begin
       then
          Post_Compilation_Validation_Checks;
          Errout.Finalize (Last_Call => True);
-         Errout.Output_Messages;
+         Errout.Output_Messages (Ecode);
          Write_ALI (Object => False);
          Tree_Dump;
          Namet.Finalize;
@@ -1541,7 +1566,8 @@ begin
       --  representation information for List_Rep_Info).
 
       Errout.Finalize (Last_Call => True);
-      Errout.Output_Messages;
+      Errout.Output_Messages
+        ((if Compilation_Errors then E_Errors else E_Success));
 
       --  Back annotation of representation info is not done in CodePeer and
       --  SPARK modes.
@@ -1557,8 +1583,9 @@ begin
       --  there will be no attempt to generate an object file.
 
       if Compilation_Errors then
+         Ecode := E_Errors;
          Treepr.Tree_Dump;
-         Exit_Program (E_Errors);
+         Exit_Program (Ecode);
       end if;
 
       if not GNATprove_Mode then
@@ -1632,7 +1659,7 @@ begin
 exception
    when Unrecoverable_Error =>
       Errout.Finalize (Last_Call => True);
-      Errout.Output_Messages;
+      Errout.Output_Messages (E_Errors);
 
       Set_Standard_Error;
       Write_Str ("compilation abandoned");

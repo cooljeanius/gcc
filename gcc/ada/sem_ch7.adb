@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2025, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -32,7 +32,6 @@ with Aspects;        use Aspects;
 with Atree;          use Atree;
 with Contracts;      use Contracts;
 with Debug;          use Debug;
-with Einfo;          use Einfo;
 with Einfo.Entities; use Einfo.Entities;
 with Einfo.Utils;    use Einfo.Utils;
 with Elists;         use Elists;
@@ -66,7 +65,6 @@ with Sem_Util;       use Sem_Util;
 with Sem_Warn;       use Sem_Warn;
 with Snames;         use Snames;
 with Stand;          use Stand;
-with Sinfo;          use Sinfo;
 with Sinfo.Nodes;    use Sinfo.Nodes;
 with Sinfo.Utils;    use Sinfo.Utils;
 with Sinput;         use Sinput;
@@ -138,9 +136,6 @@ package body Sem_Ch7 is
    --  one entity on its visibility chain, and recurses on the visible part if
    --  the entity is an inner package.
 
-   function Is_Private_Base_Type (E : Entity_Id) return Boolean;
-   --  True for a private type that is not a subtype
-
    function Is_Visible_Dependent (Dep : Entity_Id) return Boolean;
    --  If the private dependent is a private type whose full view is derived
    --  from the parent type, its full properties are revealed only if we are in
@@ -206,7 +201,7 @@ package body Sem_Ch7 is
    function Node_Hash (Id : Entity_Id) return Entity_Header_Num;
    --  Simple hash function for Entity_Ids
 
-   package Subprogram_Table is new GNAT.Htable.Simple_HTable
+   package Subprogram_Table is new GNAT.HTable.Simple_HTable
      (Header_Num => Entity_Header_Num,
       Element    => Boolean,
       No_Element => False,
@@ -216,7 +211,7 @@ package body Sem_Ch7 is
    --  Hash table to record which subprograms are referenced. It is declared
    --  at library level to avoid elaborating it for every call to Analyze.
 
-   package Traversed_Table is new GNAT.Htable.Simple_HTable
+   package Traversed_Table is new GNAT.HTable.Simple_HTable
      (Header_Num => Entity_Header_Num,
       Element    => Boolean,
       No_Element => False,
@@ -702,7 +697,7 @@ package body Sem_Ch7 is
             if Is_Type (Id)
               and then (Is_Limited_Composite (Id)
                          or else Is_Private_Composite (Id))
-              and then No (Private_Component (Id))
+              and then No (Partially_Visible_Part (Id))
             then
                Set_Is_Limited_Composite (Id, False);
                Set_Is_Private_Composite (Id, False);
@@ -714,8 +709,7 @@ package body Sem_Ch7 is
 
       --  Local variables
 
-      Saved_GM   : constant Ghost_Mode_Type := Ghost_Mode;
-      Saved_IGR  : constant Node_Id         := Ignored_Ghost_Region;
+      Saved_Ghost_Config : constant Ghost_Config_Type := Ghost_Config;
       Saved_EA   : constant Boolean         := Expander_Active;
       Saved_ISMP : constant Boolean         :=
                      Ignore_SPARK_Mode_Pragmas_In_Instance;
@@ -836,7 +830,8 @@ package body Sem_Ch7 is
       --  user entities, as internally generated entities might still need
       --  to be expanded (e.g. those generated for types).
 
-      if Present (Ignored_Ghost_Region)
+      if not CodePeer_Mode
+        and then Present (Ghost_Config.Ignored_Ghost_Region)
         and then Comes_From_Source (Body_Id)
       then
          Expander_Active := False;
@@ -1089,14 +1084,6 @@ package body Sem_Ch7 is
             Set_Is_Immediately_Visible (E, False);
             Set_Is_Potentially_Use_Visible (E, False);
             Set_Is_Hidden (E);
-
-            --  Child units may appear on the entity list (e.g. if they appear
-            --  in the context of a subunit) but they are not body entities.
-
-            if not Is_Child_Unit (E) then
-               Set_Is_Package_Body_Entity (E);
-            end if;
-
             Next_Entity (E);
          end loop;
       end;
@@ -1149,12 +1136,14 @@ package body Sem_Ch7 is
          end if;
       end if;
 
-      if Present (Ignored_Ghost_Region) then
+      if not CodePeer_Mode and then
+        Present (Ghost_Config.Ignored_Ghost_Region)
+      then
          Expander_Active := Saved_EA;
       end if;
 
       Ignore_SPARK_Mode_Pragmas_In_Instance := Saved_ISMP;
-      Restore_Ghost_Region (Saved_GM, Saved_IGR);
+      Restore_Ghost_Region (Saved_Ghost_Config);
    end Analyze_Package_Body_Helper;
 
    ---------------------------------
@@ -1348,6 +1337,18 @@ package body Sem_Ch7 is
       --  primitive equality operator and, if so, make it so that it will be
       --  used as the predefined operator of the private view of the record.
 
+      procedure Inspect_Abstract_Constructors_Completion (Pkg_Id : Entity_Id);
+      --  For each abstract constructor in the visible part of package Id,
+      --  verify that a non-abstract counterpart exists in the private part
+      --  of the package, and emit an error for each that lacks one.
+
+      procedure Inspect_Components_Needing_Construction (Pkg_Id : Entity_Id);
+      --  For each record type declared in package Id that does not require
+      --  a constructor, report an error on components that have a type that
+      --  requires explicit constructor initialization (that is, a type that
+      --  needs construction which has no default parameterless constructor
+      --  and no default initialization expression).
+
       procedure Install_Parent_Private_Declarations (Inst_Id : Entity_Id);
       --  Given the package entity of a generic package instantiation or
       --  formal package whose corresponding generic is a child unit, installs
@@ -1459,6 +1460,96 @@ package body Sem_Ch7 is
             end if;
          end if;
       end Is_Public_Child;
+
+      ----------------------------------------------
+      -- Inspect_Abstract_Constructors_Completion --
+      ----------------------------------------------
+
+      procedure Inspect_Abstract_Constructors_Completion (Pkg_Id : Entity_Id)
+      is
+         First_Priv : constant Entity_Id := First_Private_Entity (Pkg_Id);
+         Vis_E      : Entity_Id          := First_Entity (Pkg_Id);
+
+      begin
+         while Present (Vis_E) and then Vis_E /= First_Priv loop
+            if Is_Constructor (Vis_E)
+              and then Is_Abstract_Subprogram (Vis_E)
+            then
+               declare
+                  Hom   : Entity_Id := Get_Name_Entity_Id (Chars (Vis_E));
+                  Found : Boolean   := False;
+
+               begin
+                  while Present (Hom)
+                    and then Scope (Hom) = Scope (Vis_E)
+                  loop
+                     if not Is_Abstract_Subprogram (Hom)
+                       and then Is_Constructor (Hom)
+                       and then Overridden_Operation (Hom) = Vis_E
+                     then
+                        Found := True;
+                        exit;
+                     end if;
+
+                     Hom := Homonym (Hom);
+                  end loop;
+
+                  if not Found then
+                     Error_Msg_N
+                       ("abstract constructor has no declaration in "
+                        & "the private part", Vis_E);
+                  end if;
+               end;
+            end if;
+
+            Next_Entity (Vis_E);
+         end loop;
+      end Inspect_Abstract_Constructors_Completion;
+
+      ---------------------------------------------
+      -- Inspect_Components_Needing_Construction --
+      ---------------------------------------------
+
+      procedure Inspect_Components_Needing_Construction (Pkg_Id : Entity_Id) is
+         Comp_Decl : Node_Id;
+         Comp_Id   : Entity_Id;
+         Comp_Typ  : Entity_Id;
+         E         : Entity_Id;
+
+      begin
+         E := First_Entity (Pkg_Id);
+
+         while Present (E) loop
+            if Is_Record_Type (E)
+              and then not Needs_Construction (E)
+              and then Comes_From_Source (E)
+              and then not Is_Class_Wide_Type (E)
+              and then Nkind (Parent (E)) = N_Full_Type_Declaration
+            then
+               Comp_Decl := First_Component_Declaration (E);
+
+               while Present (Comp_Decl) loop
+                  if Nkind (Comp_Decl) = N_Component_Declaration then
+                     Comp_Id  := Defining_Identifier (Comp_Decl);
+                     Comp_Typ := Etype (Comp_Id);
+
+                     if Needs_Construction (Comp_Typ)
+                       and then not Has_Parameterless_Constructor (Comp_Typ)
+                       and then No (Expression (Comp_Decl))
+                     then
+                        Error_Msg_NE
+                          ("& needs explicit constructor call",
+                           Comp_Id, Comp_Id);
+                     end if;
+                  end if;
+
+                  Next_Non_Pragma (Comp_Decl);
+               end loop;
+            end if;
+
+            Next_Entity (E);
+         end loop;
+      end Inspect_Components_Needing_Construction;
 
       ----------------------------------------
       -- Inspect_Unchecked_Union_Completion --
@@ -1902,6 +1993,14 @@ package body Sem_Ch7 is
          Set_First_Private_Entity (Id, Next_Entity (L));
       end if;
 
+      --  An abstract constructor declared in the visible part requires a
+      --  matching concrete constructor in the private part.
+
+      if Core_Extensions_Allowed then
+         Inspect_Abstract_Constructors_Completion (Id);
+         Inspect_Components_Needing_Construction (Id);
+      end if;
+
       E := First_Entity (Id);
       while Present (E) loop
 
@@ -2267,7 +2366,32 @@ package body Sem_Ch7 is
                         Next_Elmt (Op_Elmt_2);
                      end loop;
 
-                     --  Case 2: We have not found any explicit overriding and
+                     --  Case 2: For a formal type, we need to explicitly check
+                     --  whether a local subprogram hides from all visibility
+                     --  the implicitly declared primitive, because subprograms
+                     --  declared in a generic package specification are never
+                     --  primitive for a formal type, even if they happen to
+                     --  override an operation of the type (RM 3.2.3(7.d/2)).
+
+                     if Is_Generic_Type (E) then
+                        declare
+                           S : Entity_Id;
+
+                        begin
+                           S := E;
+                           while Present (S) loop
+                              if Chars (S) = Chars (Parent_Subp)
+                                and then Type_Conformant (Prim_Op, S)
+                              then
+                                 goto Next_Primitive;
+                              end if;
+
+                              Next_Entity (S);
+                           end loop;
+                        end;
+                     end if;
+
+                     --  Case 3: We have not found any explicit overriding and
                      --  hence we need to declare the operation (i.e., make it
                      --  visible).
 
@@ -2522,11 +2646,13 @@ package body Sem_Ch7 is
            and then Scope (Full_View (Id)) = Scope (Id)
            and then Ekind (Full_View (Id)) /= E_Incomplete_Type
          then
+            Full := Full_View (Id);
+
             --  If there is a use-type clause on the private type, set the full
             --  view accordingly.
 
-            Set_In_Use (Full_View (Id), In_Use (Id));
-            Full := Full_View (Id);
+            Set_In_Use (Full, In_Use (Id));
+            Set_Current_Use_Clause (Full, Current_Use_Clause (Id));
 
             if Is_Private_Base_Type (Full)
               and then Has_Private_Declaration (Full)
@@ -2693,7 +2819,7 @@ package body Sem_Ch7 is
    begin
       if not Has_Completion (E)
         and then Nkind (P) = N_Package_Declaration
-        and then (Present (Activation_Chain_Entity (P)) or else Has_RACW (E))
+        and then (Has_Activation_Chain_Entity (E) or else Has_RACW (E))
       then
          B :=
            Make_Package_Body (Sloc (E),
@@ -2758,9 +2884,6 @@ package body Sem_Ch7 is
       --  usage.
 
       Set_Is_Tagged_Type (Id, Tagged_Present (Def));
-
-      Set_Discriminant_Constraint (Id, No_Elist);
-      Set_Stored_Constraint (Id, No_Elist);
 
       if Present (Discriminant_Specifications (N)) then
          Push_Scope (Id);
@@ -2897,7 +3020,12 @@ package body Sem_Ch7 is
       --  When compiling a child unit this needs to be done recursively.
 
       function Type_In_Use (T : Entity_Id) return Boolean;
-      --  Check whether type or base type appear in an active use_type clause
+      --  Check whether type T is declared in P and appears in an active
+      --  use_type clause.
+
+      function Type_Of_Primitive_In_Use_All (Id : Entity_Id) return Boolean;
+      --  Check whether the profile of primitive subprogram Id mentions a type
+      --  declared in P that appears in an active use-all-type clause.
 
       ------------------------------
       -- Preserve_Full_Attributes --
@@ -3062,10 +3190,85 @@ package body Sem_Ch7 is
       -----------------
 
       function Type_In_Use (T : Entity_Id) return Boolean is
+         BT : constant Entity_Id := Base_Type (T);
       begin
-         return Scope (Base_Type (T)) = P
-           and then (In_Use (T) or else In_Use (Base_Type (T)));
+         return Scope (BT) = P and then (In_Use (T) or else In_Use (BT));
       end Type_In_Use;
+
+      ----------------------------------
+      -- Type_Of_Primitive_In_Use_All --
+      ----------------------------------
+
+      function Type_Of_Primitive_In_Use_All (Id : Entity_Id) return Boolean is
+         function Type_In_Use_All (T : Entity_Id) return Boolean;
+         --  Check whether type T is declared in P and appears in an active
+         --  use-all-type clause.
+
+         ---------------------
+         -- Type_In_Use_All --
+         ---------------------
+
+         function Type_In_Use_All (T : Entity_Id) return Boolean is
+         begin
+            return Type_In_Use (T)
+              and then Nkind (Current_Use_Clause (T)) = N_Use_Type_Clause
+              and then All_Present (Current_Use_Clause (T));
+         end Type_In_Use_All;
+
+         --  Local variables
+
+         F : Node_Id;
+
+      --  Start of processing for Type_Of_Primitive_In_Use_All
+
+      begin
+         --  The use-all-type clauses were introduced in Ada 2005
+
+         if Ada_Version <= Ada_95 then
+            return False;
+         end if;
+
+         --  For enumeration literals, check type
+
+         if Ekind (Id) = E_Enumeration_Literal then
+            return Type_In_Use_All (Etype (Id));
+         end if;
+
+         --  For functions, check return type
+
+         if Ekind (Id) = E_Function then
+            declare
+               Typ : constant Entity_Id :=
+                       (if Ekind (Etype (Id)) = E_Anonymous_Access_Type
+                        then Designated_Type (Etype (Id))
+                        else Etype (Id));
+            begin
+               if Type_In_Use_All (Typ) then
+                  return True;
+               end if;
+            end;
+         end if;
+
+         --  For all subprograms, check formals
+
+         F := First_Formal (Id);
+         while Present (F) loop
+            declare
+               Typ : constant Entity_Id :=
+                       (if Ekind (Etype (F)) = E_Anonymous_Access_Type
+                        then Designated_Type (Etype (F))
+                        else Etype (F));
+            begin
+               if Type_In_Use_All (Typ) then
+                  return True;
+               end if;
+            end;
+
+            Next_Formal (F);
+         end loop;
+
+         return False;
+      end Type_Of_Primitive_In_Use_All;
 
    --  Start of processing for Uninstall_Declarations
 
@@ -3090,8 +3293,7 @@ package body Sem_Ch7 is
          --  the instantiation of the formals appears in the visible part,
          --  but the formals are private and remain so.
 
-         if Ekind (Id) = E_Function
-           and then Is_Operator_Symbol_Name (Chars (Id))
+         if Nkind (Id) = N_Defining_Operator_Symbol
            and then not Is_Hidden (Id)
            and then not Error_Posted (Id)
          then
@@ -3124,13 +3326,13 @@ package body Sem_Ch7 is
             elsif No (Etype (Id)) and then Serious_Errors_Detected /= 0 then
                null;
 
-            --  We need to avoid incorrectly marking enumeration literals as
-            --  non-visible when a visible use-all-type clause is in effect.
+            --  RM 8.4(8.1/3): Each primitive subprogram of T, including each
+            --  enumeration literal (if any), is potentially use-visible if T
+            --  is named in an active use-all-type clause.
 
-            elsif Type_In_Use (Etype (Id))
-              and then Nkind (Current_Use_Clause (Etype (Id))) =
-                         N_Use_Type_Clause
-              and then All_Present (Current_Use_Clause (Etype (Id)))
+            elsif (Ekind (Id) = E_Enumeration_Literal
+                    or else (Is_Subprogram (Id) and then Is_Primitive (Id)))
+              and then Type_Of_Primitive_In_Use_All (Id)
             then
                null;
 

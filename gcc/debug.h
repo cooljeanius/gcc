@@ -1,5 +1,5 @@
 /* Debug hooks for GCC.
-   Copyright (C) 2001-2025 Free Software Foundation, Inc.
+   Copyright (C) 2001-2026 Free Software Foundation, Inc.
 
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
@@ -268,7 +268,7 @@ dump_go_spec_init (const char *, const struct gcc_debug_hooks *);
 typedef hash_map<const_tree, int> decl_to_instance_map_t;
 extern decl_to_instance_map_t *decl_to_instance_map;
 
-/* Allocate decl_to_instance_map with COUNT slots to begin wtih, if it
+/* Allocate decl_to_instance_map with COUNT slots to begin with, if it
  * hasn't been allocated yet.  */
 
 inline decl_to_instance_map_t *

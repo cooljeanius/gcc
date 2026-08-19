@@ -1,6 +1,6 @@
 // 2001-10-30 Benjamin Kosnik  <bkoz@redhat.com>
 
-// Copyright (C) 2001-2025 Free Software Foundation, Inc.
+// Copyright (C) 2001-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -19,11 +19,13 @@
 
 // 21.3.5 string modifiers
 
+#include <stdexcept>
 #include <string>
 #include <testsuite_hooks.h>
 
 // assign(const _CharT* __s, size_type __n)
 // assign(const _CharT* __s)
+// assign(const _CharT* __s, size_type __pos, size_type __n)
 void
 test03()
 {
@@ -47,6 +49,20 @@ test03()
 
   one.assign(one.c_str() + 8, 6);
   VERIFY( one == L"by the" );
+
+  one.assign(one.c_str(), 3, 3);
+  VERIFY( one == L"the" );
+
+  try {
+    one.assign(L"a\0b", 2, 1);
+    VERIFY( false );
+  }
+  catch(std::out_of_range& fail) {
+    VERIFY( true );
+  }
+  catch(...) {
+    VERIFY( false );
+  }
 }
 
 int main()

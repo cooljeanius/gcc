@@ -1,5 +1,5 @@
 ;; Predicate definitions for LoongArch target.
-;; Copyright (C) 2021-2025 Free Software Foundation, Inc.
+;; Copyright (C) 2021-2026 Free Software Foundation, Inc.
 ;; Contributed by Loongson Ltd.
 ;; Based on MIPS target for GNU compiler.
 ;;
@@ -134,6 +134,10 @@
 (define_predicate "const_imm5_operand"
   (and (match_code "const_int")
        (match_test "IN_RANGE (INTVAL (op), -16, 15)")))
+
+(define_predicate "const_uimm63_operand"
+  (and (match_code "const_int")
+       (match_test "IN_RANGE (INTVAL (op), 0, 63)")))
 
 (define_predicate "const_imm10_operand"
   (and (match_code "const_int")
@@ -291,7 +295,10 @@
 
 (define_predicate "low_bitmask_operand"
   (and (match_code "const_int")
-       (match_test "low_bitmask_len (mode, INTVAL (op)) > 12")))
+       (ior
+	 (match_test "low_bitmask_len (mode, INTVAL (op)) > 12")
+	 (match_test "op == CONSTM1_RTX (GET_MODE (op))"))
+       (match_test "!TARGET_32BIT_R")))
 
 (define_predicate "d_operand"
   (and (match_code "reg")
@@ -402,6 +409,7 @@
 
 (define_predicate "ins_zero_bitmask_operand"
   (and (match_code "const_int")
+       (match_test "!TARGET_32BIT_R")
        (match_test "low_bitmask_len (mode, \
 				     ~UINTVAL (op) | (~UINTVAL(op) - 1)) \
 		    > 0")
@@ -413,12 +421,17 @@
        (match_operand 0 "low_bitmask_operand")
        (match_operand 0 "ins_zero_bitmask_operand")))
 
+(define_predicate "mask_operand"
+  (ior (match_operand 0 "qi_mask_operand")
+       (match_operand 0 "hi_mask_operand")
+       (match_operand 0 "si_mask_operand")))
+
 (define_predicate "const_call_insn_operand"
   (match_code "const,symbol_ref,label_ref")
 {
   /* Split symbol to high and low if return false.
-     If defined TARGET_CMODEL_EXTREME, all symbol would be splited,
-     else if offset is not zero, the symbol would be splited.  */
+     If defined TARGET_CMODEL_EXTREME, all symbol would be split,
+     else if offset is not zero, the symbol would be split.  */
 
   enum loongarch_symbol_type symbol_type;
   loongarch_symbolic_constant_p (op, &symbol_type);
@@ -429,8 +442,12 @@
   if (offset != const0_rtx)
     return false;
 
+  /* TARGET_32BIT always support call30.  */
+  if (TARGET_32BIT)
+    return true;
+
   /* When compiling with '-mcmodel=medium -mexplicit-relocs'
-     symbols are splited in loongarch_legitimize_call_address.
+     symbols are split in loongarch_legitimize_call_address.
 
      When compiling with '-mcmodel=medium -mno-explicit-relocs',
      first obtain the symbolic address or the address of the
@@ -570,8 +587,8 @@
 
 (define_predicate "symbolic_pcrel_offset_operand"
   (and (match_code "plus")
-       (match_operand 0 "symbolic_pcrel_operand")
-       (match_operand 1 "const_int_operand")))
+       (match_test "symbolic_pcrel_operand (XEXP (op, 0), mode)")
+       (match_test "const_int_operand (XEXP (op, 1), mode)")))
 
 (define_predicate "mem_simple_ldst_operand"
   (match_code "mem")
@@ -592,6 +609,14 @@
 (define_predicate "symbolic_off64_or_reg_operand"
  (ior (match_operand 0 "register_operand")
       (match_operand 0 "symbolic_off64_operand")))
+
+;; Currently stack canary must be the global symbol __stack_chk_guard.
+(define_predicate "ssp_operand" (match_code "symbol_ref"))
+
+;; If the stack canary is within the normal/medium code model.
+(define_predicate "ssp_normal_operand"
+  (and (match_operand 0 "ssp_operand")
+       (not (match_operand 0 "symbolic_off64_operand"))))
 
 (define_predicate "equality_operator"
   (match_code "eq,ne"))
@@ -647,7 +672,19 @@
   return loongarch_const_vector_same_int_p (op, mode);
 })
 
-(define_predicate "par_const_vector_shf_set_operand"
+(define_predicate "const_vector_neg_fp_operand"
+  (match_code "const_vector")
+{
+  machine_mode imode = related_int_vector_mode (mode).require ();
+  rtx mask = loongarch_build_signbit_mask (imode, 1, 0);
+
+  op = gen_lowpart (imode, op);
+  return rtx_equal_p (mask,
+		      simplify_const_binary_operation (AND, imode, mask,
+						       op));
+})
+
+(define_special_predicate "par_const_vector_shf_set_operand"
   (match_code "parallel")
 {
   return loongarch_const_vector_shuffle_set_p (op, mode);
@@ -672,6 +709,10 @@
 (define_predicate "reg_or_vector_same_uimm_operand"
   (ior (match_operand 0 "register_operand")
        (match_operand 0 "const_vector_same_uimm_operand")))
+
+(define_predicate "reg_or_vector_neg_fp_operand"
+  (ior (match_operand 0 "register_operand")
+       (match_operand 0 "const_vector_neg_fp_operand")))
 
 ;; PARALLEL for a vec_select that selects all the even or all the odd
 ;; elements of a vector of MODE.
@@ -698,4 +739,20 @@
     }
 
   return true;
+})
+
+;; PARALLEL for a vec_select that selects the low half
+;; elements of a vector of MODE.
+(define_special_predicate "vect_par_cnst_low_half"
+  (match_code "parallel")
+{
+  return loongarch_check_vect_par_cnst_half (op, mode, false);
+})
+
+;; PARALLEL for a vec_select that selects the high half
+;; elements of a vector of MODE.
+(define_special_predicate "vect_par_cnst_high_half"
+  (match_code "parallel")
+{
+  return loongarch_check_vect_par_cnst_half (op, mode, true);;
 })

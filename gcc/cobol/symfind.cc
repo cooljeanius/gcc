@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2025 Symas Corporation
+ * Copyright (c) 2021-2026 Symas Corporation
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -45,10 +45,38 @@
 
 extern int yydebug;
 
+/*
+ * This silly function accepts __PRETTY_FUNCTION__ and trims the return type
+ * and parameter list from the name.  It's used only for debug messages.  It
+ * will not DTRT for conversion operators e.g. operator bool() or others with
+ * spaces in their names.
+ */
+struct funcname {
+  std::string output;
+  funcname( const char name[] ) { // cppcheck-suppress noExplicitConstructor
+    auto ename = name + strlen(name);
+    auto p = std::find(name, ename, ' ');
+    p = p == ename? name : p + 1;
+    auto pend = std::find(p, ename, '(');
+    std::reverse_iterator<const char *> rbeg(pend), rend(p);
+    // Find the last character that could not by part of the function name.
+    const std::string stop(" *&");
+    auto rp = std::find_if( rbeg, rend, 
+                            [stop]( char ch ) {
+                              return stop.find(ch) != std::string::npos;
+                            } );
+    if( rp != rend ) p = rp.base();
+
+    assert(p < pend && pend < ename);
+    output.assign(p, pend);
+  }
+};
+#define __funcsig__ funcname(__PRETTY_FUNCTION__).output.c_str()
+
 static bool
 is_data_field( symbol_elem_t& e ) {
   if( e.type != SymField ) return false;
-  auto f = cbl_field_of(&e);
+  const cbl_field_t *f = cbl_field_of(&e);
   if( f->name[0] == '\0' ) return false;
   if( is_filler(f) ) return false;
 
@@ -56,10 +84,10 @@ is_data_field( symbol_elem_t& e ) {
 }
 
 class sym_name_t {
-public: // TEMPORARY
-  const char *name;
-  size_t program, parent;
 public:
+  const char *name;
+  const size_t program, parent;
+
   explicit sym_name_t( const char name[] )
     : name(name), program(0), parent(0) { assert(name[0] == '\0'); }
   sym_name_t( size_t program, const char name[], size_t parent )
@@ -86,36 +114,114 @@ public:
 
 typedef std::map< sym_name_t, std::vector<size_t> > symbol_map_t;
 
-
 static symbol_map_t symbol_map;
 
 typedef std::map <field_key_t, std::list<size_t> > field_keymap_t;
 static field_keymap_t symbol_map2;
 
 /*
- * As each field is added to the symbol table, add its name and index
- * to the name map.  Initially the type is FldInvalid.  Those are
- * removed by symbols_update();
+ * symbol_file_names_t is a small "lookaside" map of FD name to the file's
+ * default buffer. It's a little bit too generous.  It works correctly for
+ * CALL, but because it's used by the parser's name: nonterminal, everything
+ * that wants a cbl_field_t gets it.  So MOVE would also work.
+ *
+ * To make it convenient for the parser to verify it's not relying on an FD
+ * name, the was_fd_name() function calls symbol_file_names_t::exists.
+ */
+static class symbol_file_names_t : protected symbol_map_t {
+  std::set<size_t> named_defaults;
+ public:
+  void add( const cbl_file_t& file ) {
+    auto program = symbol_elem_of(&file)->program;
+    std::vector<size_t> ids( 1, file.default_record );
+    sym_name_t key(program, file.name, 0);
+    (*this)[key] = ids;
+    // Keep track of symbols we added, so the parser can ask. 
+    auto f = cbl_field_of(symbol_at(ids.front()));
+    assert('_' == f->name[0]); // not a COBOL name
+    named_defaults.insert(ids.front());
+  }
+  symbol_map_t find( size_t program, const char name[] ) const {
+    symbol_map_t output;
+    std::copy_if( cbegin(), cend(),
+                  std::inserter(output, output.begin()), 
+                  [program, name]( const auto& elem ) {
+                    return match(program, name, elem);
+                  } );
+    
+    dbgmsg("%s:%d: found %lu #%lu for %s", __funcsig__, __LINE__,
+           (unsigned long)output.size(),
+           output.empty()? 0ul : (unsigned long)output.begin()->second.front(),
+           name);
+           
+    return output;
+  }
+  bool exists( const cbl_field_t * field ) const {
+    auto isym = symbol_index(symbol_elem_of(field));
+    return 1 == named_defaults.count(isym);
+  }
+ protected:
+  static bool match( size_t program, const char *name, const_reference elem ) {
+    const sym_name_t& key = elem.first;
+    return key.program == program
+      &&   0 == strcasecmp(key.name, name);
+  }
+} symbol_file_names;
+
+/*
+ * As each field is added to the symbol table, add its name and index to the
+ * name map.  Initially the type is FldInvalid.  Those are removed by
+ * symbols_update().  Typedefs are excluded; they do not represent data items.
  */
 void
 update_symbol_map2( const symbol_elem_t *e ) {
   auto field = cbl_field_of(e);
 
-  if( ! field->is_typedef() ) {
-    switch( field->type ) {
-    case FldForward:
-    case FldLiteralN:
-      return;
-    case FldLiteralA:
-      if( ! field->is_key_name() ) return;
-      break;
-    default:
-      break;
-    }
+  if( field->is_typedef() ) return;
+
+  switch( field->type ) {
+  case FldForward:
+  case FldLiteralN:
+    return;
+  case FldLiteralA:
+    if( ! field->is_key_name() ) return;
+    break;
+  default:
+    break;
   }
 
   field_key_t fk( e->program, field );
   symbol_map2[fk].push_back(symbol_index(e));
+}
+
+void
+update_symbol_map2( const cbl_file_t& file ) {
+  assert(file.default_record);
+  auto e = symbol_elem_of(&file);
+
+  symbol_file_names.add(file);
+
+  sym_name_t key( e->program, file.name, 0 );
+  auto m = symbol_file_names.find(e->program, file.name);
+  dbgmsg("%s:%d: %s => %lu (last of %lu)", __func__, __LINE__,
+         key.name, m[key].back(), m[key].size() );
+}
+
+/*
+ * The field may have been accepted as an FD NAME, representing the file's
+ * buffer.  That is valid for a CALL parameter, for example, but not otherwise,
+ * as in MOVE.
+ *
+ * When parsing a name nonterminal, we smuggle in the file's default buffer if
+ * an FD name is referenced (and unique).  The function below exists to check
+ * against that possibility in cases where it's not allowed.
+ */
+bool
+was_fd_name( const cbl_field_t * field ) {
+  if( current_program_index() < field->our_index ) {
+    return symbol_file_names.exists(field);
+  }
+  return false;
 }
 
 /*
@@ -128,11 +234,10 @@ finalize_symbol_map2() {
 
   for( auto& elem : symbol_map2 ) {
     auto& fields( elem.second );
-    std::remove_if( fields.begin(), fields.end(),
-                  []( auto isym ) {
-                    auto f = cbl_field_of(symbol_at(isym));
-                    return f->type == FldInvalid;
-                  } );
+    fields.remove_if( []( auto isym ) {
+			const cbl_field_t *f = cbl_field_of(symbol_at(isym));
+			return f->type == FldInvalid;
+		      } );
     if( fields.empty() ) empties.insert(elem.first);
   }
 
@@ -148,13 +253,14 @@ dump_symbol_map2( const field_key_t& key, const std::list<size_t>& candidates ) 
 
   for( auto candidate : candidates ) {
     char *tmp = fields;
-    fields = xasprintf("%s%s %3zu", tmp? tmp : "", sep, candidate);
+    fields = xasprintf("%s%s %3" GCC_PRISZ "u",
+                       tmp? tmp : "", sep, (fmt_size_t)candidate);
     sep[0] = ',';
     free(tmp);
   }
 
-  dbgmsg( "%s:%d: %3zu %s {%s}", __func__, __LINE__,
-          key.program, key.name, fields );
+  dbgmsg( "%s:%d: %3" GCC_PRISZ "u %s {%s}", __func__, __LINE__,
+          (fmt_size_t)key.program, key.name, fields );
   free(fields);
 }
 
@@ -180,7 +286,8 @@ dump_symbol_map_value( const char name[], const symbol_map_t::value_type& value 
 
   for( ; p != value.second.end(); p++ ) {
     char *tmp = ancestry;
-    ancestry = xasprintf("%s%s %3zu", tmp? tmp : "", sep, *p);
+    ancestry = xasprintf("%s%s %3" GCC_PRISZ "u",
+                         tmp? tmp : "", sep, (fmt_size_t)*p);
     sep[0] = ',';
     free(tmp);
   }
@@ -201,15 +308,10 @@ field_structure( symbol_elem_t& sym ) {
   static const symbol_map_t::value_type
     none( symbol_map_t::key_type( 0, "", 0 ), std::vector<size_t>() );
 
-  if( getenv(__func__) && sym.type == SymField ) {
-    const auto& field = *cbl_field_of(&sym);
-    dbgmsg("%s: #%zu %s: '%s' is_data_field: %s", __func__,
-          symbol_index(&sym), cbl_field_type_str(field.type), field.name,
-          is_data_field(sym)? "yes" : "no" );
-  }
   if( !is_data_field(sym) ) return none;
 
   cbl_field_t *field = cbl_field_of(&sym);
+  assert(field->type != FldForward); // eliminated by is_data_field
 
   symbol_map_t::key_type key( sym.program, field->name, field->parent );
   symbol_map_t::value_type elem( key, std::vector<size_t>() );
@@ -234,23 +336,7 @@ field_structure( symbol_elem_t& sym ) {
     }
   }
 
-  if( getenv(__func__) && yydebug ) {
-    dbgmsg( "%s:%d: '%s' has %zu ancestors", __func__, __LINE__,
-           elem.first.c_str(), elem.second.size() );
-    dump_symbol_map_value(__func__, elem);
-  }
-
   return elem;
-}
-
-void erase_symbol_map_fwds( size_t beg ) {
-  for( auto p = symbols_begin(beg); p < symbols_end(); p++ ) {
-    if( p->type != SymField ) continue;
-    const auto& field(*cbl_field_of(p));
-    if( field.type == FldForward ) {
-      symbol_map.erase( sym_name_t(p->program, field.name, field.parent) );
-    }
-  }
 }
 
 void
@@ -269,14 +355,11 @@ build_symbol_map() {
   symbol_map.erase(sym_name_t(""));
 
   if( yydebug ) {
-    dbgmsg( "%s:%d: %zu of %zu symbols inserted into %zu in symbol_map",
-           __func__, __LINE__, nsym, end, symbol_map.size() );
-
-    if( getenv(__func__) ) {
-      for( const auto& elem : symbol_map ) {
-        dump_symbol_map_value1(elem);
-      }
-    }
+    dbgmsg( "%s:%d: " HOST_SIZE_T_PRINT_UNSIGNED " of "
+            HOST_SIZE_T_PRINT_UNSIGNED " symbols inserted into "
+            HOST_SIZE_T_PRINT_UNSIGNED " in symbol_map",
+            __func__, __LINE__, (fmt_size_t)nsym, (fmt_size_t)end,
+            (fmt_size_t)symbol_map.size() );
   }
 }
 
@@ -289,18 +372,15 @@ update_symbol_map( symbol_elem_t *e ) {
 class is_name {
   const char *name;
 public:
-  is_name( const char *name ) : name(name) {}
-  bool operator()( symbol_map_t::value_type& elem ) {
+  explicit is_name( const char *name ) : name(name) {}
+  bool operator()( const symbol_map_t::value_type& elem ) {
     const bool tf = elem.first == name;
-    if( tf && getenv("is_name") ) {
-      dump_key( "matched", elem.first );
-    }
     return tf;
   }
   protected:
     void dump_key( const char tag[], const symbol_map_t::key_type& key ) const {
-      dbgmsg( "symbol_map key: %s { %3zu %3zu %s }",
-             tag, key.program, key.parent, key.name );
+      dbgmsg( "symbol_map key: %s { %3" GCC_PRISZ "u %3" GCC_PRISZ "u %s }",
+             tag, (fmt_size_t)key.program, (fmt_size_t)key.parent, key.name );
   }
 };
 
@@ -315,7 +395,7 @@ class reduce_ancestry {
   static symbol_map_t::mapped_type
     candidates_only( const symbol_map_t::value_type& elem ) { return elem.second; }
 public:
-  reduce_ancestry( const symbol_map_t& groups )
+  explicit reduce_ancestry( const symbol_map_t& groups )
     : candidates( groups.size() )
     {
       std::transform( groups.begin(), groups.end(), candidates.begin(),
@@ -333,9 +413,9 @@ public:
       if( p != item.second.end() ) {
         // Preserve symbol's index at front of ancestor list.
         symbol_map_t::mapped_type shorter(1 + ancestors->size());
-        auto p = shorter.begin();
-        *p = item.second.front();
-        shorter.insert( ++p, ancestors->begin(), ancestors->end() );
+        auto p_l = shorter.begin();
+        *p_l = item.second.front();
+        shorter.insert( ++p_l, ancestors->begin(), ancestors->end() );
         return make_pair(item.first, shorter);
       }
     }
@@ -348,7 +428,7 @@ public:
 class different_program {
   size_t program;
 public:
-  different_program( size_t program ) : program(program) {}
+  explicit different_program( size_t program ) : program(program) {}
   bool operator()( const symbol_map_t::value_type& item ) const {
     return ! item.first.same_program(program);
   }
@@ -358,16 +438,16 @@ class in_scope {
   size_t program;
 
   static size_t prog_of( size_t program ) {
-    auto L = cbl_label_of(symbol_at(program));
+    const cbl_label_t *L = cbl_label_of(symbol_at(program));
     return L->parent;
   }
 
 public:
-  in_scope( size_t program ) : program(program) {}
+  explicit in_scope( size_t program ) : program(program) {}
 
   // A symbol is in scope if it's defined by this program or by an ancestor.
   bool operator()( const symbol_map_t::value_type& item ) const {
-    symbol_elem_t *e = symbol_at(item.second.front());
+    const symbol_elem_t *e = symbol_at(item.second.front());
     for( size_t prog = this->program; prog != 0; prog = prog_of(prog) ) {
       if( e->program == prog ) return true;
     }
@@ -438,7 +518,7 @@ size_t end_of_group( size_t igroup );
 
 static std::vector<size_t>
 symbol_match2( size_t program,
-               std::list<const char *> names, bool local = true )
+               const std::list<const char *>& names, bool local = true )
 {
   std::vector<size_t> fields;
 
@@ -447,7 +527,7 @@ symbol_match2( size_t program,
   auto plist = symbol_map2.find(key);
   if( plist != symbol_map2.end() ) {
     for( auto candidate : plist->second ) {
-      auto e = symbol_at(candidate);
+      const symbol_elem_t *e = symbol_at(candidate);
       if( name_has_names( e, names, local ) ) {
         fields.push_back( symbol_index(e) );
       }
@@ -481,14 +561,16 @@ symbol_match2( size_t program,
       sep = "";
       for( auto field : fields ) {
         char *partial = fieldstr;
-        int asret = asprintf(&fieldstr, "%s%s%zu", partial? partial : "", sep, field);
+        int asret = asprintf(&fieldstr, "%s%s" HOST_SIZE_T_PRINT_UNSIGNED,
+                             partial? partial : "", sep, (fmt_size_t)field);
         assert(asret);
         sep = ", ";
         assert(fieldstr);
         free(partial);
       }
 
-      dbgmsg("%s: '%s' matches %zu fields: {%s}", __func__, ancestry, fields.size(), fieldstr);
+      dbgmsg("%s: '%s' matches " HOST_SIZE_T_PRINT_UNSIGNED " fields: {%s}",
+             __func__, ancestry, (fmt_size_t)fields.size(), fieldstr);
       free(fieldstr);
     }
     free(ancestry);
@@ -503,7 +585,7 @@ symbol_match2( size_t program,
  * N-1.
  */
 static symbol_map_t
-symbol_match( size_t program, std::list<const char *> names ) {
+symbol_match( size_t program, const std::list<const char *>& names ) {
   auto matched = symbol_match2( program, names );
   symbol_map_t output;
 
@@ -519,7 +601,7 @@ symbol_match( size_t program, std::list<const char *> names ) {
     }
     auto inserted = output.insert(*p);
     if( ! inserted.second ) {
-      yyerror("%s is not a unique reference", key.name);
+      error_msg_direct("%s is not a unique reference", key.name);
     }
   }
   return output;
@@ -547,20 +629,25 @@ symbol_find( size_t program, std::list<const char *> names ) {
                   std::inserter(qualified, qualified.begin()),
                   [i01]( auto item ) {
                     const std::vector<size_t>& ancestors(item.second);
+                    assert(!ancestors.empty());
                     return ancestors.back() == i01;
                   } );
     items = qualified;
   }
 
+  if( items.empty() && names.size() == 1 ) {
+    items = symbol_file_names.find(program, names.front());
+  }
+
   auto unique = items.size() == 1;
 
-  if( !unique ) {
+  if( ! unique ) {
     if( items.empty() ) {
       return std::pair<symbol_elem_t *, bool>(NULL, false);
     }
     if( yydebug ) {
-      dbgmsg( "%s:%d: '%s' has %zu possible matches",
-             __func__, __LINE__, names.back(), items.size() );
+      dbgmsg( "%s:%d: '%s' has " HOST_SIZE_T_PRINT_UNSIGNED " possible matches",
+              __func__, __LINE__, names.back(), (fmt_size_t)items.size() );
       std::for_each( items.begin(), items.end(), dump_symbol_map_value1 );
     }
   }
@@ -576,7 +663,7 @@ symbol_find( size_t program, std::list<const char *> names ) {
 class in_group {
   size_t group;
 public:
-  in_group( size_t group ) : group(group) {}
+  explicit in_group( size_t group ) : group(group) {}
 
   bool operator()( symbol_map_t::const_reference elem ) const {
     return 0 < std::count( elem.second.begin(),
@@ -587,12 +674,6 @@ public:
 symbol_elem_t *
 symbol_find_of( size_t program, std::list<const char *> names, size_t group ) {
   symbol_map_t input = symbol_match(program, names);
-
-  if( getenv(__func__) && input.size() != 1 ) {
-    dbgmsg( "%s:%d: '%s' has %zu candidates for group %zu",
-           __func__, __LINE__, names.back(), input.size(), group );
-    std::for_each( input.begin(), input.end(), dump_symbol_map_value1 );
-  }
 
   symbol_map_t items;
   std::copy_if( input.begin(), input.end(),
@@ -605,8 +686,8 @@ symbol_find_of( size_t program, std::list<const char *> names, size_t group ) {
   }
 
   if( yydebug ) {
-    dbgmsg( "%s:%d: '%s' has %zu possible matches",
-           __func__, __LINE__, names.back(), input.size() );
+    dbgmsg( "%s:%d: '%s' has " HOST_SIZE_T_PRINT_UNSIGNED " possible matches",
+           __func__, __LINE__, names.back(), (fmt_size_t)input.size() );
     std::for_each( input.begin(), input.end(), dump_symbol_map_value1 );
   }
 

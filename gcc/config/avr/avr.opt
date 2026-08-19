@@ -1,6 +1,6 @@
 ; Options for AVR 8-bit microcontrollers.
 
-; Copyright (C) 2005-2025 Free Software Foundation, Inc.
+; Copyright (C) 2005-2026 Free Software Foundation, Inc.
 ;
 ; This file is part of GCC.
 ;
@@ -17,10 +17,6 @@
 ; You should have received a copy of the GNU General Public License
 ; along with GCC; see the file COPYING3.  If not see
 ; <http://www.gnu.org/licenses/>.
-
-mlra
-Target Var(avropt_lra_p) UInteger Init(0) Optimization Undocumented
-Usa LRA for reload instead of the old reload framework.  This option is experimental, and it may be removed in future versions of the compiler.
 
 mcall-prologues
 Target Mask(CALL_PROLOGUES) Optimization
@@ -119,6 +115,10 @@ msplit-ldst
 Target Var(avropt_split_ldst) Init(0) Optimization
 Optimization. Split most of the load and store instructions into byte load and stores.
 
+mstrict-addr-space-subsets
+Target Var(avropt_strict_addr_space_subsets) Init(0)
+Implement strict named address space subset relations.
+
 mstrict-X
 Target Var(avropt_strict_X) Init(0) Optimization
 Optimization. When accessing RAM, use X as imposed by the hardware, i.e. just use pre-decrement, post-increment and indirect addressing with the X register.  Without this option, the compiler may assume that there is an addressing mode X+const similar to Y+const and Z+const and emit instructions to emulate such an addressing mode for X.
@@ -144,6 +144,14 @@ mfuse-add=
 Target Joined RejectNegative UInteger Var(avropt_fuse_add) Init(0) Optimization IntegerRange(0, 3)
 -mfuse-add=<0,2>	Optimization. Split register additions from load/store instructions. Most useful on Reduced Tiny.
 
+masm-len-notes
+Target Var(avropt_asmlen_notes) Init(1) Save
+Recognize [[len=<spec>]] notes to specify the size of inline asm constructs. Enabled by default.
+
+Wasm-len-notes
+Warning C C++ Var(avropt_warn_asmlen_notes) Init(1) Save
+Warn about unrecognized [[len=<spec>]] notes in inline asm constructs. Enabled by default.
+
 Waddr-space-convert
 Warning C Var(avropt_warn_addr_space_convert) Init(0)
 Warn if the address space of an address is changed.
@@ -163,6 +171,10 @@ Optimization. Run a post-reload pass that tweaks move instructions.
 mfuse-move=
 Target Joined RejectNegative UInteger Var(avropt_fuse_move) Init(0) Optimization IntegerRange(0, 23)
 -mfuse-move=<0,23>	Optimization. Run a post-reload pass that tweaks move instructions.
+
+mfuse-move2
+Target Var(avropt_fuse_move2) Init(0) Optimization
+Optimization. Fuse some move insns after insn combine.
 
 mabsdata
 Target Mask(ABSDATA)

@@ -26,7 +26,7 @@ std::map<std::string_view, std::string_view>  headers;
 
 void init_map()
 {
-    // Enter the glamourous world of data entry!!  Maintain these!
+    // Enter the glamorous world of data entry!!  Maintain these!
     // Because the map_header function removes common prefixes and suffixes,
     // a header "bits/st[dl]_foo.h" will automatically map to "foo" if that
     // is a standard header, so we don't need to list those cases here.
@@ -54,7 +54,9 @@ void init_map()
     headers["function.h"]               = "functional";
     headers["functional_hash.h"]        = "functional";
     headers["mofunc_impl.h"]            = "functional";
-    headers["move_only_function.h"]     = "functional";
+    headers["cpyfunc_impl.h"]           = "functional";
+    headers["funcref_impl.h"]           = "functional";
+    headers["funcwrap.h"]               = "functional";
     headers["invoke.h"]                 = "functional";
     headers["ranges_cmp.h"]             = "functional";
     headers["refwrap.h"]                = "functional";
@@ -104,6 +106,7 @@ void init_map()
     headers["uses_allocator.h"]         = "memory";
     headers["uses_allocator_args.h"]    = "memory";
     headers["out_ptr.h"]                = "memory";
+    headers["indirect.h"]               = "memory";
     headers["memory_resource.h"]        = "memory_resource";
     headers["unique_lock.h"]            = "mutex";
     headers["sat_arith.h"]              = "numeric";

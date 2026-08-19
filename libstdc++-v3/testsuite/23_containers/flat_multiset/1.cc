@@ -8,6 +8,7 @@
 #include <testsuite_hooks.h>
 
 template<template<class> class Sequence>
+constexpr
 void
 test01()
 {
@@ -42,6 +43,7 @@ test01()
   VERIFY( m.size() == 5 );
 }
 
+constexpr
 void
 test02()
 {
@@ -67,6 +69,7 @@ test02()
   VERIFY( m.count(3) == 2 );
 }
 
+constexpr
 void
 test03()
 {
@@ -95,6 +98,7 @@ test03()
   VERIFY( std::ranges::equal(m, (int[]){5}) );
 }
 
+constexpr
 void
 test04()
 {
@@ -121,6 +125,7 @@ test04()
   VERIFY( std::move(m5).extract().get_allocator().get_personality() == 44 );
 }
 
+constexpr
 void
 test05()
 {
@@ -129,6 +134,7 @@ test05()
   VERIFY( std::ranges::equal(m, (int[]){1, 2, 3, 3, 4, 5}) );
 }
 
+constexpr
 void
 test06()
 {
@@ -152,25 +158,215 @@ struct NoInsertRange : std::vector<T>
   void insert_range(typename std::vector<T>::const_iterator, R&&) = delete;
 };
 
-void test07()
+struct NoCatIterator {
+  using difference_type = int;
+  using value_type = int;
+
+  constexpr NoCatIterator() : v(0) {}
+  constexpr NoCatIterator(int x) : v(x) {}
+
+  constexpr int operator*() const
+  { return v; }
+
+  constexpr NoCatIterator& operator++()
+  {
+    ++v;
+    return *this;
+  }
+
+  constexpr NoCatIterator operator++(int)
+  {
+    ++v;
+    return NoCatIterator(v-1);
+  }
+
+  constexpr bool operator==(const NoCatIterator& rhs) const
+  { return v == rhs.v; }
+
+private:
+  int v;
+};
+
+template<>
+struct std::iterator_traits<NoCatIterator> {
+  using difference_type = int;
+  using value_type = int;
+  using iterator_concept = std::input_iterator_tag;
+  // no iterator_category, happens also for common_iterator
+};
+
+constexpr
+void
+test07()
 {
+  std::flat_multiset<int> s;
+  std::flat_multiset<int, std::less<int>, NoInsertRange<int>> s2;
+
+  auto r = std::ranges::subrange<NoCatIterator>(1, 6);
+  s.insert_range(r);
+  VERIFY( std::ranges::equal(s, (int[]){1, 2, 3, 4, 5}) );
+  s2.insert_range(r);
+  VERIFY( std::ranges::equal(s2, (int[]){1, 2, 3, 4, 5}) );
+
 #ifdef __SIZEOF_INT128__
   // PR libstdc++/119415 - flat_foo::insert_range cannot handle common ranges
   // on c++20 only iterators
-  auto r = std::views::iota(__int128(1), __int128(6));
-
-  std::flat_multiset<int> s;
-  s.insert_range(r);
+  auto r2 = std::views::iota(__int128(1), __int128(6));
+  s.clear();
+  s.insert_range(r2);
   VERIFY( std::ranges::equal(s, (int[]){1, 2, 3, 4, 5}) );
 
-  std::flat_multiset<int, std::less<int>, NoInsertRange<int>> s2;
-  s2.insert_range(r);
+  s2.clear();
+  s2.insert_range(r2);
   VERIFY( std::ranges::equal(s2, (int[]){1, 2, 3, 4, 5}) );
 #endif
 }
 
-int
-main()
+constexpr
+void
+test08()
+{
+  // PR libstdc++/119620 -- flat_set::emplace always constructs element on the stack
+  int copy_counter = 0;
+
+  struct A {
+    int *counter;
+    constexpr A(int &c) : counter(&c) {}
+
+    constexpr A(const A &other) : counter(other.counter) { ++(*counter); }
+
+    constexpr A &operator=(const A &other) {
+      counter = other.counter;
+      ++(*counter);
+      return *this;
+    }
+
+    constexpr auto operator<=>(const A &) const = default;
+  };
+
+  std::vector<A> v;
+  v.reserve(2);
+  std::flat_multiset<A> s(std::move(v));
+  A a(copy_counter);
+  s.emplace(a);
+  VERIFY( copy_counter == 1 );
+  s.emplace(a);
+  VERIFY( copy_counter == 2 );
+}
+
+constexpr
+void
+test09()
+{
+  // PR libstdc++/119427 - std::erase_if(std::flat_foo) does not work
+  std::flat_multiset<int> s = {1,1,2,2,3,4,5};
+  auto n = std::erase_if(s, [](int x) { return x % 2 != 0; });
+  VERIFY( n == 4 );
+  VERIFY( std::ranges::equal(s, (int[]){2,2,4}) );
+}
+
+template<typename T>
+struct throwing_vector : std::vector<T>
+{
+  static inline bool throw_on_move = false;
+
+  throwing_vector() = default;
+  throwing_vector(const throwing_vector&) = default;
+  throwing_vector& operator=(const throwing_vector&) = default;
+
+  throwing_vector(throwing_vector&& other)
+  : std::vector<T>(std::move(other))
+  {
+    if (throw_on_move)
+      throw std::runtime_error("move ctor");
+  }
+
+  throwing_vector&
+  operator=(throwing_vector&& other)
+  {
+    static_cast<std::vector<T>&>(*this) = std::move(other);
+    if (throw_on_move)
+      throw std::runtime_error("move assign");
+    return *this;
+  }
+
+  using std::vector<int>::operator=;
+};
+
+void
+test10()
+{
+#if __cpp_exceptions
+  using flat_multiset = std::flat_multiset<int, std::less<int>, throwing_vector<int>>;
+
+  throwing_vector<int>::throw_on_move = true;
+
+  // Verify invariant preservation upon throwing move construction.
+  flat_multiset source = {1, 2};
+  try
+    {
+      flat_multiset target(std::move(source));
+      VERIFY( false );
+    }
+  catch (const std::runtime_error&)
+    {
+      VERIFY( source.empty() );
+    }
+
+  // Verify invariant preservation upon throwing move assignment.
+  source = {1, 2};
+  flat_multiset target = {3, 4};
+  try
+    {
+      target = std::move(source);
+      VERIFY( false );
+    }
+  catch (const std::runtime_error&)
+    {
+      VERIFY( source.empty() );
+      VERIFY( target.empty() );
+    }
+
+  // Verify invariant preservation upon throwing swap.
+  source = {1, 2};
+  target = {3, 4};
+  try
+    {
+      source.swap(target);
+      VERIFY( false );
+    }
+  catch (const std::runtime_error&)
+    {
+      VERIFY( source.empty() );
+      VERIFY( target.empty() );
+    }
+#endif
+}
+
+constexpr
+void
+test11()
+{
+  // Verify usability of flat_multiset::insert_range(sorted_equivalent_t, Rg&&).
+  std::flat_multiset<int> m = {2};
+  int s[] = {1, 3};
+  m.insert_range(std::sorted_equivalent, s);
+  VERIFY( std::ranges::equal(m, (int[]){1, 2, 3}) );
+}
+
+void
+test12()
+{
+  // Verify usability of flat_multiset::operator=(initializer_list).
+  throwing_vector<int>::throw_on_move = true;
+  std::flat_multiset<int, std::less<int>, throwing_vector<int>> s;
+  std::initializer_list<int> il = {2, 3, 1};
+  s = il;
+  VERIFY( std::ranges::equal(s, (int[]){1, 2, 3}) );
+}
+
+void
+test()
 {
   test01<std::vector>();
   test01<std::deque>();
@@ -180,4 +376,39 @@ main()
   test05();
   test06();
   test07();
+  test08();
+  test09();
+  test10();
+  test11();
+  test12();
+}
+
+constexpr
+bool
+test_constexpr()
+{
+  test01<std::vector>();
+  test02();
+  test03();
+  test04();
+  test06();
+  test07();
+  test08();
+  test09();
+  // test10() is non-constexpr
+  test11();
+  // test12() is non-constexpr
+  return true;
+}
+
+int
+main()
+{
+  test();
+#if __cplusplus > 202302L
+  static_assert(test_constexpr());
+#if __cpp_lib_constexpr_flat_set != 202502L
+#error "Feature-test macro __cpp_lib_constexpr_flat_set has wrong value in <flat_set>"
+#endif
+#endif
 }

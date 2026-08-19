@@ -1,5 +1,5 @@
 /* Liveness for SSA trees.
-   Copyright (C) 2003-2025 Free Software Foundation, Inc.
+   Copyright (C) 2003-2026 Free Software Foundation, Inc.
    Contributed by Andrew MacLeod <amacleod@redhat.com>
 
 This file is part of GCC.
@@ -446,8 +446,8 @@ remove_unused_scope_block_p (tree scope, bool in_ctor_dtor_block)
       next = &DECL_CHAIN (*t);
 
       /* Debug info of nested function refers to the block of the
-	 function.  We might stil call it even if all statements
-	 of function it was nested into was elliminated.
+	 function.  We might still call it even if all statements
+	 of function it was nested into was eliminated.
 
 	 TODO: We can actually look into cgraph to see if function
 	 will be output to file.  */
@@ -582,7 +582,7 @@ remove_unused_scope_block_p (tree scope, bool in_ctor_dtor_block)
    else if (inlined_function_outer_scope_p (scope))
      unused = false;
    else
-   /* Verfify that only blocks with source location set
+   /* Verify that only blocks with source location set
       are entry points to the inlined functions.  */
      gcc_assert (LOCATION_LOCUS (BLOCK_SOURCE_LOCATION (scope))
 		 == UNKNOWN_LOCATION);
@@ -702,7 +702,10 @@ dump_scope_block (FILE *file, int indent, tree scope, dump_flags_t flags)
   if (LOCATION_LOCUS (BLOCK_SOURCE_LOCATION (scope)) != UNKNOWN_LOCATION)
     {
       expanded_location s = expand_location (BLOCK_SOURCE_LOCATION (scope));
-      fprintf (file, " %s:%i", s.file, s.line);
+      fprintf (file, " %s:%i:%i", s.file, s.line, s.column);
+      if (has_discriminator (BLOCK_SOURCE_LOCATION (scope)))
+	fprintf (file, " discrim %i",
+		 get_discriminator_from_loc (BLOCK_SOURCE_LOCATION (scope)));
     }
   if (BLOCK_ABSTRACT_ORIGIN (scope))
     {
@@ -923,7 +926,12 @@ remove_unused_locals (void)
 	      {
 		tree lhs = gimple_call_lhs (stmt);
 		tree base = get_base_address (lhs);
-		if (DECL_P (base) && !is_used_p (base))
+		if ((DECL_P (base) && !is_used_p (base))
+		    || (TREE_CODE (lhs) == MEM_REF
+			&& TREE_CODE (TREE_OPERAND (lhs, 0)) == SSA_NAME
+			&& SSA_NAME_IS_DEFAULT_DEF (TREE_OPERAND (lhs, 0))
+			&& (TREE_CODE (SSA_NAME_VAR (TREE_OPERAND (lhs, 0)))
+			    != PARM_DECL)))
 		  {
 		    unlink_stmt_vdef (stmt);
 		    gsi_remove (&gsi, true);

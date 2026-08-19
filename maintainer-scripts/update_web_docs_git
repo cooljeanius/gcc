@@ -32,6 +32,9 @@ fi
 MANUALS="cpp
   cppinternals
   fastjar
+  ga68
+  ga68-coding-guidelines
+  ga68-internals
   gcc
   gccgo
   gccint
@@ -205,11 +208,12 @@ done
 #
 # The COBOL FE maintains man pages.  Convert them to HTML and PDF.
 #
-mdoc2pdf_html() {
+cobol_mdoc2pdf_html() {
+    mkdir -p $DOCSDIR/gcobol gcobol
     input="$1"
     d="${input%/*}"
-    pdf="$d/$2"
-    html="$d/$3"
+    pdf="$2"
+    html="gcobol/$3"
     groff -mdoc -T pdf "$input" > "${pdf}~"
     mv "${pdf}~" "${pdf}"
     mandoc -T html "$filename" > "${html}~"
@@ -221,10 +225,10 @@ find . -name gcobol.[13] |
     do
         case ${filename##*.} in
             1)
-                mdoc2pdf_html "$filename" gcobol.pdf gcobol.html
+                cobol_mdoc2pdf_html "$filename" gcobol.pdf gcobol.html
                 ;;
             3)
-                mdoc2pdf_html "$filename" gcobol_io.pdf gcobol_io.html
+                cobol_mdoc2pdf_html "$filename" gcobol_io.pdf gcobol_io.html
                 ;;
         esac
     done
@@ -241,11 +245,15 @@ popd
 cp -a gcc/gcc/jit/docs/_build/html jit
 mkdir -p $DOCSDIR/jit
 
-pushd gcc/gcc/doc/libgdiagnostics
-make html SPHINXBUILD=$SPHINX_VENV/bin/sphinx-build || true
-popd
-cp -a gcc/gcc/doc/libgdiagnostics/_build/html libgdiagnostics
-mkdir -p $DOCSDIR/libgdiagnostics
+LIBGDIAGNOSTICS=
+if test -d gcc/gcc/doc/libgdiagnostics; then
+  pushd gcc/gcc/doc/libgdiagnostics
+  make html SPHINXBUILD=$SPHINX_VENV/bin/sphinx-build || true
+  popd
+  cp -a gcc/gcc/doc/libgdiagnostics/_build/html libgdiagnostics
+  mkdir -p $DOCSDIR/libgdiagnostics
+  LIBGDIAGNOSTICS=libgdiagnostics
+fi
 
 # Work around makeinfo generated file names and references with
 # "_002d" instead of "-".
@@ -297,11 +305,19 @@ done
 # below them, and with some non-HTML files (.png images from us,
 # plus .css and .js supplied by sphinx, and source files, renamed
 # from .rst to .txt).
-find jit libgdiagnostics \
+find jit $LIBGDIAGNOSTICS \
     -name "*.html" -o -name "*.png" \
     -o -name "*.css" -o -name "*.js" \
     -o -name "*.txt" |
   while read file ; do
+    # Avoid bogus redirects stemming from Sphinx stylesheets.
+    case $file in
+      *.html)
+        sed -e 's#<a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>#Alabaster#' \
+            -e 's#<a href="http://sphinx-doc.org/">Sphinx 5.3.0</a>#Sphinx#' \
+            -i $file
+	;;
+    esac
     # Note that $file here will contain path fragments beginning
     # with "jit/", e.g. "jit/cp/topics/functions.html"
     mkdir -p $(dirname $DOCSDIR/$file)

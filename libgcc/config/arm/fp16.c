@@ -1,6 +1,6 @@
 /* Half-float conversion routines.
 
-   Copyright (C) 2008-2025 Free Software Foundation, Inc.
+   Copyright (C) 2008-2026 Free Software Foundation, Inc.
    Contributed by CodeSourcery.
 
    This file is free software; you can redistribute it and/or modify it
@@ -152,7 +152,7 @@ __gnu_float2h_internal (const struct format* fmt,
 	 before adding it to the calculated exponent.
      2.  When we were calculating rounding, we left the mantissa with the
 	 number of bits of the source operand, it needs reduced to ten
-	 bits (+1 for the afforementioned leading 1) by shifting right by
+	 bits (+1 for the aforementioned leading 1) by shifting right by
 	 the number of bits in the source mantissa - 10.
      3.  To ensure the leading 1 in the mantissa is applied to the exponent
 	 we need to add the mantissa rather than apply an arithmetic "or"

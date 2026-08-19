@@ -1,6 +1,6 @@
 /* Libiberty dirname.  Like dirname, but is not overridden by the
    system C library.
-   Copyright (C) 2025 Free Software Foundation, Inc.
+   Copyright (C) 2025-2026 Free Software Foundation, Inc.
 
 This file is part of the libiberty library.
 Libiberty is free software; you can redistribute it and/or
@@ -26,7 +26,7 @@ Given a pointer to a string containing a typical pathname
 (@samp{/usr/src/cmd/ls/ls.c} for example), returns a string containing the
 passed string up to, but not including, the final directory separator.
 
-If the given pathname doesn't contain a directory separator then this funtion
+If the given pathname doesn't contain a directory separator then this function
 returns the empty string; this includes an empty given pathname.  @code{NULL}
 is returned on memory allocation error.
 

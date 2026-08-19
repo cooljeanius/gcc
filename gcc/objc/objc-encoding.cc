@@ -1,5 +1,5 @@
 /* Routines dealing with ObjC encoding of types
-   Copyright (C) 1992-2025 Free Software Foundation, Inc.
+   Copyright (C) 1992-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -40,16 +40,12 @@ along with GCC; see the file COPYING3.  If not see
 /* For my_build_string().  */
 #include "objc-runtime-shared-support.h"
 
-/* For BITS_PER_UNIT.  */
-
 /* When building Objective-C++, we are not linking against the C front-end
    and so need to replicate the C tree-construction functions in some way.  */
 #ifdef OBJCPLUS
 #define OBJCP_REMAP_FUNCTIONS
 #include "objcp-decl.h"
 #endif  /* OBJCPLUS */
-
-/* Set up for use of obstacks.  */
 
 /* This obstack is used to accumulate the encoding of a data type.  */
 static struct obstack util_obstack;

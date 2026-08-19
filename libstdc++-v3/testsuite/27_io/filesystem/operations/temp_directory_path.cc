@@ -1,4 +1,4 @@
-// Copyright (C) 2015-2025 Free Software Foundation, Inc.
+// Copyright (C) 2015-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -23,6 +23,8 @@
 #include <stdio.h>
 #include <testsuite_hooks.h>
 #include <testsuite_fs.h>
+
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 
 void
 clean_env()

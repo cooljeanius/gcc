@@ -205,7 +205,7 @@ __parallel_transform_reduce(__pstl::__internal::__tbb_backend_tag, _ExecutionPol
                             _Up __u, _Tp __init, _Cp __combine, _Rp __brick_reduce)
 {
     __tbb_backend::__par_trans_red_body<_Index, _Up, _Tp, _Cp, _Rp> __body(__u, __init, __combine, __brick_reduce);
-    // The grain size of 3 is used in order to provide mininum 2 elements for each body
+    // The grain size of 3 is used in order to provide minimum 2 elements for each body
     tbb::this_task_arena::isolate(
         [__first, __last, &__body]() { tbb::parallel_reduce(tbb::blocked_range<_Index>(__first, __last, 3), __body); });
     return __body.sum();
@@ -521,7 +521,7 @@ class __root_task
     friend class __func_task<_Func>;
 };
 
-#else  // TBB_INTERFACE_VERSION <= 12000
+#else  // TBB_INTERFACE_VERSION > 12000
 class __task : public tbb::detail::d1::task
 {
   protected:
@@ -656,10 +656,16 @@ class __func_task : public __task
 
         _PSTL_ASSERT(__parent != nullptr);
         _PSTL_ASSERT(__parent->_M_refcount.load(std::memory_order_relaxed) > 0);
-        if (--__parent->_M_refcount == 0)
+
+        auto __refcount = --__parent->_M_refcount;
+
+        // Placing the deallocation after the refcount decrement allows another thread to proceed with tree
+        // folding concurrently with this task cleanup.
+        __alloc.deallocate(this, *__ed);
+
+        if (__refcount == 0)
         {
             _PSTL_ASSERT(__next == nullptr);
-            __alloc.deallocate(this, *__ed);
             return __parent;
         }
 
@@ -734,7 +740,7 @@ class __merge_func
     _SizeType _M_zs;
     _Compare _M_comp;
     _LeafMerge _M_leaf_merge;
-    _SizeType _M_nsort; //number of elements to be sorted for partial_sort alforithm
+    _SizeType _M_nsort; //number of elements to be sorted for partial_sort algorithm
 
     static const _SizeType __merge_cut_off = _PSTL_MERGE_CUT_OFF;
 
@@ -1108,7 +1114,7 @@ class __stable_sort_func
     _Compare _M_comp;
     _LeafSort _M_leaf_sort;
     bool _M_root;
-    _SizeType _M_nsort; //zero or number of elements to be sorted for partial_sort alforithm
+    _SizeType _M_nsort; //zero or number of elements to be sorted for partial_sort algorithm
 
   public:
     __stable_sort_func(_RandomAccessIterator1 __xs, _RandomAccessIterator1 __xe, _RandomAccessIterator2 __zs,
@@ -1173,7 +1179,7 @@ __parallel_stable_sort(__pstl::__internal::__tbb_backend_tag, _ExecutionPolicy&&
         typedef typename std::iterator_traits<_RandomAccessIterator>::difference_type _DifferenceType;
         const _DifferenceType __n = __xe - __xs;
         if (__nsort == __n)
-            __nsort = 0; // 'partial_sort' becames 'sort'
+            __nsort = 0; // 'partial_sort' becomes 'sort'
 
         const _DifferenceType __sort_cut_off = _PSTL_STABLE_SORT_CUT_OFF;
         if (__n > __sort_cut_off)

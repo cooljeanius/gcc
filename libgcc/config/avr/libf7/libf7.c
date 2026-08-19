@@ -1,4 +1,4 @@
-/* Copyright (C) 2019-2025 Free Software Foundation, Inc.
+/* Copyright (C) 2019-2026 Free Software Foundation, Inc.
 
    This file is part of LIBF7, which is part of GCC.
 
@@ -122,9 +122,9 @@ int8_t ssat8_range (int16_t a, int8_t range)
 F7_WEAK
 f7_double_t __floatundidf (uint64_t x)
 {
-  f7_t xx;
-  f7_set_u64 (&xx, x);
-  return f7_get_double (&xx);
+  f7_t xx7, *xx = &xx7;
+  xx = f7_set_u64 (xx, x);
+  return f7_get_double (xx);
 }
 #endif // F7MOD_floatundidf_
 
@@ -133,9 +133,9 @@ f7_double_t __floatundidf (uint64_t x)
 F7_WEAK
 f7_double_t __floatdidf (int64_t x)
 {
-  f7_t xx;
-  f7_set_s64 (&xx, x);
-  return f7_get_double (&xx);
+  f7_t xx7, *xx = &xx7;
+  xx = f7_set_s64 (xx, x);
+  return f7_get_double (xx);
 }
 #endif // F7MOD_floatdidf_
 
@@ -207,7 +207,6 @@ f7_t* f7_set_s32 (f7_t *cc, int32_t i32)
   cc->flags = flags;
   return cc;
 }
-ALIAS (f7_set_s32, f7_floatsidf)
 #endif // F7MOD_set_s32_
 
 
@@ -219,7 +218,6 @@ f7_t* f7_set_u32 (f7_t *cc, uint32_t u32)
   cc->expo = 31;
   return f7_normalize_asm (cc);
 }
-ALIAS (f7_set_u32, f7_floatunsidf)
 #endif // F7MOD_set_u32_
 
 
@@ -346,7 +344,7 @@ float f7_get_float (const f7_t *aa)
 
   __asm ("cbr %T0%t2, 1 << (7 & %2)"  "\n\t"
 	 "or  %C0, %A1"		      "\n\t"
-	 "or  %D0, %B1"
+	 "or  %D0, %B1 ; [[len=3]]"
 	 : "+d" (mant)
 	 : "r" (expo16), "n" (FLT_DIG_MANT));
 
@@ -412,7 +410,8 @@ uint64_t clr_r18 (void)
 {
   extern void __clr_8 (void);
   register uint64_t r18 __asm ("r18");
-  __asm ("%~call %x[f]" : "=r" (r18) : [f] "i" (__clr_8));
+  __asm ("%~call %x[f] ; [[len=%~call]]"
+	 : "=r" (r18) : [f] "i" (__clr_8));
   return r18;
 }
 
@@ -461,7 +460,7 @@ f7_double_t f7_get_double (const f7_t *aa)
   // dex = Overflow ? 1 : 0.
   __asm ("bst %T[mant]%T[bitno]"  "\n\t"
 	 "clr %0"		  "\n\t"
-	 "bld %0,0"
+	 "bld %0,0 ; [[len=3]]"
 	 : "=r" (dex), [mant] "+r" (r18)
 	 : [bitno] "n" (64 - 8));
 
@@ -506,7 +505,7 @@ f7_double_t f7_get_double (const f7_t *aa)
   r18 = mant;
   __asm ("cbr %T0%t2, 1 << (7 & %2)"  "\n\t"
 	 "or  %r0+6, %A1"	      "\n\t"
-	 "or  %r0+7, %B1"
+	 "or  %r0+7, %B1 ; [[len=3]]"
 	 : "+r" (r18)
 	 : "r" (expo16), "n" (DBL_DIG_MANT));
 
@@ -674,7 +673,7 @@ int8_t cmp_u8 (uint8_t a_class, uint8_t b_class, bool sign_a)
 	 "sbci %[c], -1"      "\n\t"
 	 "sbrc %[s], 0"	      "\n\t"
 	 "neg  %[c]"	      "\n\t"
-	 "1:"
+	 "1: ; [[len=6]]"
 	 : [c] "=d" (c)
 	 : [a] "0" (a_class), [b] "r" (b_class), [s] "r" (sign_a));
   return c;
@@ -928,10 +927,25 @@ void f7_sub (f7_t *cc, const f7_t *aa, const f7_t *bb)
 #endif // F7MOD_sub_
 
 
+#ifdef F7MOD_fdim_
+F7_WEAK
+void f7_fdim (f7_t *cc, const f7_t *aa, const f7_t *bb)
+{
+  int8_t cmp = f7_cmp_unordered (aa, bb, true /*with_sign*/);
+  if (cmp == INT8_MIN)
+    return f7_set_nan (cc);
+  if (cmp < 0)
+    return f7_clr (cc);
+
+  f7_sub (cc, aa, bb);
+}
+#endif // F7MOD_fdim_
+
+
 #ifdef F7MOD_addsub_
 static void return_with_sign (f7_t *cc, const f7_t *aa, int8_t c_sign)
 {
-  __asm (";;; return with sign");
+  __asm (";;; return with sign ; [[len=0]]");
   f7_copy (cc, aa);
   if (c_sign != -1)
     f7_set_sign (cc, c_sign);
@@ -945,7 +959,7 @@ void f7_addsub (f7_t *cc, const f7_t *aa, const f7_t *bb, bool neg_b)
   // From this point on, no more access aa->flags or bb->flags
   // to avoid early-clobber when writing cc->flags.
 
-  // Hande NaNs.
+  // Handle NaNs.
   if (f7_class_nan (a_class | b_class))
     return f7_set_nan (cc);
 
@@ -1021,7 +1035,7 @@ void f7_madd_msub (f7_t *cc, const f7_t *aa, const f7_t *bb, const f7_t *dd,
   uint8_t x_sign = f7_signbit (xx);
   int16_t x_expo = xx->expo;
   f7_addsub (xx, xx, dd, neg_d);
-  // Now add LSB.  If cancellation occured in the add / sub, then we have the
+  // Now add LSB.  If cancellation occurred in the add / sub, then we have the
   // chance of extra 8 bits of precision.  Turn LSByte into f7_t.
   f7_clr (cc);
   cc->expo = sub_ssat16 (x_expo, F7_MANT_BITS);
@@ -1649,10 +1663,10 @@ void f7_exp (f7_t *cc, const f7_t *aa)
     return f7_set_nan (cc);
 
   /* The maximal exponent of 2 for a double is 1023, hence we may limit
-     to  |A| < 1023 * ln2 ~ 709.  We limit to  1024 ~ 1.99 * 2^9  */
+     to  |A| < 1023 * ln2 ~ 709.  We limit to  1024 = 2^10  */
 
   if (f7_class_inf (a_class)
-      || (f7_class_nonzero (a_class) && aa->expo >= 9))
+      || (f7_class_nonzero (a_class) && aa->expo >= 10))
     {
       if (f7_class_sign (a_class))
 	return f7_clr (cc);

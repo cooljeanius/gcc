@@ -1,5 +1,5 @@
 /* Output routines for graphical representation.
-   Copyright (C) 1998-2025 Free Software Foundation, Inc.
+   Copyright (C) 1998-2026 Free Software Foundation, Inc.
    Contributed by Ulrich Drepper <drepper@cygnus.com>, 1998.
    Rewritten for DOT output by Steven Bosscher, 2012.
 
@@ -255,7 +255,7 @@ draw_cfg_nodes (pretty_printer *pp, struct function *fun)
     draw_cfg_nodes_no_loops (pp, fun);
 }
 
-/* Draw all edges in the CFG.  Retreating edges are drawin as not
+/* Draw all edges in the CFG.  Retreating edges are drawn as not
    constraining, this makes the layout of the graph better.  */
 
 static void

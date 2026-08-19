@@ -1,6 +1,6 @@
 /* Communication between registering jump thread requests and
    updating the SSA/CFG for jump threading.
-   Copyright (C) 2013-2025 Free Software Foundation, Inc.
+   Copyright (C) 2013-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -116,7 +116,8 @@ private:
   bool update_cfg (bool peel_loop_headers) override;
   void adjust_paths_after_duplication (unsigned curr_path_num);
   bool duplicate_thread_path (edge entry, edge exit, basic_block *region,
-			      unsigned n_region, unsigned current_path_no);
+			      unsigned n_region, unsigned current_path_no,
+			      const char **failure_reason);
   bool rewire_first_differing_edge (unsigned path_num, unsigned edge_num);
 };
 

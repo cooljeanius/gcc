@@ -1,6 +1,6 @@
 // <future> -*- C++ -*-
 
-// Copyright (C) 2009-2025 Free Software Foundation, Inc.
+// Copyright (C) 2009-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -34,6 +34,7 @@
 #endif
 
 #include <bits/requires_hosted.h> // concurrency
+#include <bits/functexcept.h>
 
 #if __cplusplus < 201103L
 # include <bits/c++0x_warning.h>
@@ -51,7 +52,6 @@
 #include <bits/shared_ptr.h>
 #include <bits/std_function.h>
 #include <bits/std_thread.h>
-#include <bits/uses_allocator.h>
 #include <ext/aligned_buffer.h>
 
 namespace std _GLIBCXX_VISIBILITY(default)
@@ -1111,22 +1111,16 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	_M_storage(new _Res_type())
       { }
 
-      promise(promise&& __rhs) noexcept
-      : _M_future(std::move(__rhs._M_future)),
-	_M_storage(std::move(__rhs._M_storage))
-      { }
-
       template<typename _Allocator>
 	promise(allocator_arg_t, const _Allocator& __a)
 	: _M_future(std::allocate_shared<_State>(__a)),
 	  _M_storage(__future_base::_S_allocate_result<_Res>(__a))
 	{ }
 
-      template<typename _Allocator>
-	promise(allocator_arg_t, const _Allocator&, promise&& __rhs)
-	: _M_future(std::move(__rhs._M_future)),
-	  _M_storage(std::move(__rhs._M_storage))
-	{ }
+      promise(promise&& __rhs) noexcept
+      : _M_future(std::move(__rhs._M_future)),
+	_M_storage(std::move(__rhs._M_storage))
+      { }
 
       promise(const promise&) = delete;
 
@@ -1206,11 +1200,6 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     swap(promise<_Res>& __x, promise<_Res>& __y) noexcept
     { __x.swap(__y); }
 
-  template<typename _Res, typename _Alloc>
-    struct uses_allocator<promise<_Res>, _Alloc>
-    : public true_type { };
-
-
   /// Partial specialization for promise<R&>
   template<typename _Res>
     class promise<_Res&>
@@ -1230,22 +1219,16 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	_M_storage(new _Res_type())
       { }
 
-      promise(promise&& __rhs) noexcept
-      : _M_future(std::move(__rhs._M_future)),
-	_M_storage(std::move(__rhs._M_storage))
-      { }
-
       template<typename _Allocator>
 	promise(allocator_arg_t, const _Allocator& __a)
 	: _M_future(std::allocate_shared<_State>(__a)),
 	  _M_storage(__future_base::_S_allocate_result<_Res&>(__a))
 	{ }
 
-      template<typename _Allocator>
-	promise(allocator_arg_t, const _Allocator&, promise&& __rhs)
-	: _M_future(std::move(__rhs._M_future)),
-	  _M_storage(std::move(__rhs._M_storage))
-	{ }
+      promise(promise&& __rhs) noexcept
+      : _M_future(std::move(__rhs._M_future)),
+	_M_storage(std::move(__rhs._M_storage))
+      { }
 
       promise(const promise&) = delete;
 
@@ -1328,24 +1311,16 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	_M_storage(new _Res_type())
       { }
 
-      promise(promise&& __rhs) noexcept
-      : _M_future(std::move(__rhs._M_future)),
-	_M_storage(std::move(__rhs._M_storage))
-      { }
-
       template<typename _Allocator>
 	promise(allocator_arg_t, const _Allocator& __a)
 	: _M_future(std::allocate_shared<_State>(__a)),
 	  _M_storage(__future_base::_S_allocate_result<void>(__a))
 	{ }
 
-      // _GLIBCXX_RESOLVE_LIB_DEFECTS
-      // 2095.  missing constructors needed for uses-allocator construction
-      template<typename _Allocator>
-	promise(allocator_arg_t, const _Allocator&, promise&& __rhs)
-	: _M_future(std::move(__rhs._M_future)),
-	  _M_storage(std::move(__rhs._M_storage))
-	{ }
+      promise(promise&& __rhs) noexcept
+      : _M_future(std::move(__rhs._M_future)),
+	_M_storage(std::move(__rhs._M_storage))
+      { }
 
       promise(const promise&) = delete;
 
@@ -1486,11 +1461,27 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     struct __future_base::_Task_state<_Fn, _Alloc, _Res(_Args...)> final
     : __future_base::_Task_state_base<_Res(_Args...)>
     {
+#ifdef __cpp_lib_is_invocable // C++ >= 17
+      static_assert(is_invocable_r_v<_Res, _Fn&, _Args...>);
+#else
+      static_assert(__is_invocable<_Fn&, _Args...>::value,
+		    "_Fn& is invocable with _Args...");
+#endif
+
       template<typename _Fn2>
 	_Task_state(_Fn2&& __fn, const _Alloc& __a)
 	: _Task_state_base<_Res(_Args...)>(__a),
 	  _M_impl(std::forward<_Fn2>(__fn), __a)
 	{ }
+
+      template<typename _Fn2>
+	static shared_ptr<_Task_state_base<_Res(_Args...)>>
+	_S_create(_Fn2&& __fn, const _Alloc& __a)
+	{
+	  return std::allocate_shared<_Task_state>(__a,
+						   std::forward<_Fn2>(__fn),
+						   __a);
+	}
 
     private:
       virtual void
@@ -1515,7 +1506,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       }
 
       virtual shared_ptr<_Task_state_base<_Res(_Args...)>>
-      _M_reset();
+      _M_reset()
+      { return _S_create(std::move(_M_impl._M_fn), _M_impl); }
 
       struct _Impl : _Alloc
       {
@@ -1525,38 +1517,27 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	_Fn _M_fn;
       } _M_impl;
     };
-
-  template<typename _Signature, typename _Fn,
-	   typename _Alloc = std::allocator<int>>
-    shared_ptr<__future_base::_Task_state_base<_Signature>>
-    __create_task_state(_Fn&& __fn, const _Alloc& __a = _Alloc())
-    {
-      typedef typename decay<_Fn>::type _Fn2;
-      typedef __future_base::_Task_state<_Fn2, _Alloc, _Signature> _State;
-      return std::allocate_shared<_State>(__a, std::forward<_Fn>(__fn), __a);
-    }
-
-  template<typename _Fn, typename _Alloc, typename _Res, typename... _Args>
-    shared_ptr<__future_base::_Task_state_base<_Res(_Args...)>>
-    __future_base::_Task_state<_Fn, _Alloc, _Res(_Args...)>::_M_reset()
-    {
-      return __create_task_state<_Res(_Args...)>(std::move(_M_impl._M_fn),
-						 static_cast<_Alloc&>(_M_impl));
-    }
   /// @endcond
 
   /// packaged_task
   template<typename _Res, typename... _ArgTypes>
     class packaged_task<_Res(_ArgTypes...)>
     {
-      typedef __future_base::_Task_state_base<_Res(_ArgTypes...)> _State_type;
+      using _State_type = __future_base::_Task_state_base<_Res(_ArgTypes...)>;
       shared_ptr<_State_type>                   _M_state;
 
       // _GLIBCXX_RESOLVE_LIB_DEFECTS
       // 3039. Unnecessary decay in thread and packaged_task
       template<typename _Fn, typename _Fn2 = __remove_cvref_t<_Fn>>
-	using __not_same
-	  = typename enable_if<!is_same<packaged_task, _Fn2>::value>::type;
+	using __not_same = __enable_if_t<!is_same<packaged_task, _Fn2>::value>;
+
+      // _GLIBCXX_RESOLVE_LIB_DEFECTS
+      // 4154. The Mandates for std::packaged_task's constructor
+      // from a callable entity should consider decaying.
+      template<typename _Fn, typename _Alloc = std::allocator<int>>
+	using _Task_state
+	  = __future_base::_Task_state<__decay_t<_Fn>, _Alloc,
+				       _Res(_ArgTypes...)>;
 
     public:
       // Construction and destruction
@@ -1565,43 +1546,19 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       template<typename _Fn, typename = __not_same<_Fn>>
 	explicit
 	packaged_task(_Fn&& __fn)
-	: _M_state(
-	    __create_task_state<_Res(_ArgTypes...)>(std::forward<_Fn>(__fn)))
-	{
-#ifdef __cpp_lib_is_invocable // C++ >= 17
-	  // _GLIBCXX_RESOLVE_LIB_DEFECTS
-	  // 4154. The Mandates for std::packaged_task's constructor
-	  // from a callable entity should consider decaying
-	  static_assert(is_invocable_r_v<_Res, decay_t<_Fn>&, _ArgTypes...>);
-#endif
-	}
+	: _M_state(_Task_state<_Fn>::_S_create(std::forward<_Fn>(__fn), {}))
+	{ }
 
-#if __cplusplus < 201703L
       // _GLIBCXX_RESOLVE_LIB_DEFECTS
       // 2097. packaged_task constructors should be constrained
       // 2407. [this constructor should not be] explicit
       // 2921. packaged_task and type-erased allocators
+      // 3003. <future> still has type-erased allocators in promise
       template<typename _Fn, typename _Alloc, typename = __not_same<_Fn>>
 	packaged_task(allocator_arg_t, const _Alloc& __a, _Fn&& __fn)
-	: _M_state(__create_task_state<_Res(_ArgTypes...)>(
-		   std::forward<_Fn>(__fn), __a))
+	: _M_state(_Task_state<_Fn, _Alloc>::_S_create(std::forward<_Fn>(__fn),
+						       __a))
 	{ }
-
-      // _GLIBCXX_RESOLVE_LIB_DEFECTS
-      // 2095.  missing constructors needed for uses-allocator construction
-      template<typename _Allocator>
-	packaged_task(allocator_arg_t, const _Allocator&) noexcept
-	{ }
-
-      template<typename _Allocator>
-	packaged_task(allocator_arg_t, const _Allocator&,
-		      const packaged_task&) = delete;
-
-      template<typename _Allocator>
-	packaged_task(allocator_arg_t, const _Allocator&,
-		      packaged_task&& __other) noexcept
-	{ this->swap(__other); }
-#endif
 
       ~packaged_task()
       {
@@ -1678,14 +1635,6 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     swap(packaged_task<_Res(_ArgTypes...)>& __x,
 	 packaged_task<_Res(_ArgTypes...)>& __y) noexcept
     { __x.swap(__y); }
-
-#if __cplusplus < 201703L
-  // _GLIBCXX_RESOLVE_LIB_DEFECTS
-  // 2976. Dangling uses_allocator specialization for packaged_task
-  template<typename _Res, typename _Alloc>
-    struct uses_allocator<packaged_task<_Res>, _Alloc>
-    : public true_type { };
-#endif
 
   /// @cond undocumented
 

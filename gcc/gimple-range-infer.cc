@@ -1,5 +1,5 @@
 /* Gimple range inference implementation.
-   Copyright (C) 2022-2025 Free Software Foundation, Inc.
+   Copyright (C) 2022-2026 Free Software Foundation, Inc.
    Contributed by Andrew MacLeod <amacleod@redhat.com>.
 
 This file is part of GCC.
@@ -36,6 +36,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "gimple-walk.h"
 #include "cfganal.h"
 #include "tree-dfa.h"
+#include "fold-const.h"
 
 // Create the global oracle.
 
@@ -61,9 +62,17 @@ private:
 // stmt range inference instance.
 
 static bool
-non_null_loadstore (gimple *, tree op, tree, void *data)
+non_null_loadstore (gimple *stmt, tree op, tree, void *data)
 {
-  if (TREE_CODE (op) == MEM_REF || TREE_CODE (op) == TARGET_MEM_REF)
+  if (TREE_CODE (op) == MEM_REF
+      || (TREE_CODE (op) == TARGET_MEM_REF
+	  && !TMR_INDEX2 (op)
+	  && (!TMR_INDEX (op)
+	      || (TMR_STEP (op)
+		  && expr_not_equal_to (TMR_STEP (op),
+					wi::one (TYPE_PRECISION (TREE_TYPE
+							(TMR_STEP (op)))),
+					stmt)))))
     {
       /* Some address spaces may legitimately dereference zero.  */
       addr_space_t as = TYPE_ADDR_SPACE (TREE_TYPE (op));
@@ -197,19 +206,42 @@ gimple_infer_range::gimple_infer_range (gimple *s, range_query *q,
 	    unsigned int idx = TREE_INT_CST_LOW (TREE_VALUE (args)) - 1;
 	    unsigned int idx2
 	      = TREE_INT_CST_LOW (TREE_VALUE (TREE_CHAIN (args))) - 1;
+	    unsigned int idx3 = idx2;
+	    if (tree chain2 = TREE_CHAIN (TREE_CHAIN (args)))
+	      idx3 = TREE_INT_CST_LOW (TREE_VALUE (chain2)) - 1;
 	    if (idx < gimple_call_num_args (s)
-		&& idx2 < gimple_call_num_args (s))
+		&& idx2 < gimple_call_num_args (s)
+		&& idx3 < gimple_call_num_args (s))
 	      {
 		tree arg = gimple_call_arg (s, idx);
 		tree arg2 = gimple_call_arg (s, idx2);
+		tree arg3 = gimple_call_arg (s, idx3);
 		if (!POINTER_TYPE_P (TREE_TYPE (arg))
 		    || !INTEGRAL_TYPE_P (TREE_TYPE (arg2))
-		    || integer_zerop (arg2))
+		    || !INTEGRAL_TYPE_P (TREE_TYPE (arg3))
+		    || integer_zerop (arg2)
+		    || integer_zerop (arg3))
 		  continue;
-		if (integer_nonzerop (arg2))
+		if (integer_nonzerop (arg2) && integer_nonzerop (arg3))
 		  add_nonzero (arg);
-		// FIXME: Can one query here whether arg2 has
-		// nonzero range if it is a SSA_NAME?
+		else
+		  {
+		    value_range r (TREE_TYPE (arg2));
+		    if (q->range_of_expr (r, arg2, s)
+			&& !r.contains_p (build_zero_cst (TREE_TYPE (arg2))))
+		      {
+			if (idx2 == idx3)
+			  add_nonzero (arg);
+			else
+			  {
+			    value_range r2 (TREE_TYPE (arg3));
+			    tree zero3 = build_zero_cst (TREE_TYPE (arg3));
+			    if (q->range_of_expr (r2, arg3, s)
+				&& !r2.contains_p (zero3))
+			      add_nonzero (arg);
+			  }
+		      }
+		  }
 	      }
 	  }
       // Fallthru and walk load/store ops now.
@@ -434,6 +466,8 @@ infer_range_manager::add_range (tree name, gimple *s, const vrange &r)
      fprintf (dump_file, "\n");
    }
 
+  get_range_query (cfun)->update_range_info (name);
+
   // If NAME already has a range, intersect them and done.
   exit_range *ptr = m_on_exit[bb->index].find_ptr (name);
   if (ptr)
@@ -497,4 +531,35 @@ infer_range_manager::register_all_uses (tree name)
 	    add_range (name, s, infer.range (x));
 	}
     }
+}
+
+// Clear all inferred ranges for NAME.
+
+void
+infer_range_manager::clear(tree name)
+{
+  if (!m_seen)
+    return;
+
+  // Check if this name has any inferred ranges.
+  unsigned v = SSA_NAME_VERSION (name);
+  if (!bitmap_bit_p (m_seen, v))
+     return;
+
+  // Check each basic block for an inferred range.
+  basic_block bb;
+  FOR_EACH_BB_FN (bb, cfun)
+    {
+      unsigned bbi = bb->index;
+      if (bbi >= m_on_exit.length ())
+	continue;
+      exit_range *ptr = m_on_exit[bbi].find_ptr (name);
+      if (ptr)
+	{
+	  bitmap_clear_bit (m_on_exit[bbi].m_names, v);
+	  ptr->name = NULL;
+	}
+    }
+
+  bitmap_clear_bit (m_seen, v);
 }

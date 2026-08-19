@@ -1,5 +1,5 @@
 /* Target-independent configuration for VxWorks and VxWorks AE.
-   Copyright (C) 2005-2025 Free Software Foundation, Inc.
+   Copyright (C) 2005-2026 Free Software Foundation, Inc.
    Contributed by CodeSourcery, LLC.
 
 This file is part of GCC.
@@ -73,7 +73,7 @@ along with GCC; see the file COPYING3.  If not see
 
 /* ---------------------- Debug and unwind info formats ------------------  */
 
-/* Dwarf2 unwind info is supported, unless overriden by a request for a target
+/* Dwarf2 unwind info is supported, unless overridden by a request for a target
    specific format.  Always #define DWARF2_UNWIND_INFO to prevent defaults.h
    from picking a possibly different value.
 

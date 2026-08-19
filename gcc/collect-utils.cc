@@ -1,5 +1,5 @@
 /* Utility functions used by tools like collect2 and lto-wrapper.
-   Copyright (C) 2009-2025 Free Software Foundation, Inc.
+   Copyright (C) 2009-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -268,4 +268,23 @@ utils_cleanup (bool from_signal)
   cleanup_done = true;
 
   tool_cleanup (from_signal);
+}
+
+/* Return COLLECT_GCC_OPTIONS, expanding an @file reference if present.
+   Returns nullptr if unset.  Result is owned by an internal cache.  */
+
+const char *
+read_collect_gcc_options (void)
+{
+  static char *cached;
+
+  if (cached)
+    return cached;
+
+  const char *raw = getenv ("COLLECT_GCC_OPTIONS");
+  if (raw == nullptr)
+    return nullptr;
+
+  cached = expandargstr (tool_name, raw);
+  return cached;
 }

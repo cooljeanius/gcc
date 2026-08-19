@@ -1,5 +1,5 @@
 /* Natural loop analysis code for GNU compiler.
-   Copyright (C) 2002-2025 Free Software Foundation, Inc.
+   Copyright (C) 2002-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -265,7 +265,7 @@ loop_count_in (const class loop *loop)
    entry of the loop.  If this is the case initialize RET with the number
    of iterations.
 
-   RELIABLE is set if profile indiates that the returned value should be
+   RELIABLE is set if profile indicates that the returned value should be
    realistic estimate.  (This is the case if we read profile and did not
    messed it up yet and not the case of guessed profiles.)
 
@@ -471,15 +471,13 @@ init_set_costs (void)
 
       start_sequence ();
       emit_move_insn (reg1, reg2);
-      seq = get_insns ();
-      end_sequence ();
+      seq = end_sequence ();
       target_reg_cost [speed] = seq_cost (seq, speed);
 
       start_sequence ();
       emit_move_insn (mem, reg1);
       emit_move_insn (reg2, mem);
-      seq = get_insns ();
-      end_sequence ();
+      seq = end_sequence ();
       target_spill_cost [speed] = seq_cost (seq, speed);
     }
   default_rtl_profile ();

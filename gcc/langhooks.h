@@ -1,5 +1,5 @@
 /* The lang_hooks data structure.
-   Copyright (C) 2001-2025 Free Software Foundation, Inc.
+   Copyright (C) 2001-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -22,7 +22,7 @@ along with GCC; see the file COPYING3.  If not see
 
 /* FIXME: This file should be #include-d after tree.h (for enum tree_code).  */
 
-struct diagnostic_info;
+namespace diagnostics { struct diagnostic_info; }
 
 struct gimplify_omp_ctx;
 
@@ -243,6 +243,13 @@ struct lang_hooks_for_decls
      is true, only the TREE_TYPE is returned without generating a new tree.  */
   tree (*omp_array_data) (tree, bool);
 
+  /* Return true if the actual array data of the passed array descriptor decl
+     shall be privatized as well, otherwise only the array descriptor is to
+     be privatized.  The argument must be a decl for an array descriptor,
+     i.e. it may only be called for a decl for which omp_array_data returns
+     a non-NULL_TREE.  */
+  bool (*omp_array_data_privatize) (tree);
+
   /* Return a tree for the actual data of an array descriptor - or NULL_TREE
      if original tree is not an array descriptor.  If the second argument
      is true, only the TREE_TYPE is returned without generating a new tree.  */
@@ -254,7 +261,7 @@ struct lang_hooks_for_decls
 
   /* Check whether this DECL belongs to a Fortran optional argument.
      With 'for_present_check' set to false, decls which are optional parameters
-     themselve are returned as tree - or a NULL_TREE otherwise. Those decls are
+     themselves are returned as tree - or a NULL_TREE otherwise. Those decls are
      always pointers.  With 'for_present_check' set to true, the decl for
      checking whether an argument is present is returned; for arguments with
      value attribute this is the hidden argument and of BOOLEAN_TYPE.  If the
@@ -313,20 +320,45 @@ struct lang_hooks_for_decls
   /* Do language specific checking on an implicitly determined clause.  */
   void (*omp_finish_clause) (tree clause, gimple_seq *pre_p, bool);
 
-  /* Additional language-specific mappings for a decl; returns true
-     if those may occur.  */
+  /* Return true if for the passed OpenMP 'map' CLAUSE, additional data-mapping
+     is required; CTX_STMT is the gimple statement containing the clause.
+     Otherwise, false is returned.  */
   bool (*omp_deep_mapping_p) (const gimple *ctx_stmt, tree clause);
 
-  /* Additional language-specific mappings for a decl; returns the
-     number of additional mappings needed.  */
+  /* Return the number of additional data-mappings required for the passed
+     'map' CLAUSE; CTX_STMT is the gimple statement containing the clause.
+     It is NULL_TREE if known that no such mapping are required and otherwise
+     of type size_type_node and usually non-constant.  */
   tree (*omp_deep_mapping_cnt) (const gimple *ctx_stmt, tree clause,
 				gimple_seq *seq);
 
-  /* Do the actual additional language-specific mappings for a decl. */
+  /* If no additional data-mapping is required for the passed 'map' CLAUSE that
+     is part of the CTX_SMT gimple statement, the function has no effect.
+     Otherwise, DATA refers to a void-pointer array containing the address values
+     of the mapping while SIZE and KINDS are arrays for the to-be mapped size and
+     the map kind; OFFSET_DATA and OFFSET are size_type_node variable that refer
+     to the array index of DATA and SIZE/KIND, respectively and are incremented
+     whenever an element is added. New gimple code is added to SEQ.  */
   void (*omp_deep_mapping) (const gimple *stmt, tree clause,
 			    unsigned HOST_WIDE_INT tkind,
 			    tree data, tree sizes, tree kinds,
 			    tree offset_data, tree offset, gimple_seq *seq);
+
+  /* Finish language-specific processing on mapping nodes after expanding
+     user-defined mappers.  */
+  tree (*omp_finish_mapper_clauses) (tree clauses);
+
+  /* Find a mapper in the current parsing context, given a NAME (or
+     NULL_TREE) and TYPE.  */
+  tree (*omp_mapper_lookup) (tree name, tree type);
+
+  /* Return the statement for the mapper directive definition, from the
+     representation used to contain it (e.g. an inline function
+     declaration).  */
+  tree (*omp_extract_mapper_directive) (tree fndecl);
+
+  /* Return a simplified form for OMP_ARRAY_SECTION argument.  */
+  tree (*omp_map_array_section) (location_t, tree t);
 
   /* Return true if DECL is an allocatable variable (for the purpose of
      implicit mapping).  */
@@ -405,7 +437,7 @@ struct lang_hooks
 
   /* Callback used to perform language-specific initialization for the
      global diagnostic context structure.  */
-  void (*initialize_diagnostics) (diagnostic_context *);
+  void (*initialize_diagnostics) (diagnostics::context *);
 
   /* Beginning the main source file.  */
   void (*preprocess_main_file) (cpp_reader *, line_maps *,
@@ -531,9 +563,9 @@ struct lang_hooks
 
   /* Called by diagnostic_report_current_function to print out function name
      for textual diagnostic output.  */
-  void (*print_error_function) (diagnostic_text_output_format &,
+  void (*print_error_function) (diagnostics::text_sink &,
 				const char *,
-				const struct diagnostic_info *);
+				const diagnostics::diagnostic_info *);
 
   /* Convert a character from the host's to the target's character
      set.  The character should be in what C calls the "basic source
@@ -611,6 +643,10 @@ struct lang_hooks
 
   /* Map a type to a runtime object to match type.  */
   tree (*eh_runtime_type) (tree);
+
+  /* Return true if a handler of HANDLER_TYPE can catch an exception
+     of EXCEPTION_TYPE, per the language's exception-matching rules.  */
+  bool (*exception_matches_type_p) (tree handler_type, tree exception_type);
 
   /* If non-NULL, this is a function that returns a function decl to be
      executed if an unhandled exception is propagated out of a cleanup

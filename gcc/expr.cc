@@ -1,5 +1,5 @@
 /* Convert tree expression to rtl instructions, for GNU compiler.
-   Copyright (C) 1988-2025 Free Software Foundation, Inc.
+   Copyright (C) 1988-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -66,6 +66,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "tree-pretty-print.h"
 #include "flags.h"
 #include "internal-fn.h"
+#include "gimple-range.h"
 
 
 /* If this is nonzero, we do not bother generating VOLATILE
@@ -75,6 +76,10 @@ along with GCC; see the file COPYING3.  If not see
    if it is used only once, instruction combination will produce
    the same indirect address eventually.  */
 int cse_not_expected;
+
+/* Cache of the "extended" flag in the target's _BitInt description
+   for use during expand.  */
+int bitint_extended = -1;
 
 static bool block_move_libcall_safe_for_call_parm (void);
 static bool emit_block_move_via_pattern (rtx, rtx, rtx, unsigned, unsigned,
@@ -471,8 +476,7 @@ convert_mode_scalar (rtx to, rtx from, int unsignedp)
 			    emit_move_insn (to, tof);
 			}
 		    }
-		  insns = get_insns ();
-		  end_sequence ();
+		  insns = end_sequence ();
 		  if (tof)
 		    {
 		      emit_insn (insns);
@@ -542,8 +546,7 @@ convert_mode_scalar (rtx to, rtx from, int unsignedp)
 		    emit_move_insn (to, tof);
 		}
 	      while (0);
-	      insns = get_insns ();
-	      end_sequence ();
+	      insns = end_sequence ();
 	      if (tof)
 		{
 		  emit_insn (insns);
@@ -562,8 +565,7 @@ convert_mode_scalar (rtx to, rtx from, int unsignedp)
       start_sequence ();
       value = emit_library_call_value (libcall, NULL_RTX, LCT_CONST, to_mode,
 				       from, from_mode);
-      insns = get_insns ();
-      end_sequence ();
+      insns = end_sequence ();
       emit_libcall_block (insns, to, value,
 			  tab == trunc_optab ? gen_rtx_FLOAT_TRUNCATE (to_mode,
 								       from)
@@ -736,8 +738,7 @@ convert_mode_scalar (rtx to, rtx from, int unsignedp)
 	    emit_move_insn (subword, fill_value);
 	}
 
-      insns = get_insns ();
-      end_sequence ();
+      insns = end_sequence ();
 
       emit_insn (insns);
       return;
@@ -1383,7 +1384,7 @@ class op_by_pieces_d
   /* The type of operation that we're performing.  */
   by_pieces_operation m_op;
 
-  /* Virtual functions, overriden by derived classes for the specific
+  /* Virtual functions, overridden by derived classes for the specific
      operation.  */
   virtual void generate (rtx, rtx, machine_mode) = 0;
   virtual bool prepare_mode (machine_mode, unsigned int) = 0;
@@ -1565,7 +1566,7 @@ op_by_pieces_d::run ()
 	  if (gap > 0)
 	    {
 	      /* If size of MODE > M_LEN, generate the last operation
-		 in MODE for the remaining bytes with ovelapping memory
+		 in MODE for the remaining bytes with overlapping memory
 		 from the previois operation.  */
 	      if (m_reverse)
 		m_offset += gap;
@@ -2320,6 +2321,8 @@ emit_block_move_via_pattern (rtx x, rtx y, rtx size, unsigned int align,
 	      else
 		create_fixed_operand (&ops[8], NULL);
 	    }
+	  gcc_assert (min_size != max_size
+		      || rtx_equal_p (ops[2].value, GEN_INT (min_size)));
 	  if (maybe_expand_insn (code, nops, ops))
 	    return true;
 	}
@@ -3038,6 +3041,7 @@ emit_group_load_1 (rtx *tmps, rtx dst, rtx orig_src, tree type,
       src = orig_src;
       if (!MEM_P (orig_src)
 	  && (!REG_P (orig_src) || HARD_REGISTER_P (orig_src))
+	  && GET_CODE (orig_src) != CONCAT
 	  && !CONSTANT_P (orig_src))
 	{
 	  gcc_assert (GET_MODE (orig_src) != VOIDmode);
@@ -3059,6 +3063,28 @@ emit_group_load_1 (rtx *tmps, rtx dst, rtx orig_src, tree type,
 	       && known_eq (bytelen, GET_MODE_SIZE (mode)))
 	/* Let emit_move_complex do the bulk of the work.  */
 	tmps[i] = src;
+      else if (SCALAR_INT_MODE_P (mode)
+	       && COMPLEX_MODE_P (GET_MODE (src))
+	       && known_eq (GET_MODE_SIZE (mode),
+			    GET_MODE_SIZE (GET_MODE (src)))
+	       && known_eq (bytelen, GET_MODE_SIZE (mode)))
+	{
+	  /* When passing a complex value in an integer mode of the same
+	     size, explicitly construct (highpart<<isize)+lowpart to
+	     avoid spilling to memory before reload.  */
+	  rtx tmp = read_complex_part (src, !BYTES_BIG_ENDIAN);
+	  scalar_int_mode imode = int_mode_for_mode (GET_MODE (tmp)).require();
+	  tmp = gen_lowpart (imode, tmp);
+	  tmp = simplify_gen_unary (ZERO_EXTEND, mode, tmp, imode);
+	  rtx result = force_reg (mode, tmp);
+	  result = expand_shift (LSHIFT_EXPR, mode, result,
+				 GET_MODE_BITSIZE (imode), NULL_RTX, 1);
+	  tmp = read_complex_part (src, BYTES_BIG_ENDIAN);
+	  tmp = gen_lowpart (imode, tmp);
+	  tmp = simplify_gen_unary (ZERO_EXTEND, mode, tmp, imode);
+	  result = simplify_gen_binary (PLUS, mode, result, tmp);
+	  tmps[i] = force_reg (mode, result);
+	}
       else if (GET_CODE (src) == CONCAT)
 	{
 	  poly_int64 slen = GET_MODE_SIZE (GET_MODE (src));
@@ -3816,7 +3842,7 @@ use_group_regs (rtx *call_fusage, rtx regs)
 }
 
 /* Return the defining gimple statement for SSA_NAME NAME if it is an
-   assigment and the code of the expresion on the RHS is CODE.  Return
+   assignment and the code of the expression on the RHS is CODE.  Return
    NULL otherwise.  */
 
 static gimple *
@@ -3837,7 +3863,7 @@ get_def_for_expr (tree name, enum tree_code code)
 }
 
 /* Return the defining gimple statement for SSA_NAME NAME if it is an
-   assigment and the class of the expresion on the RHS is CLASS.  Return
+   assignment and the class of the expression on the RHS is CLASS.  Return
    NULL otherwise.  */
 
 static gimple *
@@ -4044,6 +4070,8 @@ set_storage_via_setmem (rtx object, rtx size, rtx val, unsigned int align,
 	      else
 		create_fixed_operand (&ops[8], NULL);
 	    }
+	  gcc_assert (min_size != max_size
+		      || rtx_equal_p (ops[1].value, GEN_INT (min_size)));
 	  if (maybe_expand_insn (code, nops, ops))
 	    return true;
 	}
@@ -4547,8 +4575,7 @@ emit_move_multi_word (machine_mode mode, rtx x, rtx y)
       last_insn = emit_move_insn (xpart, ypart);
     }
 
-  seq = get_insns ();
-  end_sequence ();
+  seq = end_sequence ();
 
   /* Show the output dies here.  This is necessary for SUBREGs
      of pseudos since we cannot track their lifetimes correctly;
@@ -4660,7 +4687,7 @@ emit_move_insn (rtx x, rtx y)
   auto candidate_mem_p = [&](machine_mode innermode, rtx mem) {
     return (!targetm.can_change_mode_class (innermode, GET_MODE (mem), ALL_REGS)
 	    && !push_operand (mem, GET_MODE (mem))
-	    /* Not a candiate if innermode requires too much alignment.  */
+	    /* Not a candidate if innermode requires too much alignment.  */
 	    && (MEM_ALIGN (mem) >= GET_MODE_ALIGNMENT (innermode)
 		|| targetm.slow_unaligned_access (GET_MODE (mem),
 						  MEM_ALIGN (mem))
@@ -4765,13 +4792,9 @@ emit_move_insn (rtx x, rtx y)
 rtx_insn *
 gen_move_insn (rtx x, rtx y)
 {
-  rtx_insn *seq;
-
   start_sequence ();
   emit_move_insn_1 (x, y);
-  seq = get_insns ();
-  end_sequence ();
-  return seq;
+  return end_sequence ();
 }
 
 /* If Y is representable exactly in a narrower mode, and the target can
@@ -5973,6 +5996,18 @@ mem_ref_refers_to_non_mem_p (tree ref)
   return non_mem_decl_p (base);
 }
 
+/* Helper function of expand_assignment.  Check if storing field of
+   size BITSIZE at position BITPOS overlaps with the most significant
+   bit of TO_RTX, known to be SUBREG_PROMOTED_VAR_P.
+   Updating this field requires an explicit extension.  */
+static bool
+store_field_updates_msb_p (poly_int64 bitpos, poly_int64 bitsize, rtx to_rtx)
+{
+  return (BYTES_BIG_ENDIAN
+	  ? maybe_le (bitpos, 0)
+	  : maybe_ge (bitpos + bitsize, GET_MODE_BITSIZE (GET_MODE (to_rtx))));
+}
+
 /* Expand an assignment that stores the value of FROM into TO.  If NONTEMPORAL
    is true, try generating a nontemporal store.  */
 
@@ -6319,8 +6354,7 @@ expand_assignment (tree to, tree from, bool nontemporal)
 		  && known_eq (bitsize, GET_MODE_BITSIZE (GET_MODE (to_rtx))))
 		result = store_expr (from, to_rtx, 0, nontemporal, false);
 	      /* Check if the field overlaps the MSB, requiring extension.  */
-	      else if (maybe_eq (bitpos + bitsize,
-				 GET_MODE_BITSIZE (GET_MODE (to_rtx))))
+	      else if (store_field_updates_msb_p (bitpos, bitsize, to_rtx))
 		{
 		  scalar_int_mode imode = subreg_unpromoted_mode (to_rtx);
 		  scalar_int_mode omode = subreg_promoted_mode (to_rtx);
@@ -6536,6 +6570,31 @@ string_cst_read_str (void *data, void *, HOST_WIDE_INT offset,
     }
 
   return c_readstr (TREE_STRING_POINTER (str) + offset, mode, false);
+}
+
+/* Helper function for store_expr storing of RAW_DATA_CST.  */
+
+static rtx
+raw_data_cst_read_str (void *data, void *, HOST_WIDE_INT offset,
+		       fixed_size_mode mode)
+{
+  tree cst = (tree) data;
+
+  gcc_assert (offset >= 0);
+  if (offset >= RAW_DATA_LENGTH (cst))
+    return const0_rtx;
+
+  if ((unsigned HOST_WIDE_INT) offset + GET_MODE_SIZE (mode)
+      > (unsigned HOST_WIDE_INT) RAW_DATA_LENGTH (cst))
+    {
+      char *p = XALLOCAVEC (char, GET_MODE_SIZE (mode));
+      size_t l = RAW_DATA_LENGTH (cst) - offset;
+      memcpy (p, RAW_DATA_POINTER (cst) + offset, l);
+      memset (p + l, '\0', GET_MODE_SIZE (mode) - l);
+      return c_readstr (p, mode, false);
+    }
+
+  return c_readstr (RAW_DATA_POINTER (cst) + offset, mode, false);
 }
 
 /* Generate code for computing expression EXP,
@@ -7101,7 +7160,8 @@ count_type_elements (const_tree type, bool for_ctor_p)
 static bool
 categorize_ctor_elements_1 (const_tree ctor, HOST_WIDE_INT *p_nz_elts,
 			    HOST_WIDE_INT *p_unique_nz_elts,
-			    HOST_WIDE_INT *p_init_elts, int *p_complete)
+			    HOST_WIDE_INT *p_init_elts,
+			    ctor_completeness *p_complete)
 {
   unsigned HOST_WIDE_INT idx;
   HOST_WIDE_INT nz_elts, unique_nz_elts, init_elts, num_fields;
@@ -7193,9 +7253,9 @@ categorize_ctor_elements_1 (const_tree ctor, HOST_WIDE_INT *p_nz_elts,
 
 	case VECTOR_CST:
 	  {
-	    /* We can only construct constant-length vectors using
-	       CONSTRUCTOR.  */
-	    unsigned int nunits = VECTOR_CST_NELTS (value).to_constant ();
+	    unsigned int nunits
+	      = constant_lower_bound
+	      (TYPE_VECTOR_SUBPARTS (TREE_TYPE (value)));
 	    for (unsigned int i = 0; i < nunits; ++i)
 	      {
 		tree v = VECTOR_CST_ELT (value, i);
@@ -7228,34 +7288,34 @@ categorize_ctor_elements_1 (const_tree ctor, HOST_WIDE_INT *p_nz_elts,
 	}
     }
 
-  if (*p_complete && !complete_ctor_at_level_p (TREE_TYPE (ctor),
+  if (!p_complete->sparse && !complete_ctor_at_level_p (TREE_TYPE (ctor),
 						num_fields, elt_type))
-    *p_complete = 0;
+    p_complete->sparse = true;
   else if (TREE_CODE (TREE_TYPE (ctor)) == UNION_TYPE
 	   || TREE_CODE (TREE_TYPE (ctor)) == QUAL_UNION_TYPE)
     {
-      if (*p_complete
+      if (!p_complete->sparse
 	  && CONSTRUCTOR_ZERO_PADDING_BITS (ctor)
 	  && (num_fields
 	      ? simple_cst_equal (TYPE_SIZE (TREE_TYPE (ctor)),
 				  TYPE_SIZE (elt_type)) != 1
 	      : type_has_padding_at_level_p (TREE_TYPE (ctor))))
-	*p_complete = 0;
-      else if (*p_complete > 0
+	p_complete->sparse = true;
+      else if (!p_complete->sparse && !p_complete->padded_union
 	       && (num_fields
 		   ? simple_cst_equal (TYPE_SIZE (TREE_TYPE (ctor)),
 				       TYPE_SIZE (elt_type)) != 1
 		   : type_has_padding_at_level_p (TREE_TYPE (ctor))))
-	*p_complete = -1;
+	p_complete->padded_union = true;
     }
-  else if (*p_complete
+  else if (!p_complete->sparse
 	   && (CONSTRUCTOR_ZERO_PADDING_BITS (ctor)
 	       || flag_zero_init_padding_bits == ZERO_INIT_PADDING_BITS_ALL)
 	   && type_has_padding_at_level_p (TREE_TYPE (ctor)))
-    *p_complete = 0;
-  else if (*p_complete > 0
+    p_complete->sparse = true;
+  else if (!p_complete->sparse && !p_complete->padded_non_union
 	   && type_has_padding_at_level_p (TREE_TYPE (ctor)))
-    *p_complete = -1;
+    p_complete->padded_non_union = true;
 
   *p_nz_elts += nz_elts;
   *p_unique_nz_elts += unique_nz_elts;
@@ -7277,9 +7337,6 @@ categorize_ctor_elements_1 (const_tree ctor, HOST_WIDE_INT *p_nz_elts,
    * whether the constructor is complete -- in the sense that every
      meaningful byte is explicitly given a value --
      and place it in *P_COMPLETE:
-     -  0 if any field is missing
-     -  1 if all fields are initialized, and there's no padding
-     - -1 if all fields are initialized, but there's padding
 
    Return whether or not CTOR is a valid static constant initializer, the same
    as "initializer_constant_valid_p (CTOR, TREE_TYPE (CTOR)) != 0".  */
@@ -7287,12 +7344,13 @@ categorize_ctor_elements_1 (const_tree ctor, HOST_WIDE_INT *p_nz_elts,
 bool
 categorize_ctor_elements (const_tree ctor, HOST_WIDE_INT *p_nz_elts,
 			  HOST_WIDE_INT *p_unique_nz_elts,
-			  HOST_WIDE_INT *p_init_elts, int *p_complete)
+			  HOST_WIDE_INT *p_init_elts,
+			  ctor_completeness *p_complete)
 {
   *p_nz_elts = 0;
   *p_unique_nz_elts = 0;
   *p_init_elts = 0;
-  *p_complete = 1;
+  *p_complete = {};
 
   return categorize_ctor_elements_1 (ctor, p_nz_elts, p_unique_nz_elts,
 				     p_init_elts, p_complete);
@@ -7366,11 +7424,11 @@ mostly_zeros_p (const_tree exp)
   if (TREE_CODE (exp) == CONSTRUCTOR)
     {
       HOST_WIDE_INT nz_elts, unz_elts, init_elts;
-      int complete_p;
+      ctor_completeness complete_p;
 
       categorize_ctor_elements (exp, &nz_elts, &unz_elts, &init_elts,
 				&complete_p);
-      return !complete_p || nz_elts < init_elts / 4;
+      return complete_p.sparse || nz_elts < init_elts / 4;
     }
 
   return initializer_zerop (exp);
@@ -7384,7 +7442,7 @@ all_zeros_p (const_tree exp)
   if (TREE_CODE (exp) == CONSTRUCTOR)
     {
       HOST_WIDE_INT nz_elts, unz_elts, init_elts;
-      int complete_p;
+      ctor_completeness complete_p;
 
       categorize_ctor_elements (exp, &nz_elts, &unz_elts, &init_elts,
 				&complete_p);
@@ -7467,11 +7525,14 @@ fields_length (const_tree type)
   return count;
 }
 
-
 /* Store the value of constructor EXP into the rtx TARGET.
    TARGET is either a REG or a MEM; we know it cannot conflict, since
    safe_from_p has been called.
    CLEARED is true if TARGET is known to have been zero'd.
+   If the constructor EXP has a vector type then elements of TARGET for which
+   there is no corresponding element in EXP are zero'd.  For a variable-length
+   vector type, only elements up to the minimum number of subparts of the type
+   are explicitly zero'd; any elements beyond that are implicitly zero.
    SIZE is the number of bytes of TARGET we are allowed to modify: this
    may not be the same as the size of EXP if we are assigning to a field
    which has been packed to exclude padding bits.
@@ -7559,8 +7620,13 @@ store_constructor (tree exp, rtx target, int cleared, poly_int64 size,
 	    if (cleared && initializer_zerop (value))
 	      continue;
 
-	    if (tree_fits_uhwi_p (DECL_SIZE (field)))
-	      bitsize = tree_to_uhwi (DECL_SIZE (field));
+	    /* Variable sized arrays are ignored.  */
+	    tree decl_size = DECL_SIZE (field);
+	    if (!decl_size)
+	      continue;
+
+	    if (tree_fits_uhwi_p (decl_size))
+	      bitsize = tree_to_uhwi (decl_size);
 	    else
 	      gcc_unreachable ();
 
@@ -7635,13 +7701,13 @@ store_constructor (tree exp, rtx target, int cleared, poly_int64 size,
     case ARRAY_TYPE:
       {
 	tree value, index;
-	unsigned HOST_WIDE_INT i;
+	unsigned HOST_WIDE_INT i, j = 0;
 	bool need_to_clear;
 	tree domain;
 	tree elttype = TREE_TYPE (type);
 	bool const_bounds_p;
-	HOST_WIDE_INT minelt = 0;
-	HOST_WIDE_INT maxelt = 0;
+	unsigned HOST_WIDE_INT minelt = 0;
+	unsigned HOST_WIDE_INT maxelt = 0;
 
 	/* The storage order is specified for every aggregate type.  */
 	reverse = TYPE_REVERSE_STORAGE_ORDER (type);
@@ -7649,14 +7715,14 @@ store_constructor (tree exp, rtx target, int cleared, poly_int64 size,
 	domain = TYPE_DOMAIN (type);
 	const_bounds_p = (TYPE_MIN_VALUE (domain)
 			  && TYPE_MAX_VALUE (domain)
-			  && tree_fits_shwi_p (TYPE_MIN_VALUE (domain))
-			  && tree_fits_shwi_p (TYPE_MAX_VALUE (domain)));
+			  && tree_fits_uhwi_p (TYPE_MIN_VALUE (domain))
+			  && tree_fits_uhwi_p (TYPE_MAX_VALUE (domain)));
 
 	/* If we have constant bounds for the range of the type, get them.  */
 	if (const_bounds_p)
 	  {
-	    minelt = tree_to_shwi (TYPE_MIN_VALUE (domain));
-	    maxelt = tree_to_shwi (TYPE_MAX_VALUE (domain));
+	    minelt = tree_to_uhwi (TYPE_MIN_VALUE (domain));
+	    maxelt = tree_to_uhwi (TYPE_MAX_VALUE (domain));
 	  }
 
 	/* If the constructor has fewer elements than the array, clear
@@ -7669,7 +7735,7 @@ store_constructor (tree exp, rtx target, int cleared, poly_int64 size,
 	else
 	  {
 	    unsigned HOST_WIDE_INT idx;
-	    HOST_WIDE_INT count = 0, zero_count = 0;
+	    unsigned HOST_WIDE_INT count = 0, zero_count = 0;
 	    need_to_clear = ! const_bounds_p;
 
 	    /* This loop is a more accurate version of the loop in
@@ -7677,7 +7743,7 @@ store_constructor (tree exp, rtx target, int cleared, poly_int64 size,
 	       is also needed to check for missing elements.  */
 	    FOR_EACH_CONSTRUCTOR_ELT (CONSTRUCTOR_ELTS (exp), idx, index, value)
 	      {
-		HOST_WIDE_INT this_node_count;
+		unsigned HOST_WIDE_INT this_node_count;
 
 		if (need_to_clear)
 		  break;
@@ -7697,6 +7763,8 @@ store_constructor (tree exp, rtx target, int cleared, poly_int64 size,
 		    this_node_count = (tree_to_uhwi (hi_index)
 				       - tree_to_uhwi (lo_index) + 1);
 		  }
+		else if (TREE_CODE (value) == RAW_DATA_CST)
+		  this_node_count = RAW_DATA_LENGTH (value);
 		else
 		  this_node_count = 1;
 
@@ -7739,7 +7807,11 @@ store_constructor (tree exp, rtx target, int cleared, poly_int64 size,
 	    rtx xtarget = target;
 
 	    if (cleared && initializer_zerop (value))
-	      continue;
+	      {
+		if (TREE_CODE (value) == RAW_DATA_CST)
+		  j += RAW_DATA_LENGTH (value) - 1;
+		continue;
+	      }
 
 	    mode = TYPE_MODE (elttype);
 	    if (mode != BLKmode)
@@ -7751,16 +7823,18 @@ store_constructor (tree exp, rtx target, int cleared, poly_int64 size,
 	      {
 		tree lo_index = TREE_OPERAND (index, 0);
 		tree hi_index = TREE_OPERAND (index, 1);
-		rtx index_r, pos_rtx;
-		HOST_WIDE_INT lo, hi, count;
-		tree position;
+		rtx index_r;
+		unsigned HOST_WIDE_INT lo, hi, count;
+		tree offset;
+
+		gcc_assert (TREE_CODE (value) != RAW_DATA_CST);
 
 		/* If the range is constant and "small", unroll the loop.  */
 		if (const_bounds_p
-		    && tree_fits_shwi_p (lo_index)
-		    && tree_fits_shwi_p (hi_index)
-		    && (lo = tree_to_shwi (lo_index),
-			hi = tree_to_shwi (hi_index),
+		    && tree_fits_uhwi_p (lo_index)
+		    && tree_fits_uhwi_p (hi_index)
+		    && (lo = tree_to_uhwi (lo_index),
+			hi = tree_to_uhwi (hi_index),
 			count = hi - lo + 1,
 			(!MEM_P (target)
 			 || count <= 2
@@ -7771,7 +7845,7 @@ store_constructor (tree exp, rtx target, int cleared, poly_int64 size,
 		    lo -= minelt;  hi -= minelt;
 		    for (; lo <= hi; lo++)
 		      {
-			bitpos = lo * tree_to_shwi (TYPE_SIZE (elttype));
+			bitpos = lo * tree_to_uhwi (TYPE_SIZE (elttype));
 
 			if (MEM_P (target)
 			    && !MEM_KEEP_ALIAS_SET_P (target)
@@ -7807,21 +7881,18 @@ store_constructor (tree exp, rtx target, int cleared, poly_int64 size,
 		    emit_label (loop_start);
 
 		    /* Assign value to element index.  */
-		    position =
-		      fold_convert (ssizetype,
-				    fold_build2 (MINUS_EXPR,
-						 TREE_TYPE (index),
-						 index,
-						 TYPE_MIN_VALUE (domain)));
+		    offset = fold_build2 (MINUS_EXPR,
+					  TREE_TYPE (index),
+					  index,
+					  TYPE_MIN_VALUE (domain));
 
-		    position =
-			size_binop (MULT_EXPR, position,
-				    fold_convert (ssizetype,
-						  TYPE_SIZE_UNIT (elttype)));
+		    offset = size_binop (MULT_EXPR,
+					 fold_convert (sizetype, offset),
+					 TYPE_SIZE_UNIT (elttype));
 
-		    pos_rtx = expand_normal (position);
-		    xtarget = offset_address (target, pos_rtx,
-					      highest_pow2_factor (position));
+		    xtarget = offset_address (target,
+					      expand_normal (offset),
+					      highest_pow2_factor (offset));
 		    xtarget = adjust_address (xtarget, mode, 0);
 		    if (TREE_CODE (value) == CONSTRUCTOR)
 		      store_constructor (value, xtarget, cleared,
@@ -7849,38 +7920,36 @@ store_constructor (tree exp, rtx target, int cleared, poly_int64 size,
 		    emit_label (loop_end);
 		  }
 	      }
-	    else if ((index != 0 && ! tree_fits_shwi_p (index))
-		     || ! tree_fits_uhwi_p (TYPE_SIZE (elttype)))
+	    else if ((index && !tree_fits_uhwi_p (index))
+		     || !tree_fits_uhwi_p (TYPE_SIZE (elttype)))
 	      {
-		tree position;
+		tree offset;
 
-		if (index == 0)
-		  index = ssize_int (1);
+		gcc_assert (TREE_CODE (value) != RAW_DATA_CST);
+		if (index)
+		  offset = fold_build2 (MINUS_EXPR,
+					TREE_TYPE (index),
+					index,
+					TYPE_MIN_VALUE (domain));
+		else
+		  offset = size_int (i + j);
 
-		if (minelt)
-		  index = fold_convert (ssizetype,
-					fold_build2 (MINUS_EXPR,
-						     TREE_TYPE (index),
-						     index,
-						     TYPE_MIN_VALUE (domain)));
-
-		position =
-		  size_binop (MULT_EXPR, index,
-			      fold_convert (ssizetype,
-					    TYPE_SIZE_UNIT (elttype)));
+		offset = size_binop (MULT_EXPR,
+				     fold_convert (sizetype, offset),
+				     TYPE_SIZE_UNIT (elttype));
 		xtarget = offset_address (target,
-					  expand_normal (position),
-					  highest_pow2_factor (position));
+					  expand_normal (offset),
+					  highest_pow2_factor (offset));
 		xtarget = adjust_address (xtarget, mode, 0);
 		store_expr (value, xtarget, 0, false, reverse);
 	      }
 	    else
 	      {
-		if (index != 0)
-		  bitpos = ((tree_to_shwi (index) - minelt)
+		if (index)
+		  bitpos = ((tree_to_uhwi (index) - minelt)
 			    * tree_to_uhwi (TYPE_SIZE (elttype)));
 		else
-		  bitpos = (i * tree_to_uhwi (TYPE_SIZE (elttype)));
+		  bitpos = ((i + j) * tree_to_uhwi (TYPE_SIZE (elttype)));
 
 		if (MEM_P (target) && !MEM_KEEP_ALIAS_SET_P (target)
 		    && TREE_CODE (type) == ARRAY_TYPE
@@ -7889,10 +7958,50 @@ store_constructor (tree exp, rtx target, int cleared, poly_int64 size,
 		    target = copy_rtx (target);
 		    MEM_KEEP_ALIAS_SET_P (target) = 1;
 		  }
-		store_constructor_field (target, bitsize, bitpos, 0,
-					 bitregion_end, mode, value,
-					 cleared, get_alias_set (elttype),
-					 reverse);
+		if (TREE_CODE (value) != RAW_DATA_CST)
+		  store_constructor_field (target, bitsize, bitpos, 0,
+					   bitregion_end, mode, value,
+					   cleared, get_alias_set (elttype),
+					   reverse);
+		else
+		  {
+		    j += RAW_DATA_LENGTH (value) - 1;
+		    gcc_assert (known_eq (bitsize, BITS_PER_UNIT));
+		    rtx to_rtx = adjust_address (target, mode,
+						 bitpos / BITS_PER_UNIT);
+
+		    if (to_rtx == target)
+		      to_rtx = copy_rtx (to_rtx);
+
+		    if (!MEM_KEEP_ALIAS_SET_P (to_rtx)
+			&& MEM_ALIAS_SET (to_rtx) != 0)
+		      set_mem_alias_set (to_rtx, get_alias_set (elttype));
+
+		    if (can_store_by_pieces (RAW_DATA_LENGTH (value),
+					     raw_data_cst_read_str,
+					     (void *) value,
+					     MEM_ALIGN (target), false))
+		      {
+			store_by_pieces (target, RAW_DATA_LENGTH (value),
+					 raw_data_cst_read_str, (void *) value,
+					 MEM_ALIGN (target), false,
+					 RETURN_BEGIN);
+			continue;
+		      }
+
+		    elttype
+		      = build_array_type_nelts (TREE_TYPE (value),
+						RAW_DATA_LENGTH (value));
+		    tree ctor = build_constructor_single (elttype, NULL_TREE,
+							  value);
+		    ctor = tree_output_constant_def (ctor);
+		    mode = TYPE_MODE (type);
+		    store_constructor_field (target,
+					     bitsize * RAW_DATA_LENGTH (value),
+					     bitpos, 0, bitregion_end, mode,
+					     ctor, cleared,
+					     get_alias_set (elttype), reverse);
+		  }
 	      }
 	  }
 	break;
@@ -7920,11 +8029,16 @@ store_constructor (tree exp, rtx target, int cleared, poly_int64 size,
 	gcc_assert (eltmode != BLKmode);
 
 	/* Try using vec_duplicate_optab for uniform vectors.  */
+	icode = optab_handler (vec_duplicate_optab, mode);
 	if (!TREE_SIDE_EFFECTS (exp)
 	    && VECTOR_MODE_P (mode)
-	    && eltmode == GET_MODE_INNER (mode)
-	    && ((icode = optab_handler (vec_duplicate_optab, mode))
-		!= CODE_FOR_nothing)
+	    && icode != CODE_FOR_nothing
+	    /* If the vec_duplicate target pattern does not specify an element
+	       mode check that eltmode is the normal inner mode of the
+	       requested vector mode.  But if the target allows eltmode
+	       explicitly go ahead and use it.  */
+	    && (eltmode == GET_MODE_INNER (mode)
+		|| insn_data[icode].operand[1].mode == eltmode)
 	    && (elt = uniform_vector_p (exp))
 	    && !VECTOR_TYPE_P (TREE_TYPE (elt)))
 	  {
@@ -7944,7 +8058,8 @@ store_constructor (tree exp, rtx target, int cleared, poly_int64 size,
 	    && VECTOR_BOOLEAN_TYPE_P (type)
 	    && SCALAR_INT_MODE_P (TYPE_MODE (type))
 	    && (elt = uniform_vector_p (exp))
-	    && !VECTOR_TYPE_P (TREE_TYPE (elt)))
+	    && !VECTOR_TYPE_P (TREE_TYPE (elt))
+	    && !BYTES_BIG_ENDIAN)
 	  {
 	    rtx op0 = force_reg (TYPE_MODE (TREE_TYPE (elt)),
 				 expand_normal (elt));
@@ -7954,7 +8069,7 @@ store_constructor (tree exp, rtx target, int cleared, poly_int64 size,
 	    /* Ensure no excess bits are set.
 	       GCN needs this for nunits < 64.
 	       x86 needs this for nunits < 8.  */
-	    auto nunits = TYPE_VECTOR_SUBPARTS (type).to_constant ();
+	    unsigned int nunits = TYPE_VECTOR_SUBPARTS (type).to_constant ();
 	    if (maybe_ne (GET_MODE_PRECISION (mode), nunits))
 	      tmp = expand_binop (mode, and_optab, tmp,
 				  GEN_INT ((HOST_WIDE_INT_1U << nunits) - 1),
@@ -7990,14 +8105,22 @@ store_constructor (tree exp, rtx target, int cleared, poly_int64 size,
 		   similarly non-const type vectors. */
 		icode = convert_optab_handler (vec_init_optab, mode, eltmode);
 	      }
+	    else
+	      {
+		/* Handle variable-length vector types.  */
+		icode = convert_optab_handler (vec_init_optab, mode, eltmode);
+		const_n_elts = constant_lower_bound (n_elts);
+	      }
 
-	  if (const_n_elts && icode != CODE_FOR_nothing)
-	    {
-	      vector = rtvec_alloc (const_n_elts);
-	      for (unsigned int k = 0; k < const_n_elts; k++)
-		RTVEC_ELT (vector, k) = CONST0_RTX (eltmode);
-	    }
+	    if (const_n_elts && icode != CODE_FOR_nothing)
+	      {
+		vector = rtvec_alloc (const_n_elts);
+		for (unsigned int k = 0; k < const_n_elts; k++)
+		  RTVEC_ELT (vector, k) = CONST0_RTX (eltmode);
+	      }
 	  }
+	else
+	  gcc_assert (n_elts.is_constant ());
 
 	/* Compute the size of the elements in the CTOR.  It differs
 	   from the size of the vector type elements only when the
@@ -9035,7 +9158,7 @@ highest_pow2_factor_for_target (const_tree target, const_tree exp)
 /* Convert the tree comparison code TCODE to the rtl one where the
    signedness is UNSIGNEDP.  */
 
-static enum rtx_code
+enum rtx_code
 convert_tree_comp_to_rtx (enum tree_code tcode, int unsignedp)
 {
   enum rtx_code code;
@@ -9536,7 +9659,7 @@ expand_expr_real (tree exp, rtx target, machine_mode tmode,
 }
 
 /* Try to expand the conditional expression which is represented by
-   TREEOP0 ? TREEOP1 : TREEOP2 using conditonal moves.  If it succeeds
+   TREEOP0 ? TREEOP1 : TREEOP2 using conditional moves.  If it succeeds
    return the rtl reg which represents the result.  Otherwise return
    NULL_RTX.  */
 
@@ -9634,8 +9757,7 @@ expand_cond_expr_using_cmove (tree treeop0 ATTRIBUTE_UNUSED,
      and return.  */
   if (insn)
     {
-      rtx_insn *seq = get_insns ();
-      end_sequence ();
+      rtx_insn *seq = end_sequence ();
       emit_insn (seq);
       return convert_modes (orig_mode, mode, temp, 0);
     }
@@ -9680,6 +9802,28 @@ expand_misaligned_mem_ref (rtx temp, machine_mode mode, int unsignedp,
   return temp;
 }
 
+/* Return true if OP is known to be either LOWER or LOWER + 1, with one
+   value a positive power of two.  */
+
+static bool
+near_pow2_divisor_range_p (tree op, wide_int &lower)
+{
+  if (TREE_CODE (op) != SSA_NAME)
+    return false;
+
+  int_range_max range;
+  range_query *query = get_range_query (cfun);
+  if (!query->range_of_expr (range, op, currently_expanding_gimple_stmt)
+      || range.num_pairs () != 1)
+    return false;
+
+  lower = range.lower_bound ();
+  wide_int upper = lower + 1;
+  return (range.upper_bound () == upper
+	  && wi::gt_p (lower, 0, TYPE_SIGN (TREE_TYPE (op)))
+	  && (wi::popcount (lower) == 1 || wi::popcount (upper) == 1));
+}
+
 /* Helper function of expand_expr_2, expand a division or modulo.
    op0 and op1 should be already expanded treeop0 and treeop1, using
    expand_operands.  */
@@ -9690,24 +9834,62 @@ expand_expr_divmod (tree_code code, machine_mode mode, tree treeop0,
 {
   bool mod_p = (code == TRUNC_MOD_EXPR || code == FLOOR_MOD_EXPR
 		|| code == CEIL_MOD_EXPR || code == ROUND_MOD_EXPR);
+  bool speed_p = optimize_insn_for_speed_p ();
+
+  scalar_int_mode int_mode;
+  wide_int lower;
+  /* Split x / y when y is one of two neighboring constants and the target can
+     select between the constant divisions cheaply.  */
+  if (code == TRUNC_DIV_EXPR
+      && is_a <scalar_int_mode> (mode, &int_mode)
+      && speed_p
+      && can_conditionally_move_p (int_mode)
+      && near_pow2_divisor_range_p (treeop1, lower))
+    {
+      signop sgn = TYPE_SIGN (TREE_TYPE (treeop1));
+      unsigned int prec = GET_MODE_PRECISION (int_mode);
+      wide_int upper = lower + 1;
+      rtx op_lower
+	= immed_wide_int_const (wide_int::from (lower, prec, sgn), int_mode);
+      rtx op_upper
+	= immed_wide_int_const (wide_int::from (upper, prec, sgn), int_mode);
+
+      do_pending_stack_adjust ();
+      start_sequence ();
+      rtx q_lower = expand_divmod (0, TRUNC_DIV_EXPR, mode, op0, op_lower,
+				   NULL_RTX, unsignedp);
+      rtx q_upper = expand_divmod (0, TRUNC_DIV_EXPR, mode, op0, op_upper,
+				   NULL_RTX, unsignedp);
+      rtx split_ret
+	= emit_conditional_move (target, { EQ, op1, op_lower, int_mode },
+				 q_lower, q_upper, int_mode, unsignedp);
+      rtx_insn *split_insns = end_sequence ();
+
+      /* Cost the unsplit form as a single DIV/UDIV.  */
+      rtx div_rtx = gen_rtx_fmt_ee (unsignedp ? UDIV : DIV, int_mode, op0, op1);
+      unsigned div_cost = set_src_cost (div_rtx, int_mode, speed_p);
+      if (split_ret && seq_cost (split_insns, speed_p) < div_cost)
+	{
+	  emit_insn (split_insns);
+	  return split_ret;
+	}
+    }
+
   if (SCALAR_INT_MODE_P (mode)
       && optimize >= 2
-      && get_range_pos_neg (treeop0) == 1
-      && get_range_pos_neg (treeop1) == 1)
+      && get_range_pos_neg (treeop0, currently_expanding_gimple_stmt) == 1
+      && get_range_pos_neg (treeop1, currently_expanding_gimple_stmt) == 1)
     {
       /* If both arguments are known to be positive when interpreted
 	 as signed, we can expand it as both signed and unsigned
 	 division or modulo.  Choose the cheaper sequence in that case.  */
-      bool speed_p = optimize_insn_for_speed_p ();
       do_pending_stack_adjust ();
       start_sequence ();
       rtx uns_ret = expand_divmod (mod_p, code, mode, op0, op1, target, 1);
-      rtx_insn *uns_insns = get_insns ();
-      end_sequence ();
+      rtx_insn *uns_insns = end_sequence ();
       start_sequence ();
       rtx sgn_ret = expand_divmod (mod_p, code, mode, op0, op1, target, 0);
-      rtx_insn *sgn_insns = get_insns ();
-      end_sequence ();
+      rtx_insn *sgn_insns = end_sequence ();
       unsigned uns_cost = seq_cost (uns_insns, speed_p);
       unsigned sgn_cost = seq_cost (sgn_insns, speed_p);
       bool was_tie = false;
@@ -9735,6 +9917,29 @@ expand_expr_divmod (tree_code code, machine_mode mode, tree treeop0,
       return sgn_ret;
     }
   return expand_divmod (mod_p, code, mode, op0, op1, target, unsignedp);
+}
+
+/* Return true if EXP has a range of values [0..1], false
+   otherwise. This works for constants and ssa names, calling back into the ranger.  */
+static bool
+expr_has_boolean_range (tree exp, gimple *stmt)
+{
+  /* An integral type with a single bit of precision.  */
+  if (INTEGRAL_TYPE_P (TREE_TYPE (exp))
+      && TYPE_UNSIGNED (TREE_TYPE (exp))
+      && TYPE_PRECISION (TREE_TYPE (exp)) == 1)
+    return true;
+
+  /* Signed 1 bit integers are not boolean ranges. */
+  if (!INTEGRAL_TYPE_P (TREE_TYPE (exp))
+      || TYPE_PRECISION (TREE_TYPE (exp)) <= 1)
+    return false;
+
+  if (TREE_CODE (exp) == SSA_NAME)
+    return ssa_name_has_boolean_range (exp, stmt);
+  if (TREE_CODE (exp) == INTEGER_CST)
+    return wi::leu_p (wi::to_wide (exp), 1);
+  return false;
 }
 
 rtx
@@ -9892,14 +10097,69 @@ expand_expr_real_2 (const_sepops ops, rtx target, machine_mode tmode,
 	op0 = gen_rtx_fmt_e (TYPE_UNSIGNED (TREE_TYPE (treeop0))
 			     ? ZERO_EXTEND : SIGN_EXTEND, mode, op0);
 
+      else if (SCALAR_INT_MODE_P (GET_MODE (op0))
+	       && optimize >= 2
+	       && SCALAR_INT_MODE_P (mode)
+	       && INTEGRAL_TYPE_P (TREE_TYPE (treeop0))
+	       && (GET_MODE_SIZE (as_a <scalar_int_mode> (mode))
+		   > GET_MODE_SIZE (as_a <scalar_int_mode> (GET_MODE (op0))))
+	       && get_range_pos_neg (treeop0,
+				     currently_expanding_gimple_stmt) == 1)
+	{
+	  /* If argument is known to be positive when interpreted
+	     as signed, we can expand it as both sign and zero
+	     extension.  Choose the cheaper sequence in that case.  */
+	  bool speed_p = optimize_insn_for_speed_p ();
+	  rtx uns_ret = NULL_RTX, sgn_ret = NULL_RTX;
+	  do_pending_stack_adjust ();
+	  start_sequence ();
+	  if (target == NULL_RTX)
+	    uns_ret = convert_to_mode (mode, op0, 1);
+	  else
+	    convert_move (target, op0, 1);
+	  rtx_insn *uns_insns = end_sequence ();
+	  start_sequence ();
+	  if (target == NULL_RTX)
+	    sgn_ret = convert_to_mode (mode, op0, 0);
+	  else
+	    convert_move (target, op0, 0);
+	  rtx_insn *sgn_insns = end_sequence ();
+	  unsigned uns_cost = seq_cost (uns_insns, speed_p);
+	  unsigned sgn_cost = seq_cost (sgn_insns, speed_p);
+	  bool was_tie = false;
+
+	  /* If costs are the same then use as tie breaker the other other
+	     factor.  */
+	  if (uns_cost == sgn_cost)
+	    {
+	      uns_cost = seq_cost (uns_insns, !speed_p);
+	      sgn_cost = seq_cost (sgn_insns, !speed_p);
+	      was_tie = true;
+	    }
+
+	  if (dump_file && (dump_flags & TDF_DETAILS))
+	    fprintf (dump_file, ";; positive extension:%s unsigned cost: %u; "
+				"signed cost: %u\n",
+		     was_tie ? " (needed tie breaker)" : "",
+		     uns_cost, sgn_cost);
+	  if (uns_cost < sgn_cost
+	      || (uns_cost == sgn_cost && TYPE_UNSIGNED (TREE_TYPE (treeop0))))
+	    {
+	      emit_insn (uns_insns);
+	      sgn_ret = uns_ret;
+	    }
+	  else
+	    emit_insn (sgn_insns);
+	  if (target == NULL_RTX)
+	    op0 = sgn_ret;
+	  else
+	    op0 = target;
+	}
       else if (target == 0)
-	op0 = convert_to_mode (mode, op0,
-			       TYPE_UNSIGNED (TREE_TYPE
-					      (treeop0)));
+	op0 = convert_to_mode (mode, op0, TYPE_UNSIGNED (TREE_TYPE (treeop0)));
       else
 	{
-	  convert_move (target, op0,
-			TYPE_UNSIGNED (TREE_TYPE (treeop0)));
+	  convert_move (target, op0, TYPE_UNSIGNED (TREE_TYPE (treeop0)));
 	  op0 = target;
 	}
 
@@ -10305,8 +10565,7 @@ expand_expr_real_2 (const_sepops ops, rtx target, machine_mode tmode,
 				      op0, op1, NULL_RTX, unsignedp);
 	      divmul_ret = expand_mult (mode, divmul_ret, op1, target,
 					unsignedp);
-	      rtx_insn *divmul_insns = get_insns ();
-	      end_sequence ();
+	      rtx_insn *divmul_insns = end_sequence ();
 	      start_sequence ();
 	      rtx modsub_ret
 		= expand_expr_divmod (TRUNC_MOD_EXPR, mode, treeop0, treeop1,
@@ -10315,8 +10574,7 @@ expand_expr_real_2 (const_sepops ops, rtx target, machine_mode tmode,
 						optab_default);
 	      modsub_ret = expand_binop (mode, this_optab, op0, modsub_ret,
 					 target, unsignedp, OPTAB_LIB_WIDEN);
-	      rtx_insn *modsub_insns = get_insns ();
-	      end_sequence ();
+	      rtx_insn *modsub_insns = end_sequence ();
 	      unsigned divmul_cost = seq_cost (divmul_insns, speed_p);
 	      unsigned modsub_cost = seq_cost (modsub_insns, speed_p);
 	      /* If costs are the same then use as tie breaker the other other
@@ -10342,9 +10600,8 @@ expand_expr_real_2 (const_sepops ops, rtx target, machine_mode tmode,
       /* Expand X*Y as X&-Y when Y must be zero or one.  */
       if (SCALAR_INT_MODE_P (mode))
 	{
-	  bool gimple_zero_one_valued_p (tree, tree (*)(tree));
-	  bool bit0_p = gimple_zero_one_valued_p (treeop0, nullptr);
-	  bool bit1_p = gimple_zero_one_valued_p (treeop1, nullptr);
+	  bool bit0_p = expr_has_boolean_range (treeop0, currently_expanding_gimple_stmt);
+	  bool bit1_p = expr_has_boolean_range (treeop1, currently_expanding_gimple_stmt);
 
 	  /* Expand X*Y as X&Y when both X and Y must be zero or one.  */
 	  if (bit0_p && bit1_p)
@@ -10558,8 +10815,7 @@ expand_expr_real_2 (const_sepops ops, rtx target, machine_mode tmode,
 	       and return.  */
 	    if (insn)
 	      {
-		rtx_insn *seq = get_insns ();
-		end_sequence ();
+		rtx_insn *seq = end_sequence ();
 		emit_insn (seq);
 		return target;
 	      }
@@ -10731,8 +10987,7 @@ expand_expr_real_2 (const_sepops ops, rtx target, machine_mode tmode,
 		    if (temp != dest_low)
 		      emit_move_insn (dest_low, temp);
 
-		    seq = get_insns ();
-		    end_sequence ();
+		    seq = end_sequence ();
 		    temp = target ;
 
 		    if (have_insn_for (ASHIFT, int_mode))
@@ -10744,8 +10999,7 @@ expand_expr_real_2 (const_sepops ops, rtx target, machine_mode tmode,
 							     target,
 							     unsignedp);
 
-			seq_old = get_insns ();
-			end_sequence ();
+			seq_old = end_sequence ();
 			if (seq_cost (seq, speed_p)
 			    >= seq_cost (seq_old, speed_p))
 			  {
@@ -11183,7 +11437,7 @@ expand_expr_real_gassign (gassign *g, rtx target, machine_mode tmode,
     case GIMPLE_BINARY_RHS:
       ops.op1 = gimple_assign_rhs2 (g);
 
-      /* Try to expand conditonal compare.  */
+      /* Try to expand conditional compare.  */
       if (targetm.have_ccmp ())
 	{
 	  gcc_checking_assert (targetm.gen_ccmp_next != NULL);
@@ -11211,6 +11465,45 @@ expand_expr_real_gassign (gassign *g, rtx target, machine_mode tmode,
   if (REG_P (r) && !REG_EXPR (r))
     set_reg_attrs_for_decl_rtl (lhs, r);
   return r;
+}
+
+/* A subroutine of expand_expr_real_1.  Attempt to VIEW_CONVERT_EXPR
+   the complex expression OP0 to the vector mode MODE.  Store the
+   result at TARGET if possible (if TARGET is nonzero).  Returns
+   NULL_RTX on failure.  */
+static rtx
+try_expand_complex_as_vector (machine_mode mode, rtx op0, rtx target)
+{
+  if (COMPLEX_MODE_P (GET_MODE (op0))
+      && VECTOR_MODE_P (mode)
+      && known_eq (GET_MODE_NUNITS (mode), 2)
+      && GET_MODE_INNER (mode) == GET_MODE_INNER (GET_MODE (op0)))
+    {
+      enum insn_code icode = convert_optab_handler (vec_init_optab, mode,
+						    GET_MODE_INNER (mode));
+      if (icode != CODE_FOR_nothing)
+	{
+	  if (!target || !REG_P (target))
+	    target = gen_reg_rtx (mode);
+	  rtx rpart = read_complex_part (op0, false);
+	  rtx ipart = read_complex_part (op0, true);
+	  if (!REG_P (rpart) && !CONSTANT_P (rpart))
+	    rpart = force_reg (GET_MODE_INNER (mode), rpart);
+	  if (!REG_P (ipart) && !CONSTANT_P (ipart))
+	    ipart = force_reg (GET_MODE_INNER (mode), ipart);
+	  rtvec vec = rtvec_alloc (2);
+	  RTVEC_ELT (vec, 0) = rpart;
+	  RTVEC_ELT (vec, 1) = ipart;
+	  rtx par = gen_rtx_PARALLEL (mode, vec);
+	  rtx_insn *insn = GEN_FCN (icode) (target, par);
+	  if (insn)
+	    {
+	      emit_insn (insn);
+	      return target;
+	    }
+	}
+    }
+  return NULL_RTX;
 }
 
 rtx
@@ -11243,7 +11536,8 @@ expand_expr_real_1 (tree exp, rtx target, machine_mode tmode,
      internally extend after arithmetic operations, we can avoid doing that
      when reading from SSA_NAMEs of vars.  */
 #define EXTEND_BITINT(expr) \
-  ((TREE_CODE (type) == BITINT_TYPE					\
+  ((BITINT_TYPE_P (type)						\
+    && !bitint_extended							\
     && reduce_bit_field							\
     && mode != BLKmode							\
     && modifier != EXPAND_MEMORY					\
@@ -11255,6 +11549,13 @@ expand_expr_real_1 (tree exp, rtx target, machine_mode tmode,
   type = TREE_TYPE (exp);
   mode = TYPE_MODE (type);
   unsignedp = TYPE_UNSIGNED (type);
+  if (BITINT_TYPE_P (type) && bitint_extended == -1)
+    {
+      struct bitint_info info;
+      bool ok = targetm.c.bitint_type_info (TYPE_PRECISION (type), &info);
+      gcc_assert (ok);
+      bitint_extended = info.extended;
+    }
 
   treeop0 = treeop1 = treeop2 = NULL_TREE;
   if (!VL_EXP_CLASS_P (exp))
@@ -11384,11 +11685,16 @@ expand_expr_real_1 (tree exp, rtx target, machine_mode tmode,
 	  /* ???  internal call expansion doesn't follow the usual API
 	     of returning the destination RTX and being passed a desired
 	     target.  */
+	  if (modifier == EXPAND_WRITE)
+	    return DECL_RTL (SSA_NAME_VAR (exp));
 	  rtx dest = gen_reg_rtx (TYPE_MODE (TREE_TYPE (exp)));
 	  tree tmplhs = make_tree (TREE_TYPE (exp), dest);
-	  gimple_call_set_lhs (g, tmplhs);
+	  tree var_or_id = SSA_NAME_VAR (exp);
+	  if (!var_or_id)
+	    var_or_id = SSA_NAME_IDENTIFIER (exp);
+	  SET_SSA_NAME_VAR_OR_IDENTIFIER (exp, tmplhs);
 	  expand_internal_call (as_a <gcall *> (g));
-	  gimple_call_set_lhs (g, exp);
+	  SET_SSA_NAME_VAR_OR_IDENTIFIER (exp, var_or_id);
 	  return dest;
 	}
 
@@ -11588,7 +11894,7 @@ expand_expr_real_1 (tree exp, rtx target, machine_mode tmode,
 
     case INTEGER_CST:
       {
-	if (TREE_CODE (type) == BITINT_TYPE)
+	if (BITINT_TYPE_P (type))
 	  {
 	    unsigned int prec = TYPE_PRECISION (type);
 	    struct bitint_info info;
@@ -12180,13 +12486,26 @@ expand_expr_real_1 (tree exp, rtx target, machine_mode tmode,
 	   and need be, put it there.  */
 	else if (CONSTANT_P (op0) || (!MEM_P (op0) && must_force_mem))
 	  {
+	    machine_mode tem_mode = TYPE_MODE (TREE_TYPE (tem));
 	    poly_int64 size;
 	    if (!poly_int_tree_p (TYPE_SIZE_UNIT (TREE_TYPE (tem)), &size))
 	      size = max_int_size_in_bytes (TREE_TYPE (tem));
-	    memloc = assign_stack_local (TYPE_MODE (TREE_TYPE (tem)), size,
-					 TREE_CODE (tem) == SSA_NAME
-					 ? TYPE_ALIGN (TREE_TYPE (tem))
-					 : get_object_alignment (tem));
+	    unsigned int align = TREE_CODE (tem) == SSA_NAME
+				 ? TYPE_ALIGN (TREE_TYPE (tem))
+				 : get_object_alignment (tem);
+	    if (STRICT_ALIGNMENT)
+	      {
+		/* For STRICT_ALIGNMENT targets, when we force the operand to
+		   memory, we may need to increase the alignment to meet the
+		   expectation in later RTL lowering passes.  The increased
+		   alignment is capped by MAX_SUPPORTED_STACK_ALIGNMENT.  */
+		if (tem_mode != BLKmode)
+		  align = MAX (align, GET_MODE_ALIGNMENT (tem_mode));
+		else
+		  align = MAX (align, TYPE_ALIGN (TREE_TYPE (tem)));
+		align = MIN (align, (unsigned) MAX_SUPPORTED_STACK_ALIGNMENT);
+	      }
+	    memloc = assign_stack_local (tem_mode, size, align);
 	    emit_move_insn (memloc, op0);
 	    op0 = memloc;
 	    clear_mem_expr = true;
@@ -12603,6 +12922,12 @@ expand_expr_real_1 (tree exp, rtx target, machine_mode tmode,
 	return extract_bit_field (op0, TYPE_PRECISION (type), 0,
 				  TYPE_UNSIGNED (type), NULL_RTX,
 				  mode, mode, false, NULL);
+      /* If source is a complex number and destination is a
+	 two-component vector with same inner type, try to use
+	 vector initialization.  */
+      else if ((temp = try_expand_complex_as_vector (mode, op0, target))
+	       != NULL_RTX)
+	return temp;
       /* As a last resort, spill op0 to memory, and reload it in a
 	 different mode.  */
       else if (!MEM_P (op0))
@@ -13165,6 +13490,8 @@ constant_byte_string (tree arg, tree *ptr_offset, tree *mem_size, tree *decl,
 	     of the expected type and size.  */
 	  if (!initsize)
 	    initsize = integer_zero_node;
+	  else if (!tree_fits_uhwi_p (initsize))
+	    return NULL_TREE;
 
 	  unsigned HOST_WIDE_INT size = tree_to_uhwi (initsize);
 	  if (size > (unsigned HOST_WIDE_INT) INT_MAX)
@@ -13235,7 +13562,7 @@ maybe_optimize_pow2p_mod_cmp (enum tree_code code, tree *arg0, tree *arg1)
       || integer_zerop (*arg1)
       /* If c is known to be non-negative, modulo will be expanded as unsigned
 	 modulo.  */
-      || get_range_pos_neg (treeop0) == 1)
+      || get_range_pos_neg (treeop0, currently_expanding_gimple_stmt) == 1)
     return code;
 
   /* x % c == d where d < 0 && d <= -c should be always false.  */
@@ -13269,8 +13596,7 @@ maybe_optimize_pow2p_mod_cmp (enum tree_code code, tree *arg0, tree *arg1)
   start_sequence ();
   rtx mor = expand_expr_real_2 (&ops, NULL_RTX, TYPE_MODE (ops.type),
 				EXPAND_NORMAL);
-  rtx_insn *moinsns = get_insns ();
-  end_sequence ();
+  rtx_insn *moinsns = end_sequence ();
 
   unsigned mocost = seq_cost (moinsns, speed_p);
   mocost += rtx_cost (mor, mode, EQ, 0, speed_p);
@@ -13285,8 +13611,7 @@ maybe_optimize_pow2p_mod_cmp (enum tree_code code, tree *arg0, tree *arg1)
   start_sequence ();
   rtx mur = expand_expr_real_2 (&ops, NULL_RTX, TYPE_MODE (ops.type),
 				EXPAND_NORMAL);
-  rtx_insn *muinsns = get_insns ();
-  end_sequence ();
+  rtx_insn *muinsns = end_sequence ();
 
   unsigned mucost = seq_cost (muinsns, speed_p);
   mucost += rtx_cost (mur, mode, EQ, 0, speed_p);
@@ -13369,7 +13694,8 @@ maybe_optimize_mod_cmp (enum tree_code code, tree *arg0, tree *arg1)
   /* If both operands are known to have the sign bit clear, handle
      even the signed modulo case as unsigned.  treeop1 is always
      positive >= 2, checked above.  */
-  if (!TYPE_UNSIGNED (type) && get_range_pos_neg (treeop0) != 1)
+  if (!TYPE_UNSIGNED (type)
+      && get_range_pos_neg (treeop0, currently_expanding_gimple_stmt) != 1)
     sgn = SIGNED;
 
   if (!TYPE_UNSIGNED (type))
@@ -13472,8 +13798,7 @@ maybe_optimize_mod_cmp (enum tree_code code, tree *arg0, tree *arg1)
   start_sequence ();
   rtx mor = expand_expr_real_2 (&ops, NULL_RTX, TYPE_MODE (ops.type),
 				EXPAND_NORMAL);
-  rtx_insn *moinsns = get_insns ();
-  end_sequence ();
+  rtx_insn *moinsns = end_sequence ();
 
   unsigned mocost = seq_cost (moinsns, speed_p);
   mocost += rtx_cost (mor, mode, EQ, 0, speed_p);
@@ -13493,8 +13818,7 @@ maybe_optimize_mod_cmp (enum tree_code code, tree *arg0, tree *arg1)
 
   start_sequence ();
   rtx mur = expand_normal (t);
-  rtx_insn *muinsns = get_insns ();
-  end_sequence ();
+  rtx_insn *muinsns = end_sequence ();
 
   unsigned mucost = seq_cost (muinsns, speed_p);
   mucost += rtx_cost (mur, mode, LE, 0, speed_p);
@@ -13533,12 +13857,6 @@ maybe_optimize_sub_cmp_0 (enum tree_code code, tree *arg0, tree *arg1)
   tree treeop1 = gimple_assign_rhs2 (stmt);
   if (!TYPE_OVERFLOW_UNDEFINED (TREE_TYPE (treeop0)))
     return;
-
-  if (issue_strict_overflow_warning (WARN_STRICT_OVERFLOW_COMPARISON))
-    warning_at (gimple_location (stmt), OPT_Wstrict_overflow,
-		"assuming signed overflow does not occur when "
-		"simplifying %<X - Y %s 0%> to %<X %s Y%>",
-		op_symbol_code (code), op_symbol_code (code));
 
   *arg0 = treeop0;
   *arg1 = treeop1;
@@ -14336,6 +14654,75 @@ generate_crc_table (unsigned HOST_WIDE_INT polynom, unsigned short crc_bits)
   return assemble_crc_table (polynom, crc_bits);
 }
 
+/* Calculate CRC for the initial CRC and given POLYNOMIAL.
+   CRC_BITS is CRC size.  */
+
+static unsigned HOST_WIDE_INT
+calculate_reversed_crc (unsigned HOST_WIDE_INT crc,
+			unsigned HOST_WIDE_INT polynomial,
+			unsigned short crc_bits)
+{
+  unsigned HOST_WIDE_INT rev_polynom = reflect_hwi (polynomial, crc_bits);
+  for (int j = 0; j < 8; j++)
+    {
+      if (crc & 1)
+	crc = (crc >> 1) ^ rev_polynom;
+      else
+	crc >>= 1;
+    }
+  /* Zero out bits in crc beyond the specified number of crc_bits.  */
+  if (crc_bits < sizeof (crc) * CHAR_BIT)
+    crc &= (HOST_WIDE_INT_1U << crc_bits) - 1;
+  return crc;
+}
+
+/* Assemble CRC table with 256 elements for the given POLYNOM and CRC_BITS.
+   POLYNOM is the polynomial used to calculate the CRC table's elements.
+   CRC_BITS is the size of CRC, may be 8, 16, ... . */
+
+static rtx
+assemble_reversed_crc_table (unsigned HOST_WIDE_INT polynom, unsigned short crc_bits)
+{
+  unsigned table_el_n = 0x100;
+  tree ar = build_array_type (make_unsigned_type (crc_bits),
+			      build_index_type (size_int (table_el_n - 1)));
+
+  /* Initialize the table.  */
+  vec<tree, va_gc> *initial_values;
+  vec_alloc (initial_values, table_el_n);
+  for (size_t i = 0; i < table_el_n; ++i)
+    {
+      unsigned HOST_WIDE_INT crc = calculate_reversed_crc (i, polynom, crc_bits);
+      tree element = build_int_cstu (make_unsigned_type (crc_bits), crc);
+      vec_safe_push (initial_values, element);
+    }
+  tree ctor = build_constructor_from_vec (ar, initial_values);
+  rtx mem = output_constant_def (ctor, 1);
+  gcc_assert (MEM_P (mem));
+  if (dump_file && (dump_flags & TDF_DETAILS))
+    {
+      fprintf (dump_file,
+	       ";; emitting reversed crc table crc_%u_polynomial_"
+	       HOST_WIDE_INT_PRINT_HEX " ",
+	       crc_bits, polynom);
+      print_rtl_single (dump_file, XEXP (mem, 0));
+      fprintf (dump_file, "\n");
+    }
+
+  return XEXP (mem, 0);
+}
+
+/* Generate reversed CRC table for the given POLYNOM and CRC_BITS.  */
+
+static rtx
+generate_reversed_crc_table (unsigned HOST_WIDE_INT polynom,
+			     unsigned short crc_bits)
+{
+  gcc_assert (crc_bits <= 64);
+
+  return assemble_reversed_crc_table (polynom, crc_bits);
+}
+
 /* Generate table-based CRC code for the given CRC, INPUT_DATA and the
    POLYNOMIAL (without leading 1).
 
@@ -14410,6 +14797,71 @@ calculate_table_based_CRC (rtx *crc, const rtx &input_data,
 
       /* crc = (crc << 8)
 	       ^ crc_table[(crc >> (crc_bit_size - 8)) ^ data_8bit];  */
+      *crc = expand_binop (mode, xor_optab, tab_el, high, NULL_RTX, 1,
+			   OPTAB_WIDEN);
+    }
+}
+
+/* Generate table-based reversed CRC code for the given CRC, INPUT_DATA
+   and the POLYNOMIAL (without leading 1).
+
+   This function generates code for reversed (bit-reflected) CRC calculation
+   using a pre-computed lookup table.  Unlike the standard CRC calculation,
+   this processes data from LSB to MSB, eliminating the need for explicit
+   bit reflection before and after the CRC computation.  */
+
+static void
+calculate_table_based_reversed_CRC (rtx *crc, const rtx &input_data,
+				    const rtx &polynomial,
+				    machine_mode data_mode)
+{
+  machine_mode mode = GET_MODE (*crc);
+  unsigned short crc_bit_size = GET_MODE_BITSIZE (mode).to_constant ();
+  unsigned short data_size = GET_MODE_SIZE (data_mode).to_constant ();
+  rtx tab = generate_reversed_crc_table (UINTVAL (polynomial), crc_bit_size);
+
+  /* CRC's mode is always at least as wide as INPUT_DATA.  Convert
+     INPUT_DATA into CRC's mode once outside the loop since INPUT_DATA
+     is loop-invariant.  */
+  rtx data_in_crc_mode = gen_reg_rtx (mode);
+  convert_move (data_in_crc_mode, input_data, 1);
+
+  for (unsigned short i = 0; i < data_size; i++)
+    {
+      *crc = force_reg (mode, *crc);
+
+      /* data >> (8 * i).  */
+      unsigned range_8 = 8 * i;
+      rtx data = expand_shift (RSHIFT_EXPR, mode, data_in_crc_mode,
+			       range_8, NULL_RTX, 1);
+
+      /* crc ^ (data >> (8 * i)).  */
+      rtx in = expand_binop (mode, xor_optab, *crc, data,
+			     NULL_RTX, 1, OPTAB_WIDEN);
+
+      /* (crc ^ data) & 0xFF.  */
+      rtx index = expand_and (mode, in, gen_int_mode (255, mode),
+			      NULL_RTX);
+      int log_crc_size = exact_log2 (GET_MODE_SIZE (mode).to_constant ());
+      index = expand_shift (LSHIFT_EXPR, mode, index,
+			    log_crc_size, NULL_RTX, 0);
+
+      rtx addr = gen_reg_rtx (Pmode);
+      convert_move (addr, index, 1);
+      addr = expand_binop (Pmode, add_optab, addr, tab, NULL_RTX,
+			    0, OPTAB_DIRECT);
+
+      /* crc_table[(crc ^ data) & 0xFF].  */
+      rtx tab_el = validize_mem (gen_rtx_MEM (mode, addr));
+
+      /* (crc >> 8) if CRC is larger than 8, otherwise 0.  */
+      rtx high = NULL_RTX;
+      if (crc_bit_size != 8)
+	high = expand_shift (RSHIFT_EXPR, mode, *crc, 8, NULL_RTX, 1);
+      else
+	high = gen_int_mode (0, mode);
+
+      /* crc = (crc >> 8) ^ crc_table[(crc ^ data) & 0xFF].  */
       *crc = expand_binop (mode, xor_optab, tab_el, high, NULL_RTX, 1,
 			   OPTAB_WIDEN);
     }
@@ -14552,41 +15004,30 @@ generate_reflecting_code_standard (rtx *op)
    the POLYNOMIAL (without leading 1).
 
    CRC is OP1, data is OP2 and the polynomial is OP3.
-   This must generate CRC table and assembly for the following code,
+   This generates a reversed CRC table and assembly for the following code,
    where crc_bit_size and data_bit_size may be 8, 16, 32, 64:
    uint_crc_bit_size_t
    crc_crc_bit_size (uint_crc_bit_size_t crc_init,
-			   uint_data_bit_size_t data, size_t size)
+		     uint_data_bit_size_t data)
    {
-     reflect (crc_init)
      uint_crc_bit_size_t crc = crc_init;
-     reflect (data);
      for (int i = 0; i < data_bit_size / 8; i++)
-       crc = (crc << 8) ^ crc_table[(crc >> (crc_bit_size - 8))
-			  ^ (data >> (data_bit_size - (i + 1) * 8) & 0xFF))];
-     reflect (crc);
+       crc = (crc >> 8) ^ crc_table[(crc ^ (data >> (i * 8))) & 0xFF];
      return crc;
-   }  */
+   }
+
+   This approach uses a pre-computed reversed polynomial table, eliminating
+   the need for explicit bit reflection before and after the CRC computation.  */
 
 void
 expand_reversed_crc_table_based (rtx op0, rtx op1, rtx op2, rtx op3,
-				 machine_mode data_mode,
-				 void (*gen_reflecting_code) (rtx *op))
+				 machine_mode data_mode)
 {
   gcc_assert (!CONST_INT_P (op0));
   gcc_assert (CONST_INT_P (op3));
   machine_mode crc_mode = GET_MODE (op0);
-
   rtx crc = gen_reg_rtx (crc_mode);
   convert_move (crc, op1, 0);
-  gen_reflecting_code (&crc);
-
-  rtx data = gen_reg_rtx (data_mode);
-  convert_move (data, op2, 0);
-  gen_reflecting_code (&data);
-
-  calculate_table_based_CRC (&crc, data, op3, data_mode);
-
-  gen_reflecting_code (&crc);
+  calculate_table_based_reversed_CRC (&crc, op2, op3, data_mode);
   convert_move (op0, crc, 0);
 }

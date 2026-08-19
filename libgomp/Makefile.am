@@ -66,11 +66,12 @@ libgomp_la_LINK = $(LINK) $(libgomp_la_LDFLAGS)
 libgomp_la_SOURCES = alloc.c atomic.c barrier.c critical.c env.c error.c \
 	icv.c icv-device.c iter.c iter_ull.c loop.c loop_ull.c ordered.c \
 	parallel.c scope.c sections.c single.c task.c team.c work.c lock.c \
-	mutex.c proc.c sem.c bar.c ptrlock.c time.c fortran.c affinity.c \
-	target.c splay-tree.c libgomp-plugin.c oacc-parallel.c oacc-host.c \
-	oacc-init.c oacc-mem.c oacc-async.c oacc-plugin.c oacc-cuda.c \
-	priority_queue.c affinity-fmt.c teams.c allocator.c oacc-profiling.c \
-	oacc-target.c target-indirect.c
+	mutex.c numa.c proc.c sem.c bar.c ptrlock.c time.c fortran.c \
+	affinity.c target.c splay-tree.c libgomp-plugin.c oacc-parallel.c \
+	oacc-host.c oacc-init.c oacc-mem.c oacc-async.c oacc-plugin.c \
+	oacc-cuda.c priority_queue.c affinity-fmt.c teams.c allocator.c \
+	simple-allocator.c oacc-profiling.c oacc-target.c target-indirect.c \
+	target-cxa-dso-dtor.c
 
 include $(top_srcdir)/plugin/Makefrag.am
 
@@ -97,7 +98,7 @@ openacc_kinds.mod: openacc.mod
 openacc.mod: openacc.lo
 	:
 %.mod: %.f90
-	$(FC) $(FCFLAGS) -cpp -fopenmp -fsyntax-only $<
+	$(FC) $(FCFLAGS) -cpp -fopenmp -fsyntax-only -Wno-c-binding-type $<
 fortran.lo: libgomp_f.h
 fortran.o: libgomp_f.h
 env.lo: libgomp_f.h

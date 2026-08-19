@@ -28,7 +28,6 @@ pragma Assertion_Policy (Pre            => Ignore,
 --  in order to work around an internal limitation of the compiler.
 
 with System;
-with System.Parameters;
 
 package Interfaces.C with
   SPARK_Mode,
@@ -59,10 +58,9 @@ is
    --  avoid ambiguities when compiling in the presence of s-auxdec.ads and
    --  a non-private system.address type.
 
-   type int   is new Integer;
-   type short is new Short_Integer;
-   type long  is range -(2 ** (System.Parameters.long_bits - Integer'(1)))
-     .. +(2 ** (System.Parameters.long_bits - Integer'(1))) - 1;
+   type int       is new Integer;
+   type short     is new Short_Integer;
+   type long      is new Long_Integer;
    type long_long is new Long_Long_Integer;
 
    type signed_char is range SCHAR_MIN .. SCHAR_MAX;
@@ -133,6 +131,7 @@ is
    function C_Length_Ghost (Item : char_array) return size_t
    with
      Ghost,
+     Import,
      Pre  => Is_Nul_Terminated (Item),
      Post => C_Length_Ghost'Result <= Item'Last - Item'First
        and then Item (Item'First + C_Length_Ghost'Result) = nul
@@ -274,6 +273,7 @@ is
    function C_Length_Ghost (Item : wchar_array) return size_t
    with
      Ghost,
+     Import,
      Pre  => Is_Nul_Terminated (Item),
      Post => C_Length_Ghost'Result <= Item'Last - Item'First
        and then Item (Item'First + C_Length_Ghost'Result) = wide_nul
@@ -395,6 +395,7 @@ is
    function C_Length_Ghost (Item : char16_array) return size_t
    with
      Ghost,
+     Import,
      Pre  => Is_Nul_Terminated (Item),
      Post => C_Length_Ghost'Result <= Item'Last - Item'First
        and then Item (Item'First + C_Length_Ghost'Result) = char16_nul
@@ -510,6 +511,7 @@ is
    function C_Length_Ghost (Item : char32_array) return size_t
    with
      Ghost,
+     Import,
      Pre  => Is_Nul_Terminated (Item),
      Post => C_Length_Ghost'Result <= Item'Last - Item'First
        and then Item (Item'First + C_Length_Ghost'Result) = char32_nul

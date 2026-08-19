@@ -1,5 +1,5 @@
 /* Implement the SELECT statement for character variables.
-   Copyright (C) 2008-2025 Free Software Foundation, Inc.
+   Copyright (C) 2008-2026 Free Software Foundation, Inc.
 
 This file is part of the GNU Fortran runtime library (libgfortran).
 
@@ -116,7 +116,7 @@ select_string (select_struct *table, int table_len, const CHARTYPE *selector,
         high = mid;
     }
 
-  /* The string now lies between the low indeces of the now-adjacent
+  /* The string now lies between the low indices of the now-adjacent
      high and low entries.  Because it is less than the low entry of
      'high', it can't be that one.  If low is still -1, then no
      entries match.  Otherwise, we have to check the high entry of

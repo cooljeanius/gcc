@@ -1,5 +1,5 @@
 /* SSA Jump Threading
-   Copyright (C) 2005-2025 Free Software Foundation, Inc.
+   Copyright (C) 2005-2026 Free Software Foundation, Inc.
    Contributed by Jeff Law  <law@redhat.com>
 
 This file is part of GCC.
@@ -500,17 +500,10 @@ jump_threader::simplify_control_stmt_condition_1
   gimple_cond_set_lhs (dummy_cond, op0);
   gimple_cond_set_rhs (dummy_cond, op1);
 
-  /* We absolutely do not care about any type conversions
-     we only care about a zero/nonzero value.  */
-  fold_defer_overflow_warnings ();
-
   tree res = fold_binary (cond_code, boolean_type_node, op0, op1);
   if (res)
     while (CONVERT_EXPR_P (res))
       res = TREE_OPERAND (res, 0);
-
-  fold_undefer_overflow_warnings ((res && is_gimple_min_invariant (res)),
-				  stmt, WARN_STRICT_OVERFLOW_CONDITIONAL);
 
   /* If we have not simplified the condition down to an invariant,
      then use the pass specific callback to simplify the condition.  */
@@ -658,7 +651,7 @@ propagate_threaded_block_debug_into (basic_block dest, basic_block src)
     fewvars.release ();
 }
 
-/* See if TAKEN_EDGE->dest is a threadable block with no side effecs (ie, it
+/* See if TAKEN_EDGE->dest is a threadable block with no side effects (ie, it
    need not be duplicated as part of the CFG/SSA updating process).
 
    If it is threadable, add it to PATH and VISITED and recurse, ultimately

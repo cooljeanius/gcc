@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2025, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -692,15 +692,10 @@ is
 
       Nanos_In_56_Years : constant := (14 * 366 + 42 * 365) * Nanos_In_Day;
 
-      type int_Pointer  is access all Interfaces.C.int;
-      type long_Pointer is access all Interfaces.C.long;
-
-      type OS_Time_Pointer is access all System.OS_Lib.OS_Time;
-
       procedure localtime_tzoff
-        (timer       : OS_Time_Pointer;
-         is_historic : int_Pointer;
-         off         : long_Pointer);
+        (timer       : System.OS_Lib.OS_Time;
+         is_historic : Interfaces.C.int;
+         off         : out Interfaces.C.long);
       pragma Import (C, localtime_tzoff, "__gnat_localtime_tzoff");
       --  This routine is a interfacing wrapper around the library function
       --  __gnat_localtime_tzoff. Parameter 'timer' represents a Unix-based
@@ -713,9 +708,9 @@ is
 
       Adj_Cent : Integer;
       Date_N   : Time_Rep;
-      Flag     : aliased Interfaces.C.int;
-      Offset   : aliased Interfaces.C.long;
-      Secs_T   : aliased System.OS_Lib.OS_Time;
+      Flag     : Interfaces.C.int;
+      Offset   : Interfaces.C.long;
+      Secs_T   : System.OS_Lib.OS_Time;
 
    --  Start of processing for UTC_Time_Offset
 
@@ -759,11 +754,7 @@ is
 
       Flag := (if Is_Historic then 1 else 0);
 
-      localtime_tzoff
-        (Secs_T'Unchecked_Access,
-         Flag'Unchecked_Access,
-         Offset'Unchecked_Access);
-      pragma Annotate (CodePeer, Modified, Offset);
+      localtime_tzoff (Secs_T, Flag, Offset);
 
       return Long_Integer (Offset);
    end UTC_Time_Offset;
@@ -1068,19 +1059,28 @@ is
          tv_nsec : out Long_Integer)
       is
          pragma Unsuppress (Overflow_Check);
-         Secs      : Duration;
-         Nano_Secs : Duration;
 
       begin
-         --  Seconds extraction, avoid potential rounding errors
+         if D = 0.0 then
+            tv_sec  := 0;
+            tv_nsec := 0;
 
-         Secs   := D - 0.5;
-         tv_sec := Long_Long_Integer (Secs);
+         elsif D < 0.0 then
+            tv_sec := Long_Long_Integer (D + 0.5);
+            if D = Duration (tv_sec) then
+               tv_nsec := 0;
+            else
+               tv_nsec := Long_Integer ((D - Duration (tv_sec)) * Nano + 0.5);
+            end if;
 
-         --  Nanoseconds extraction
-
-         Nano_Secs := D - Duration (tv_sec);
-         tv_nsec := Long_Integer (Nano_Secs * Nano);
+         else
+            tv_sec := Long_Long_Integer (D - 0.5);
+            if D = Duration (tv_sec) then
+               tv_nsec := 0;
+            else
+               tv_nsec := Long_Integer ((D - Duration (tv_sec)) * Nano - 0.5);
+            end if;
+         end if;
       end To_Struct_Timespec_64;
 
       ------------------

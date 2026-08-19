@@ -1,5 +1,5 @@
 /* Integrated Register Allocator (IRA) entry point.
-   Copyright (C) 2006-2025 Free Software Foundation, Inc.
+   Copyright (C) 2006-2026 Free Software Foundation, Inc.
    Contributed by Vladimir Makarov <vmakarov@redhat.com>.
 
 This file is part of GCC.
@@ -466,6 +466,7 @@ static void
 setup_class_hard_regs (void)
 {
   int cl, i, hard_regno, n;
+  unsigned int j;
   HARD_REG_SET processed_hard_reg_set;
 
   ira_assert (SHRT_MAX >= FIRST_PSEUDO_REGISTER);
@@ -497,9 +498,12 @@ setup_class_hard_regs (void)
 	    }
 	}
       ira_class_hard_regs_num[cl] = n;
-      for (n = 0, i = 0; i < FIRST_PSEUDO_REGISTER; i++)
-	if (TEST_HARD_REG_BIT (temp_hard_regset, i))
-	  ira_non_ordered_class_hard_regs[cl][n++] = i;
+      n = 0;
+      j = 0;
+      hard_reg_set_iterator hrsi;
+      EXECUTE_IF_SET_IN_HARD_REG_SET (temp_hard_regset, 0, j, hrsi)
+	ira_non_ordered_class_hard_regs[cl][n++] = j;
+
       ira_assert (ira_class_hard_regs_num[cl] == n);
     }
 }
@@ -758,7 +762,7 @@ setup_stack_reg_pressure_class (void)
       {
 	cl = ira_pressure_classes[i];
 	temp_hard_regset2 = temp_hard_regset & reg_class_contents[cl];
-	size = hard_reg_set_size (temp_hard_regset2);
+	size = hard_reg_set_popcount (temp_hard_regset2);
 	if (best < size)
 	  {
 	    best = size;
@@ -1843,6 +1847,12 @@ ira_setup_alts (rtx_insn *insn)
 		    goto op_success;
 		    break;
 
+		  case '{':
+		    if (REG_P (op) || SUBREG_P (op))
+		      goto op_success;
+		    win_p = true;
+		    break;
+
 		  default:
 		    {
 		      enum constraint_num cn = lookup_constraint (p);
@@ -2113,6 +2123,87 @@ ira_get_dup_out_num (int op_num, alternative_mask alts,
 
 
 
+/* Return true if a replacement of SRC by DEST does not lead to unsatisfiable
+   asm.  A replacement is valid if SRC or DEST are not constrained in asm
+   inputs of a single asm statement.  See match_asm_constraints_2() for more
+   details.  TODO: As in match_asm_constraints_2() consider alternatives more
+   precisely.  */
+
+static bool
+valid_replacement_for_asm_input_p_1 (const_rtx asmops, const_rtx src, const_rtx dest)
+{
+  int ninputs = ASM_OPERANDS_INPUT_LENGTH (asmops);
+  rtvec inputs = ASM_OPERANDS_INPUT_VEC (asmops);
+  for (int i = 0; i < ninputs; ++i)
+    {
+      rtx input_src = RTVEC_ELT (inputs, i);
+      const char *constraint_src
+	= ASM_OPERANDS_INPUT_CONSTRAINT (asmops, i);
+      if (rtx_equal_p (input_src, src)
+	  && strchr (constraint_src, '{') != nullptr)
+	for (int j = 0; j < ninputs; ++j)
+	  {
+	    rtx input_dest = RTVEC_ELT (inputs, j);
+	    const char *constraint_dest
+	      = ASM_OPERANDS_INPUT_CONSTRAINT (asmops, j);
+	    if (rtx_equal_p (input_dest, dest)
+		&& strchr (constraint_dest, '{') != nullptr)
+	      return false;
+	  }
+    }
+  return true;
+}
+
+/* Return true if a replacement of SRC by DEST does not lead to unsatisfiable
+   asm.  A replacement is valid if SRC or DEST are not constrained in asm
+   inputs of a single asm statement.  The final check is done in function
+   valid_replacement_for_asm_input_p_1.  */
+
+static bool
+valid_replacement_for_asm_input_p (const_rtx src, const_rtx dest)
+{
+  /* Bail out early if there is no asm statement.  */
+  if (!crtl->has_asm_statement)
+    return true;
+  for (df_ref use = DF_REG_USE_CHAIN (REGNO (src));
+       use;
+       use = DF_REF_NEXT_REG (use))
+    {
+      struct df_insn_info *use_info = DF_REF_INSN_INFO (use);
+      /* Only check real uses, not artificial ones.  */
+      if (use_info)
+	{
+	  rtx_insn *insn = DF_REF_INSN (use);
+	  rtx pat = PATTERN (insn);
+	  if (asm_noperands (pat) <= 0)
+	    continue;
+	  if (GET_CODE (pat) == SET)
+	    {
+	      if (!valid_replacement_for_asm_input_p_1 (SET_SRC (pat), src, dest))
+		return false;
+	    }
+	  else if (GET_CODE (pat) == PARALLEL)
+	    for (int i = 0, len = XVECLEN (pat, 0); i < len; ++i)
+	      {
+		rtx asmops = XVECEXP (pat, 0, i);
+		if (GET_CODE (asmops) == SET)
+		  asmops = SET_SRC (asmops);
+		if (GET_CODE (asmops) == ASM_OPERANDS
+		    && !valid_replacement_for_asm_input_p_1 (asmops, src, dest))
+		  return false;
+	      }
+	  else if (GET_CODE (pat) == ASM_OPERANDS)
+	    {
+	      if (!valid_replacement_for_asm_input_p_1 (pat, src, dest))
+		return false;
+	    }
+	  else
+	    gcc_unreachable ();
+	}
+    }
+  return true;
+}
+
 /* Search forward to see if the source register of a copy insn dies
    before either it or the destination register is modified, but don't
    scan past the end of the basic block.  If so, we can replace the
@@ -2162,7 +2253,8 @@ decrease_live_ranges_number (void)
 	       auto-inc memory reference, so we must disallow this
 	       optimization on them.  */
 	    || sregno == STACK_POINTER_REGNUM
-	    || dregno == STACK_POINTER_REGNUM)
+	    || dregno == STACK_POINTER_REGNUM
+	    || !valid_replacement_for_asm_input_p (src, dest))
 	  continue;
 
 	dest_death = NULL_RTX;
@@ -3522,10 +3614,14 @@ update_equiv_regs_prescan (void)
 	}
 
   HARD_REG_SET extra_caller_saves = callee_abis.caller_save_regs (*crtl->abi);
+
+  hard_reg_set_iterator hrsi;
+  unsigned int regno = 0;
   if (!hard_reg_set_empty_p (extra_caller_saves))
-    for (unsigned int regno = 0; regno < FIRST_PSEUDO_REGISTER; ++regno)
-      if (TEST_HARD_REG_BIT (extra_caller_saves, regno))
+    {
+      EXECUTE_IF_SET_IN_HARD_REG_SET (extra_caller_saves, 0, regno, hrsi)
 	df_set_regs_ever_live (regno, true);
+    }
 }
 
 /* Find registers that are equivalent to a single value throughout the
@@ -3894,6 +3990,7 @@ combine_and_move_insns (void)
 	continue;
 
       rtx_insn *use_insn = 0;
+      bool multiple_insns = false;
       for (df_ref use = DF_REG_USE_CHAIN (regno);
 	   use;
 	   use = DF_REF_NEXT_REG (use))
@@ -3901,10 +3998,19 @@ combine_and_move_insns (void)
 	  {
 	    if (DEBUG_INSN_P (DF_REF_INSN (use)))
 	      continue;
-	    gcc_assert (!use_insn);
+	    if (use_insn && DF_REF_INSN (use) != use_insn)
+	      {
+		multiple_insns = true;
+		break;
+	      }
 	    use_insn = DF_REF_INSN (use);
 	  }
       gcc_assert (use_insn);
+
+      /* If a register is used by more than one insn, we cannot trivially move
+	 or delete the definition anymore.  */
+      if (multiple_insns)
+	continue;
 
       /* Don't substitute into jumps.  indirect_jump_optimize does
 	 this for anything we are prepared to handle.  */
@@ -3944,7 +4050,7 @@ combine_and_move_insns (void)
 	  /* Append the REG_DEAD notes from def_insn.  */
 	  for (rtx *p = &REG_NOTES (def_insn); (link = *p) != 0; )
 	    {
-	      if (REG_NOTE_KIND (XEXP (link, 0)) == REG_DEAD)
+	      if (REG_NOTE_KIND (link) == REG_DEAD)
 		{
 		  *p = XEXP (link, 1);
 		  XEXP (link, 1) = REG_NOTES (use_insn);
@@ -4151,12 +4257,14 @@ setup_reg_equiv (void)
 			    && REGNO (SET_SRC (set)) == (unsigned int) i);
 		x = SET_DEST (set);
 	      }
-	    if (! function_invariant_p (x)
+	    /* If PIC is enabled and the equiv is not a LEGITIMATE_PIC_OPERAND,
+	       we can't use it.  */
+	    if (! CONSTANT_P (x)
 		|| ! flag_pic
 		/* A function invariant is often CONSTANT_P but may
 		   include a register.  We promise to only pass
 		   CONSTANT_P objects to LEGITIMATE_PIC_OPERAND_P.  */
-		|| (CONSTANT_P (x) && LEGITIMATE_PIC_OPERAND_P (x)))
+		|| LEGITIMATE_PIC_OPERAND_P (x))
 	      {
 		/* It can happen that a REG_EQUIV note contains a MEM
 		   that is not a legitimate memory operand.  As later
@@ -4297,9 +4405,9 @@ build_insn_chain (void)
   sbitmap *live_subregs = XCNEWVEC (sbitmap, max_regno);
   auto_bitmap live_subregs_used;
 
-  for (i = 0; i < FIRST_PSEUDO_REGISTER; i++)
-    if (TEST_HARD_REG_BIT (eliminable_regset, i))
-      bitmap_set_bit (elim_regset, i);
+  hard_reg_set_iterator hrsi;
+  EXECUTE_IF_SET_IN_HARD_REG_SET (eliminable_regset, 0, i, hrsi)
+    bitmap_set_bit (elim_regset, i);
   FOR_EACH_BB_REVERSE_FN (bb, cfun)
     {
       bitmap_iterator bi;
@@ -5294,7 +5402,7 @@ struct sloc
 {
   rtx_insn *insn; /* Insn where the scratch was.  */
   int nop;  /* Number of the operand which was a scratch.  */
-  unsigned regno; /* regno gnerated instead of scratch */
+  unsigned regno; /* regno generated instead of scratch */
   int icode;  /* Original icode from which scratch was removed.  */
 };
 
@@ -5379,7 +5487,7 @@ ira_remove_insn_scratches (rtx_insn *insn, bool all_p, FILE *dump_file,
 	  insn_changed_p = true;
 	  *loc = reg = get_reg (*loc);
 	  ira_register_new_scratch_op (insn, i, INSN_CODE (insn));
-	  if (ira_dump_file != NULL)
+	  if (dump_file != NULL)
 	    fprintf (dump_file,
 		     "Removing SCRATCH to p%u in insn #%u (nop %d)\n",
 		     REGNO (reg), INSN_UID (insn), i);
@@ -5572,6 +5680,7 @@ ira (FILE *f)
   bool output_jump_reload_p = false;
 
   setup_hard_regno_nrefs ();
+  lra_reset_dependent_filters ();
   if (ira_use_lra_p)
     {
       /* First put potential jump output reloads on the output edges
@@ -5609,8 +5718,7 @@ ira (FILE *f)
 			 not put a note as commit_edges insertion will
 			 fail.  */
 		      emit_insn (gen_rtx_USE (VOIDmode, const1_rtx));
-		      rtx_insn *insns = get_insns ();
-		      end_sequence ();
+		      rtx_insn *insns = end_sequence ();
 		      insert_insn_on_edge (insns, e);
 		    }
 		break;

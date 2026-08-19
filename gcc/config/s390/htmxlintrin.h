@@ -1,5 +1,5 @@
 /* XL compiler hardware transactional execution intrinsics
-   Copyright (C) 2013-2025 Free Software Foundation, Inc.
+   Copyright (C) 2013-2026 Free Software Foundation, Inc.
    Contributed by Andreas Krebbel (Andreas.Krebbel@de.ibm.com)
 
 This file is part of GCC.
@@ -167,11 +167,7 @@ extern __inline long __attribute__((__gnu_inline__, __always_inline__, __artific
 __TM_failure_address (void* const tdb_ptr)
 {
   struct __htm_tdb *tdb = (struct __htm_tdb*)tdb_ptr;
-#ifdef __s390x__
   return tdb->atia;
-#else
-  return tdb->atia & 0xffffffff;
-#endif
 }
 
 extern __inline long __attribute__((__gnu_inline__, __always_inline__, __artificial__))

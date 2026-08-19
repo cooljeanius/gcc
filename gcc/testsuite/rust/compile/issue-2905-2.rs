@@ -1,6 +1,11 @@
 // { dg-options "-w" }
+#![feature(no_core)]
+#![no_core]
+
+#![feature(no_core)]
 #![feature(intrinsics)]
 #![feature(lang_items)]
+#![no_core]
 
 #[lang = "sized"]
 trait Sized {}
@@ -17,10 +22,12 @@ pub mod core {
     }
 
     pub mod slice {
-        use core::marker::PhantomData;
-        use core::option::Option;
+        use crate::core::marker::PhantomData;
+        use crate::core::option::Option;
+        use crate::offset;
+        use crate::transmute;
 
-        impl<T> core::iter::IntoIterator for &[T] {
+        impl<T> crate::core::iter::IntoIterator for &[T] {
             type Item = &T;
             type IntoIter = Weird<T>;
 
@@ -69,17 +76,13 @@ pub mod core {
 
         impl<T> Foo for Weird<T> {}
 
-        // impl<T> core::iter::Iterator for Iter<T> {
-        //     type Item = &T;
+        impl<T> crate::core::iter::Iterator for Weird<T> {
+            type Item = &T;
 
-        //     fn next(&mut self) -> Option<&T> {
-        //         if self.is_empty() {
-        //             Option::None
-        //         } else {
-        //             Option::Some(&*self.next_unchecked())
-        //         }
-        //     }
-        // }
+            fn next(&mut self) -> Option<&T> {
+                Option::None
+            }
+        }
 
         union Repr<T> {
             pub(crate) rust: *const [T],
@@ -108,7 +111,7 @@ pub mod core {
     }
 
     pub mod iter {
-        use option::Option;
+        use crate::core::option::Option;
 
         pub trait IntoIterator {
             type Item;

@@ -1,5 +1,5 @@
 /* read-rtl-function.cc - Reader for RTL function dumps
-   Copyright (C) 2016-2025 Free Software Foundation, Inc.
+   Copyright (C) 2016-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -356,7 +356,7 @@ lookup_reg_by_dump_name (const char *name)
   /* TODO: handle "virtual-reg-%d".  */
 
   /* In compact mode, pseudos are printed with '< and '>' wrapping the regno,
-     offseting it by (LAST_VIRTUAL_REGISTER + 1), so that the
+     offsetting it by (LAST_VIRTUAL_REGISTER + 1), so that the
      first non-virtual pseudo is dumped as "<0>".  */
   if (name[0] == '<' && name[strlen (name) - 1] == '>')
     {
@@ -1065,7 +1065,10 @@ function_reader::read_rtx_operand_r (rtx x)
   if (regno == -1)
     fatal_at (loc, "unrecognized register: '%s'", name.string);
 
-  set_regno_raw (x, regno, 1);
+  int nregs = 1;
+  if (HARD_REGISTER_NUM_P (regno))
+    nregs = hard_regno_nregs (regno, GET_MODE (x));
+  set_regno_raw (x, regno, nregs);
 
   /* Consolidate singletons.  */
   x = consolidate_singletons (x);

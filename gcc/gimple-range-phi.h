@@ -1,5 +1,5 @@
 /* Header file for gimple range phi analysis.
-   Copyright (C) 2023-2025 Free Software Foundation, Inc.
+   Copyright (C) 2023-2026 Free Software Foundation, Inc.
    Contributed by Andrew MacLeod <amacleod@redhat.com>.
 
 This file is part of GCC.
@@ -24,7 +24,7 @@ along with GCC; see the file COPYING3.  If not see
 // -------------------------------------------------------------------------
 
 // A PHI_GROUP consists of a set of SSA_NAMES which are all PHI_DEFS, and
-// their arguemnts contain nothing but other PHI defintions, with at most
+// their arguments contain nothing but other PHI definitions, with at most
 // 2 exceptions:
 //  1 - An initial value.  This is either a constant, or another non-phi name
 //      with a single incoming edge to the cycle group
@@ -33,7 +33,7 @@ along with GCC; see the file COPYING3.  If not see
 //  to determine the other bound.
 //  All members of the PHI cycle will be given the same range.
 //
-// For example, given the follwoing sequences:
+// For example, given the following sequences:
 // qa_20 = qa_10 + 1;
 // qa_9 = PHI <qa_10(3), qa_20(4)>
 // qa_10 = PHI <0(2), qa_9(5)>
@@ -59,16 +59,17 @@ public:
 protected:
   bool calculate_using_modifier (range_query *q);
   bool refine_using_relation (relation_kind k);
-  static unsigned is_modifier_p (gimple *s, const bitmap bm);
+  static unsigned is_modifier_p (gimple *s, const bitmap bm, tree *op = NULL);
   bitmap m_group;
   gimple *m_modifier;     // Single stmt which modifies phi group.
   unsigned m_modifier_op; // Operand of group member in modifier stmt.
+  tree m_modifier_name;	  // Name of modifier operand ssa-name.
   int_range_max m_vr;
   friend class phi_analyzer;
 };
 
-// The phi anlyzer will return the group that name belongs to.
-// If inforamtion is not known about a name yet, analysis is conducted by
+// The phi analyzer will return the group that name belongs to.
+// If information is not known about a name yet, analysis is conducted by
 // looking at the arguments to PHIS and following them to their defs to
 // determine whether the conditions are met to form a new group.
 
@@ -81,8 +82,7 @@ public:
   void dump (FILE *f);
 protected:
   phi_group *group (tree name) const;
-  void process_phi (gphi *phi);
-  range_query &m_global;
+  void process_phi (gphi *phi, range_query &query);
   vec<tree> m_work;
 
   bitmap m_simple;       // Processed, not part of a group.
@@ -92,16 +92,10 @@ protected:
   bitmap_obstack m_bitmaps;
 };
 
-// These are the APIs to start and stop a phi analyzerin a SCEV like manner.
-// There can only be one operating at any given time.
-// When initialized, a range-query if provided to do lookups of values for
-// PHIs and to evaluate modifier and initial value statements.
-// To avoid problems, this should be some form of constant query, like
-// global_range_query or better yet a const_query from a functioning ranger.
+// Invoke a phi analyzer.  It will process all the current PHI nodes and try
+// to form groups with initial values. Then export any ranges found
+// to set_range_info.  When finished, it will simply dispose of itself.
 
-bool phi_analysis_available_p ();
-phi_analyzer &phi_analysis ();
-void phi_analysis_initialize (range_query &);
-void phi_analysis_finalize ();
+void phi_analysis (range_query &q);
 
 #endif // GCC_SSA_RANGE_PHI_H

@@ -1,5 +1,5 @@
 ! { dg-additional-options "-fcoarray=single -fcray-pointer" }
-
+! { dg-additional-options "-Wno-deprecated-openmp" }
 module m
 use iso_c_binding
 integer, parameter :: omp_allocator_handle_kind = c_intptr_t
@@ -38,7 +38,7 @@ subroutine coarrays(x)
   !$omp allocate(z) ! { dg-error "18:Unexpected coarray 'z' in 'allocate' at .1." }
     allocate(z(5)[*])
   x = 5
-end 
+end
 
 
 integer function f() result(res)
@@ -79,7 +79,7 @@ subroutine common
   use m
   integer :: a,b,c(5)
   common /my/ a,b,c
-  !$omp allocate(b) allocator(omp_cgroup_mem_alloc)  ! { dg-error "'b' at .1. is part of the common block '/my/' and may only be specificed implicitly via the named common block" }
+  !$omp allocate(b) allocator(omp_cgroup_mem_alloc)  ! { dg-error "'b' at .1. is part of the common block '/my/' and may only be specified implicitly via the named common block" }
 end
 
 subroutine c_and_func_ptrs
@@ -114,7 +114,7 @@ subroutine coarray_3
   integer :: x
   integer, allocatable :: a, b, c[:], d
   x = 5 ! executable stmt
-  !$omp allocators allocate(align(16): a,b) allocate(align(32) : d) 
+  !$omp allocators allocate(align(16): a,b) allocate(align(32) : d)
   allocate(a,b,c[*],d)  ! OK - Fortran allocator used for 'C'
 end
 

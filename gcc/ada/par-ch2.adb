@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2025, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -385,6 +385,8 @@ package body Ch2 is
         or else Chars (Ident_Node) = Name_Refined_Depends
       then
          Inside_Depends := True;
+      elsif Chars (Ident_Node) = Name_Abstract_State then
+         Inside_Abstract_State := True;
       end if;
 
       --  Scan arguments. We assume that arguments are present if there is
@@ -401,11 +403,21 @@ package body Ch2 is
          loop
             Arg_Count := Arg_Count + 1;
 
-            Scan_Pragma_Argument_Association
-              (Identifier_Seen   => Identifier_Seen,
-               Association       => Assoc_Node,
-               Reserved_Words_OK =>
-                 Prag_Name in Name_Restriction_Warnings | Name_Restrictions);
+            --  Syntax of the Modifies contract requires custom parsing
+
+            if Chars (Ident_Node) = Name_Modifies then
+               Assoc_Node :=
+                 New_Node (N_Pragma_Argument_Association, Token_Ptr);
+               Set_Chars (Assoc_Node, No_Name);
+               Set_Expression (Assoc_Node, Ch13.P_Modifies_Specification);
+            else
+               Scan_Pragma_Argument_Association
+                 (Identifier_Seen   => Identifier_Seen,
+                  Association       => Assoc_Node,
+                  Reserved_Words_OK =>
+                    Prag_Name in Name_Restriction_Warnings
+                               | Name_Restrictions);
+            end if;
 
             if Arg_Count = 2 and then Import_Check_Required then
                --  Here is where we cancel the SIS active status if this pragma
@@ -441,11 +453,11 @@ package body Ch2 is
 
       Semicolon_Loc := Token_Ptr;
 
-      --  Cancel indication of being within a pragma or in particular a Depends
-      --  pragma.
+      --  Cancel indication of being within a pragma
 
-      Inside_Depends := False;
-      Inside_Pragma  := False;
+      Inside_Depends        := False;
+      Inside_Abstract_State := False;
+      Inside_Pragma         := False;
 
       --  Now we have two tasks left, we need to scan out the semicolon
       --  following the pragma, and we have to call Par.Prag to process
@@ -472,8 +484,9 @@ package body Ch2 is
    exception
       when Error_Resync =>
          Resync_Past_Semicolon;
-         Inside_Depends := False;
-         Inside_Pragma  := False;
+         Inside_Depends        := False;
+         Inside_Abstract_State := False;
+         Inside_Pragma         := False;
          return Error;
    end P_Pragma;
 

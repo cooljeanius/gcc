@@ -2,7 +2,7 @@
 
 // 1999-08-23 bkoz
 
-// Copyright (C) 1999-2025 Free Software Foundation, Inc.
+// Copyright (C) 1999-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -78,6 +78,8 @@ void test01()
   VERIFY( !obj.tinyness_before );
   VERIFY( obj.round_style == std::round_toward_zero );
 }
+// { dg-warning "has_denorm' is deprecated" "" { target c++23 } 68 }
+// { dg-warning "has_denorm_loss' is deprecated" "" { target c++23 } 69 }
 
 // test linkage of the generic bits
 template struct std::numeric_limits<B>;

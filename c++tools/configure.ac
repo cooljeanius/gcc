@@ -1,5 +1,5 @@
 # Configure script for c++tools
-#   Copyright (C) 2020-2025 Free Software Foundation, Inc.
+#   Copyright (C) 2020-2026 Free Software Foundation, Inc.
 #   Written by Nathan Sidwell <nathan@acm.org> while at FaceBook
 #
 # This file is free software; you can redistribute it and/or modify it
@@ -30,7 +30,7 @@ AC_CONFIG_SRCDIR([server.cc])
 # Determine the noncanonical names used for directories.
 ACX_NONCANONICAL_TARGET
 
-AC_CANONICAL_SYSTEM
+AC_CANONICAL_TARGET
 AC_PROG_INSTALL
 test -z "$INSTALL_PROGRAM" && INSTALL_PROGRAM='${INSTALL}'
 AC_SUBST(INSTALL_PROGRAM)
@@ -96,12 +96,6 @@ if test x$ac_assert_checking != x ; then
   AC_DEFINE(ENABLE_ASSERT_CHECKING, 1,
 [Define if you want assertions enabled.  This is a cheap check.])
 fi
-
-# Check whether --enable-default-pie was given.
-AC_ARG_ENABLE(default-pie,
-[AS_HELP_STRING([--enable-default-pie],
-		  [enable Position Independent Executable as default])],
-[PICFLAG=-fPIE], [PICFLAG=])
 
 # Enable --enable-host-pie
 AC_ARG_ENABLE(host-pie,

@@ -1,5 +1,5 @@
 /* Callgraph summary data structure.
-   Copyright (C) 2014-2025 Free Software Foundation, Inc.
+   Copyright (C) 2014-2026 Free Software Foundation, Inc.
    Contributed by Martin Liska
 
 This file is part of GCC.
@@ -169,7 +169,7 @@ private:
    related to a callgraph node.  Typical usage can be seen in IPA passes which
    create a temporary pass-related structures.  The summary class registers
    hooks that are triggered when a new node is inserted, duplicated and deleted.
-   A user of a summary class can ovewrite virtual methods than are triggered by
+   A user of a summary class can overwrite virtual methods than are triggered by
    the summary if such hook is triggered.  Apart from a callgraph node, the user
    is given a data structure tied to the node.
 

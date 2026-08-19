@@ -1,7 +1,7 @@
 /* m68kelf support, derived from m68kv4.h */
 
 /* Target definitions for GNU compiler for mc680x0 running System V.4
-   Copyright (C) 1991-2025 Free Software Foundation, Inc.
+   Copyright (C) 1991-2026 Free Software Foundation, Inc.
 
    Written by Ron Guilmette (rfg@netcom.com) and Fred Fish (fnf@cygnus.com).
 
@@ -104,7 +104,7 @@ do {								\
 #define DEBUGGER_REGNO(REGNO) (REGNO)
 
 #if 0
-/* SVR4 m68k assembler is bitching on the `comm i,1,1' which askes for
+/* SVR4 m68k assembler is bitching on the `comm i,1,1' which asks for
    1 byte alignment. Don't generate alignment for COMMON seems to be
    safer until we the assembler is fixed.  */
 #undef ASM_OUTPUT_ALIGNED_COMMON

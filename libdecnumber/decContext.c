@@ -1,5 +1,5 @@
 /* Decimal context module for the decNumber C Library.
-   Copyright (C) 2005-2025 Free Software Foundation, Inc.
+   Copyright (C) 2005-2026 Free Software Foundation, Inc.
    Contributed by IBM Corporation.  Author Mike Cowlishaw.
 
    This file is part of GCC.
@@ -170,7 +170,7 @@ uInt decContextGetStatus(decContext *context) {
 /*  newstatus is the source for the bits to be restored 	      */
 /*  mask indicates the bits to be restored (the status bit that       */
 /*    corresponds to each 1 bit in the mask is set to the value of    */
-/*    the correspnding bit in newstatus)			      */
+/*    the corresponding bit in newstatus)			      */
 /*  returns context						      */
 /*								      */
 /* No error is possible.					      */

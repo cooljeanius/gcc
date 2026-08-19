@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 S p e c                                  --
 --                                                                          --
---          Copyright (C) 1992-2025, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -42,7 +42,6 @@ package Sem_Ch7 is
 
    procedure Install_Visible_Declarations (P : Entity_Id);
    procedure Install_Private_Declarations (P : Entity_Id);
-
    --  On entrance to a package body, make declarations in package spec
    --  immediately visible.
    --
@@ -51,6 +50,9 @@ package Sem_Ch7 is
    --  to Install_Private_Declaration is immediate for private children,
    --  but is deferred until the compilation of the private part of the
    --  child for public child packages.
+
+   function Is_Private_Base_Type (E : Entity_Id) return Boolean;
+   --  True for a private type that is not a subtype
 
    function Unit_Requires_Body
      (Pack_Id            : Entity_Id;

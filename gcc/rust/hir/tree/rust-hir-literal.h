@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2024 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -33,6 +33,7 @@ public:
     STRING,
     BYTE,
     BYTE_STRING,
+    C_STRING,
     INT,
     FLOAT,
     BOOL

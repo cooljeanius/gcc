@@ -1,5 +1,5 @@
 /* ACLE support for AArch64 SVE (function shapes)
-   Copyright (C) 2018-2025 Free Software Foundation, Inc.
+   Copyright (C) 2018-2026 Free Software Foundation, Inc.
 
    This file is part of GCC.
 
@@ -20,7 +20,7 @@
 #ifndef GCC_AARCH64_SVE_BUILTINS_SHAPES_H
 #define GCC_AARCH64_SVE_BUILTINS_SHAPES_H
 
-namespace aarch64_sve
+namespace aarch64_acle
 {
   /* The naming convention is:
 
@@ -81,6 +81,7 @@ namespace aarch64_sve
     extern const function_shape *const adr_index;
     extern const function_shape *const adr_offset;
     extern const function_shape *const binary;
+    extern const function_shape *const binary_aes_lane;
     extern const function_shape *const binary_int_opt_n;
     extern const function_shape *const binary_int_opt_single_n;
     extern const function_shape *const binary_lane;
@@ -95,6 +96,7 @@ namespace aarch64_sve
     extern const function_shape *const binary_rotate;
     extern const function_shape *const binary_scalar;
     extern const function_shape *const binary_single;
+    extern const function_shape *const binary_to_pair_opt_n;
     extern const function_shape *const binary_to_uint;
     extern const function_shape *const binary_uint;
     extern const function_shape *const binary_uint_n;
@@ -126,6 +128,7 @@ namespace aarch64_sve
     extern const function_shape *const count_pred_c;
     extern const function_shape *const count_vector;
     extern const function_shape *const create;
+    extern const function_shape *const dot_half_za_slice_lane;
     extern const function_shape *const dot_za_slice_int_lane;
     extern const function_shape *const dot_za_slice_lane;
     extern const function_shape *const dot_za_slice_uint_lane;
@@ -168,6 +171,7 @@ namespace aarch64_sve
     extern const function_shape *const luti4;
     extern const function_shape *const luti2_lane_zt;
     extern const function_shape *const luti4_lane_zt;
+    extern const function_shape *const luti4_zt;
     extern const function_shape *const mmla;
     extern const function_shape *const pattern_pred;
     extern const function_shape *const pmov_from_vector;
@@ -231,6 +235,7 @@ namespace aarch64_sve
     extern const function_shape *const ternary_rotate;
     extern const function_shape *const ternary_shift_left_imm;
     extern const function_shape *const ternary_shift_right_imm;
+    extern const function_shape *const ternary_to_pair_opt_n;
     extern const function_shape *const ternary_uint;
     extern const function_shape *const ternary_uintq_intq;
     extern const function_shape *const ternary_uintq_intq_lane;
@@ -260,6 +265,8 @@ namespace aarch64_sve
     extern const function_shape *const write_za;
     extern const function_shape *const write_za_m;
     extern const function_shape *const write_za_slice;
+    extern const function_shape *const write_zt;
+    extern const function_shape *const write_lane_zt;
   }
 }
 

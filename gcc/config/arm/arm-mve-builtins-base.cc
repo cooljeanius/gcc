@@ -1,5 +1,5 @@
 /* ACLE support for Arm MVE (__ARM_FEATURE_MVE intrinsics)
-   Copyright (C) 2023-2025 Free Software Foundation, Inc.
+   Copyright (C) 2023-2026 Free Software Foundation, Inc.
 
    This file is part of GCC.
 
@@ -44,7 +44,7 @@ namespace {
 class vdupq_impl : public quiet<function_base>
 {
 public:
-  CONSTEXPR vdupq_impl (int unspec_for_m_n_sint,
+  constexpr vdupq_impl (int unspec_for_m_n_sint,
 			int unspec_for_m_n_uint,
 			int unspec_for_m_n_fp)
     : m_unspec_for_m_n_sint (unspec_for_m_n_sint),
@@ -240,7 +240,7 @@ class vstrq_scatter_impl : public store_truncating
 public:
   using store_truncating::store_truncating;
 
-  CONSTEXPR vstrq_scatter_impl (bool shifted,
+  constexpr vstrq_scatter_impl (bool shifted,
 				scalar_mode to_int_mode,
 				opt_scalar_mode to_float_mode)
     : store_truncating (to_int_mode, to_float_mode),
@@ -290,13 +290,16 @@ public:
 class vstrq_scatter_base_impl : public function_base
 {
 public:
-  CONSTEXPR vstrq_scatter_base_impl (scalar_mode to_int_mode)
+  constexpr vstrq_scatter_base_impl (scalar_mode to_int_mode)
     : m_to_int_mode (to_int_mode)
   {}
 
-  unsigned int call_properties (const function_instance &) const override
+  unsigned int call_properties (const function_instance &fi) const override
   {
-    return CP_WRITE_MEMORY;
+    if (fi.mode_suffix_id == MODE_wb)
+      return CP_WRITE_MEMORY | CP_READ_MEMORY;
+    else
+      return CP_WRITE_MEMORY;
   }
 
   machine_mode memory_vector_mode (const function_instance &fi) const override
@@ -407,7 +410,7 @@ class vldrq_gather_impl : public load_extending
 public:
   using load_extending::load_extending;
 
-  CONSTEXPR vldrq_gather_impl (bool shifted,
+  constexpr vldrq_gather_impl (bool shifted,
 			       type_suffix_index signed_memory_type,
 			       type_suffix_index unsigned_memory_type,
 			       type_suffix_index float_memory_type)
@@ -415,7 +418,7 @@ public:
       m_shifted (shifted)
   {}
 
-  CONSTEXPR vldrq_gather_impl (bool shifted,
+  constexpr vldrq_gather_impl (bool shifted,
 			       type_suffix_index signed_memory_type,
 			       type_suffix_index unsigned_memory_type)
     : load_extending (signed_memory_type, unsigned_memory_type, NUM_TYPE_SUFFIXES),
@@ -480,6 +483,14 @@ public:
     return type_suffixes[suffix].vector_mode;
   }
 
+  unsigned int call_properties (const function_instance &fi) const override
+  {
+    if (fi.mode_suffix_id == MODE_wb)
+      return CP_WRITE_MEMORY | CP_READ_MEMORY;
+    else
+      return CP_READ_MEMORY;
+  }
+
   rtx expand (function_expander &e) const override
   {
     insn_code icode;
@@ -534,7 +545,7 @@ public:
 class vctpq_impl : public function_base
 {
 public:
-  CONSTEXPR vctpq_impl (machine_mode mode)
+  constexpr vctpq_impl (machine_mode mode)
     : m_mode (mode)
   {}
 
@@ -691,7 +702,7 @@ public:
 class vcvtxq_impl : public function_base
 {
 public:
-  CONSTEXPR vcvtxq_impl (int unspec_f16_f32, int unspec_for_m_f16_f32,
+  constexpr vcvtxq_impl (int unspec_f16_f32, int unspec_for_m_f16_f32,
 			 int unspec_f32_f16, int unspec_for_m_f32_f16)
     : m_unspec_f16_f32 (unspec_f16_f32),
       m_unspec_for_m_f16_f32 (unspec_for_m_f16_f32),
@@ -742,14 +753,14 @@ public:
 
 /* Map the vidup / vddup function directly to CODE (UNSPEC, M) where M is the
    vector mode associated with type suffix 0.  We need this special case
-   because in MODE_wb the builtins derefrence the first parameter and update
+   because in MODE_wb the builtins dereference the first parameter and update
    its contents.  We also have to insert the two additional parameters needed
    by the builtins compared to the intrinsics.  In wrapping mode, we have to
    match the 'hack' to make sure the 'wrap' parameters is in odd register.  */
 class viddup_impl : public function_base
 {
 public:
-  CONSTEXPR viddup_impl (bool inc_dec, bool wrap)
+  constexpr viddup_impl (bool inc_dec, bool wrap)
     : m_inc_dec (inc_dec), m_wrap (wrap)
   {}
 
@@ -875,7 +886,7 @@ public:
 
 /* Map the vshlc function directly to CODE (UNSPEC, M) where M is the vector
    mode associated with type suffix 0.  We need this special case because the
-   intrinsics derefrence the second parameter and update its contents.  */
+   intrinsics dereference the second parameter and update its contents.  */
 class vshlc_impl : public function_base
 {
 public:
@@ -949,7 +960,7 @@ public:
 class vadc_vsbc_impl : public function_base
 {
 public:
-  CONSTEXPR vadc_vsbc_impl (bool init_carry, bool add)
+  constexpr vadc_vsbc_impl (bool init_carry, bool add)
     : m_init_carry (init_carry), m_add (add)
   {}
 
@@ -1167,6 +1178,194 @@ public:
   }
 };
 
+
+/* Map the function directly to the appropriate scalar shift builtin.  */
+enum which_scalar_shift {
+  ss_ASRL,
+  ss_LSLL,
+  ss_SQRSHR,
+  ss_SQRSHRL,
+  ss_SQRSHRL_SAT48,
+  ss_SQSHL,
+  ss_SQSHLL,
+  ss_SRSHR,
+  ss_SRSHRL,
+  ss_UQRSHL,
+  ss_UQRSHLL,
+  ss_UQRSHLL_SAT48,
+  ss_UQSHL,
+  ss_UQSHLL,
+  ss_URSHR,
+  ss_URSHRL
+};
+
+class mve_function_scalar_shift : public function_base
+{
+public:
+  constexpr mve_function_scalar_shift (enum which_scalar_shift shl)
+    : m_scalar_shift (shl)
+  {}
+
+  /* Which scalar_shift builtin to map.  */
+  enum which_scalar_shift m_scalar_shift;
+
+  rtx
+  expand (function_expander &e) const override
+  {
+    insn_code code;
+
+    switch (m_scalar_shift)
+      {
+      case ss_ASRL:
+	e.args[1] = simplify_gen_subreg (QImode, e.args[1], SImode, 0);
+	code = CODE_FOR_mve_asrl;
+	break;
+
+      case ss_LSLL:
+	e.args[1] = simplify_gen_subreg (QImode, e.args[1], SImode, 0);
+	code = CODE_FOR_mve_lsll;
+	break;
+
+      case ss_SQRSHR:
+	code = CODE_FOR_mve_sqrshr_si;
+	break;
+
+      case ss_SQRSHRL:
+	code = code_for_mve_sqrshrl_sat_di (SQRSHRL_64);
+	break;
+
+      case ss_SQRSHRL_SAT48:
+	code = code_for_mve_sqrshrl_sat_di (SQRSHRL_48);
+	break;
+
+      case ss_SQSHL:
+	code = CODE_FOR_mve_sqshl_si;
+	break;
+
+      case ss_SRSHR:
+	code = CODE_FOR_mve_srshr_si;
+	break;
+
+      case ss_UQRSHL:
+	code = CODE_FOR_mve_uqrshl_si;
+	break;
+
+      case ss_SQSHLL:
+	code = CODE_FOR_mve_sqshll_di;
+	break;
+
+      case ss_SRSHRL:
+	code = CODE_FOR_mve_srshrl_di;
+	break;
+
+      case ss_UQRSHLL:
+	code = code_for_mve_uqrshll_sat_di (UQRSHLL_64);
+	break;
+
+      case ss_UQRSHLL_SAT48:
+	code = code_for_mve_uqrshll_sat_di (UQRSHLL_48);
+	break;
+
+      case ss_UQSHL:
+	code = CODE_FOR_mve_uqshl_si;
+	break;
+
+      case ss_UQSHLL:
+	code = CODE_FOR_mve_uqshll_di;
+	break;
+
+      case ss_URSHR:
+	code = CODE_FOR_mve_urshr_si;
+	break;
+
+      case ss_URSHRL:
+	code = CODE_FOR_mve_urshrl_di;
+	break;
+
+      default:
+	gcc_unreachable ();
+      }
+
+    return e.use_unpred_insn (code);
+  }
+};
+
+
+/* Map the function directly to mve_vpnotv16bi, and convert the result into
+   HImode like we do for vcmp.  */
+class mve_function_vpnot : public function_base
+{
+public:
+  constexpr mve_function_vpnot (void)
+  {}
+
+  rtx
+  expand (function_expander &e) const override
+  {
+    rtx target = e.use_unpred_insn (CODE_FOR_mve_vpnotv16bi);
+    rtx HItarget = gen_reg_rtx (HImode);
+    emit_move_insn (HItarget, gen_lowpart (HImode, target));
+    return HItarget;
+  }
+};
+
+ /* Map the function directly to mve_vec_set_internal (M) or mve_vec_extract
+   (M, M) where M is the vector mode associated with type suffix 0, except when
+   mode is V2DI where the builtin name is hardcoded.  */
+class mve_function_vsetq_vgetq_lane : public function_base
+{
+public:
+  constexpr mve_function_vsetq_vgetq_lane (bool is_get)
+    : m_is_get (is_get)
+  {}
+
+  /* True for vgetq_lane, false for vsetq_lane.  */
+  bool m_is_get;
+
+  rtx
+  expand (function_expander &e) const override
+  {
+    machine_mode mode = e.vector_mode (0);
+    insn_code code;
+    HOST_WIDE_INT elem;
+
+    code = (mode == V2DImode)
+      ? (m_is_get
+	 ? CODE_FOR_mve_vec_extractv2didi
+	 : CODE_FOR_mve_vec_setv2di_internal)
+      : (m_is_get
+	 ? code_for_mve_vec_extract (mode, mode)
+	 : code_for_mve_vec_set_internal (mode));
+
+    if (!m_is_get)
+      {
+	/* mve_vec_set has vector and lane number arguments in opposite order
+	   compared to the intrinsic: swap them now...  */
+	std::swap (e.args[1], e.args[2]);
+      }
+
+    elem = INTVAL (e.args[1]);
+
+    /* For big-endian, GCC's vector indices are reversed within each 64 bits
+       compared to the architectural lane indices used by MVE intrinsics.  */
+    if (BYTES_BIG_ENDIAN)
+      {
+	unsigned int num_lanes = 128 / e.type_suffix (0).element_bits;
+	elem ^= (num_lanes / 2) - 1;
+      }
+
+    if (!m_is_get)
+      {
+	/* ... and convert the lane number into a mask as expected by the
+	   builtin.  */
+	elem = HOST_WIDE_INT_1 << elem;
+      }
+    e.args[1] = GEN_INT (elem);
+
+    return e.use_unpred_insn (code);
+  }
+};
+
 } /* end anonymous namespace */
 
 namespace arm_mve {
@@ -1334,6 +1533,22 @@ namespace arm_mve {
    (-1, -1, UNSPEC##_F,							\
     -1, -1, UNSPEC##_P_F))
 
+FUNCTION (asrl, mve_function_scalar_shift, (ss_ASRL))
+FUNCTION (lsll, mve_function_scalar_shift, (ss_LSLL))
+FUNCTION (sqrshr, mve_function_scalar_shift, (ss_SQRSHR))
+FUNCTION (sqrshrl, mve_function_scalar_shift, (ss_SQRSHRL))
+FUNCTION (sqrshrl_sat48, mve_function_scalar_shift, (ss_SQRSHRL_SAT48))
+FUNCTION (sqshl, mve_function_scalar_shift, (ss_SQSHL))
+FUNCTION (sqshll, mve_function_scalar_shift, (ss_SQSHLL))
+FUNCTION (srshr, mve_function_scalar_shift, (ss_SRSHR))
+FUNCTION (srshrl, mve_function_scalar_shift, (ss_SRSHRL))
+FUNCTION (uqrshl, mve_function_scalar_shift, (ss_UQRSHL))
+FUNCTION (uqrshll, mve_function_scalar_shift, (ss_UQRSHLL))
+FUNCTION (uqrshll_sat48, mve_function_scalar_shift, (ss_UQRSHLL_SAT48))
+FUNCTION (uqshl, mve_function_scalar_shift, (ss_UQSHL))
+FUNCTION (uqshll, mve_function_scalar_shift, (ss_UQSHLL))
+FUNCTION (urshr, mve_function_scalar_shift, (ss_URSHR))
+FUNCTION (urshrl, mve_function_scalar_shift, (ss_URSHRL))
 FUNCTION_PRED_P_S_U (vabavq, VABAVQ)
 FUNCTION_WITHOUT_N (vabdq, VABDQ)
 FUNCTION (vabsq, unspec_based_mve_function_exact_insn, (ABS, ABS, ABS, -1, -1, -1, VABSQ_M_S, -1, VABSQ_M_F, -1, -1, -1))
@@ -1390,6 +1605,7 @@ FUNCTION_WITH_RTX_M (veorq, XOR, VEORQ)
 FUNCTION (vfmaq, unspec_mve_function_exact_insn, (-1, -1, VFMAQ_F, -1, -1, VFMAQ_N_F, -1, -1, VFMAQ_M_F, -1, -1, VFMAQ_M_N_F))
 FUNCTION (vfmasq, unspec_mve_function_exact_insn, (-1, -1, -1, -1, -1, VFMASQ_N_F, -1, -1, -1, -1, -1, VFMASQ_M_N_F))
 FUNCTION (vfmsq, unspec_mve_function_exact_insn, (-1, -1, VFMSQ_F, -1, -1, -1, -1, -1, VFMSQ_M_F, -1, -1, -1))
+FUNCTION (vgetq_lane, mve_function_vsetq_vgetq_lane, (true))
 FUNCTION_WITH_M_N_NO_F (vhaddq, VHADDQ)
 FUNCTION_WITH_M_N_NO_F (vhsubq, VHSUBQ)
 FUNCTION (vld1q, vld1_impl,)
@@ -1453,6 +1669,7 @@ FUNCTION (vmulltq_poly, unspec_mve_function_exact_insn_vmull_poly, (VMULLTQ_POLY
 FUNCTION_WITH_RTX_M_N (vmulq, MULT, VMULQ)
 FUNCTION_WITH_RTX_M_N_NO_F (vmvnq, NOT, VMVNQ)
 FUNCTION (vnegq, unspec_based_mve_function_exact_insn, (NEG, NEG, NEG, -1, -1, -1, VNEGQ_M_S, -1, VNEGQ_M_F, -1, -1, -1))
+FUNCTION (vpnot, mve_function_vpnot, )
 FUNCTION_WITHOUT_M_N (vpselq, VPSELQ)
 FUNCTION (vornq, unspec_based_mve_function_exact_insn_vorn, (-1, -1, VORNQ_M_S, VORNQ_M_U, VORNQ_M_F, -1, -1))
 FUNCTION_WITH_RTX_M_N_NO_N_F (vorrq, IOR, VORRQ)
@@ -1517,6 +1734,7 @@ FUNCTION_ONLY_N_NO_F (vrshrntq, VRSHRNTQ)
 FUNCTION_ONLY_N_NO_F (vrshrq, VRSHRQ)
 FUNCTION (vsbciq, vadc_vsbc_impl, (true, false))
 FUNCTION (vsbcq, vadc_vsbc_impl, (false, false))
+FUNCTION (vsetq_lane, mve_function_vsetq_vgetq_lane, (false))
 FUNCTION (vshlcq, vshlc_impl,)
 FUNCTION_ONLY_N_NO_F (vshllbq, VSHLLBQ)
 FUNCTION_ONLY_N_NO_F (vshlltq, VSHLLTQ)

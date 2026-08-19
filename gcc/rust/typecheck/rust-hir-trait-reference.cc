@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2025 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -17,6 +17,7 @@
 // <http://www.gnu.org/licenses/>.
 
 #include "rust-hir-trait-reference.h"
+#include "rust-hir-type-check.h"
 
 namespace Rust {
 namespace Resolver {
@@ -342,31 +343,15 @@ TraitReference::on_resolved ()
 {
   for (auto &item : item_refs)
     {
-      item.on_resolved ();
+      if (item.get_trait_item_type ()
+	  == TraitItemReference::TraitItemType::TYPE)
+	item.on_resolved (this);
     }
-}
-
-void
-TraitReference::clear_associated_types () const
-{
-  for (const auto &item : item_refs)
+  for (auto &item : item_refs)
     {
-      bool is_assoc_type = item.get_trait_item_type ()
-			   == TraitItemReference::TraitItemType::TYPE;
-      if (is_assoc_type)
-	item.associated_type_reset (false);
-    }
-}
-
-void
-TraitReference::clear_associated_type_projections () const
-{
-  for (const auto &item : item_refs)
-    {
-      bool is_assoc_type = item.get_trait_item_type ()
-			   == TraitItemReference::TraitItemType::TYPE;
-      if (is_assoc_type)
-	item.associated_type_reset (true);
+      if (item.get_trait_item_type ()
+	  != TraitItemReference::TraitItemType::TYPE)
+	item.on_resolved (this);
     }
 }
 
@@ -424,7 +409,13 @@ TraitReference::trait_has_generics () const
   return !trait_substs.empty ();
 }
 
-std::vector<TyTy::SubstitutionParamMapping>
+std::vector<TyTy::SubstitutionParamMapping> &
+TraitReference::get_trait_substs ()
+{
+  return trait_substs;
+}
+
+const std::vector<TyTy::SubstitutionParamMapping> &
 TraitReference::get_trait_substs () const
 {
   return trait_substs;
@@ -449,9 +440,9 @@ AssociatedImplTrait::AssociatedImplTrait (TraitReference *trait,
 					  TyTy::TypeBoundPredicate predicate,
 					  HIR::ImplBlock *impl,
 					  TyTy::BaseType *self,
-					  Resolver::TypeCheckContext *context)
+					  ImplTraitContextFrame frame)
   : trait (trait), predicate (predicate), impl (impl), self (self),
-    context (context)
+    context (TypeCheckContext::get ()), frame (frame)
 {}
 
 TyTy::TypeBoundPredicate &
@@ -476,6 +467,12 @@ const TyTy::BaseType *
 AssociatedImplTrait::get_self () const
 {
   return self;
+}
+
+ImplTraitContextFrame
+AssociatedImplTrait::get_frame () const
+{
+  return frame;
 }
 
 } // namespace Resolver

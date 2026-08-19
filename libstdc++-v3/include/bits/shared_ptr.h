@@ -1,6 +1,6 @@
 // shared_ptr and weak_ptr implementation -*- C++ -*-
 
-// Copyright (C) 2007-2025 Free Software Foundation, Inc.
+// Copyright (C) 2007-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -49,7 +49,7 @@
 #ifndef _SHARED_PTR_H
 #define _SHARED_PTR_H 1
 
-#include <iosfwd>           	  // std::basic_ostream
+#include <bits/iosfwd.h>           	  // std::basic_ostream
 #include <bits/shared_ptr_base.h>
 
 namespace std _GLIBCXX_VISIBILITY(default)
@@ -114,38 +114,20 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
 #if __glibcxx_shared_ptr_arrays >= 201707L
   // Constraint for overloads taking array types with unknown bound, U[].
-#if __cpp_concepts
   template<typename _Tp>
     requires is_array_v<_Tp> && (extent_v<_Tp> == 0)
     using _UnboundedArray = _Tp;
-#else
-  template<typename _Tp>
-    using _UnboundedArray
-      = __enable_if_t<__is_array_unknown_bounds<_Tp>::value, _Tp>;
-#endif
 
   // Constraint for overloads taking array types with known bound, U[N].
-#if __cpp_concepts
   template<typename _Tp>
     requires (extent_v<_Tp> != 0)
     using _BoundedArray = _Tp;
-#else
-  template<typename _Tp>
-    using _BoundedArray
-      = __enable_if_t<__is_array_known_bounds<_Tp>::value, _Tp>;
-#endif
 
 #if __glibcxx_smart_ptr_for_overwrite
   // Constraint for overloads taking either non-array or bounded array, U[N].
-#if __cpp_concepts
   template<typename _Tp>
     requires (!is_array_v<_Tp>) || (extent_v<_Tp> != 0)
     using _NotUnboundedArray = _Tp;
-#else
-  template<typename _Tp>
-    using _NotUnboundedArray
-      = __enable_if_t<!__is_array_unknown_bounds<_Tp>::value, _Tp>;
-#endif
 #endif // smart_ptr_for_overwrite
 #endif // shared_ptr_arrays
 
@@ -908,6 +890,64 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     struct owner_less<weak_ptr<_Tp>>
     : public _Sp_owner_less<weak_ptr<_Tp>, shared_ptr<_Tp>>
     { };
+
+#ifdef __glibcxx_smart_ptr_owner_equality // >= C++26
+
+  /**
+   * @brief Provides ownership-based hashing.
+   * @headerfile memory
+   * @since C++26
+   */
+  struct owner_hash
+  {
+    template<typename _Tp>
+      size_t
+      operator()(const shared_ptr<_Tp>& __s) const noexcept
+      { return __s.owner_hash(); }
+
+    template<typename _Tp>
+      size_t
+      operator()(const weak_ptr<_Tp>& __s) const noexcept
+      { return __s.owner_hash(); }
+
+    using is_transparent = void;
+  };
+
+  /**
+   * @brief Provides ownership-based mixed equality comparisons of
+   *        shared and weak pointers.
+   * @headerfile memory
+   * @since C++26
+   */
+  struct owner_equal
+  {
+    template<typename _Tp1, typename _Tp2>
+      bool
+      operator()(const shared_ptr<_Tp1>& __lhs,
+		 const shared_ptr<_Tp2>& __rhs) const noexcept
+      { return __lhs.owner_equal(__rhs); }
+
+    template<typename _Tp1, typename _Tp2>
+      bool
+      operator()(const shared_ptr<_Tp1>& __lhs,
+		 const   weak_ptr<_Tp2>& __rhs) const noexcept
+      { return __lhs.owner_equal(__rhs); }
+
+    template<typename _Tp1, typename _Tp2>
+      bool
+      operator()(const   weak_ptr<_Tp1>& __lhs,
+		 const shared_ptr<_Tp2>& __rhs) const noexcept
+      { return __lhs.owner_equal(__rhs); }
+
+    template<typename _Tp1, typename _Tp2>
+      bool
+      operator()(const weak_ptr<_Tp1>& __lhs,
+		 const weak_ptr<_Tp2>& __rhs)   const noexcept
+      { return __lhs.owner_equal(__rhs); }
+
+    using is_transparent = void;
+  };
+#endif
 
   /**
    * @brief Base class allowing use of the member function `shared_from_this`.

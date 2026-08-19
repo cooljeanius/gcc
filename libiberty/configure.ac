@@ -114,18 +114,6 @@ dnl to call AC_CHECK_PROG.
 AC_CHECK_TOOL(AR, ar)
 AC_CHECK_TOOL(RANLIB, ranlib, :)
 
-GCC_PLUGIN_OPTION(PLUGIN_OPTION)
-if test -n "$PLUGIN_OPTION"; then
-  if $AR --help 2>&1 | grep -q "\--plugin"; then
-    AR_PLUGIN_OPTION="$PLUGIN_OPTION"
-    AC_SUBST(AR_PLUGIN_OPTION)
-  fi
-  if $RANLIB --help 2>&1 | grep -q "\--plugin"; then
-    RANLIB_PLUGIN_OPTION="$PLUGIN_OPTION"
-    AC_SUBST(RANLIB_PLUGIN_OPTION)
-  fi
-fi
-
 dnl When switching to automake, replace the following with AM_ENABLE_MULTILIB.
 # Add --enable-multilib to configure.
 # Default to --enable-multilib
@@ -175,6 +163,37 @@ AC_PROG_CC
 AC_USE_SYSTEM_EXTENSIONS
 AC_SYS_LARGEFILE
 AC_PROG_CPP_WERROR
+
+# Try CLANG_PLUGIN_FILE first since GCC_PLUGIN_OPTION may return the
+# wrong PLUGIN_OPTION with clang.
+CLANG_PLUGIN_FILE(PLUGIN_FILE)
+if test -n "$PLUGIN_FILE"; then
+  PLUGIN_OPTION="--plugin $PLUGIN_FILE"
+else
+  GCC_PLUGIN_OPTION(PLUGIN_OPTION)
+fi
+if test -n "$PLUGIN_OPTION"; then
+  case "$AR" in
+  *"$PLUGIN_OPTION"*)
+    ;;
+  *)
+    if $AR --help 2>&1 | grep -q "\--plugin"; then
+      AR_PLUGIN_OPTION="$PLUGIN_OPTION"
+      AC_SUBST(AR_PLUGIN_OPTION)
+    fi
+    ;;
+  esac
+  case "$RANLIB" in
+  *"$PLUGIN_OPTION"*)
+    ;;
+  *)
+    if $RANLIB --help 2>&1 | grep -q "\--plugin"; then
+      RANLIB_PLUGIN_OPTION="$PLUGIN_OPTION"
+      AC_SUBST(RANLIB_PLUGIN_OPTION)
+    fi
+    ;;
+  esac
+fi
 
 ACX_PROG_CC_WARNING_OPTS([-W -Wall -Wwrite-strings -Wc++-compat \
 			  -Wstrict-prototypes \
@@ -302,7 +321,7 @@ AC_CHECK_SIZEOF([int])
 AC_CHECK_SIZEOF([long])
 AC_CHECK_SIZEOF([size_t])
 
-# Check for presense of long long
+# Check for presence of long long
 AC_CHECK_TYPE([long long],
   [AC_DEFINE(HAVE_LONG_LONG, 1, [Define if you have the `long long' type.]) AC_CHECK_SIZEOF([long long])],
   [])
@@ -310,30 +329,30 @@ AC_CHECK_TYPE([long long],
 # Look for a 64-bit type.
 AC_MSG_CHECKING([for a 64-bit type])
 AC_CACHE_VAL(liberty_cv_uint64,
-[AC_TRY_COMPILE(
-[#ifdef HAVE_STDINT_H
+[AC_COMPILE_IFELSE([AC_LANG_PROGRAM(
+[[#ifdef HAVE_STDINT_H
 #include <stdint.h>
-#endif],
-[extern uint64_t foo;],
-liberty_cv_uint64=uint64_t,
-[AC_TRY_COMPILE(
-[#ifdef HAVE_LIMITS_H
+#endif]],
+[[extern uint64_t foo;]])],
+[liberty_cv_uint64=uint64_t],
+[AC_COMPILE_IFELSE([AC_LANG_PROGRAM(
+[[#ifdef HAVE_LIMITS_H
 #include <limits.h>
 #endif
 #ifndef CHAR_BIT
 #define CHAR_BIT 8
-#endif],
-[extern char foo[sizeof(long) * CHAR_BIT >= 64 ? 1 : -1];],
-liberty_cv_uint64="unsigned long",
-[AC_TRY_COMPILE(
-[#ifdef HAVE_LIMITS_H
+#endif]],
+[[extern char foo[sizeof(long) * CHAR_BIT >= 64 ? 1 : -1];]])],
+[liberty_cv_uint64="unsigned long"],
+[AC_COMPILE_IFELSE([AC_LANG_PROGRAM(
+[[#ifdef HAVE_LIMITS_H
 #include <limits.h>
 #endif
 #ifndef CHAR_BIT
 #define CHAR_BIT 8
-#endif],
-[extern char foo[sizeof(long long) * CHAR_BIT >= 64 ? 1 : -1];],
-liberty_cv_uint64="unsigned long long", liberty_cv_uint64=none)])])])
+#endif]],
+[[extern char foo[sizeof(long long) * CHAR_BIT >= 64 ? 1 : -1];]])],
+[liberty_cv_uint64="unsigned long long"], [liberty_cv_uint64=none])])])])
 AC_MSG_RESULT($liberty_cv_uint64)
 if test "$liberty_cv_uint64" != none; then
   AC_DEFINE_UNQUOTED(UNSIGNED_64BIT_TYPE, $liberty_cv_uint64,
@@ -370,6 +389,7 @@ funcs="$funcs gettimeofday"
 funcs="$funcs index"
 funcs="$funcs insque"
 funcs="$funcs memchr"
+funcs="$funcs memrchr"
 funcs="$funcs memcmp"
 funcs="$funcs memcpy"
 funcs="$funcs memmem"
@@ -436,7 +456,7 @@ if test "x" = "y"; then
     ffs __fsetlocking \
     getcwd getpagesize getrlimit getrusage getsysinfo gettimeofday \
     index insque \
-    memchr memcmp memcpy memmem memmove memset mkstemps \
+    memchr memrchr memcmp memcpy memmem memmove memset mkstemps \
     on_exit \
     pipe2 posix_spawn posix_spawnp psignal \
     pstat_getdynamic pstat_getstatic putenv \
@@ -555,7 +575,7 @@ if test -n "${with_target_subdir}"; then
 
     for f in atexit basename bcmp bcopy bsearch bzero calloc clock ffs \
              getcwd getpagesize getrusage gettimeofday \
-             index insque memchr memcmp memcpy memmove memset psignal \
+             index insque memchr memrchr memcmp memcpy memmove memset psignal \
              putenv random rename rindex sbrk setenv stpcpy strcasecmp \
              strchr strdup strerror strncasecmp strrchr strstr strtod \
              strtol strtoul sysconf times tmpnam vfprintf vprintf \
@@ -681,7 +701,7 @@ if test -z "${setobjs}"; then
 
   # We haven't set the list of objects yet.  Use the standard autoconf
   # tests.  This will only work if the compiler works.
-  AC_ISC_POSIX
+  AC_SEARCH_LIBS([strerror],[cposix])
   AC_REPLACE_FUNCS($funcs)
   libiberty_AC_FUNC_C_ALLOCA
   AC_FUNC_FORK

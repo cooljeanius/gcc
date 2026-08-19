@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2025 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -19,7 +19,9 @@
 #ifndef RUST_COMPILE_CONTEXT
 #define RUST_COMPILE_CONTEXT
 
+#include "optional.h"
 #include "rust-system.h"
+#include "rust-compile-drop-candidate.h"
 #include "rust-hir-map.h"
 #include "rust-name-resolver.h"
 #include "rust-hir-type-check.h"
@@ -27,13 +29,17 @@
 #include "rust-hir-full.h"
 #include "rust-mangle.h"
 #include "rust-tree.h"
-#include "rust-immutable-name-resolution-context.h"
+#include "rust-finalized-name-resolution-context.h"
 
 namespace Rust {
 namespace Compile {
 
 struct fncontext
 {
+  fncontext (tree fndecl, ::Bvariable *ret_addr, TyTy::BaseType *retty)
+    : fndecl (fndecl), ret_addr (ret_addr), retty (retty)
+  {}
+
   tree fndecl;
   ::Bvariable *ret_addr;
   TyTy::BaseType *retty;
@@ -46,10 +52,12 @@ struct CustomDeriveInfo
   std::vector<std::string> attributes;
 };
 
+class DropBuilder;
+
 class Context
 {
 public:
-  Context ();
+  static Context *get ();
 
   void setup_builtins ();
 
@@ -72,7 +80,10 @@ public:
       return it->second;
 
     compiled_type_map.insert ({h, type});
-    push_type (type);
+
+    if (TYPE_NAME (type) != NULL)
+      push_type (type);
+
     return type;
   }
 
@@ -87,7 +98,6 @@ public:
     return type;
   }
 
-  Resolver::Resolver *get_resolver () { return resolver; }
   Resolver::TypeCheckContext *get_tyctx () { return tyctx; }
   Analysis::Mappings &get_mappings () { return mappings; }
 
@@ -95,19 +105,14 @@ public:
   {
     scope_stack.push_back (scope);
     statements.push_back ({});
+    block_drop_candidates.emplace_back ();
   }
 
-  tree pop_block ()
+  tree pop_block () { return pop_block_impl (NULL_TREE, UNKNOWN_LOCATION); }
+
+  tree pop_block_with_cleanup (tree cleanup, location_t cleanup_locus)
   {
-    auto block = scope_stack.back ();
-    scope_stack.pop_back ();
-
-    auto stmts = statements.back ();
-    statements.pop_back ();
-
-    Backend::block_add_statements (block, stmts);
-
-    return block;
+    return pop_block_impl (cleanup, cleanup_locus);
   }
 
   tree peek_enclosing_scope ()
@@ -152,7 +157,7 @@ public:
     if (it == mono_fns.end ())
       mono_fns[dId] = {};
 
-    mono_fns[dId].push_back ({ref, fn});
+    mono_fns[dId].emplace_back (ref, fn);
   }
 
   void insert_closure_decl (const TyTy::ClosureType *ref, tree fn)
@@ -162,7 +167,7 @@ public:
     if (it == mono_closure_fns.end ())
       mono_closure_fns[dId] = {};
 
-    mono_closure_fns[dId].push_back ({ref, fn});
+    mono_closure_fns[dId].emplace_back (ref, fn);
   }
 
   tree lookup_closure_decl (const TyTy::ClosureType *ref)
@@ -260,6 +265,32 @@ public:
     return true;
   }
 
+  void insert_break_label (HirId id, tree label)
+  {
+    compiled_break_labels[id] = label;
+  }
+
+  tl::optional<tree> lookup_break_label (HirId id)
+  {
+    auto it = compiled_break_labels.find (id);
+    if (it == compiled_break_labels.end ())
+      return tl::nullopt;
+    return it->second;
+  }
+
+  void insert_continue_label (HirId id, tree label)
+  {
+    compiled_continue_labels[id] = label;
+  }
+
+  tl::optional<tree> lookup_continue_label (HirId id)
+  {
+    auto it = compiled_continue_labels.find (id);
+    if (it == compiled_continue_labels.end ())
+      return tl::nullopt;
+    return it->second;
+  }
+
   void insert_pattern_binding (HirId id, tree binding)
   {
     implicit_pattern_bindings[id] = binding;
@@ -275,9 +306,24 @@ public:
     return true;
   }
 
+  void insert_vtable (std::pair<size_t, size_t> pair, ::Bvariable *vtable)
+  {
+    compiled_vtables[pair] = vtable;
+  }
+
+  bool lookup_vtable (std::pair<size_t, size_t> pair, ::Bvariable **vtable)
+  {
+    auto it = compiled_vtables.find (pair);
+    if (it == compiled_vtables.end ())
+      return false;
+
+    *vtable = it->second;
+    return true;
+  }
+
   void push_fn (tree fn, ::Bvariable *ret_addr, TyTy::BaseType *retty)
   {
-    fn_stack.push_back (fncontext{fn, ret_addr, retty});
+    fn_stack.emplace_back (fn, ret_addr, retty);
   }
   void pop_fn () { fn_stack.pop_back (); }
 
@@ -316,7 +362,13 @@ public:
 
   void push_loop_context (Bvariable *var) { loop_value_stack.push_back (var); }
 
-  Bvariable *peek_loop_context () { return loop_value_stack.back (); }
+  bool have_loop_context () const { return !loop_value_stack.empty (); }
+
+  Bvariable *peek_loop_context ()
+  {
+    rust_assert (!loop_value_stack.empty ());
+    return loop_value_stack.back ();
+  }
 
   Bvariable *pop_loop_context ()
   {
@@ -330,12 +382,32 @@ public:
     loop_begin_labels.push_back (label);
   }
 
-  tree peek_loop_begin_label () { return loop_begin_labels.back (); }
+  tree peek_loop_begin_label ()
+  {
+    rust_assert (!loop_begin_labels.empty ());
+    return loop_begin_labels.back ();
+  }
 
   tree pop_loop_begin_label ()
   {
     tree pop = loop_begin_labels.back ();
     loop_begin_labels.pop_back ();
+    return pop;
+  }
+
+  void push_loop_end_label (tree label) { loop_end_labels.push_back (label); }
+
+  tree peek_loop_end_label ()
+  {
+    rust_assert (!loop_end_labels.empty ());
+    return loop_end_labels.back ();
+  }
+
+  tree pop_loop_end_label ()
+  {
+    rust_assert (!loop_end_labels.empty ());
+    tree pop = loop_end_labels.back ();
+    loop_end_labels.pop_back ();
     return pop;
   }
 
@@ -388,7 +460,43 @@ public:
   }
 
 private:
-  Resolver::Resolver *resolver;
+  friend class DropBuilder;
+  Context ();
+
+  tree pop_block_impl (tree cleanup, location_t cleanup_locus)
+  {
+    auto block = scope_stack.back ();
+    scope_stack.pop_back ();
+
+    auto stmts = statements.back ();
+    statements.pop_back ();
+
+    rust_assert (!block_drop_candidates.empty ());
+    block_drop_candidates.pop_back ();
+
+    if (cleanup != NULL_TREE)
+      {
+	tree body = Backend::statement_list (stmts);
+	if (body == NULL_TREE)
+	  body = build_empty_stmt (cleanup_locus);
+
+	tree exceptional_cleanup = build_empty_stmt (cleanup_locus);
+	tree cleanup_selector
+	  = build2_loc (cleanup_locus, EH_ELSE_EXPR, void_type_node, cleanup,
+			exceptional_cleanup);
+
+	tree try_finally
+	  = Backend::exception_handler_statement (body, NULL_TREE,
+						  cleanup_selector,
+						  cleanup_locus);
+	Backend::block_add_statements (block, {try_finally});
+      }
+    else
+      Backend::block_add_statements (block, stmts);
+
+    return block;
+  }
+
   Resolver::TypeCheckContext *tyctx;
   Analysis::Mappings &mappings;
   Mangler mangler;
@@ -400,10 +508,15 @@ private:
   std::map<HirId, tree> compiled_fn_map;
   std::map<HirId, tree> compiled_consts;
   std::map<HirId, tree> compiled_labels;
+  std::map<std::pair<size_t, size_t>, ::Bvariable *> compiled_vtables;
+  std::map<HirId, tree> compiled_break_labels;
+  std::map<HirId, tree> compiled_continue_labels;
   std::vector<::std::vector<tree>> statements;
   std::vector<tree> scope_stack;
+  std::vector<::std::vector<DropCandidate>> block_drop_candidates;
   std::vector<::Bvariable *> loop_value_stack;
   std::vector<tree> loop_begin_labels;
+  std::vector<tree> loop_end_labels;
   std::map<DefId, std::vector<std::pair<const TyTy::BaseType *, tree>>>
     mono_fns;
   std::map<DefId, std::vector<std::pair<const TyTy::ClosureType *, tree>>>

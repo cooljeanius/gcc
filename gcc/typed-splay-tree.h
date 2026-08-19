@@ -1,5 +1,5 @@
 /* A typesafe wrapper around libiberty's splay-tree.h.
-   Copyright (C) 2015-2025 Free Software Foundation, Inc.
+   Copyright (C) 2015-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -94,7 +94,7 @@ class typed_splay_tree
   /* The root of the tree.  */
   splay_tree_node root;
 
-  /* The comparision function.  */
+  /* The comparison function.  */
   compare_fn comp;
 
   /* The deallocate-key function.  NULL if no cleanup is necessary.  */

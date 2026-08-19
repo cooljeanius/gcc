@@ -1,4 +1,4 @@
-/* Copyright (C) 2005-2025 Free Software Foundation, Inc.
+/* Copyright (C) 2005-2026 Free Software Foundation, Inc.
    Contributed by Jakub Jelinek <jakub@redhat.com>.
 
    This file is part of the GNU Offloading and Multi Processing Library
@@ -48,11 +48,8 @@ ialias_redirect (omp_test_nest_lock)
 # endif
 ialias_redirect (omp_set_dynamic)
 ialias_redirect (omp_get_dynamic)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 ialias_redirect (omp_set_nested)
 ialias_redirect (omp_get_nested)
-#pragma GCC diagnostic pop
 ialias_redirect (omp_set_num_threads)
 ialias_redirect (omp_in_parallel)
 ialias_redirect (omp_get_max_threads)
@@ -106,6 +103,9 @@ ialias_redirect (omp_get_interop_str)
 ialias_redirect (omp_get_interop_name)
 ialias_redirect (omp_get_interop_type_desc)
 ialias_redirect (omp_get_interop_rc_desc)
+ialias_redirect (omp_control_tool)
+ialias_redirect (omp_get_supported_active_team_dims)
+ialias_redirect (omp_get_supported_active_league_dims)
 #endif
 
 #ifndef LIBGOMP_GNU_SYMBOL_VERSIONING
@@ -296,8 +296,6 @@ omp_set_dynamic_8_ (const int64_t *set)
   omp_set_dynamic (!!*set);
 }
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 void
 omp_set_nested_ (const int32_t *set)
 {
@@ -309,7 +307,6 @@ omp_set_nested_8_ (const int64_t *set)
 {
   omp_set_nested (!!*set);
 }
-#pragma GCC diagnostic pop
 
 void
 omp_set_num_threads_ (const int32_t *set)
@@ -329,14 +326,11 @@ omp_get_dynamic_ (void)
   return omp_get_dynamic ();
 }
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 int32_t
 omp_get_nested_ (void)
 {
   return omp_get_nested ();
 }
-#pragma GCC diagnostic pop
 
 int32_t
 omp_in_parallel_ (void)
@@ -869,6 +863,18 @@ omp_get_uid_from_device_8_ (const char **res, size_t *res_len,
 
 #ifndef LIBGOMP_OFFLOADED_ONLY
 
+int
+omp_get_supported_active_team_dims_ (int *device_num, int *native_support)
+{
+  return omp_get_supported_active_team_dims (*device_num, *native_support);
+}
+
+int
+omp_get_supported_active_league_dims_ (int *device_num, int *native_support)
+{
+  return omp_get_supported_active_league_dims (*device_num, *native_support);
+}
+
 void
 omp_display_env_ (const int32_t *verbose)
 {
@@ -879,6 +885,18 @@ void
 omp_display_env_8_ (const int64_t *verbose)
 {
   omp_display_env (!!*verbose);
+}
+
+omp_control_tool_result_t
+omp_control_tool_ (omp_control_tool_t command, int32_t modifier)
+{
+  return omp_control_tool (command, modifier, NULL);
+}
+
+omp_control_tool_result_t
+omp_control_tool_8_ (omp_control_tool_t command, int64_t modifier)
+{
+  return omp_control_tool (command, (int32_t) modifier, NULL);
 }
 
 #endif /* LIBGOMP_OFFLOADED_ONLY */

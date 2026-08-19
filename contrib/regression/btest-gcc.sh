@@ -1,7 +1,7 @@
 #!/bin/sh
 
 #  Test GCC.
-#  Copyright (C) 1999-2025 Free Software Foundation, Inc.
+#  Copyright (C) 1999-2026 Free Software Foundation, Inc.
 
 #  This program is free software; you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -138,10 +138,9 @@ if [ $H_HOST = $H_TARGET ] ; then
     make $dashj all || exit 1
   fi
 else
-  withopt="--with-gnu-ld --with-gnu-as"
   case "$H_TARGET" in
     *-linux*) ;;
-    *) withopt="$withopt --with-newlib";;
+    *) withopt="--with-newlib";;
   esac
   $SOURCE/configure --prefix=$PREFIX --target=$H_TARGET $withopt || exit 1
   make $dashj || exit 1

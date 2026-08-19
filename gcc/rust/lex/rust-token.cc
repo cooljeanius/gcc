@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2025 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -20,6 +20,7 @@
 #include "rust-token.h"
 #include "rust-diagnostics.h"
 #include "rust-unicode.h"
+#include "rust-ast.h"
 
 namespace Rust {
 // Hackily defined way to get token description for enum value using x-macros
@@ -88,7 +89,8 @@ token_id_keyword_string (TokenId id)
   switch (id)
     {
 #define RS_TOKEN_KEYWORD_2015(id, str_ptr)                                     \
-    case id: {                                                                 \
+  case id:                                                                     \
+    {                                                                          \
       static const std::string str (str_ptr);                                  \
       return str;                                                              \
     }                                                                          \
@@ -176,29 +178,6 @@ nfc_normalize_token_string (location_t loc, TokenId id, const std::string &str)
     return str;
 }
 
-const std::string &
-Token::get_str () const
-{
-  if (token_id_is_keyword (token_id))
-    return token_id_keyword_string (token_id);
-
-  // FIXME: attempt to return null again
-  // gcc_assert(str != NULL);
-
-  // HACK: allow referencing an empty string
-  static const std::string empty = "";
-
-  if (str == NULL)
-    {
-      rust_error_at (get_locus (),
-		     "attempted to get string for %qs, which has no string. "
-		     "returning empty string instead",
-		     get_token_description ());
-      return empty;
-    }
-  return *str;
-}
-
 namespace {
 enum class Context
 {
@@ -234,6 +213,13 @@ escape_special_chars (const std::string &source, Context ctx)
 
 } // namespace
 
+TokenPtr
+Token::make_identifier (const Identifier &ident)
+{
+  std::string str = ident;
+  return make_identifier (ident.get_locus (), std::move (str));
+}
+
 std::string
 Token::as_string () const
 {
@@ -262,12 +248,31 @@ Token::as_string () const
 	  if (get_type_hint () == CORETYPE_UNKNOWN)
 	    return get_str ();
 	  else
-	    return get_str () + get_type_hint_str ();
+	    /* FIXME: This is a workaround for an overzealous -Wrestrict,
+	       #125404 - we should remove it once it is fixed
+
+	       return get_str () + get_type_hint_str ();
+	       */
+	    {
+	      std::string s = get_str ();
+	      s += get_type_hint_str ();
+	      return s;
+	    }
 	case FLOAT_LITERAL:
 	  if (get_type_hint () == CORETYPE_UNKNOWN)
 	    return get_str ();
 	  else
-	    return get_str () + get_type_hint_str ();
+	    /* FIXME: This is a workaround for an overzealous -Wrestrict,
+	       #125404 - we should remove it once it is fixed
+
+	       return get_str () + get_type_hint_str ();
+	       */
+	    {
+	      std::string s = get_str ();
+	      s += get_type_hint_str ();
+	      return s;
+	    }
+
 	default:
 	  return get_str ();
 	}

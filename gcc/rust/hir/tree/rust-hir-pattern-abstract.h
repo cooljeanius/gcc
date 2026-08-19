@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2024 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -25,8 +25,10 @@
 #include "rust-system.h"
 
 namespace Rust {
+namespace TyTy {
+class BaseType;
+}
 namespace HIR {
-
 // Pattern base HIR node
 class Pattern : public Node, virtual public FullVisitable
 {
@@ -57,11 +59,28 @@ public:
     return std::unique_ptr<Pattern> (clone_pattern_impl ());
   }
 
-  // possible virtual methods: is_refutable()
-
   virtual ~Pattern () {}
 
-  virtual std::string as_string () const = 0;
+  // Syntactic refutability. ICEs for patterns whose refutability depends
+  // on type context (Path, Range, Slice, Alt). Callers that might
+  // encounter such patterns must use the typed overload.
+  virtual bool is_refutable () const = 0;
+  // Type-aware refutability. Defaults to the syntactic answer for
+  // patterns whose refutability is independent of the scrutinee type.
+
+  // Virtual method overriden by classes that enable this.
+  virtual bool
+  is_refutable (const TyTy::BaseType &scrutinee ATTRIBUTE_UNUSED) const
+  {
+    return is_refutable ();
+  }
+
+  virtual std::string to_string () const = 0;
+
+  std::string to_debug_string () const
+  {
+    return to_string () + get_mappings ().as_string ();
+  }
 
   virtual void accept_vis (HIRPatternVisitor &vis) = 0;
 

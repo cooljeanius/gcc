@@ -1,5 +1,5 @@
 /* Subroutines used for code generation on the Synopsys DesignWare ARC cpu.
-   Copyright (C) 1994-2025 Free Software Foundation, Inc.
+   Copyright (C) 1994-2026 Free Software Foundation, Inc.
 
    Sources derived from work done by Sankhya Technologies (www.sankhya.com) on
    behalf of Synopsys Inc.
@@ -83,7 +83,7 @@ typedef struct GTY (()) _arc_jli_section
 
 static arc_jli_section *arc_jli_sections = NULL;
 
-/* Track which regs are set fixed/call saved/call used from commnad line.  */
+/* Track which regs are set fixed/call saved/call used from command line.  */
 HARD_REG_SET overrideregs;
 
 /* Maximum size of a loop.  */
@@ -386,27 +386,41 @@ legitimate_small_data_address_p (rtx x, machine_mode mode)
       return SYMBOL_REF_SMALL_P (x);
     case PLUS:
       {
-	bool p0 = (GET_CODE (XEXP (x, 0)) == SYMBOL_REF)
-	  && SYMBOL_REF_SMALL_P (XEXP (x, 0));
+	if ((GET_CODE (XEXP (x, 0)) != SYMBOL_REF)
+	    || !SYMBOL_REF_SMALL_P (XEXP (x, 0)))
+	  return false;
 
 	/* If no constant then we cannot do small data.  */
 	if (!CONST_INT_P (XEXP (x, 1)))
 	  return false;
 
-	/* Small data relocs works with scalled addresses, check if
+	const int offset = INTVAL (XEXP (x, 1));
+	int size = GET_MODE_SIZE (mode);
+	size = size == 8 ? 4 : size;
+
+	/* Small data relocs works with scaled addresses, check if
 	   the immediate fits the requirements.  */
-	switch (GET_MODE_SIZE (mode))
+	switch (size)
 	  {
 	  case 1:
-	    return p0;
+	    break;
 	  case 2:
-	    return p0 && ((INTVAL (XEXP (x, 1)) & 0x1) == 0);
+	    if ((offset & 0x1) == 0)
+	      break;
+	    else
+	      return false;
 	  case 4:
-	  case 8:
-	    return p0 && ((INTVAL (XEXP (x, 1)) & 0x3) == 0);
+	    if ((offset & 0x3) == 0)
+	      break;
+	    else
+	      return false;
 	  default:
 	    return false;
 	  }
+
+	/* Reloc allows scaled signed 9 bits.  */
+	const int v = (offset / size) >> 8;
+	return v == 0 || v == -1;
       }
     default:
       return false;
@@ -459,7 +473,7 @@ legitimate_scaled_address_p (machine_mode mode, rtx op, bool strict)
       return false;
     }
 
-  /* Scalled addresses for sdata is done other places.  */
+  /* Scaled addresses for sdata is done other places.  */
   if (legitimate_small_data_address_p (op, mode))
     return false;
 
@@ -720,8 +734,6 @@ static rtx arc_legitimize_address_0 (rtx, rtx, machine_mode mode);
 #define TARGET_NO_SPECULATION_IN_DELAY_SLOTS_P	\
   arc_no_speculation_in_delay_slots_p
 
-#undef TARGET_LRA_P
-#define TARGET_LRA_P hook_bool_void_true
 #define TARGET_REGISTER_PRIORITY arc_register_priority
 /* Stores with scaled offsets have different displacement ranges.  */
 #define TARGET_DIFFERENT_ADDR_DISPLACEMENT_P hook_bool_void_true
@@ -1438,6 +1450,13 @@ get_arc_condition_code (rtx comparison)
 	case GEU : return ARC_CC_NC;
 	default : gcc_unreachable ();
 	}
+    case E_CC_Vmode:
+      switch (GET_CODE (comparison))
+	{
+	case EQ : return ARC_CC_NV;
+	case NE : return ARC_CC_V;
+	default : gcc_unreachable ();
+	}
     case E_CC_FP_GTmode:
       if (TARGET_ARGONAUT_SET && TARGET_SPFP)
 	switch (GET_CODE (comparison))
@@ -1520,7 +1539,7 @@ get_arc_condition_code (rtx comparison)
   return (42);
 }
 
-/* Return true if COMPARISON has a short form that can accomodate OFFSET.  */
+/* Return true if COMPARISON has a short form that can accommodate OFFSET.  */
 
 bool
 arc_short_comparison_p (rtx comparison, int offset)
@@ -1547,6 +1566,13 @@ arc_select_cc_mode (enum rtx_code op, rtx x, rtx y)
 {
   machine_mode mode = GET_MODE (x);
   rtx x1;
+
+  /* Matches all instructions which can do .f and clobbers only Z flag.  */
+  if (GET_MODE_CLASS (mode) == MODE_INT
+      && y == const0_rtx
+      && GET_CODE (x) == MULT
+      && (op == EQ || op == NE))
+    return CC_Zmode;
 
   /* For an operation that sets the condition codes as a side-effect, the
      C and V flags is not set as for cmp, so we can only use comparisons where
@@ -2378,7 +2404,7 @@ arc_setup_incoming_varargs (cumulative_args_t args_so_far,
     }
 }
 
-/* Return TRUE if reg is ok for short instrcutions.  */
+/* Return TRUE if reg is ok for short instructions.  */
 
 static bool
 arc_check_short_reg_p (rtx op)
@@ -3038,8 +3064,8 @@ pop_reg (rtx reg)
   return GET_MODE_SIZE (GET_MODE (reg));
 }
 
-/* Check if we have a continous range to be save/restored with the
-   help of enter/leave instructions.  A vaild register range starts
+/* Check if we have a continuous range to be save/restored with the
+   help of enter/leave instructions.  A valid register range starts
    from $r13 and is up to (including) $r26.  */
 
 static bool
@@ -3363,7 +3389,7 @@ arc_restore_callee_leave (uint64_t gmask,
 
   if (offset && !restore_fp)
     {
-      /* This add is only emmited when we do not restore fp with leave
+      /* This add is only emitted when we do not restore fp with leave
 	 instruction.  */
       frame_stack_add (offset);
       frame_allocated += offset;
@@ -4785,7 +4811,7 @@ arc_asm_trampoline_template (FILE *f)
    that no executable code but trampolines is on the stack, no icache
    entries linger for the area of the stack from when before the stack
    was allocated, and allocating trampolines in trampoline-only cache
-   lines or allocate trampolines fram a special pool of pre-allocated
+   lines or allocate trampolines from a special pool of pre-allocated
    trampolines.  */
 
 static void
@@ -4843,7 +4869,7 @@ arc_add_jli_section (rtx pat)
   arc_jli_sections = new_section;
 }
 
-/* This is set briefly to 1 when we output a ".as" address modifer, and then
+/* This is set briefly to 1 when we output a ".as" address modifier, and then
    reset when we output the scaled address.  */
 static int output_scaled = 0;
 
@@ -6693,7 +6719,7 @@ arc_cannot_force_const_mem (machine_mode mode, rtx x)
 
 enum arc_builtin_id
   {
-#define DEF_BUILTIN(NAME, N_ARGS, TYPE, ICODE, MASK)	\
+#define DEF_BUILTIN(NAME, N_ARGS, TYPE, ICODE, MASK, ATTRS)	\
     ARC_BUILTIN_ ## NAME,
 #include "builtins.def"
 #undef DEF_BUILTIN
@@ -6711,7 +6737,7 @@ struct GTY(()) arc_builtin_description
 static GTY(()) struct arc_builtin_description
 arc_bdesc[ARC_BUILTIN_COUNT] =
 {
-#define DEF_BUILTIN(NAME, N_ARGS, TYPE, ICODE, MASK)		\
+#define DEF_BUILTIN(NAME, N_ARGS, TYPE, ICODE, MASK, ATTRS)		\
   { (enum insn_code) CODE_FOR_ ## ICODE, N_ARGS, NULL_TREE },
 #include "builtins.def"
 #undef DEF_BUILTIN
@@ -6843,8 +6869,11 @@ arc_init_builtins (void)
     = build_function_type_list (long_long_integer_type_node,
 				V2SI_type_node, V2HI_type_node, NULL_TREE);
 
+  /* Create const attribute for mathematical functions.  */
+  tree attr_const = tree_cons (get_identifier ("const"), NULL, NULL);
+
   /* Add the builtins.  */
-#define DEF_BUILTIN(NAME, N_ARGS, TYPE, ICODE, MASK)			\
+#define DEF_BUILTIN(NAME, N_ARGS, TYPE, ICODE, MASK, ATTRS)		\
   {									\
     int id = ARC_BUILTIN_ ## NAME;					\
     const char *Name = "__builtin_arc_" #NAME;				\
@@ -6854,7 +6883,7 @@ arc_init_builtins (void)
     if (MASK)								\
       arc_bdesc[id].fndecl						\
 	= add_builtin_function (arc_tolower(name, Name), TYPE, id,	\
-				BUILT_IN_MD, NULL, NULL_TREE);		\
+				BUILT_IN_MD, NULL, ATTRS);		\
   }
 #include "builtins.def"
 #undef DEF_BUILTIN
@@ -7606,7 +7635,7 @@ arc_invalid_within_doloop (const rtx_insn *insn)
   return NULL;
 }
 
-/* Return the next active insn, skiping the inline assembly code.  */
+/* Return the next active insn, skipping the inline assembly code.  */
 
 static rtx_insn *
 arc_active_insn (rtx_insn *insn)
@@ -8220,8 +8249,7 @@ hwloop_optimize (hwloop_info loop)
   insn = emit_insn (gen_arc_lp (loop->start_label,
 				loop->end_label));
 
-  seq = get_insns ();
-  end_sequence ();
+  seq = end_sequence ();
 
   entry_after = BB_END (entry_bb);
   if (!single_succ_p (entry_bb) || vec_safe_length (loop->incoming) > 1
@@ -8264,7 +8292,7 @@ hwloop_optimize (hwloop_info loop)
   /* Insert the loop end label before the last instruction of the
      loop.  */
   emit_label_after (end_label, loop->last_insn);
-  /* Make sure we mark the begining and end label as used.  */
+  /* Make sure we mark the beginning and end label as used.  */
   LABEL_NUSES (loop->end_label)++;
   LABEL_NUSES (loop->start_label)++;
 
@@ -8434,9 +8462,9 @@ arc_reorg (void)
    delay slot scheduling:
 
    - If a delay slot is filled with a nocond/set insn from above, the previous
-     basic block can become elegible for conditional execution.
+     basic block can become eligible for conditional execution.
    - If a delay slot is filled with a nocond insn from the fall-through path,
-     the branch with that delay slot can become eligble for conditional
+     the branch with that delay slot can become eligible for conditional
      execution (however, with the same sort of data flow analysis that dbr
      does, we could have figured out before that we don't need to
      conditionalize this insn.)
@@ -9461,8 +9489,8 @@ conditionalize_nonjump (rtx pat, rtx cond, rtx insn, bool annulled)
      what to do with COND_EXEC.  */
   if (RTX_FRAME_RELATED_P (insn))
     {
-      /* If this is the delay slot insn of an anulled branch,
-	 dwarf2out.cc:scan_trace understands the anulling semantics
+      /* If this is the delay slot insn of an annulled branch,
+	 dwarf2out.cc:scan_trace understands the annulling semantics
 	 without the COND_EXEC.  */
       gcc_assert (annulled);
       rtx note = alloc_reg_note (REG_FRAME_RELATED_EXPR, pat,
@@ -10156,7 +10184,7 @@ arc_eh_uses (int regno)
   return false;
 }
 
-/* ??? Should we define TARGET_REGISTER_PRIORITY?  We might perfer to
+/* ??? Should we define TARGET_REGISTER_PRIORITY?  We might prefer to
    use q registers, because some insn are shorter with them.  OTOH we
    already have separate alternatives for this purpose, and other
    insns don't mind, so maybe we should rather prefer the other
@@ -11270,7 +11298,7 @@ arc_memory_move_cost (machine_mode mode,
    one OR instruction:
    OR rA, rB, mask -> OR rA,rB,mask1/BSET_S rA,mask2
 
-   3. otherwise an OR with limm will be emmitted.  */
+   3. otherwise an OR with limm will be emitted.  */
 
 void
 arc_split_ior (rtx *operands)
@@ -11545,6 +11573,21 @@ arc_libm_function_max_error (unsigned cfn, machine_mode mode,
     }
   return default_libm_function_max_error (cfn, mode, boundary_p);
 }
+
+void
+arc_gen_unlikely_cbranch (enum rtx_code cmp, machine_mode cc_mode, rtx label)
+{
+  rtx cc_reg, x;
+
+  cc_reg = gen_rtx_REG (cc_mode, CC_REG);
+  label = gen_rtx_LABEL_REF (VOIDmode, label);
+
+  x = gen_rtx_fmt_ee (cmp, VOIDmode, cc_reg, const0_rtx);
+  x = gen_rtx_IF_THEN_ELSE (VOIDmode, x, label, pc_rtx);
+
+  emit_unlikely_jump (gen_rtx_SET (pc_rtx, x));
+}
+
 
 #undef TARGET_USE_ANCHORS_FOR_SYMBOL_P
 #define TARGET_USE_ANCHORS_FOR_SYMBOL_P arc_use_anchors_for_symbol_p

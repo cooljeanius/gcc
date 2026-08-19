@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2025, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -197,7 +197,7 @@ package body Ch13 is
    function Get_Aspect_Specifications (Semicolon : Boolean) return List_Id is
       A_Id    : Aspect_Id;
       Aspect  : Node_Id;
-      Aspects : List_Id := Empty_List;
+      Aspects : constant List_Id := Empty_List;
       OK      : Boolean;
 
       Opt : Boolean;
@@ -215,7 +215,6 @@ package body Ch13 is
       end if;
 
       Scan; -- past WITH (or possible WHEN after error)
-      Aspects := Empty_List;
 
       --  Loop to scan aspects
 
@@ -497,26 +496,30 @@ package body Ch13 is
                   end if;
                end if;
 
-               --  Note if inside Depends or Refined_Depends aspect
+               --  Set some aspect-dependent flags
 
-               if A_Id = Aspect_Depends
-                 or else A_Id = Aspect_Refined_Depends
-               then
-                  Inside_Depends := True;
-               end if;
+               case A_Id is
+                  when Aspect_Depends | Aspect_Refined_Depends =>
+                     Inside_Depends := True;
+                  when Aspect_Abstract_State =>
+                     Inside_Abstract_State := True;
+                  when Aspect_Import =>
+                     SIS_Aspect_Import_Seen := True;
+                     --  This matters only while parsing a subprogram.
 
-               --  Note that we have seen an Import aspect specification.
-               --  This matters only while parsing a subprogram.
+                  when others => null;
+               end case;
 
-               if A_Id = Aspect_Import then
-                  SIS_Aspect_Import_Seen := True;
-                  --  Should do it only for subprograms
-               end if;
+               --  Aspect Modifies requires dedicated parsing, because it is
+               --  unlike any valid expression.
+
+               if A_Id = Aspect_Modifies then
+                  Set_Expression (Aspect, P_Modifies_Specification);
 
                --  Parse the aspect definition depending on the expected
                --  argument kind.
 
-               if Aspect_Argument (A_Id) = Name
+               elsif Aspect_Argument (A_Id) = Name
                  or else Aspect_Argument (A_Id) = Optional_Name
                then
                   Set_Expression (Aspect, P_Name);
@@ -529,9 +532,10 @@ package body Ch13 is
                   Set_Expression (Aspect, P_Expression);
                end if;
 
-               --  Unconditionally reset flag for Inside_Depends
+               --  Unconditionally reset flag for being inside aspects
 
-               Inside_Depends := False;
+               Inside_Depends        := False;
+               Inside_Abstract_State := False;
             end if;
 
             --  Add the aspect to the resulting list only when it was properly
@@ -629,6 +633,77 @@ package body Ch13 is
       return Aspects;
    end Get_Aspect_Specifications;
 
+   -----------------------------
+   -- P_Attribute_Designators --
+   -----------------------------
+
+   function P_Attribute_Designators (Initial_Prefix : Node_Id) return Node_Id
+   is
+      Accumulator  : Node_Id := Initial_Prefix;
+      Designator   : Name_Id;
+   begin
+      while Token = Tok_Apostrophe loop
+
+         Scan; -- past apostrophe
+
+         Designator := No_Name;
+
+         if Token = Tok_Identifier then
+            Designator := Token_Name;
+
+            --  Note that the parser must complain in case of an internal
+            --  attribute name that comes from source since internal names are
+            --  meant to be used only by the compiler.
+
+            if not Is_Attribute_Name (Designator)
+              and then (not Is_Internal_Attribute_Name (Designator)
+                        or else Comes_From_Source (Token_Node))
+            then
+               Signal_Bad_Attribute;
+            end if;
+
+            if Style_Check then
+               Style.Check_Attribute_Name (False);
+            end if;
+
+         --  Here for case of attribute designator is not an identifier
+
+         else
+            if Token = Tok_Delta then
+               Designator := Name_Delta;
+
+            elsif Token = Tok_Digits then
+               Designator := Name_Digits;
+
+            elsif Token = Tok_Access then
+               Designator := Name_Access;
+
+            else
+               Error_Msg_AP ("attribute designator expected");
+               raise Error_Resync;
+            end if;
+
+            if Style_Check then
+               Style.Check_Attribute_Name (True);
+            end if;
+         end if;
+
+         --  Here we have an OK attribute scanned, and the corresponding
+         --  Attribute identifier node is stored in Designator.
+
+         declare
+            Temp : constant Node_Id := Accumulator;
+         begin
+            Accumulator := New_Node (N_Attribute_Reference, Prev_Token_Ptr);
+            Set_Prefix (Accumulator, Temp);
+         end;
+         Set_Attribute_Name (Accumulator, Designator);
+         Scan;
+      end loop;
+
+      return Accumulator;
+   end P_Attribute_Designators;
+
    --------------------------------------------
    -- 13.1  Representation Clause (also I.7) --
    --------------------------------------------
@@ -671,8 +746,6 @@ package body Ch13 is
    function P_Representation_Clause return Node_Id is
       For_Loc         : Source_Ptr;
       Name_Node       : Node_Id;
-      Prefix_Node     : Node_Id;
-      Attr_Name       : Name_Id;
       Identifier_Node : Node_Id;
       Rep_Clause_Node : Node_Id;
       Expr_Node       : Node_Id;
@@ -690,8 +763,7 @@ package body Ch13 is
       --  Check case of qualified name to give good error message
 
       if Token = Tok_Dot then
-         Error_Msg_SC
-            ("representation clause requires simple name!");
+         Error_Msg_SC ("representation clause requires simple name!");
 
          loop
             exit when Token /= Tok_Dot;
@@ -703,80 +775,28 @@ package body Ch13 is
       --  Attribute Definition Clause
 
       if Token = Tok_Apostrophe then
+         Name_Node := P_Attribute_Designators (Identifier_Node);
 
-         --  Allow local names of the form a'b'.... This enables
-         --  us to parse class-wide streams attributes correctly.
+         --  Check for Address clause which needs to be marked for use in
+         --  optimizing performance of Exp_Util.Following_Address_Clause.
 
-         Name_Node := Identifier_Node;
-         while Token = Tok_Apostrophe loop
+         declare
+            Cursor : Node_Id := Name_Node;
+         begin
+            while Nkind (Prefix (Cursor)) = N_Attribute_Reference loop
+               Cursor := Prefix (Cursor);
+            end loop;
 
-            Scan; -- past apostrophe
-
-            Identifier_Node := Token_Node;
-            Attr_Name := No_Name;
-
-            if Token = Tok_Identifier then
-               Attr_Name := Token_Name;
-
-               --  Note that the parser must complain in case of an internal
-               --  attribute name that comes from source since internal names
-               --  are meant to be used only by the compiler.
-
-               if not Is_Attribute_Name (Attr_Name)
-                 and then (not Is_Internal_Attribute_Name (Attr_Name)
-                            or else Comes_From_Source (Token_Node))
-               then
-                  Signal_Bad_Attribute;
-               end if;
-
-               if Style_Check then
-                  Style.Check_Attribute_Name (False);
-               end if;
-
-            --  Here for case of attribute designator is not an identifier
-
-            else
-               if Token = Tok_Delta then
-                  Attr_Name := Name_Delta;
-
-               elsif Token = Tok_Digits then
-                  Attr_Name := Name_Digits;
-
-               elsif Token = Tok_Access then
-                  Attr_Name := Name_Access;
-
-               else
-                  Error_Msg_AP ("attribute designator expected");
-                  raise Error_Resync;
-               end if;
-
-               if Style_Check then
-                  Style.Check_Attribute_Name (True);
-               end if;
-            end if;
-
-            --  Here we have an OK attribute scanned, and the corresponding
-            --  Attribute identifier node is stored in Ident_Node.
-
-            Prefix_Node := Name_Node;
-            Name_Node := New_Node (N_Attribute_Reference, Prev_Token_Ptr);
-            Set_Prefix (Name_Node, Prefix_Node);
-            Set_Attribute_Name (Name_Node, Attr_Name);
-            Scan;
-
-            --  Check for Address clause which needs to be marked for use in
-            --  optimizing performance of Exp_Util.Following_Address_Clause.
-
-            if Attr_Name = Name_Address
-              and then Nkind (Prefix_Node) = N_Identifier
+            if Attribute_Name (Cursor) = Name_Address
+              and then Nkind (Prefix (Cursor)) = N_Identifier
             then
-               Set_Name_Table_Boolean1 (Chars (Prefix_Node), True);
+               Set_Name_Table_Boolean1 (Chars (Prefix (Cursor)), True);
             end if;
-         end loop;
+         end;
 
          Rep_Clause_Node := New_Node (N_Attribute_Definition_Clause, For_Loc);
-         Set_Name (Rep_Clause_Node, Prefix_Node);
-         Set_Chars (Rep_Clause_Node, Attr_Name);
+         Set_Name (Rep_Clause_Node, Prefix (Name_Node));
+         Set_Chars (Rep_Clause_Node, Attribute_Name (Name_Node));
          T_Use;
 
          Expr_Node := P_Expression_No_Right_Paren;
@@ -980,6 +1000,144 @@ package body Ch13 is
       TF_Semicolon;
       return Mod_Node;
    end P_Mod_Clause;
+
+   ------------------------------
+   -- P_Modifies_Specification --
+   ------------------------------
+
+   --  MODIFIES_SPECIFICATION ::=
+   --      MODIFIES_CLAUSE
+   --    | (MODIFIES_CLAUSE {, MODIFIES_CLAUSE});
+   --
+   --  MODIFIES_CLAUSE ::= MODIFIED_OBJECTS { when GUARD }
+   --
+   --  GUARD ::= boolean_EXPRESSION
+   --
+   --  MODIFIED_OBJECTS ::=
+   --      MODIFIED_OBJECT
+   --    | (MODIFIED_OBJECT {, MODIFIED_OBJECT})
+   --
+   --  MODIFIED_OBJECT ::=
+   --      name
+   --    | MODIFIED_OBJECT . all
+   --    | MODIFIED_OBJECT . component_selector_name
+   --    | MODIFIED_OBJECT (expression {, expression})
+
+   function P_Modifies_Specification return Node_Id is
+
+      function P_Modifies_Clause return Node_Id;
+      --  Parse a single modifies clause. If there are multiple modified
+      --  objects or a guard, then a component association is returned where
+      --  modified objects become component choices and guard becomes component
+      --  expression; otherwise, a modified object is returned directly.
+
+      -----------------------
+      -- P_Modifies_Clause --
+      -----------------------
+
+      function P_Modifies_Clause return Node_Id is
+         Clause_Node    : Node_Id;
+         Object_Node    : Node_Id;
+         Condition_Node : Node_Id;
+      begin
+         if Token = Tok_Left_Paren then
+            Scan;  --  pase left paren
+
+            Clause_Node :=
+              New_Node (N_Component_Association, Token_Ptr);
+
+            loop
+               Object_Node := P_Name;
+
+               if Choices (Clause_Node) = No_List then
+                  Set_Choices (Clause_Node, New_List);
+               end if;
+
+               Append (Object_Node, Choices (Clause_Node));
+
+               if Token = Tok_Comma then
+                  Scan; --  past comma
+               elsif Token = Tok_Right_Paren then
+                  Scan; --  past right paren
+                  exit;
+               else
+                  raise Error_Resync;
+               end if;
+            end loop;
+
+            if Token = Tok_When then
+               Scan; --  past WHEN
+               Condition_Node := P_Expression;
+
+               Set_Expression (Clause_Node, Condition_Node);
+            end if;
+
+            return Clause_Node;
+         else
+            Object_Node := P_Name;
+
+            if Token = Tok_When then
+               Scan; --  past WHEN
+               Condition_Node := P_Expression;
+
+               Clause_Node :=
+                 New_Node (N_Component_Association, Sloc (Object_Node));
+
+               Set_Choices    (Clause_Node, New_List (Object_Node));
+               Set_Expression (Clause_Node, Condition_Node);
+
+               return Clause_Node;
+            else
+               return Object_Node;
+            end if;
+         end if;
+      end P_Modifies_Clause;
+
+      Modifies_Node : Node_Id;
+      Clause_Node   : Node_Id;
+
+   begin
+      Modifies_Node := New_Node (N_Aggregate, Token_Ptr);
+
+      if Token = Tok_Left_Paren then
+         Scan; --  past left paren
+         loop
+            Clause_Node := P_Modifies_Clause;
+            if Nkind (Clause_Node) = N_Component_Association then
+               if Component_Associations (Modifies_Node) = No_List then
+                  Set_Component_Associations (Modifies_Node, New_List);
+               end if;
+               Append (Clause_Node, Component_Associations (Modifies_Node));
+            else
+               if Expressions (Modifies_Node) = No_List then
+                  Set_Expressions (Modifies_Node, New_List);
+               end if;
+               Append (Clause_Node, Expressions (Modifies_Node));
+            end if;
+
+            if Token = Tok_Comma then
+               Scan; --  past comma
+            elsif Token = Tok_Right_Paren then
+               Scan; --  past right paren
+               exit;
+            else
+               raise Error_Resync;
+            end if;
+         end loop;
+      else
+         Clause_Node := P_Modifies_Clause;
+         if Nkind (Clause_Node) = N_Component_Association then
+            Set_Component_Associations (Modifies_Node, New_List (Clause_Node));
+         else
+            Set_Expressions (Modifies_Node, New_List (Clause_Node));
+         end if;
+      end if;
+
+      return Modifies_Node;
+   exception
+      when Error_Resync =>
+         return Error;
+   end P_Modifies_Specification;
 
    ------------------------------
    -- 13.5.1  Component Clause --

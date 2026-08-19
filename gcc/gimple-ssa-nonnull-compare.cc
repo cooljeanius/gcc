@@ -1,5 +1,5 @@
 /* -Wnonnull-compare warning support.
-   Copyright (C) 2016-2025 Free Software Foundation, Inc.
+   Copyright (C) 2016-2026 Free Software Foundation, Inc.
    Contributed by Jakub Jelinek <jakub@redhat.com>
 
 This file is part of GCC.
@@ -72,24 +72,6 @@ do_warn_nonnull_compare (function *fun, tree arg)
 	  case NE_EXPR:
 	    if (gimple_assign_rhs1 (stmt) == d)
 	      op = gimple_assign_rhs2 (stmt);
-	    break;
-	  case COND_EXPR:
-	    switch (TREE_CODE (gimple_assign_rhs1 (stmt)))
-	      {
-	      case EQ_EXPR:
-	      case NE_EXPR:
-		op = gimple_assign_rhs1 (stmt);
-		if (TREE_OPERAND (op, 0) != d)
-		  {
-		    op = NULL_TREE;
-		    break;
-		  }
-		loc = EXPR_LOC_OR_LOC (op, loc);
-		op = TREE_OPERAND (op, 1);
-		break;
-	      default:
-		break;
-	      }
 	    break;
 	  default:
 	    break;

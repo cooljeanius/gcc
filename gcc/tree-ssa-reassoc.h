@@ -1,5 +1,5 @@
 /* Reassociation for trees.
-   Copyright (C) 2020-2025 Free Software Foundation, Inc.
+   Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -36,7 +36,6 @@ struct range_entry
   tree low;
   tree high;
   bool in_p;
-  bool strict_overflow_p;
   unsigned int idx, next;
 };
 

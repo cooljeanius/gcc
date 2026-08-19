@@ -1,5 +1,5 @@
 /* IPA visibility pass
-   Copyright (C) 2003-2025 Free Software Foundation, Inc.
+   Copyright (C) 2003-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -51,14 +51,14 @@ along with GCC; see the file COPYING3.  If not see
       Comdat group represent a section that may be replaced by linker by
       a different copy of the same section from other unit.
       If we have resolution information (from linker plugin) and we know that
-      a given comdat gorup is prevailing, we can dismantle it and turn symbols
+      a given comdat group is prevailing, we can dismantle it and turn symbols
       into normal symbols.  If the resolution information says that the
       section was previaled by copy from non-LTO code, we can also dismantle
       it and turn all symbols into external.
 
     - Local aliases:
 
-      Some symbols can be interposed by dynamic linker. Refering to these
+      Some symbols can be interposed by dynamic linker. Referring to these
       symbols is expensive, since it needs to be overwritable by the dynamic
       linker.  In some cases we know that the interposition does not change
       semantic and we can always refer to a local copy (as in the case of
@@ -198,6 +198,8 @@ cgraph_externally_visible_p (struct cgraph_node *node,
   if (!TREE_PUBLIC (node->decl)
       || DECL_EXTERNAL (node->decl))
     return false;
+  if (node->ref_by_asm)
+    return true;
 
   /* Do not try to localize built-in functions yet.  One of problems is that we
      end up mangling their asm for WHOPR that makes it impossible to call them
@@ -269,6 +271,8 @@ varpool_node::externally_visible_p (void)
 
   if (!TREE_PUBLIC (decl))
     return false;
+  if (ref_by_asm)
+    return true;
 
   /* If linker counts on us, we must preserve the function.  */
   if (used_from_object_file_p ())
@@ -306,7 +310,7 @@ varpool_node::externally_visible_p (void)
   /* As a special case, the COMDAT virtual tables can be unshared.
      In LTO mode turn vtables into static variables.  The variable is readonly,
      so this does not enable more optimization, but referring static var
-     is faster for dynamic linking.  Also this match logic hidding vtables
+     is faster for dynamic linking.  Also this match logic hides vtables
      from LTO symbol tables.  */
   if (((in_lto_p || flag_whole_program) && !flag_incremental_link)
       && DECL_COMDAT (decl)
@@ -329,7 +333,7 @@ varpool_node::externally_visible_p (void)
      inline definitions.
 
      FIXME: We can do so for readonly vars with no address taken and
-     possibly also for vtables since no direct pointer comparsion is done.
+     possibly also for vtables since no direct pointer comparison is done.
      It might be interesting to do so to reduce linking overhead.  */
   if (DECL_COMDAT (decl) || DECL_WEAK (decl))
     return true;

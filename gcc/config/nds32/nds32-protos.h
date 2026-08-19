@@ -1,5 +1,5 @@
 /* Prototypes for exported functions of Andes NDS32 cpu for GNU compiler
-   Copyright (C) 2012-2025 Free Software Foundation, Inc.
+   Copyright (C) 2012-2026 Free Software Foundation, Inc.
    Contributed by Andes Technology Corporation.
 
    This file is part of GCC.
@@ -223,11 +223,11 @@ extern bool symbolic_reference_mentioned_p (rtx);
 
 extern int nds32_cond_move_p (rtx);
 
-/* Auxiliary functions to identify 16 bit addresing mode.  */
+/* Auxiliary functions to identify 16 bit addressing mode.  */
 
 extern enum nds32_16bit_address_type nds32_mem_format (rtx);
 
-/* Auxiliary functions to identify floating-point addresing mode.  */
+/* Auxiliary functions to identify floating-point addressing mode.  */
 
 extern bool nds32_float_mem_operand_p (rtx);
 
