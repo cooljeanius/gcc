@@ -1,5 +1,5 @@
 /* Dump a gcov file, for debugging use.
-   Copyright (C) 2002-2025 Free Software Foundation, Inc.
+   Copyright (C) 2002-2026 Free Software Foundation, Inc.
    Contributed by Nathan Sidwell <nathan@codesourcery.com>
 
 Gcov is free software; you can redistribute it and/or modify
@@ -39,7 +39,9 @@ static void tag_function (const char *, unsigned, int, unsigned);
 static void tag_blocks (const char *, unsigned, int, unsigned);
 static void tag_arcs (const char *, unsigned, int, unsigned);
 static void tag_conditions (const char *, unsigned, int, unsigned);
+static void tag_paths (const char *, unsigned, int, unsigned);
 static void tag_lines (const char *, unsigned, int, unsigned);
+static void tag_suppress (const char *, unsigned, int, unsigned);
 static void tag_counters (const char *, unsigned, int, unsigned);
 static void tag_summary (const char *, unsigned, int, unsigned);
 extern int main (int, char **);
@@ -79,7 +81,9 @@ static const tag_format_t tag_table[] =
   {GCOV_TAG_BLOCKS, "BLOCKS", tag_blocks},
   {GCOV_TAG_ARCS, "ARCS", tag_arcs},
   {GCOV_TAG_CONDS, "CONDITIONS", tag_conditions},
+  {GCOV_TAG_PATHS, "PATHS", tag_paths},
   {GCOV_TAG_LINES, "LINES", tag_lines},
+  {GCOV_TAG_SUPPRESS, "SUPPRESS", tag_suppress},
   {GCOV_TAG_OBJECT_SUMMARY, "OBJECT_SUMMARY", tag_summary},
   {0, NULL, NULL}
 };
@@ -156,7 +160,7 @@ static void
 print_version (void)
 {
   printf ("gcov-dump %s%s\n", pkgversion_string, version_string);
-  printf ("Copyright (C) 2025 Free Software Foundation, Inc.\n");
+  printf ("Copyright (C) 2026 Free Software Foundation, Inc.\n");
   printf ("This is free software; see the source for copying conditions.  There is NO\n\
 warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n");
 }
@@ -406,16 +410,26 @@ tag_conditions (const char *filename, unsigned /* tag */, int length,
     {
       for (unsigned ix = 0; ix != n_conditions; ix++)
 	{
+	  const gcov_position_t position = gcov_position ();
 	  const unsigned blockno = gcov_read_unsigned ();
 	  const unsigned nterms = gcov_read_unsigned ();
 
 	  printf ("\n");
-	  print_prefix (filename, depth, gcov_position ());
+	  print_prefix (filename, depth, position);
 	  printf (VALUE_PADDING_PREFIX "block %u:", blockno);
 	  printf (" %u", nterms);
 	}
     }
 }
+
+static void
+tag_paths (const char *filename ATTRIBUTE_UNUSED,
+	   unsigned tag ATTRIBUTE_UNUSED, int length ATTRIBUTE_UNUSED,
+	   unsigned depth ATTRIBUTE_UNUSED)
+{
+  printf (" %u paths", gcov_read_unsigned ());
+}
+
 static void
 tag_lines (const char *filename ATTRIBUTE_UNUSED,
 	   unsigned tag ATTRIBUTE_UNUSED, int length ATTRIBUTE_UNUSED,
@@ -457,6 +471,26 @@ tag_lines (const char *filename ATTRIBUTE_UNUSED,
 	      printf ("%s`%s'", sep, source);
 	      sep = ":";
 	    }
+	}
+    }
+}
+
+static void
+tag_suppress (const char *filename ATTRIBUTE_UNUSED,
+	      unsigned tag ATTRIBUTE_UNUSED, int length ATTRIBUTE_UNUSED,
+	      unsigned depth)
+{
+  if (flag_dump_contents)
+    {
+      unsigned nblocks = GCOV_TAG_SUPPRESS_NUM (length);
+      printf (" %u blocks suppressed", nblocks);
+      for (unsigned i = 0; i != nblocks; ++i)
+	{
+	  gcov_position_t position = gcov_position ();
+	  unsigned blockno = gcov_read_unsigned ();
+	  printf ("\n");
+	  print_prefix (filename, depth, position);
+	  printf (VALUE_PADDING_PREFIX "block %u", blockno);
 	}
     }
 }

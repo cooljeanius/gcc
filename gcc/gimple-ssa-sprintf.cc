@@ -1,4 +1,4 @@
-/* Copyright (C) 2016-2025 Free Software Foundation, Inc.
+/* Copyright (C) 2016-2026 Free Software Foundation, Inc.
    Contributed by Martin Sebor <msebor@redhat.com>.
 
 This file is part of GCC.
@@ -1128,7 +1128,7 @@ get_int_range (tree arg, gimple *stmt,
 	    *pmin = *pmax = -*pmin;
 	  else
 	    {
-	      /* Make sure signed overlow is avoided.  */
+	      /* Make sure signed overflow is avoided.  */
 	      gcc_assert (*pmin != HOST_WIDE_INT_MIN);
 
 	      HOST_WIDE_INT tmp = -*pmin;
@@ -1372,7 +1372,7 @@ format_integer (const directive &dir, tree arg, pointer_query &ptr_qry)
       return res;
     }
   else if (INTEGRAL_TYPE_P (TREE_TYPE (arg))
-	   || TREE_CODE (TREE_TYPE (arg)) == POINTER_TYPE)
+	   || POINTER_TYPE_P (TREE_TYPE (arg)))
     /* Determine the type of the provided non-constant argument.  */
     argtype = TREE_TYPE (arg);
   else
@@ -1434,7 +1434,7 @@ format_integer (const directive &dir, tree arg, pointer_query &ptr_qry)
 		{
 		  tree type = TREE_TYPE (gimple_assign_rhs1 (def));
 		  if (INTEGRAL_TYPE_P (type)
-		      || TREE_CODE (type) == POINTER_TYPE)
+		      || POINTER_TYPE_P (type))
 		    argtype = type;
 		}
 	    }
@@ -1443,7 +1443,7 @@ format_integer (const directive &dir, tree arg, pointer_query &ptr_qry)
 
   if (!argmin)
     {
-      if (TREE_CODE (argtype) == POINTER_TYPE)
+      if (POINTER_TYPE_P (argtype))
 	{
 	  argmin = build_int_cst (pointer_sized_int_node, 0);
 	  argmax = build_all_ones_cst (pointer_sized_int_node);
@@ -4401,7 +4401,7 @@ handle_printf_call (gimple_stmt_iterator *gsi, pointer_query &ptr_qry)
   /* Object size argument number (snprintf_chk and vsnprintf_chk).  */
   unsigned idx_objsize = UINT_MAX;
 
-  /* Destinaton argument number (valid for sprintf functions only).  */
+  /* Destination argument number (valid for sprintf functions only).  */
   unsigned idx_dstptr = 0;
 
   switch (info.fncode)

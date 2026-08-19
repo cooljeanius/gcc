@@ -1,5 +1,5 @@
 /* NVPTX atomic operations
-   Copyright (C) 2020-2025 Free Software Foundation, Inc.
+   Copyright (C) 2020-2026 Free Software Foundation, Inc.
    Contributed by Mentor Graphics.
 
    This file is free software; you can redistribute it and/or modify it
@@ -30,7 +30,7 @@
    value that we are interested in are accessible as well (which should
    normally be the case).  Note that if the contents of the word surrounding
    the subword changes between the __sync_val_compare_and_swap_4 and the
-   preceeding load of oldword, while the subword does not, the implementation
+   preceding load of oldword, while the subword does not, the implementation
    loops, which may manifest worst-case as a hang.  */
 
 #define __SYNC_SUBWORD_COMPARE_AND_SWAP(TYPE, SIZE)			     \

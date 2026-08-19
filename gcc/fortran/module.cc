@@ -1,6 +1,6 @@
 /* Handle modules, which amounts to loading and saving symbols and
    their attendant structures.
-   Copyright (C) 2000-2025 Free Software Foundation, Inc.
+   Copyright (C) 2000-2026 Free Software Foundation, Inc.
    Contributed by Andy Vaught
 
 This file is part of GCC.
@@ -76,6 +76,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "parse.h" /* FIXME */
 #include "constructor.h"
 #include "cpp.h"
+#include "diagnostic-core.h"
 #include "scanner.h"
 #include <zlib.h>
 
@@ -85,6 +86,7 @@ along with GCC; see the file COPYING3.  If not see
 /* Don't put any single quote (') in MOD_VERSION, if you want it to be
    recognized.  */
 #define MOD_VERSION "16"
+#define MOD_VERSION_NUMERIC 16
 /* Older mod versions we can still parse.  */
 #define COMPAT_MOD_VERSIONS { "15" }
 
@@ -2092,8 +2094,9 @@ enum ab_attribute
   AB_ARRAY_OUTER_DEPENDENCY, AB_MODULE_PROCEDURE, AB_OACC_DECLARE_CREATE,
   AB_OACC_DECLARE_COPYIN, AB_OACC_DECLARE_DEVICEPTR,
   AB_OACC_DECLARE_DEVICE_RESIDENT, AB_OACC_DECLARE_LINK,
-  AB_OMP_DECLARE_TARGET_LINK, AB_PDT_KIND, AB_PDT_LEN, AB_PDT_TYPE,
-  AB_PDT_TEMPLATE, AB_PDT_ARRAY, AB_PDT_STRING,
+  AB_OMP_DECLARE_TARGET_LINK, AB_OMP_DECLARE_TARGET_LOCAL,
+  AB_PDT_KIND, AB_PDT_LEN, AB_PDT_TYPE,
+  AB_PDT_COMP, AB_PDT_TEMPLATE, AB_PDT_ARRAY, AB_PDT_STRING,
   AB_OACC_ROUTINE_LOP_GANG, AB_OACC_ROUTINE_LOP_WORKER,
   AB_OACC_ROUTINE_LOP_VECTOR, AB_OACC_ROUTINE_LOP_SEQ,
   AB_OACC_ROUTINE_NOHOST,
@@ -2102,7 +2105,7 @@ enum ab_attribute
   AB_OMP_REQ_MEM_ORDER_SEQ_CST, AB_OMP_REQ_MEM_ORDER_ACQ_REL,
   AB_OMP_REQ_MEM_ORDER_ACQUIRE, AB_OMP_REQ_MEM_ORDER_RELEASE,
   AB_OMP_REQ_MEM_ORDER_RELAXED, AB_OMP_DEVICE_TYPE_NOHOST,
-  AB_OMP_DEVICE_TYPE_HOST, AB_OMP_DEVICE_TYPE_ANY
+  AB_OMP_DEVICE_TYPE_HOST, AB_OMP_DEVICE_TYPE_ANY, AB_OMP_GROUPPRIVATE
 };
 
 static const mstring attr_bits[] =
@@ -2166,12 +2169,15 @@ static const mstring attr_bits[] =
     minit ("OACC_DECLARE_DEVICE_RESIDENT", AB_OACC_DECLARE_DEVICE_RESIDENT),
     minit ("OACC_DECLARE_LINK", AB_OACC_DECLARE_LINK),
     minit ("OMP_DECLARE_TARGET_LINK", AB_OMP_DECLARE_TARGET_LINK),
+    minit ("OMP_DECLARE_TARGET_LOCAL", AB_OMP_DECLARE_TARGET_LOCAL),
+    minit ("OMP_GROUPPRIVATE", AB_OMP_GROUPPRIVATE),
     minit ("PDT_KIND", AB_PDT_KIND),
     minit ("PDT_LEN", AB_PDT_LEN),
     minit ("PDT_TYPE", AB_PDT_TYPE),
     minit ("PDT_TEMPLATE", AB_PDT_TEMPLATE),
     minit ("PDT_ARRAY", AB_PDT_ARRAY),
     minit ("PDT_STRING", AB_PDT_STRING),
+    minit ("PDT_COMP", AB_PDT_COMP),
     minit ("OACC_ROUTINE_LOP_GANG", AB_OACC_ROUTINE_LOP_GANG),
     minit ("OACC_ROUTINE_LOP_WORKER", AB_OACC_ROUTINE_LOP_WORKER),
     minit ("OACC_ROUTINE_LOP_VECTOR", AB_OACC_ROUTINE_LOP_VECTOR),
@@ -2398,12 +2404,18 @@ mio_symbol_attribute (symbol_attribute *attr)
 	MIO_NAME (ab_attribute) (AB_OACC_DECLARE_LINK, attr_bits);
       if (attr->omp_declare_target_link)
 	MIO_NAME (ab_attribute) (AB_OMP_DECLARE_TARGET_LINK, attr_bits);
+      if (attr->omp_declare_target_local)
+	MIO_NAME (ab_attribute) (AB_OMP_DECLARE_TARGET_LOCAL, attr_bits);
+      if (attr->omp_groupprivate)
+	MIO_NAME (ab_attribute) (AB_OMP_GROUPPRIVATE, attr_bits);
       if (attr->pdt_kind)
 	MIO_NAME (ab_attribute) (AB_PDT_KIND, attr_bits);
       if (attr->pdt_len)
 	MIO_NAME (ab_attribute) (AB_PDT_LEN, attr_bits);
       if (attr->pdt_type)
 	MIO_NAME (ab_attribute) (AB_PDT_TYPE, attr_bits);
+      if (attr->pdt_comp)
+	MIO_NAME (ab_attribute) (AB_PDT_COMP , attr_bits);
       if (attr->pdt_template)
 	MIO_NAME (ab_attribute) (AB_PDT_TEMPLATE, attr_bits);
       if (attr->pdt_array)
@@ -2651,6 +2663,12 @@ mio_symbol_attribute (symbol_attribute *attr)
 	    case AB_OMP_DECLARE_TARGET_LINK:
 	      attr->omp_declare_target_link = 1;
 	      break;
+	    case AB_OMP_DECLARE_TARGET_LOCAL:
+	      attr->omp_declare_target_local = 1;
+	      break;
+	    case AB_OMP_GROUPPRIVATE:
+	      attr->omp_groupprivate = 1;
+	      break;
 	    case AB_ARRAY_OUTER_DEPENDENCY:
 	      attr->array_outer_dependency =1;
 	      break;
@@ -2680,6 +2698,9 @@ mio_symbol_attribute (symbol_attribute *attr)
 	      break;
 	    case AB_PDT_TYPE:
 	      attr->pdt_type = 1;
+	      break;
+	    case AB_PDT_COMP:
+	      attr->pdt_comp = 1;
 	      break;
 	    case AB_PDT_TEMPLATE:
 	      attr->pdt_template = 1;
@@ -3622,7 +3643,9 @@ static const mstring expr_types[] = {
     minit ("ARRAY", EXPR_ARRAY),
     minit ("NULL", EXPR_NULL),
     minit ("COMPCALL", EXPR_COMPCALL),
-    minit (NULL, -1)
+    minit ("PPC", EXPR_PPC),
+    minit ("CONDITIONAL", EXPR_CONDITIONAL),
+    minit (NULL, -1),
 };
 
 /* INTRINSIC_ASSIGN is missing because it is used as an index for
@@ -3843,6 +3866,12 @@ mio_expr (gfc_expr **ep)
 
       break;
 
+    case EXPR_CONDITIONAL:
+      mio_expr (&e->value.conditional.condition);
+      mio_expr (&e->value.conditional.true_expr);
+      mio_expr (&e->value.conditional.false_expr);
+      break;
+
     case EXPR_FUNCTION:
       mio_symtree_ref (&e->symtree);
       mio_actual_arglist (&e->value.function.actual, false);
@@ -3909,10 +3938,9 @@ mio_expr (gfc_expr **ep)
       break;
 
     case EXPR_SUBSTRING:
-      e->value.character.string
-	= CONST_CAST (gfc_char_t *,
-		      mio_allocated_wide_string (e->value.character.string,
-						 e->value.character.length));
+      e->value.character.string = const_cast<gfc_char_t *>
+	(mio_allocated_wide_string (e->value.character.string,
+				    e->value.character.length));
       mio_ref_list (&e->ref);
       break;
 
@@ -3949,10 +3977,9 @@ mio_expr (gfc_expr **ep)
 	  hwi = e->value.character.length;
 	  mio_hwi (&hwi);
 	  e->value.character.length = hwi;
-	  e->value.character.string
-	    = CONST_CAST (gfc_char_t *,
-			  mio_allocated_wide_string (e->value.character.string,
-						     e->value.character.length));
+	  e->value.character.string = const_cast<gfc_char_t *>
+	    (mio_allocated_wide_string (e->value.character.string,
+					e->value.character.length));
 	  break;
 
 	default:
@@ -4347,7 +4374,7 @@ mio_full_f2k_derived (gfc_symbol *sym)
 	  /* PDT templates make use of the mechanisms for formal args
 	     and so the parameter symbols are stored in the formal
 	     namespace.  Transfer the sym_root to f2k_derived and then
-	     free the formal namespace since it is uneeded.  */
+	     free the formal namespace since it is unneeded.  */
 	  if (sym->attr.pdt_template && sym->formal && sym->formal->sym)
 	    {
 	      ns = sym->formal->sym->ns;
@@ -5254,6 +5281,8 @@ load_commons (void)
       if (flags & 2)
 	p->threadprivate = 1;
       p->omp_device_type = (gfc_omp_device_type) ((flags >> 2) & 3);
+      if ((flags >> 4) & 1)
+	p->omp_groupprivate = 1;
       p->use_assoc = 1;
 
       /* Get whether this was a bind(c) common or not.  */
@@ -5416,12 +5445,14 @@ load_omp_udrs (void)
 	  pointer_info *p = get_integer (atom_int);
 	  if (strcmp (p->u.rsym.module, udr->omp_out->module))
 	    {
-	      gfc_error ("Ambiguous !$OMP DECLARE REDUCTION from "
-			 "module %s at %L",
-			 p->u.rsym.module, &gfc_current_locus);
-	      gfc_error ("Previous !$OMP DECLARE REDUCTION from module "
-			 "%s at %L",
-			 udr->omp_out->module, &udr->where);
+	      gcc_assert (!gfc_buffered_p ());  /* Cf. PR80012 comment 15.  */
+	      auto_diagnostic_group d;
+	      gfc_error ("Ambiguous !$OMP DECLARE REDUCTION %qs for type %qs "
+			 "from module %qs at %L", udr->name,
+			 gfc_typename (&ts), module_name, &gfc_current_locus);
+	      inform (gfc_get_location (&udr->where),
+		      "Previous !$OMP DECLARE REDUCTION from module %qs",
+		      udr->omp_out->module);
 	    }
 	  skip_list (1);
 	  continue;
@@ -5455,6 +5486,120 @@ load_omp_udrs (void)
       mio_rparen ();
     }
   mio_rparen ();
+}
+
+
+/* In declare mapper, not all map types are permitted; hence, only
+   a subset is needed.  */
+
+static const mstring omp_map_clause_ops[] =
+{
+    minit ("ALLOC", OMP_MAP_ALLOC),
+    minit ("TO", OMP_MAP_TO),
+    minit ("FROM", OMP_MAP_FROM),
+    minit ("TOFROM", OMP_MAP_TOFROM),
+    minit ("ALWAYS_TO", OMP_MAP_ALWAYS_TO),
+    minit ("ALWAYS_FROM", OMP_MAP_ALWAYS_FROM),
+    minit ("ALWAYS_TOFROM", OMP_MAP_ALWAYS_TOFROM),
+    minit ("UNSET", OMP_MAP_UNSET),
+    minit (NULL, -1)
+};
+
+/* This function loads OpenMP user-defined mappers.  */
+
+static void
+load_omp_udms (void)
+{
+  while (peek_atom () != ATOM_RPAREN)
+    {
+      const char *mapper_id = NULL;
+      gfc_symtree *st;
+
+      mio_lparen ();
+      gfc_omp_udm *udm = gfc_get_omp_udm ();
+
+      require_atom (ATOM_INTEGER);
+      pointer_info *udmpi = get_integer (atom_int);
+      associate_integer_pointer (udmpi, udm);
+
+      mio_pool_string (&mapper_id);
+
+      /* Note: for a derived-type typespec, we might not have loaded the
+	 "u.derived" symbol yet.  Defer checking duplicates until
+	 check_omp_declare_mappers is called after loading all symbols.  */
+      mio_typespec (&udm->ts);
+
+      if (mapper_id == NULL)
+	mapper_id = gfc_get_string ("%s", "");
+
+      st = gfc_find_symtree (gfc_current_ns->omp_udm_root, mapper_id);
+
+      pointer_info *p = mio_symbol_ref (&udm->var_sym);
+      pointer_info *q = get_integer (p->u.rsym.ns);
+
+      udm->where = gfc_current_locus;
+      udm->mapper_id = mapper_id;
+      udm->mapper_ns = gfc_get_namespace (gfc_current_ns, 1);
+      udm->mapper_ns->proc_name = gfc_current_ns->proc_name;
+      udm->mapper_ns->omp_udm_ns = 1;
+
+      associate_integer_pointer (q, udm->mapper_ns);
+
+      gfc_omp_namelist *clauses = NULL;
+      gfc_omp_namelist **clausep = &clauses;
+
+      mio_lparen ();
+      while (peek_atom () != ATOM_RPAREN)
+	{
+	  /* Read each map clause.  */
+	  gfc_omp_namelist *n = gfc_get_omp_namelist ();
+
+	  mio_lparen ();
+
+	  n->u.map.op = (gfc_omp_map_op) mio_name (0, omp_map_clause_ops);
+	  mio_symbol_ref (&n->sym);
+	  mio_expr (&n->expr);
+
+	  mio_lparen ();
+
+	  if (peek_atom () != ATOM_RPAREN)
+	    {
+	      n->u3.udm = gfc_get_omp_namelist_udm ();
+	      mio_pool_string (&n->u3.udm->requested_mapper_id);
+
+	      if (n->u3.udm->requested_mapper_id == NULL)
+		n->u3.udm->requested_mapper_id = gfc_get_string ("%s", "");
+
+	      mio_pointer_ref (&n->u3.udm->resolved_udm);
+	    }
+
+	  mio_rparen ();
+
+	  n->where = gfc_current_locus;
+
+	  mio_rparen ();
+
+	  *clausep = n;
+	  clausep = &n->next;
+	}
+      mio_rparen ();
+
+      udm->clauses = gfc_get_omp_clauses ();
+      udm->clauses->lists[OMP_LIST_MAP] = clauses;
+
+      if (st)
+	{
+	  udm->next = st->n.omp_udm;
+	  st->n.omp_udm = udm;
+	}
+      else
+	{
+	  st = gfc_new_symtree (&gfc_current_ns->omp_udm_root, mapper_id);
+	  st->n.omp_udm = udm;
+	}
+
+      mio_rparen ();
+    }
 }
 
 
@@ -5648,12 +5793,52 @@ check_for_ambiguous (gfc_symtree *st, pointer_info *info)
 }
 
 
+static void
+check_omp_declare_mappers (gfc_symtree *st)
+{
+  if (!st)
+    return;
+
+  check_omp_declare_mappers (st->left);
+  check_omp_declare_mappers (st->right);
+
+  gfc_omp_udm **udmp = &st->n.omp_udm;
+  gfc_symtree tmp_st;
+
+  while (*udmp)
+    {
+      gfc_omp_udm *udm = *udmp;
+      tmp_st.n.omp_udm = udm->next;
+      gfc_omp_udm *prev_udm = gfc_omp_udm_find (&tmp_st, &udm->ts);
+      if (prev_udm)
+	{
+	  gcc_assert (!gfc_buffered_p ());  /* Cf. PR80012 comment 15.  */
+	  auto_diagnostic_group d;
+	  gfc_error ("Ambiguous !$OMP DECLARE MAPPER %qs for type %qs from "
+		     "module %qs at %L",
+		     st->n.omp_udm->mapper_id[0] != '\0'
+		     ? st->n.omp_udm->mapper_id : "default",
+		     udm->ts.u.derived->name, module_name,
+		     &udm->where);
+	  inform (gfc_get_location (&prev_udm->where),
+		  "Previous !$OMP DECLARE MAPPER from module %qs",
+		  prev_udm->var_sym->module);
+	  /* Delete the duplicate.  */
+	  *udmp = (*udmp)->next;
+	}
+      else
+	udmp = &(*udmp)->next;
+    }
+}
+
+
 /* Read a module file.  */
 
 static void
 read_module (void)
 {
-  module_locus operator_interfaces, user_operators, omp_udrs;
+  module_locus operator_interfaces, user_operators, omp_udrs, omp_udms;
+  bool has_omp_udms = false;
   const char *p;
   char name[GFC_MAX_SYMBOL_LEN + 1];
   int i;
@@ -5679,6 +5864,20 @@ read_module (void)
   /* Skip OpenMP UDRs.  */
   get_module_locus (&omp_udrs);
   skip_list ();
+
+  /* Skip OpenMP's user-defined 'declare mapper' (UDM); some extra code is
+     required to permit reading files without USM; see write_module for
+     details.  */
+  get_module_locus (&omp_udms);
+  if (peek_atom () == ATOM_LPAREN
+      && parse_atom ()
+      && module_char () == 'U'
+      && module_char () == 'D'
+      && module_char () == 'M')
+    has_omp_udms = true;
+  set_module_locus (&omp_udms);
+  if (has_omp_udms)
+    skip_list ();
 
   mio_lparen ();
 
@@ -5813,6 +6012,21 @@ read_module (void)
 		  || startswith (name, "__vtype_")))
 	    p = name;
 
+	  /* Include pdt_types if their associated pdt_template is in a
+	     USE, ONLY list.  */
+	  if (p == NULL && name[0] == 'P'
+	      && startswith (name, PDT_PREFIX)
+	      && module_list)
+	    {
+	      gfc_use_list *ml = module_list;
+	      for (; ml; ml = ml->next)
+		if (ml->rename
+		    && !strncmp (&name[PDT_PREFIX_LEN],
+				 ml->rename->use_name,
+				 strlen (ml->rename->use_name)))
+		  p = name;
+	    }
+
 	  /* Skip symtree nodes not in an ONLY clause, unless there
 	     is an existing symtree loaded from another USE statement.  */
 	  if (p == NULL)
@@ -5838,6 +6052,29 @@ read_module (void)
 		&& find_symbol (gfc_current_ns->sym_root, name,
 				module_name, 0))
 	    continue;
+
+	  /* Skip re-importing a derived type already visible via host
+	     association from the same module.  Walk the symtree since
+	     using gfc_find_symbol can give a wrong error.  */
+	  if (!only_flag && !info->u.rsym.renamed
+		&& strcmp (name, module_name) != 0
+		&& gfc_current_ns->parent)
+	    {
+	      gfc_symbol *host_sym = NULL;
+	      for (gfc_namespace *pns = gfc_current_ns; pns; pns = pns->parent)
+		{
+		  gfc_symtree *host_st = gfc_find_symtree (pns->sym_root, name);
+		  if (host_st)
+		    {
+		      host_sym = host_st->n.sym;
+		      break;
+		    }
+		}
+	      if (host_sym && host_sym->attr.flavor == FL_DERIVED
+		  && host_sym->module
+		  && strcmp (host_sym->module, module_name) == 0)
+		continue;
+	    }
 
 	  st = gfc_find_symtree (gfc_current_ns->sym_root, p);
 
@@ -6014,6 +6251,19 @@ read_module (void)
   set_module_locus (&omp_udrs);
   load_omp_udrs ();
 
+  /* Load OpenMP user defined mappers.  */
+  if (has_omp_udms)
+    {
+      set_module_locus (&omp_udms);
+      mio_lparen ();
+      /* Skip 'UDM' marker, cf. above.  */
+      (void) module_char ();
+      (void) module_char ();
+      (void) module_char ();
+      load_omp_udms ();
+      mio_rparen ();
+    }
+
   /* At this point, we read those symbols that are needed but haven't
      been loaded yet.  If one symbol requires another, the other gets
      marked as NEEDED if its previous state was UNUSED.  */
@@ -6045,6 +6295,9 @@ read_module (void)
 		 "in module %qs", gfc_op2string (u->op), &u->where,
 		 module_name);
     }
+
+  /* Check "omp declare mappers" for duplicates from different modules.  */
+  check_omp_declare_mappers (gfc_current_ns->omp_udm_root);
 
   /* Clean up symbol nodes that were never loaded, create references
      to hidden symbols.  */
@@ -6177,6 +6430,7 @@ write_common_0 (gfc_symtree *st, bool this_module)
       if (p->threadprivate)
 	flags |= 2;
       flags |= p->omp_device_type << 2;
+      flags |= p->omp_groupprivate << 4;
       mio_integer (&flags);
 
       /* Write out whether the common block is bind(c) or not.  */
@@ -6410,6 +6664,8 @@ write_omp_udr (gfc_omp_udr *udr)
 }
 
 
+/* Write OpenMP's declare reduction (used defined reductions). */
+
 static void
 write_omp_udrs (gfc_symtree *st)
 {
@@ -6421,6 +6677,63 @@ write_omp_udrs (gfc_symtree *st)
   for (udr = st->n.omp_udr; udr; udr = udr->next)
     write_omp_udr (udr);
   write_omp_udrs (st->right);
+}
+
+
+/* Write OpenMP's declare mapper (used defined mapper). */
+
+static void
+write_omp_udm (gfc_omp_udm *udm)
+{
+  mio_lparen ();
+  /* We need this pointer ref to identify this mapper so that other mappers
+     can refer to it.  */
+  mio_pointer_ref (&udm);
+  mio_pool_string (&udm->mapper_id);
+  mio_typespec (&udm->ts);
+
+  if (udm->var_sym->module == NULL)
+    udm->var_sym->module = module_name;
+
+  mio_symbol_ref (&udm->var_sym);
+  mio_lparen ();
+  gfc_omp_namelist *n;
+  for (n = udm->clauses->lists[OMP_LIST_MAP]; n; n = n->next)
+    {
+      mio_lparen ();
+
+      mio_name (n->u.map.op, omp_map_clause_ops);
+      mio_symbol_ref (&n->sym);
+      mio_expr (&n->expr);
+
+      mio_lparen ();
+
+      if (n->u3.udm)
+	{
+	  mio_pool_string (&n->u3.udm->requested_mapper_id);
+	  mio_pointer_ref (&n->u3.udm->resolved_udm);
+	}
+
+      mio_rparen ();
+
+      mio_rparen ();
+    }
+  mio_rparen ();
+  mio_rparen ();
+}
+
+
+static void
+write_omp_udms (gfc_symtree *st)
+{
+  if (st == NULL)
+    return;
+
+  write_omp_udms (st->left);
+  gfc_omp_udm *udm;
+  for (udm = st->n.omp_udm; udm; udm = udm->next)
+    write_omp_udm (udm);
+  write_omp_udms (st->right);
 }
 
 
@@ -6600,7 +6913,8 @@ write_symtree (gfc_symtree *st)
 	&& sym->ns->proc_name->attr.if_source == IFSRC_IFBODY)
     return;
 
-  if (!gfc_check_symbol_access (sym)
+  if ((!gfc_check_symbol_access (sym)
+       && (!sym->attr.public_used || submodule_name == NULL))
       || (sym->attr.flavor == FL_PROCEDURE && sym->attr.generic
 	  && !sym->attr.subroutine && !sym->attr.function))
     return;
@@ -6684,6 +6998,20 @@ write_module (void)
   mio_rparen ();
   write_char ('\n');
   write_char ('\n');
+
+  /* Condition can be removed if version is bumped.  Note that
+     write_symbol0 starts with an integer.  Keep in sync with read_module;
+     The 'UDM' tag can be only removed when changing COMPAT_MOD_VERSIONS.  */
+  STATIC_ASSERT (MOD_VERSION_NUMERIC == 16);
+  if (gfc_current_ns->omp_udm_root)
+    {
+      mio_lparen ();
+      write_atom (ATOM_NAME, "UDM");  /* Marker. */
+      write_omp_udms (gfc_current_ns->omp_udm_root);
+      mio_rparen ();
+      write_char ('\n');
+      write_char ('\n');
+    }
 
   /* Write symbol information.  First we traverse all symbols in the
      primary namespace, writing those that need to be written.
@@ -7277,10 +7605,13 @@ create_int_parameter_array (const char *name, int size, gfc_expr *value,
   tmp_symtree = gfc_find_symtree (gfc_current_ns->sym_root, name);
   if (tmp_symtree != NULL)
     {
-      if (strcmp (modname, tmp_symtree->n.sym->module) == 0)
+      if (tmp_symtree->n.sym->module &&
+	  strcmp (modname, tmp_symtree->n.sym->module) == 0)
 	return;
       else
-	gfc_error ("Symbol %qs already declared", name);
+	gfc_error ("Symbol %qs already declared at %L conflicts with "
+		   "symbol in %qs at %C", name,
+		   &tmp_symtree->n.sym->declared_at, modname);
     }
 
   gfc_get_sym_tree (name, gfc_current_ns, &tmp_symtree, false);
@@ -7624,7 +7955,7 @@ gfc_use_module (gfc_use_list *module)
   only_flag = module->only_flag;
   current_intmod = INTMOD_NONE;
 
-  if (!only_flag)
+  if (!only_flag && gfc_state_stack->state != COMP_SUBMODULE)
     gfc_warning_now (OPT_Wuse_without_only,
 		     "USE statement at %C has no ONLY qualifier");
 

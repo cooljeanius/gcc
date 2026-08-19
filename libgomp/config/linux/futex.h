@@ -1,4 +1,4 @@
-/* Copyright (C) 2010-2025 Free Software Foundation, Inc.
+/* Copyright (C) 2010-2026 Free Software Foundation, Inc.
    Contributed by ARM Ltd.
 
    This file is part of the GNU Offloading and Multi Processing Library
@@ -25,7 +25,7 @@
 
 /* Provide target-specific access to the futex system call.  */
 
-/* The include file hierachy above us (wait.h) has pushed visibility
+/* The include file hierarchy above us (wait.h) has pushed visibility
    hidden, this will be applied to prototypes with headers we include
    with the effect that we cannot link against an external function
    (syscall). The solution here is to push default visibility, include

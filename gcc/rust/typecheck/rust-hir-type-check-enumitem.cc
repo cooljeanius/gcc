@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2025 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -20,11 +20,9 @@
 #include "rust-hir-type-check-type.h"
 #include "rust-hir-type-check-expr.h"
 #include "rust-hir-type-check-enumitem.h"
+#include "rust-rib.h"
 #include "rust-type-util.h"
-#include "rust-immutable-name-resolution-context.h"
-
-// for flag_name_resolution_2_0
-#include "options.h"
+#include "rust-finalized-name-resolution-context.h"
 
 namespace Rust {
 namespace Resolver {
@@ -79,25 +77,13 @@ TypeCheckEnumItem::visit (HIR::EnumItem &item)
   rust_assert (ok);
   context->insert_type (mapping, isize);
 
-  tl::optional<CanonicalPath> canonical_path;
+  auto &nr_ctx = Resolver2_0::FinalizedNameResolutionContext::get ();
 
-  if (flag_name_resolution_2_0)
-    {
-      auto &nr_ctx
-	= Resolver2_0::ImmutableNameResolutionContext::get ().resolver ();
+  CanonicalPath canonical_path
+    = nr_ctx.to_canonical_path (item.get_mappings ().get_nodeid (),
+				Resolver2_0::Namespace::Types);
 
-      canonical_path
-	= nr_ctx.types.to_canonical_path (item.get_mappings ().get_nodeid ());
-    }
-  else
-    {
-      canonical_path
-	= mappings.lookup_canonical_path (item.get_mappings ().get_nodeid ());
-    }
-
-  rust_assert (canonical_path.has_value ());
-
-  RustIdent ident{*canonical_path, item.get_locus ()};
+  RustIdent ident{canonical_path, item.get_locus ()};
   variant = new TyTy::VariantDef (item.get_mappings ().get_hirid (),
 				  item.get_mappings ().get_defid (),
 				  item.get_identifier ().as_string (), ident,
@@ -123,25 +109,13 @@ TypeCheckEnumItem::visit (HIR::EnumItemDiscriminant &item)
 	      TyTy::TyWithLocation (expected_ty),
 	      TyTy::TyWithLocation (capacity_type), item.get_locus ());
 
-  tl::optional<CanonicalPath> canonical_path;
+  auto &nr_ctx = Resolver2_0::FinalizedNameResolutionContext::get ();
 
-  if (flag_name_resolution_2_0)
-    {
-      auto &nr_ctx
-	= Resolver2_0::ImmutableNameResolutionContext::get ().resolver ();
+  CanonicalPath canonical_path
+    = nr_ctx.to_canonical_path (item.get_mappings ().get_nodeid (),
+				Resolver2_0::Namespace::Types);
 
-      canonical_path
-	= nr_ctx.types.to_canonical_path (item.get_mappings ().get_nodeid ());
-    }
-  else
-    {
-      canonical_path
-	= mappings.lookup_canonical_path (item.get_mappings ().get_nodeid ());
-    }
-
-  rust_assert (canonical_path.has_value ());
-
-  RustIdent ident{*canonical_path, item.get_locus ()};
+  RustIdent ident{canonical_path, item.get_locus ()};
   variant
     = new TyTy::VariantDef (item.get_mappings ().get_hirid (),
 			    item.get_mappings ().get_defid (),
@@ -185,25 +159,13 @@ TypeCheckEnumItem::visit (HIR::EnumItemTuple &item)
   rust_assert (ok);
   context->insert_type (mapping, isize);
 
-  tl::optional<CanonicalPath> canonical_path;
+  auto &nr_ctx = Resolver2_0::FinalizedNameResolutionContext::get ();
 
-  if (flag_name_resolution_2_0)
-    {
-      auto &nr_ctx
-	= Resolver2_0::ImmutableNameResolutionContext::get ().resolver ();
+  CanonicalPath canonical_path
+    = nr_ctx.to_canonical_path (item.get_mappings ().get_nodeid (),
+				Resolver2_0::Namespace::Types);
 
-      canonical_path
-	= nr_ctx.types.to_canonical_path (item.get_mappings ().get_nodeid ());
-    }
-  else
-    {
-      canonical_path
-	= mappings.lookup_canonical_path (item.get_mappings ().get_nodeid ());
-    }
-
-  rust_assert (canonical_path.has_value ());
-
-  RustIdent ident{*canonical_path, item.get_locus ()};
+  RustIdent ident{canonical_path, item.get_locus ()};
   variant = new TyTy::VariantDef (item.get_mappings ().get_hirid (),
 				  item.get_mappings ().get_defid (),
 				  item.get_identifier ().as_string (), ident,
@@ -245,25 +207,13 @@ TypeCheckEnumItem::visit (HIR::EnumItemStruct &item)
   rust_assert (ok);
   context->insert_type (mapping, isize);
 
-  tl::optional<CanonicalPath> canonical_path;
+  auto &nr_ctx = Resolver2_0::FinalizedNameResolutionContext::get ();
 
-  if (flag_name_resolution_2_0)
-    {
-      auto &nr_ctx
-	= Resolver2_0::ImmutableNameResolutionContext::get ().resolver ();
+  CanonicalPath canonical_path
+    = nr_ctx.to_canonical_path (item.get_mappings ().get_nodeid (),
+				Resolver2_0::Namespace::Types);
 
-      canonical_path
-	= nr_ctx.types.to_canonical_path (item.get_mappings ().get_nodeid ());
-    }
-  else
-    {
-      canonical_path
-	= mappings.lookup_canonical_path (item.get_mappings ().get_nodeid ());
-    }
-
-  rust_assert (canonical_path.has_value ());
-
-  RustIdent ident{*canonical_path, item.get_locus ()};
+  RustIdent ident{canonical_path, item.get_locus ()};
   variant = new TyTy::VariantDef (item.get_mappings ().get_hirid (),
 				  item.get_mappings ().get_defid (),
 				  item.get_identifier ().as_string (), ident,

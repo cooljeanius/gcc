@@ -1,7 +1,7 @@
 /* .init/.fini section handling + C++ global constructor/destructor
    handling of Andes NDS32 cpu for GNU compiler.
    This file is based on crtstuff.c, sol2-crti.asm, sol2-crtn.asm.
-   Copyright (C) 2012-2025 Free Software Foundation, Inc.
+   Copyright (C) 2012-2026 Free Software Foundation, Inc.
    Contributed by Andes Technology Corporation.
 
    This file is part of GCC.
@@ -70,7 +70,7 @@ extern func_ptr __EH_FRAME_BEGIN__[];
 
 
 /* Note that the following two functions are going to be chained into
-   constructor and destructor list, repectively.  So these two declarations
+   constructor and destructor list, respectively.  So these two declarations
    must be placed after __CTOR_LIST__ and __DTOR_LIST.  */
 extern void __nds32_register_eh(void) __attribute__((constructor, used));
 extern void __nds32_deregister_eh(void) __attribute__((destructor, used));

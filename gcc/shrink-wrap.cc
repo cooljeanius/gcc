@@ -1,5 +1,5 @@
 /* Shrink-wrapping related optimizations.
-   Copyright (C) 1987-2025 Free Software Foundation, Inc.
+   Copyright (C) 1987-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -147,7 +147,7 @@ live_edge_for_reg (basic_block bb, int regno, int end_regno)
 /* Try to move INSN from BB to a successor.  Return true on success.
    USES and DEFS are the set of registers that are used and defined
    after INSN in BB.  SPLIT_P indicates whether a live edge from BB
-   is splitted or not.  */
+   is split or not.  */
 
 static bool
 move_insn_for_shrink_wrap (basic_block bb, rtx_insn *insn,
@@ -764,7 +764,7 @@ try_shrink_wrapping (edge *entry_edge, rtx_insn *prologue_seq)
   /* Now see if we can put the prologue at the start of PRO.  Putting it
      there might require duplicating a block that cannot be duplicated,
      or in some cases we cannot insert the prologue there at all.  If PRO
-     wont't do, try again with the immediate dominator of PRO, and so on.
+     won't do, try again with the immediate dominator of PRO, and so on.
 
      The blocks that need duplicating are those reachable from PRO but
      not dominated by it.  We keep in BB_WITH a bitmap of the blocks
@@ -994,7 +994,7 @@ try_shrink_wrapping (edge *entry_edge, rtx_insn *prologue_seq)
 	  handle_simple_exit (e);
 
   /* Finally, we want a single edge to put the prologue on.  Make a new
-     block before the PRO block; the edge beteen them is the edge we want.
+     block before the PRO block; the edge between them is the edge we want.
      Then redirect those edges into PRO that come from blocks without the
      prologue, to point to the new block instead.  The new prologue block
      is put at the end of the insn chain.  */
@@ -1559,8 +1559,7 @@ emit_common_heads_for_components (sbitmap components)
 	{
 	  start_sequence ();
 	  targetm.shrink_wrap.emit_prologue_components (pro);
-	  rtx_insn *seq = get_insns ();
-	  end_sequence ();
+	  rtx_insn *seq = end_sequence ();
 	  record_prologue_seq (seq);
 
 	  emit_insn_after (seq, bb_note (bb));
@@ -1572,8 +1571,7 @@ emit_common_heads_for_components (sbitmap components)
 	{
 	  start_sequence ();
 	  targetm.shrink_wrap.emit_epilogue_components (epi);
-	  rtx_insn *seq = get_insns ();
-	  end_sequence ();
+	  rtx_insn *seq = end_sequence ();
 	  record_epilogue_seq (seq);
 
 	  emit_insn_after (seq, bb_note (bb));
@@ -1659,8 +1657,7 @@ emit_common_tails_for_components (sbitmap components)
 	{
 	  start_sequence ();
 	  targetm.shrink_wrap.emit_epilogue_components (epi);
-	  rtx_insn *seq = get_insns ();
-	  end_sequence ();
+	  rtx_insn *seq = end_sequence ();
 	  record_epilogue_seq (seq);
 
 	  if (control_flow_insn_p (last_insn))
@@ -1675,8 +1672,7 @@ emit_common_tails_for_components (sbitmap components)
 	{
 	  start_sequence ();
 	  targetm.shrink_wrap.emit_prologue_components (pro);
-	  rtx_insn *seq = get_insns ();
-	  end_sequence ();
+	  rtx_insn *seq = end_sequence ();
 	  record_prologue_seq (seq);
 
 	  if (control_flow_insn_p (last_insn))
@@ -1740,8 +1736,7 @@ insert_prologue_epilogue_for_components (sbitmap components)
 	      /* Put the epilogue components in place.  */
 	      start_sequence ();
 	      targetm.shrink_wrap.emit_epilogue_components (epi);
-	      rtx_insn *seq = get_insns ();
-	      end_sequence ();
+	      rtx_insn *seq = end_sequence ();
 	      record_epilogue_seq (seq);
 
 	      if (e->flags & EDGE_SIBCALL)
@@ -1764,8 +1759,7 @@ insert_prologue_epilogue_for_components (sbitmap components)
 	      /* Put the prologue components in place.  */
 	      start_sequence ();
 	      targetm.shrink_wrap.emit_prologue_components (pro);
-	      seq = get_insns ();
-	      end_sequence ();
+	      seq = end_sequence ();
 	      record_prologue_seq (seq);
 
 	      insert_insn_on_edge (seq, e);

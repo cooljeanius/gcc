@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2025 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -29,7 +29,17 @@ class HIRCompileBase
 public:
   virtual ~HIRCompileBase () {}
 
-  static tree address_expression (tree expr, location_t locus);
+  static tree address_expression (tree expr, location_t locus,
+				  tree ptrty = NULL_TREE);
+
+  static tree compile_constant_expr (
+    Context *ctx, HirId coercion_id, TyTy::BaseType *resolved_type,
+    TyTy::BaseType *expected_type,
+    const Resolver::CanonicalPath &canonical_path, HIR::Expr &const_value_expr,
+    location_t locus, location_t expr_locus);
+
+  static tree query_compile_const_expr (Context *ctx, TyTy::BaseType *expr_ty,
+					HIR::Expr &const_value_expr);
 
 protected:
   HIRCompileBase (Context *ctx) : ctx (ctx) {}
@@ -46,7 +56,7 @@ protected:
 		       TyTy::BaseType *expected, location_t lvalue_locus,
 		       location_t rvalue_locus);
 
-  tree coerce_to_dyn_object (tree compiled_ref, const TyTy::BaseType *actual,
+  tree coerce_to_dyn_object (tree compiled_ref, TyTy::BaseType *actual,
 			     const TyTy::DynamicObjectType *ty,
 			     location_t locus);
 
@@ -96,7 +106,8 @@ protected:
 			      HIR::Expr &const_value_expr, location_t locus,
 			      location_t expr_locus);
 
-  tree compile_function (const std::string &fn_name, HIR::SelfParam &self_param,
+  tree compile_function (bool is_root_item, const std::string &fn_name,
+			 tl::optional<HIR::SelfParam> &self_param,
 			 std::vector<HIR::FunctionParam> &function_params,
 			 const HIR::FunctionQualifiers &qualifiers,
 			 HIR::Visibility &visibility, AST::AttrVec &outer_attrs,
@@ -104,7 +115,7 @@ protected:
 			 const Resolver::CanonicalPath &canonical_path,
 			 TyTy::FnType *fntype);
 
-  static tree unit_expression (location_t locus);
+  tree unit_expression (location_t locus);
 
   void setup_fndecl (tree fndecl, bool is_main_entry_point, bool is_generic_fn,
 		     HIR::Visibility &visibility,
@@ -140,6 +151,16 @@ protected:
 
   static void handle_no_mangle_attribute_on_fndecl (tree fndecl,
 						    const AST::Attribute &attr);
+
+  static void handle_rustc_std_internal_symbol_attribute_on_fndecl (
+    tree fndecl, const AST::Attribute &attr);
+
+  static void handle_rustc_allocator_on_fndecl (tree fndecl,
+						const AST::Attribute &attr);
+
+  static void
+  handle_rustc_allocator_nounwind_on_fndecl (tree fndecl,
+					     const AST::Attribute &attr);
 
   static void setup_abi_options (tree fndecl, ABI abi);
 

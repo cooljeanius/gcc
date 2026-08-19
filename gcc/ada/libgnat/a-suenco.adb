@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 2010-2025, Free Software Foundation, Inc.         --
+--          Copyright (C) 2010-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -51,7 +51,7 @@ package body Ada.Strings.UTF_Encoding.Conversions is
 
       --  For remaining cases, one or other of the operands is UTF-16BE/LE
       --  encoded, or we have the UTF-8 to UTF-8 case where we must handle
-      --  overlong encodings. In all cases,  go through UTF-16 intermediate.
+      --  overlong encodings. In all cases, go through UTF-16 intermediate.
 
       else
          return Convert (UTF_16_Wide_String'(Convert (Item, Input_Scheme)),

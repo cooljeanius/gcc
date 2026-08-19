@@ -1,5 +1,5 @@
 /* Pretty print support for value ranges.
-   Copyright (C) 2019-2025 Free Software Foundation, Inc.
+   Copyright (C) 2019-2026 Free Software Foundation, Inc.
    Contributed by Aldy Hernandez <aldyh@redhat.com>.
 
 This file is part of GCC.
@@ -113,6 +113,49 @@ vrange_printer::visit (const irange &r) const
 }
 
 void
+vrange_printer::print_pt (const prange &r) const
+{
+  bool points_to_p = false;
+  tree pt = r.pt_invariant ();
+  if (pt)
+    points_to_p = true;
+  else
+    pt = r.pt_invariant_away ();
+
+  if (pt)
+    {
+      if (points_to_p)
+	pp_string (pp, " -> ");
+      else
+	pp_string (pp, " ! -> ");
+      dump_generic_node (pp, pt, 0, TDF_NONE | TDF_NOUID, false);
+      if (points_to_p)
+	{
+	  int_range_max sz;
+	  int_range_max off;
+	  tree b;
+	  b = r.pt_base ();
+	  r.pt_offset(off);
+	  r.pt_size (sz);
+	  pp_string (pp, " { Base: ");
+	  dump_generic_node (pp, b, 0, TDF_NONE | TDF_NOUID, false);
+	  if (!off.varying_p () && !off.undefined_p () && !off.zero_p ())
+	    {
+	      pp_string (pp, " ; Off: ");
+	      visit (off);
+	    }
+	  if (!sz.varying_p () && !sz.undefined_p ())
+	      {
+		pp_string (pp, " ; Size: ");
+		visit (sz);
+	      }
+	  pp_string (pp, " }");
+	}
+
+    }
+}
+
+void
 vrange_printer::visit (const prange &r) const
 {
   pp_string (pp, "[prange] ");
@@ -135,6 +178,8 @@ vrange_printer::visit (const prange &r) const
   print_int_bound (pp, r.upper_bound (), r.type ());
   pp_character (pp, ']');
   print_irange_bitmasks (pp, r.m_bitmask);
+  // Dump the points to field if there is one.
+  print_pt (r);
 }
 
 void
@@ -174,15 +219,17 @@ vrange_printer::visit (const frange &r) const
       print_frange_nan (r);
       return;
     }
-  pp_character (pp, '[');
-  bool has_endpoints = !r.known_isnan ();
-  if (has_endpoints)
-    {
-      print_real_value (type, r.lower_bound ());
-      pp_string (pp, ", ");
-      print_real_value (type, r.upper_bound ());
-    }
-  pp_character (pp, ']');
+  if (r.known_isnan ())
+    pp_string (pp, "[]");
+  else
+    for (unsigned i = 0; i < r.num_pairs (); ++i)
+      {
+	pp_character (pp, '[');
+	print_real_value (type, r.lower_bound (i));
+	pp_string (pp, ", ");
+	print_real_value (type, r.upper_bound (i));
+	pp_character (pp, ']');
+      }
   print_frange_nan (r);
 }
 

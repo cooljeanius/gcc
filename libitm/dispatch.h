@@ -1,4 +1,4 @@
-/* Copyright (C) 2011-2025 Free Software Foundation, Inc.
+/* Copyright (C) 2011-2026 Free Software Foundation, Inc.
    Contributed by Torvald Riegel <triegel@redhat.com>.
 
    This file is part of the GNU Transactional Memory Library (libitm).
@@ -247,7 +247,7 @@ struct method_group
   // Stop using any method from this group for now. This can be used to
   // destruct meta data as soon as this method group is not used anymore.
   virtual void fini() = 0;
-  // This can be overriden to implement more light-weight re-initialization.
+  // This can be overridden to implement more light-weight re-initialization.
   virtual void reinit()
   {
     fini();

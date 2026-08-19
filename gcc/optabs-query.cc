@@ -1,5 +1,5 @@
 /* IR-agnostic target query functions relating to optabs
-   Copyright (C) 1987-2025 Free Software Foundation, Inc.
+   Copyright (C) 1987-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -358,7 +358,9 @@ can_conditionally_move_p (machine_mode mode)
 opt_machine_mode
 qimode_for_vec_perm (machine_mode mode)
 {
-  if (GET_MODE_INNER (mode) != QImode)
+  if (GET_MODE_INNER (mode) != QImode
+      && multiple_p (GET_MODE_PRECISION (GET_MODE_INNER (mode)),
+		     GET_MODE_PRECISION (QImode)))
     return related_vector_mode (mode, QImode, GET_MODE_SIZE (mode));
   return opt_machine_mode ();
 }
@@ -413,12 +415,7 @@ can_vec_perm_var_p (machine_mode mode)
 /* Return true if the target directly supports VEC_PERM_EXPRs on vectors
    of mode OP_MODE and result vector of mode MODE using the selector SEL.
    ALLOW_VARIABLE_P is true if it is acceptable to force the selector into a
-   register and use a variable permute (if the target supports that).
-
-   Note that additional permutations representing whole-vector shifts may
-   also be handled via the vec_shr or vec_shl optab, but only where the
-   second input vector is entirely constant zeroes; this case is not dealt
-   with here.  */
+   register and use a variable permute (if the target supports that).  */
 
 bool
 can_vec_perm_const_p (machine_mode mode, machine_mode op_mode,
@@ -461,6 +458,52 @@ can_vec_perm_const_p (machine_mode mode, machine_mode op_mode,
 	 feature implement the variable vec_perm_optab, and the ia64
 	 port specifically doesn't want us to lower V2SF operations
 	 into integer operations.  */
+    }
+
+  unsigned elements;
+  if (mode == op_mode
+      && GET_MODE_NUNITS (mode).is_constant (&elements))
+    {
+      if (sel.input_bitwise_zero_p (0)
+	  && can_implement_p (vec_shl_optab, mode))
+	{
+	  unsigned int first = 0, i;
+	  for (i = 0; i < elements; ++i)
+	    if (known_eq (poly_uint64 (sel[i]), elements))
+	      {
+		if (i == 0 || first)
+		  break;
+		first = i;
+	      }
+	    else if (first
+		     ? maybe_ne (poly_uint64 (sel[i]),
+				 elements + i - first)
+		     : maybe_ge (poly_uint64 (sel[i]), elements))
+	      break;
+	  if (first && i == elements)
+	    return true;
+	}
+      if (sel.input_bitwise_zero_p (1)
+	  && maybe_ne (sel[0], 0)
+	  && known_lt (sel[0], elements)
+	  && can_implement_p (vec_shr_optab, mode))
+	{
+	  if (sel.series_p (0, 1, sel[0], 1))
+	    return true;
+	  unsigned i;
+	  for (i = 1; i < elements; ++i)
+	    {
+	      poly_uint64 actual = sel[i];
+	      poly_uint64 expected = i + sel[0];
+	      /* Indices into the second vector are all equivalent.  */
+	      if (maybe_lt (actual, elements)
+		  ? maybe_ne (actual, expected)
+		  : maybe_lt (expected, elements))
+		break;
+	    }
+	  if (i == elements)
+	    return true;
+	}
     }
 
   return false;
@@ -654,7 +697,7 @@ lshift_cheap_p (bool speed_p)
   static bool init[2] = { false, false };
   static bool cheap[2] = { true, true };
 
-  /* If the targer has no lshift in word_mode, the operation will most
+  /* If the target has no lshift in word_mode, the operation will most
      probably not be cheap.  ??? Does GCC even work for such targets?  */
   if (optab_handler (ashl_optab, word_mode) == CODE_FOR_nothing)
     return false;
@@ -719,13 +762,9 @@ supports_vec_gather_load_p (machine_mode mode, vec<int> *elsvals)
 	= (icode != CODE_FOR_nothing) ? 1 : -1;
     }
 
-  /* For gather the optab's operand indices do not match the IFN's because
-     the latter does not have the extension operand (operand 3).  It is
-     implicitly added during expansion so we use the IFN's else index + 1.
-     */
   if (elsvals && icode != CODE_FOR_nothing)
     get_supported_else_vals
-      (icode, internal_fn_else_index (IFN_MASK_GATHER_LOAD) + 1, *elsvals);
+      (icode, internal_fn_else_index (IFN_MASK_GATHER_LOAD), *elsvals);
 
   return this_fn_optabs->supports_vec_gather_load[mode] > 0;
 }
@@ -839,8 +878,25 @@ can_open_code_p (optab op, machine_mode mode)
   if ((op == neg_optab || op == abs_optab)
       && is_a<scalar_float_mode> (GET_MODE_INNER (mode), &fmode)
       && get_absneg_bit_mode (op, mode, fmode, &bitpos).exists (&new_mode)
-      && can_implement_p (op == neg_optab ? xor_optab : and_optab, new_mode))
+      && can_open_code_p (op == neg_optab ? xor_optab : and_optab, new_mode))
     return true;
+
+  scalar_int_mode int_mode;
+  if (op == bswap_optab && is_a<scalar_int_mode> (mode, &int_mode))
+    {
+      /* widen_bswap_or_bitreverse can implement smaller bswaps using
+	 wider bswaps and a shift.  */
+      opt_scalar_int_mode wider_mode_iter;
+      FOR_EACH_WIDER_MODE (wider_mode_iter, int_mode)
+	if (optab_handler (op, wider_mode_iter.require ()) != CODE_FOR_nothing)
+	  return true;
+
+      /* expand_doubleword_bswap_or_bitreverse can use 2 word bswaps to
+	 implement a doubleword bswap.  */
+      if (GET_MODE_SIZE (int_mode) == 2 * UNITS_PER_WORD
+	  && optab_handler (op, word_mode) != CODE_FOR_nothing)
+	return true;
+    }
 
   return false;
 }

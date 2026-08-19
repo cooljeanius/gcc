@@ -1,6 +1,6 @@
 // Special functions -*- C++ -*-
 
-// Copyright (C) 2006-2025 Free Software Foundation, Inc.
+// Copyright (C) 2006-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -362,6 +362,12 @@ namespace tr1
     void
     __cyl_bessel_jn_asymp(_Tp __nu, _Tp __x, _Tp & __Jnu, _Tp & __Nnu)
     {
+      if (__builtin_expect(__builtin_isinf(__x), 0))
+	{
+	  __Jnu = __Nnu = _Tp(0);
+	  return;
+	}
+
       const _Tp __mu = _Tp(4) * __nu * __nu;
       const _Tp __8x = _Tp(8) * __x;
 

@@ -1,5 +1,5 @@
 /* jit-builtins.cc -- Handling of builtin functions during JIT-compilation.
-   Copyright (C) 2014-2025 Free Software Foundation, Inc.
+   Copyright (C) 2014-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -347,7 +347,7 @@ builtins_manager::make_type (enum jit_builtin_type type_id)
        - similarly for DEF_FUNCTION_TYPE_VAR_n, but setting the
 	"is_variadic" argument.
        - DEF_POINTER_TYPE is handled by make_ptr_type.
-     That should handle everything, but just in case we also suppy a
+     That should handle everything, but just in case we also supply a
      gcc_unreachable default clause.  */
   switch (type_id)
     {

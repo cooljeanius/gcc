@@ -1,5 +1,5 @@
 /* Target definitions for Darwin (macOS) systems.
-   Copyright (C) 1989-2025 Free Software Foundation, Inc.
+   Copyright (C) 1989-2026 Free Software Foundation, Inc.
    Contributed by Apple Computer Inc.
 
 This file is part of GCC.
@@ -287,6 +287,19 @@ extern GTY(()) int darwin_ms_struct;
 #define DARWIN_RDYNAMIC "%{rdynamic:%nrdynamic is not supported}"
 #endif
 
+#if LD64_HAS_NO_DEDUPLICATE
+/* What we want is "when the optimization level is debug OR when it is
+   a compile & link job with implied O0 optimization".  */
+#define DARWIN_LD_NO_DEDUPLICATE \
+  "%{O0|O1|O|Og: -no_deduplicate} \
+   %{!O*:\
+     %{.c|.cc|.C|.cpp|.cp|.c++|.cxx|.CPP|.m|.mm|.s|.S|.i|.ii|.mi|.mii|\
+       .f|.for|.ftn|.fpp|.f90|.f95|.f03|.f08|.f77|.F|.F90|.F95|.F03|.F08|\
+       .d|.mod: -no_deduplicate }} "
+#else
+#define DARWIN_LD_NO_DEDUPLICATE ""
+#endif
+
 #if LD64_HAS_MACOS_VERSION_MIN
 # define DARWIN_PLATFORM_ID \
   "%{mmacosx-version-min=*:-macos_version_min %*} "
@@ -403,10 +416,14 @@ extern GTY(()) int darwin_ms_struct;
     %(linker)" \
     DARWIN_LD_DEMANGLE \
     LINK_PLUGIN_SPEC \
+    DARWIN_LD_NO_DEDUPLICATE \
     "%{flto*:%<fcompare-debug*} \
      %{flto} %{fno-lto} %{flto=*} \
-    %l " \
+     %{static}%{!static:%{!dynamic:-dynamic}} \
+     %{force_cpusubtype_ALL:-arch %(darwin_arch)} \
+     %{!force_cpusubtype_ALL:-arch %(darwin_subarch)} "\
     DARWIN_PLATFORM_ID \
+    " %l " \
     LINK_COMPRESS_DEBUG_SPEC \
    "%X %{s} %{t} %{Z} %{u*} \
     %{e*} %{r} \
@@ -470,7 +487,7 @@ extern GTY(()) int darwin_ms_struct;
    depend on libgcc. */
 #undef  LINK_GCC_C_SEQUENCE_SPEC
 #define LINK_GCC_C_SEQUENCE_SPEC \
- "%G %{!nolibc:%L} "
+ "%G %{!nolibc:" LINK_LIBATOMIC_SPEC "%L} "
 
 /* ld64 supports a sysroot, it just has a different name and there's no easy
    way to check for it at config time.  */
@@ -493,9 +510,8 @@ extern GTY(()) int darwin_ms_struct;
    Note that options taking arguments may appear multiple times on a command
    line with different arguments each time, so put a * after their names so
    all of them get passed.  */
-#define LINK_SPEC  \
-  "%{static}%{!static:%{!dynamic:-dynamic}} \
-   %:remove-outfile(-ldl) \
+#define LINK_SPEC \
+   "%:remove-outfile(-ldl) \
    %:remove-outfile(-lm) \
    %:remove-outfile(-lpthread) \
    %{fgnu-runtime: %{static|static-libgcc: \
@@ -504,15 +520,15 @@ extern GTY(()) int darwin_ms_struct;
    %{static|static-libgcc|static-libgfortran:%:replace-outfile(-lgfortran libgfortran.a%s)}\
    %{static|static-libgcc|static-libquadmath:%:replace-outfile(-lquadmath libquadmath.a%s)}\
    %{static|static-libgcc|static-libphobos:%:replace-outfile(-lgphobos libgphobos.a%s)}\
+   %{static|static-libgcc|static-libgcobol:%:replace-outfile(-lgcobol libgcobol.a%s)}\
    %{static|static-libgcc|static-libstdc++|static-libgfortran:%:replace-outfile(-lgomp libgomp.a%s)}\
    %{static|static-libgcc|static-libstdc++:%:replace-outfile(-lstdc++ libstdc++.a%s)}\
+   %{static|static-libga68:%:replace-outfile(-lga68 libga68.a%s)}\
    %{static|static-libgm2:%:replace-outfile(-lm2pim libm2pim.a%s)}\
    %{static|static-libgm2:%:replace-outfile(-lm2iso libm2iso.a%s)}\
    %{static|static-libgm2:%:replace-outfile(-lm2min libm2min.a%s)}\
    %{static|static-libgm2:%:replace-outfile(-lm2log libm2log.a%s)}\
-   %{static|static-libgm2:%:replace-outfile(-lm2cor libm2cor.a%s)}\
-  %{force_cpusubtype_ALL:-arch %(darwin_arch)} \
-   %{!force_cpusubtype_ALL:-arch %(darwin_subarch)} "\
+   %{static|static-libgm2:%:replace-outfile(-lm2cor libm2cor.a%s)} "\
    LINK_SYSROOT_SPEC \
    "%{!multiply_defined*:%{shared-libgcc: \
      %:version-compare(< 10.5 mmacosx-version-min= -multiply_defined) \
@@ -647,21 +663,12 @@ extern GTY(()) int darwin_ms_struct;
 #define ASM_MMACOSX_VERSION_MIN_SPEC " %<asm_macosx_version_min=* "
 #endif
 
-#if HAVE_GNU_AS
-/* The options are added in gcc.cc for this case.  */
-#define ASM_OPTIONS ""
-#else
-/* When we detect that we're cctools or llvm as, we need to insert the right
-   additional options.  Actually, currently these are the same as GAS.  */
-#define ASM_OPTIONS "%{v} %{w:-W} %{I*}"
-#endif
-
 #define AS_NEEDS_DASH_FOR_PIPED_INPUT
 
 /* Default Darwin ASM_SPEC, very simple. */
 #define ASM_SPEC \
 "%{static} -arch %(darwin_arch) " \
-ASM_OPTIONS ASM_MMACOSX_VERSION_MIN_SPEC
+ASM_MMACOSX_VERSION_MIN_SPEC
 
 #define ASM_DEBUG_SPEC  ""
 #undef  ASM_DEBUG_OPTION_SPEC
@@ -1004,6 +1011,14 @@ extern GTY(()) section * darwin_sections[NUM_DARWIN_SECTIONS];
       sprintf (LABEL, "*%s%ld", "lASAN", (long)(NUM));\
     else if (strcmp ("LTRAMP", PREFIX) == 0)	\
       sprintf (LABEL, "*%s%ld", "lTRAMP", (long)(NUM));\
+    else if (strncmp ("LANCHOR", PREFIX, 7) == 0)	\
+      sprintf (LABEL, "*%s%ld", "lANCHOR", (long)(NUM));\
+    else if (strlen (PREFIX) == 19 \
+	     && strncmp ("Lcontract_violation", PREFIX, 19) == 0)	\
+      sprintf (LABEL, "*%s%ld", "lcontract_violation", (long)(NUM));\
+    else if (strlen (PREFIX) == 13 \
+	     && strncmp ("Lsrc_loc_impl", PREFIX, 13) == 0)	\
+      sprintf (LABEL, "*%s%ld", "lsrc_loc_impl", (long)(NUM));\
     else						\
       sprintf (LABEL, "*%s%ld", PREFIX, (long)(NUM));	\
   } while (0)
@@ -1283,5 +1298,9 @@ extern void darwin_driver_init (unsigned int *,struct cl_decoded_option **);
 #define CTF_INFO_SECTION_NAME "__CTF_BTF,__ctf,regular,debug"
 #undef BTF_INFO_SECTION_NAME
 #define BTF_INFO_SECTION_NAME "__CTF_BTF,__btf,regular,debug"
+
+/* Algol68 */
+#undef A68_EXPORT_SECTION_NAME
+#define A68_EXPORT_SECTION_NAME "__a68_exports"
 
 #endif /* CONFIG_DARWIN_H */

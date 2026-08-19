@@ -115,7 +115,7 @@ AC_SUBST(toolexeclibdir)
 # Create a spec file, so that compile/link tests don't fail
 test -f libgfortran.spec || touch libgfortran.spec
 
-AC_LANG_C
+AC_LANG([C])
 # Check the compiler.
 # The same as in boehm-gc and libstdc++. Have to borrow it from there.
 # We must force CC to /not/ be precious variables; otherwise
@@ -259,7 +259,7 @@ AC_PROG_INSTALL
 # Configure libtool
 #AC_MSG_NOTICE([====== Starting libtool configuration])
 AC_LIBTOOL_DLOPEN
-AM_PROG_LIBTOOL
+LT_INIT
 LT_LIB_M
 ACX_LT_HOST_FLAGS
 AC_SUBST(enable_shared)
@@ -298,7 +298,7 @@ AC_CHECK_TYPES([ptrdiff_t])
 AC_CHECK_HEADERS_ONCE(unistd.h sys/random.h sys/time.h sys/times.h \
 sys/resource.h sys/types.h sys/stat.h sys/uio.h sys/wait.h \
 floatingpoint.h ieeefp.h fenv.h fptrap.h \
-fpxcp.h pwd.h complex.h xlocale.h)
+fpxcp.h pwd.h complex.h xlocale.h sys/mman.h)
 
 GCC_HEADER_STDINT(gstdint.h)
 
@@ -334,7 +334,7 @@ if test "${hardwire_newlib:-0}" -eq 1; then
 else
    AC_CHECK_FUNCS_ONCE(getrusage times mkstemp strtof strtold snprintf \
    ftruncate chsize chdir getentropy getlogin gethostname kill link symlink \
-   sleep ttyname sigaction waitpid \
+   sleep ttyname sigaction waitpid mmap setenv\
    alarm access fork posix_spawn setmode fcntl writev \
    gettimeofday stat fstat lstat getpwuid vsnprintf dup \
    getcwd localtime_r gmtime_r getpwuid_r ttyname_r clock_gettime \
@@ -342,6 +342,40 @@ else
    secure_getenv __secure_getenv mkostemp strnlen strndup newlocale \
    freelocale uselocale strerror_l strtof128 strfromf128)
 fi
+
+# Check for existing and usable pthreads.
+AX_PTHREAD([
+  enable_caf_shmem=true
+  CAF_SHMEM_CFLAGS="$PTHREAD_CFLAGS"
+  CAF_SHMEM_LIBS="$PTHREAD_LIBS"
+  ], [
+  enable_caf_shmem=false
+  ])
+# caf_shmem needs process-shared pthread primitives that are visible through
+# the default pthread headers.  AX_PTHREAD already established the baseline
+# pthread flags; this additional check only verifies that the specific
+# process-shared API surface is usable for caf/shmem/thread_support.c.
+if test x$enable_caf_shmem = xtrue; then
+  AC_MSG_CHECKING([for usable process-shared pthread support for caf_shmem])
+  save_CFLAGS="$CFLAGS"
+  CFLAGS="$CFLAGS $PTHREAD_CFLAGS"
+  AC_COMPILE_IFELSE(
+    [AC_LANG_PROGRAM(
+      [[#include <pthread.h>]],
+      [[pthread_mutexattr_t mattr;
+        pthread_condattr_t cattr;
+        (void) &pthread_mutexattr_setpshared;
+        (void) &pthread_condattr_setpshared;
+        return pthread_mutexattr_init (&mattr)
+          || pthread_condattr_init (&cattr)
+          || pthread_mutexattr_setpshared (&mattr, PTHREAD_PROCESS_SHARED)
+          || pthread_condattr_setpshared (&cattr, PTHREAD_PROCESS_SHARED);]])],
+    [AC_MSG_RESULT([yes])],
+    [AC_MSG_RESULT([no])
+     enable_caf_shmem=false])
+  CFLAGS="$save_CFLAGS"
+fi
+AM_CONDITIONAL([ENABLE_CAF_SHMEM], [test x$enable_caf_shmem = xtrue])
 
 # Check strerror_r, cannot be above as versions with two and three arguments exist
 LIBGFOR_CHECK_STRERROR_R
@@ -436,6 +470,7 @@ GCC_CHECK_MATH_FUNC([nextafter])
 GCC_CHECK_MATH_FUNC([nextafterl])
 GCC_CHECK_MATH_FUNC([powf])
 GCC_CHECK_MATH_FUNC([pow])
+GCC_CHECK_MATH_FUNC([powl])
 GCC_CHECK_MATH_FUNC([cpowf])
 GCC_CHECK_MATH_FUNC([cpow])
 GCC_CHECK_MATH_FUNC([cpowl])
@@ -486,6 +521,7 @@ GCC_CHECK_MATH_FUNC([trunc])
 GCC_CHECK_MATH_FUNC([truncl])
 GCC_CHECK_MATH_FUNC([erff])
 GCC_CHECK_MATH_FUNC([erf])
+GCC_CHECK_MATH_FUNC([erfl])
 GCC_CHECK_MATH_FUNC([erfcf])
 GCC_CHECK_MATH_FUNC([erfc])
 GCC_CHECK_MATH_FUNC([erfcl])
@@ -753,7 +789,7 @@ fi
 
 
 # Check out attribute support.
-LIBGFOR_CHECK_ATTRIBUTE_VISIBILITY
+GCC_CHECK_ATTRIBUTE_VISIBILITY
 LIBGFOR_CHECK_ATTRIBUTE_ALIAS
 
 # Check out atomic builtins support.

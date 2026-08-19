@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2025, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -112,13 +112,6 @@ package body Opt is
       Uneval_Old                     := Save.Uneval_Old;
       Use_VADS_Size                  := Save.Use_VADS_Size;
       Warnings_As_Errors_Count       := Save.Warnings_As_Errors_Count;
-
-      --  Update consistently the value of Init_Or_Norm_Scalars. The value of
-      --  Normalize_Scalars is not saved/restored because after set to True its
-      --  value is never changed. That is, if a compilation unit has pragma
-      --  Normalize_Scalars then it forces that value for all with'ed units.
-
-      Init_Or_Norm_Scalars := Initialize_Scalars or Normalize_Scalars;
    end Restore_Config_Switches;
 
    --------------------------
@@ -144,7 +137,6 @@ package body Opt is
          Fast_Math                      => Fast_Math,
          Initialize_Scalars             => Initialize_Scalars,
          No_Component_Reordering        => No_Component_Reordering,
-         Normalize_Scalars              => Normalize_Scalars,
          Optimize_Alignment             => Optimize_Alignment,
          Optimize_Alignment_Local       => Optimize_Alignment_Local,
          Persistent_BSS_Mode            => Persistent_BSS_Mode,
@@ -204,14 +196,7 @@ package body Opt is
             SPARK_Mode_Pragma        := SPARK_Mode_Pragma_Config;
 
          else
-            --  In GNATprove mode assertions should be always enabled, even
-            --  when analysing internal units.
-
-            if GNATprove_Mode then
-               pragma Assert (Assertions_Enabled);
-               null;
-
-            elsif GNAT_Mode_Config then
+            if GNAT_Mode_Config then
                Assertions_Enabled    := Assertions_Enabled_Config;
             else
                Assertions_Enabled    := False;
@@ -249,14 +234,6 @@ package body Opt is
          Uneval_Old                  := Uneval_Old_Config;
          Use_VADS_Size               := Use_VADS_Size_Config;
          Warnings_As_Errors_Count    := Warnings_As_Errors_Count_Config;
-
-         --  Update consistently the value of Init_Or_Norm_Scalars. The value
-         --  of Normalize_Scalars is not saved/restored because once set to
-         --  True its value is never changed. That is, if a compilation unit
-         --  has pragma Normalize_Scalars then it forces that value for all
-         --  with'ed units.
-
-         Init_Or_Norm_Scalars := Initialize_Scalars or Normalize_Scalars;
       end if;
 
       --  Values set for all units

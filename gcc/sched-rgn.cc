@@ -1,5 +1,5 @@
 /* Instruction scheduling pass.
-   Copyright (C) 1992-2025 Free Software Foundation, Inc.
+   Copyright (C) 1992-2026 Free Software Foundation, Inc.
    Contributed by Michael Tiemann (tiemann@cygnus.com) Enhanced by,
    and currently maintained by, Jim Wilson (wilson@cygnus.com)
 
@@ -1532,7 +1532,12 @@ compute_trg_info (int trg)
 	  int tf = prob[trg], cf = prob[i];
 
 	  /* In CFGs with low probability edges TF can possibly be zero.  */
-	  sp->src_prob = (tf ? GCOV_COMPUTE_SCALE (cf, tf) : 0);
+	  sp->src_prob = (tf ?
+			  profile_count::from_gcov_type (cf)
+			    .probability_in
+			      (profile_count::from_gcov_type (tf))
+				.to_reg_br_prob_base ()
+			  : 0);
 	  sp->is_valid = (sp->src_prob >= min_spec_prob);
 	}
 
@@ -2613,11 +2618,24 @@ deps_join (class deps_desc *succ_deps, class deps_desc *pred_deps)
   unsigned reg;
   reg_set_iterator rsi;
 
+  /* Registers that PRED has not materialised carry PRED's pending barriers as
+     their sets list, so fold those into the ones SUCC has materialised before
+     the main loop, and into SUCC's own pending list afterwards.  */
+  if (pred_deps->pending_barriers)
+    EXECUTE_IF_AND_COMPL_IN_REG_SET (&succ_deps->reg_last_in_use,
+				     &pred_deps->reg_last_in_use,
+				     0, reg, rsi)
+      {
+	struct deps_reg *succ_rl = &succ_deps->reg_last[reg];
+	succ_rl->sets = concat_INSN_LIST (pred_deps->pending_barriers,
+					  succ_rl->sets);
+      }
+
   /* The reg_last lists are inherited by successor.  */
   EXECUTE_IF_SET_IN_REG_SET (&pred_deps->reg_last_in_use, 0, reg, rsi)
     {
       struct deps_reg *pred_rl = &pred_deps->reg_last[reg];
-      struct deps_reg *succ_rl = &succ_deps->reg_last[reg];
+      struct deps_reg *succ_rl = deps_reg_last (succ_deps, reg);
 
       succ_rl->uses = concat_INSN_LIST (pred_rl->uses, succ_rl->uses);
       succ_rl->sets = concat_INSN_LIST (pred_rl->sets, succ_rl->sets);
@@ -2629,6 +2647,11 @@ deps_join (class deps_desc *succ_deps, class deps_desc *pred_deps)
       succ_rl->clobbers_length += pred_rl->clobbers_length;
     }
   IOR_REG_SET (&succ_deps->reg_last_in_use, &pred_deps->reg_last_in_use);
+
+  /* Registers neither side has materialised keep both pending lists.  */
+  succ_deps->pending_barriers
+    = concat_INSN_LIST (pred_deps->pending_barriers,
+			succ_deps->pending_barriers);
 
   /* Mem read/write lists are inherited by successor.  */
   concat_insn_mem_list (pred_deps->pending_read_insns,

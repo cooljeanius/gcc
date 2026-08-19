@@ -1,5 +1,5 @@
 /* Code translation -- generate GCC trees from gfc_code.
-   Copyright (C) 2002-2025 Free Software Foundation, Inc.
+   Copyright (C) 2002-2026 Free Software Foundation, Inc.
    Contributed by Paul Brook
 
 This file is part of GCC.
@@ -33,6 +33,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "trans-array.h"
 #include "trans-types.h"
 #include "trans-const.h"
+#include "trans-descriptor.h"
 
 /* Naming convention for backend interface code:
 
@@ -44,6 +45,8 @@ along with GCC; see the file COPYING3.  If not see
 
 const char gfc_msg_fault[] = N_("Array reference out of bounds");
 
+/* Nonzero if we're translating a defined assignment call. */
+int is_assign_call = 0;
 
 /* Advance along TREE_CHAIN n times.  */
 
@@ -386,6 +389,27 @@ gfc_build_addr_expr (tree type, tree t)
 }
 
 
+/* Return the descriptor that carries the span of DECL, which is marked as a
+   pointer array.  Such a decl usually is a descriptor.  The local decl of a
+   descriptorless dummy array is not, so its span comes from the descriptor it
+   was built from, which is the saved one.  */
+
+tree
+gfc_get_span_descriptor (tree decl)
+{
+  if (DECL_P (decl)
+      && GFC_ARRAY_TYPE_P (TREE_TYPE (decl))
+      && DECL_LANG_SPECIFIC (decl)
+      && GFC_DECL_SAVED_DESCRIPTOR (decl))
+    decl = GFC_DECL_SAVED_DESCRIPTOR (decl);
+
+  if (POINTER_TYPE_P (TREE_TYPE (decl)))
+    decl = build_fold_indirect_ref_loc (input_location, decl);
+
+  return decl;
+}
+
+
 static tree
 get_array_span (tree type, tree decl)
 {
@@ -406,7 +430,9 @@ get_array_span (tree type, tree decl)
       && (TREE_CODE (type) == ARRAY_TYPE || TREE_CODE (type) == INTEGER_TYPE)
       && TYPE_STRING_FLAG (type))
     {
-      if (TREE_CODE (decl) == PARM_DECL)
+      if (DECL_P (decl) && GFC_DECL_PTR_ARRAY_P (decl))
+	decl = gfc_get_span_descriptor (decl);
+      else if (TREE_CODE (decl) == PARM_DECL)
 	decl = build_fold_indirect_ref_loc (input_location, decl);
       if (GFC_DESCRIPTOR_TYPE_P (TREE_TYPE (decl)))
 	span = gfc_conv_descriptor_span_get (decl);
@@ -446,11 +472,7 @@ get_array_span (tree type, tree decl)
 	  span = gfc_resize_class_size_with_len (NULL, decl, span);
 	}
       else if (GFC_DECL_PTR_ARRAY_P (decl))
-	{
-	  if (TREE_CODE (decl) == PARM_DECL)
-	    decl = build_fold_indirect_ref_loc (input_location, decl);
-	  span = gfc_conv_descriptor_span_get (decl);
-	}
+	span = gfc_conv_descriptor_span_get (gfc_get_span_descriptor (decl));
       else
 	span = NULL_TREE;
     }
@@ -822,6 +844,7 @@ gfc_allocate_using_malloc (stmtblock_t * block, tree pointer,
   tree tmp, error_cond;
   stmtblock_t on_error;
   tree status_type = status ? TREE_TYPE (status) : NULL_TREE;
+  bool cond_is_true = cond == boolean_true_node;
 
   /* If successful and stat= is given, set status to 0.  */
   if (status != NULL_TREE)
@@ -834,11 +857,13 @@ gfc_allocate_using_malloc (stmtblock_t * block, tree pointer,
   tmp = fold_build2_loc (input_location, MAX_EXPR, size_type_node,
 			 size, build_int_cst (size_type_node, 1));
 
-  tmp = build_call_expr_loc (input_location,
-			     builtin_decl_explicit (BUILT_IN_MALLOC), 1, tmp);
-  if (cond == boolean_true_node)
+  if (!cond_is_true)
+    tmp = build_call_expr_loc (input_location,
+			       builtin_decl_explicit (BUILT_IN_MALLOC), 1, tmp);
+  else
     tmp = alt_alloc;
-  else if (cond)
+
+  if (!cond_is_true && cond)
     tmp = build3_loc (input_location, COND_EXPR, TREE_TYPE (tmp), cond,
 		      alt_alloc, tmp);
 
@@ -1565,7 +1590,10 @@ gfc_assignment_finalizer_call (gfc_se *lse, gfc_expr *expr1, bool init_flag)
 	  gfc_init_se (&se, NULL);
 	  if (expr1->rank)
 	    {
-	      gfc_conv_expr_descriptor (&se, expr1);
+	      /* Avoid calling trans-array.cc(set_factored_descriptor_value) by
+		 not using gfc_conv_expr_descriptor.  */
+	      se.descriptor_only = 1;
+	      gfc_conv_expr (&se, expr1);
 	      ptr = gfc_conv_descriptor_data_get (se.expr);
 	    }
 	  else
@@ -1604,7 +1632,7 @@ gfc_assignment_finalizer_call (gfc_se *lse, gfc_expr *expr1, bool init_flag)
 
 void
 gfc_finalize_tree_expr (gfc_se *se, gfc_symbol *derived,
-			symbol_attribute attr, int rank)
+			const symbol_attribute &attr, int rank)
 {
   tree vptr, final_fndecl, desc, tmp, size, is_final;
   tree data_ptr, data_null, cond;
@@ -1616,11 +1644,17 @@ gfc_finalize_tree_expr (gfc_se *se, gfc_symbol *derived,
     return;
 
   /* Derived type function results with components that have defined
-     assignements are handled in resolve.cc(generate_component_assignments)  */
-  if (derived && (derived->attr.is_c_interop
-		  || derived->attr.is_iso_c
-		  || derived->attr.is_bind_c
-		  || derived->attr.defined_assign_comp))
+     assignments are handled in resolve.cc(generate_component_assignments),
+     unless the assignment was replaced by a subroutine call to the
+     subroutine associated with the assignment operator. */
+  if ( ! is_assign_call
+       && derived && (derived->attr.is_c_interop
+       || derived->attr.is_iso_c
+       || derived->attr.is_bind_c
+       || (derived->attr.extension && derived->f2k_derived
+	   && derived->f2k_derived->tb_op[INTRINSIC_ASSIGN])
+       || (!derived->attr.extension
+	   && derived->attr.defined_assign_comp)))
     return;
 
   if (is_class)
@@ -1635,12 +1669,15 @@ gfc_finalize_tree_expr (gfc_se *se, gfc_symbol *derived,
     }
   else if (derived && gfc_is_finalizable (derived, NULL))
     {
-      if (!derived->components && (!rank || attr.elemental))
+      tree type = TREE_TYPE (se->expr);
+      if (type && TYPE_SIZE_UNIT (type)
+	  && integer_zerop (TYPE_SIZE_UNIT (type))
+	  && (!rank || attr.elemental))
 	{
 	  /* Any attempt to assign zero length entities, causes the gimplifier
 	     all manner of problems. Instead, a variable is created to act as
-	     as the argument for the final call.  */
-	  desc = gfc_create_var (TREE_TYPE (se->expr), "zero");
+	     the argument for the final call.  */
+	  desc = gfc_create_var (type, "zero");
 	}
       else if (se->direct_byref)
 	{
@@ -1737,7 +1774,7 @@ gfc_finalize_tree_expr (gfc_se *se, gfc_symbol *derived,
 			     gfc_call_free (data_ptr),
 			     build_empty_stmt (input_location));
       gfc_add_expr_to_block (&se->loop->post, tmp);
-      gfc_add_modify (&se->loop->post, data_ptr, data_null);
+      gfc_conv_descriptor_data_set (&se->loop->post, desc, data_null);
     }
   else
     {
@@ -1751,7 +1788,7 @@ gfc_finalize_tree_expr (gfc_se *se, gfc_symbol *derived,
 				 gfc_call_free (data_ptr),
 				 build_empty_stmt (input_location));
 	  gfc_add_expr_to_block (&se->finalblock, tmp);
-	  gfc_add_modify (&se->finalblock, data_ptr, data_null);
+	  gfc_conv_descriptor_data_set (&se->finalblock, desc, data_null);
 	}
     }
 }
@@ -1795,11 +1832,11 @@ gfc_finalize_tree_expr (gfc_se *se, gfc_symbol *derived,
    analyzed and set by this routine, and -2 to indicate that a non-coarray is to
    be deallocated.  */
 tree
-gfc_deallocate_with_status (tree pointer, tree status, tree errmsg,
-			    tree errlen, tree label_finish,
-			    bool can_fail, gfc_expr* expr,
+gfc_deallocate_with_status (tree pointer, tree status, tree errmsg, tree errlen,
+			    tree label_finish, bool can_fail, gfc_expr *expr,
 			    int coarray_dealloc_mode, tree class_container,
-			    tree add_when_allocated, tree caf_token)
+			    tree add_when_allocated, tree caf_token,
+			    bool unalloc_ok)
 {
   stmtblock_t null, non_null;
   tree cond, tmp, error;
@@ -1891,7 +1928,7 @@ gfc_deallocate_with_status (tree pointer, tree status, tree errmsg,
       tmp = fold_build2_loc (input_location, MODIFY_EXPR, status_type,
 			     fold_build1_loc (input_location, INDIRECT_REF,
 					      status_type, status),
-			     build_int_cst (status_type, 1));
+			     build_int_cst (status_type, unalloc_ok ? 0 : 1));
       error = fold_build3_loc (input_location, COND_EXPR, void_type_node,
 			       cond2, tmp, error);
     }
@@ -1914,7 +1951,7 @@ gfc_deallocate_with_status (tree pointer, tree status, tree errmsg,
 	  tree cond, omp_tmp;
 	  if (descr)
 	    cond = fold_build2_loc (input_location, EQ_EXPR, boolean_type_node,
-				    gfc_conv_descriptor_version (descr),
+				    gfc_conv_descriptor_version_get (descr),
 				    integer_one_node);
 	  else
 	    cond = gfc_omp_call_is_alloc (pointer);
@@ -1928,8 +1965,7 @@ gfc_deallocate_with_status (tree pointer, tree status, tree errmsg,
       gfc_add_modify (&non_null, pointer, build_int_cst (TREE_TYPE (pointer),
 							 0));
       if (flag_openmp_allocators && descr)
-	gfc_add_modify (&non_null, gfc_conv_descriptor_version (descr),
-			integer_zero_node);
+	gfc_conv_descriptor_version_set (&non_null, descr, integer_zero_node);
 
       if (status != NULL_TREE && !integer_zerop (status))
 	{
@@ -1975,10 +2011,10 @@ gfc_deallocate_with_status (tree pointer, tree status, tree errmsg,
 
       token = gfc_build_addr_expr  (NULL_TREE, token);
       gcc_assert (caf_dereg_type > GFC_CAF_COARRAY_ANALYZE);
-      tmp = build_call_expr_loc (input_location,
-				 gfor_fndecl_caf_deregister, 5,
-				 token, build_int_cst (integer_type_node,
-						       caf_dereg_type),
+      tmp = build_call_expr_loc (input_location, gfor_fndecl_caf_deregister, 5,
+				 token,
+				 build_int_cst (integer_type_node,
+						caf_dereg_type),
 				 pstat, errmsg, errlen);
       gfc_add_expr_to_block (&non_null, tmp);
 
@@ -1990,7 +2026,7 @@ gfc_deallocate_with_status (tree pointer, tree status, tree errmsg,
       ASM_VOLATILE_P (tmp) = 1;
       gfc_add_expr_to_block (&non_null, tmp);
 
-      if (status != NULL_TREE)
+      if (status != NULL_TREE && !integer_zerop (status))
 	{
 	  tree stat = build_fold_indirect_ref_loc (input_location, status);
 	  tree nullify = fold_build2_loc (input_location, MODIFY_EXPR,
@@ -2024,9 +2060,10 @@ gfc_deallocate_with_status (tree pointer, tree status, tree errmsg,
 
 tree
 gfc_deallocate_scalar_with_status (tree pointer, tree status, tree label_finish,
-				   bool can_fail, gfc_expr* expr,
+				   bool can_fail, gfc_expr *expr,
 				   gfc_typespec ts, tree class_container,
-				   bool coarray)
+				   bool coarray, bool unalloc_ok, tree errmsg,
+				   tree errmsg_len)
 {
   stmtblock_t null, non_null;
   tree cond, tmp, error;
@@ -2069,7 +2106,7 @@ gfc_deallocate_scalar_with_status (tree pointer, tree status, tree label_finish,
       tmp = fold_build2_loc (input_location, MODIFY_EXPR, status_type,
 			     fold_build1_loc (input_location, INDIRECT_REF,
 					      status_type, status),
-			     build_int_cst (status_type, 1));
+			     build_int_cst (status_type, unalloc_ok ? 0 : 1));
       error = fold_build3_loc (input_location, COND_EXPR, void_type_node,
 			       cond2, tmp, error);
     }
@@ -2134,7 +2171,8 @@ gfc_deallocate_scalar_with_status (tree pointer, tree status, tree label_finish,
   else
     {
       tree token;
-      tree pstat = null_pointer_node;
+      tree pstat = null_pointer_node, perrmsg = null_pointer_node,
+	   perrlen = size_zero_node;
       gfc_se se;
 
       gfc_init_se (&se, NULL);
@@ -2147,11 +2185,17 @@ gfc_deallocate_scalar_with_status (tree pointer, tree status, tree label_finish,
 	  pstat = status;
 	}
 
-      tmp = build_call_expr_loc (input_location,
-				 gfor_fndecl_caf_deregister, 5,
-				 token, build_int_cst (integer_type_node,
-						       caf_dereg_type),
-				 pstat, null_pointer_node, integer_zero_node);
+      if (errmsg != NULL_TREE)
+	{
+	  perrmsg = errmsg;
+	  perrlen = errmsg_len;
+	}
+
+      tmp = build_call_expr_loc (input_location, gfor_fndecl_caf_deregister, 5,
+				 token,
+				 build_int_cst (integer_type_node,
+						caf_dereg_type),
+				 pstat, perrmsg, perrlen);
       gfc_add_expr_to_block (&non_null, tmp);
 
       /* It guarantees memory consistency within the same segment.  */
@@ -2414,8 +2458,12 @@ trans_code (gfc_code * code, tree cond)
 	  break;
 
 	case EXEC_ASSIGN_CALL:
+	  /* Record that an assignment call is being processed, to
+	     ensure finalization occurs in gfc_finalize_tree_expr */
+	  is_assign_call = 1;
 	  res = gfc_trans_call (code, true, NULL_TREE,
 				NULL_TREE, false);
+	  is_assign_call = 0;
 	  break;
 
 	case EXEC_RETURN:
@@ -2656,6 +2704,9 @@ trans_code (gfc_code * code, tree cond)
 	case EXEC_OACC_EXIT_DATA:
 	case EXEC_OACC_ATOMIC:
 	case EXEC_OACC_DECLARE:
+	case EXEC_OACC_INIT:
+	case EXEC_OACC_SHUTDOWN:
+	case EXEC_OACC_SET:
 	  res = gfc_trans_oacc_directive (code);
 	  break;
 
@@ -2667,7 +2718,9 @@ trans_code (gfc_code * code, tree cond)
 
       if (res != NULL_TREE && ! IS_EMPTY_STMT (res))
 	{
-	  if (TREE_CODE (res) != STATEMENT_LIST)
+	  /* Don't try to set location for trees that don't have one,
+	     e.g. STATEMENT_LIST or error_mark_node.  */
+	  if (EXPR_P (res))
 	    SET_EXPR_LOCATION (res, input_location);
 
 	  /* Add the new statement to the block.  */

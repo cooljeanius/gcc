@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 S p e c                                  --
 --                                                                          --
---          Copyright (C) 1992-2025, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -67,18 +67,18 @@ package Exp_Ch6 is
       --  Present if result subtype is returned on the secondary stack or is
       --  tagged: in this case, this indicates whether the return object is
       --  allocated by the caller or callee, and if the callee, whether to
-      --  use the secondary stack, the global heap or a storage pool. Also
-      --  present if result type needs finalization.
+      --  use the secondary stack, the global heap or a storage pool.
 
       BIP_Storage_Pool,
       --  Present if result subtype is returned on the secondary stack or is
       --  tagged: in this case, if BIP_Alloc_Form = User_Storage_Pool, this
       --  is a pointer to the pool (of type Root_Storage_Pool_Ptr); otherwise
-      --  this is null. Also present if result type needs finalization.
+      --  this is null.
 
       BIP_Collection,
-      --  Present if result type needs finalization. Pointer to the collection
-      --  of the access type used by the caller.
+      --  Present if result type is returned on the secondary stack and needs
+      --  finalization, or is tagged. Pointer to the collection of the access
+      --  type used by the caller.
 
       BIP_Task_Master,
       --  Present if result type contains tasks. Master associated with
@@ -101,15 +101,9 @@ package Exp_Ch6 is
    --  Adds Extra_Actual as a named parameter association for the formal
    --  Extra_Formal in Subprogram_Call.
 
-   procedure Apply_CW_Accessibility_Check (Exp : Node_Id; Func : Entity_Id);
-   --  Ada 2005 (AI95-344): If the result type is class-wide, insert a check
-   --  that the level of the return expression's underlying type is not deeper
-   --  than the level of the master enclosing the function. Always generate the
-   --  check when the type of the return expression is class-wide, when it's a
-   --  type conversion, or when it's a formal parameter. Otherwise suppress the
-   --  check in the case where the return expression has a specific type whose
-   --  level is known not to be statically deeper than the result type of the
-   --  function.
+   procedure Create_Extra_Actuals (Call_Node : Node_Id);
+   --  Create the extra actuals of the given call and add them to its
+   --  actual parameters list.
 
    function BIP_Formal_Suffix (Kind : BIP_Formal_Kind) return String;
    --  Ada 2005 (AI-318-02): Returns a string to be used as the suffix of names
@@ -288,13 +282,12 @@ package Exp_Ch6 is
    --  BIP_Alloc_Form parameter (see type BIP_Formal_Kind).
 
    function Needs_BIP_Collection (Func_Id : Entity_Id) return Boolean;
-   --  Ada 2005 (AI-318-02): Return True if the result subtype of function
-   --  Func_Id might need finalization actions. This includes build-in-place
-   --  functions with tagged result types, since they can be invoked via
-   --  dispatching calls, and descendant types may require finalization.
+   --  Ada 2005 (AI-318-02): Return True if the function needs an implicit
+   --  BIP_Collection parameter (see type BIP_Formal_Kind).
 
    function Needs_BIP_Task_Actuals (Func_Id : Entity_Id) return Boolean;
-   --  Return True if the function returns an object of a type that has tasks.
+   --  Ada 2005 (AI-318-02): Return True if the function needs implicit
+   --  BIP_Task_Master and BIP_Activation_Chain parameters.
 
    function Unqual_BIP_Iface_Function_Call (Expr : Node_Id) return Node_Id;
    --  Return the inner BIP function call removing any qualification from Expr
@@ -304,10 +297,12 @@ package Exp_Ch6 is
    --  to reference the secondary dispatch table of an interface; otherwise
    --  return Empty.
 
-   procedure Validate_Subprogram_Calls (N : Node_Id);
-   --  Check that the number of actuals (including extra actuals) of calls in
-   --  the subtree N match their corresponding formals; check also that the
-   --  names of BIP extra actuals and formals match.
+   function Check_BIP_Actuals
+     (Subp_Call : Node_Id;
+      Subp_Id   : Entity_Id) return Boolean;
+   --  Given a subprogram call to the given subprogram return True if the
+   --  names of BIP extra actual and formal parameters match, and the number
+   --  of actuals (including extra actuals) matches the number of formals.
 
 private
    pragma Inline (Is_Build_In_Place_Return_Object);

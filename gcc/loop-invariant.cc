@@ -1,5 +1,5 @@
 /* RTL-level loop invariant motion.
-   Copyright (C) 2004-2025 Free Software Foundation, Inc.
+   Copyright (C) 2004-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -802,7 +802,7 @@ canonicalize_address_mult (rtx x)
 
 #define MAX_CANON_ADDR_PARTS (5)
 
-/* Collect sub expressions in address X with PLUS as the seperator.
+/* Collect sub expressions in address X with PLUS as the separator.
    Sub expressions are stored in vector ADDR_PARTS.  */
 
 static void

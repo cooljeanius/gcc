@@ -1,5 +1,8 @@
+#![feature(no_core)]
+#![no_core]
+
+#![feature(lang_items)]
 #[lang = "sized"]
-// { dg-skip-if "" { *-*-* } }
 pub trait Sized {}
 
 trait Foo<T> {

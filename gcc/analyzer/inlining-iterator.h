@@ -1,5 +1,5 @@
 /* Iterator for walking a chain of inlining locations.
-   Copyright (C) 2022-2025 Free Software Foundation, Inc.
+   Copyright (C) 2022-2026 Free Software Foundation, Inc.
    Contributed by David Malcolm <dmalcolm@redhat.com>.
 
 This file is part of GCC.
@@ -46,7 +46,7 @@ class inlining_iterator
 public:
   inlining_iterator (location_t loc)
   : m_abstract_origin (LOCATION_BLOCK (loc)),
-    m_callsite (UNKNOWN_LOCATION), m_fndecl (NULL),
+    m_callsite (UNKNOWN_LOCATION), m_fndecl (NULL_TREE),
     m_next_abstract_origin (NULL)
   {
     prepare_iteration ();
@@ -71,7 +71,7 @@ private:
       return;
     tree block = m_abstract_origin;
     m_callsite = BLOCK_SOURCE_LOCATION (block);
-    m_fndecl = NULL;
+    m_fndecl = NULL_TREE;
     block = BLOCK_SUPERCONTEXT (block);
     while (block && TREE_CODE (block) == BLOCK
 	   && BLOCK_ABSTRACT_ORIGIN (block))
@@ -112,7 +112,7 @@ private:
    The early inliner runs before the analyzer, which can lead to confusing
    output.
 
-   Tne base fndecl and depth within a checker_event are from call strings
+   The base fndecl and depth within a checker_event are from call strings
    in program_points, which reflect the call strings after inlining.
    This class lets us offset the depth and fix up the reported fndecl and
    stack depth to better reflect the user's original code.  */

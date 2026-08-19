@@ -1,4 +1,4 @@
-// Copyright (C) 1994-2025 Free Software Foundation, Inc.
+// Copyright (C) 1994-2026 Free Software Foundation, Inc.
 //
 // This file is part of GCC.
 //
@@ -75,7 +75,7 @@ __do_find_public_src (ptrdiff_t src2dst,
 // to bias any optimizations. To that end we make no particular effort towards
 // early fail answers or early success answers. Instead we try to minimize
 // work by filling in things lazily (when we know we need the information),
-// and opportunisticly take early success or failure results.
+// and opportunistically take early success or failure results.
 bool __vmi_class_type_info::
 __do_dyncast (ptrdiff_t src2dst,
               __sub_kind access_path,

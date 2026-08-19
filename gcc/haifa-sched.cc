@@ -1,5 +1,5 @@
 /* Instruction scheduling pass.
-   Copyright (C) 1992-2025 Free Software Foundation, Inc.
+   Copyright (C) 1992-2026 Free Software Foundation, Inc.
    Contributed by Michael Tiemann (tiemann@cygnus.com) Enhanced by,
    and currently maintained by, Jim Wilson (wilson@cygnus.com)
 
@@ -2147,7 +2147,13 @@ model_recompute (rtx_insn *insn)
   for (use = INSN_REG_USE_LIST (insn); use != NULL; use = use->next_insn_use)
     {
       new_last = model_last_use_except (use);
-      if (new_last < point && bitmap_set_bit (tmp_bitmap, use->regno))
+      if (new_last < point
+	  && bitmap_set_bit (tmp_bitmap, use->regno)
+	  /* df_get_live_in has not necessarily been updated to reflect the
+	     effect of inter-block movement performed by earlier schedules.
+	     Cope with stale live-in sets by ignoring registers that are not
+	     currently assumed to be live.  */
+	  && bitmap_bit_p (curr_reg_live, use->regno))
 	{
 	  gcc_assert (num_uses < ARRAY_SIZE (uses));
 	  uses[num_uses].last_use = new_last;
@@ -2539,7 +2545,7 @@ model_set_excess_costs (rtx_insn **insns, int count)
   if (!param_cycle_accurate_model)
     return;
 
-  /* Use MAX (baseECC, 0) and baseP to calculcate ECC for each
+  /* Use MAX (baseECC, 0) and baseP to calculate ECC for each
      instruction.  */
   for (i = 0; i < count; i++)
     {
@@ -5602,7 +5608,7 @@ analyze_set_insn_for_autopref (rtx pat, bool write, rtx *base, int *offset)
 /* Functions to model cache auto-prefetcher.
 
    Some of the CPUs have cache auto-prefetcher, which /seems/ to initiate
-   memory prefetches if it sees instructions with consequitive memory accesses
+   memory prefetches if it sees instructions with consecutive memory accesses
    in the instruction stream.  Details of such hardware units are not published,
    so we can only guess what exactly is going on there.
    In the scheduler, we model abstract auto-prefetcher.  If there are memory
@@ -5799,7 +5805,7 @@ autopref_multipass_dfa_lookahead_guard (rtx_insn *insn1, int ready_index)
 
       if (ready_index == 0
 	  && data1->status == AUTOPREF_MULTIPASS_DATA_DONT_DELAY)
-	/* We allow only a single delay on priviledged instructions.
+	/* We allow only a single delay on privileged instructions.
 	   Doing otherwise would cause infinite loop.  */
 	{
 	  if (sched_verbose >= 2)
@@ -6132,8 +6138,13 @@ choose_ready (struct ready_list *ready, bool first_cycle_insn_p,
       return -1;
     }
 
-  if (dfa_lookahead <= 0 || SCHED_GROUP_P (ready_element (ready, 0))
+  if (SCHED_GROUP_P (ready_element (ready, 0))
       || DEBUG_INSN_P (ready_element (ready, 0)))
+    {
+      *insn_ptr = ready_remove_first (ready);
+      return 0;
+    }
+  else if (dfa_lookahead <= 0)
     {
       if (targetm.sched.dispatch (NULL, IS_DISPATCH_ON))
 	*insn_ptr = ready_remove_first_dispatch (ready);

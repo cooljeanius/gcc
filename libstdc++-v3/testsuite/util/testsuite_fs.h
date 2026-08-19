@@ -1,7 +1,7 @@
 // -*- C++ -*-
 // Filesystem utils for the C++ library testsuite.
 //
-// Copyright (C) 2014-2025 Free Software Foundation, Inc.
+// Copyright (C) 2014-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -42,7 +42,7 @@ namespace test_fs = std::experimental::filesystem;
 #include <stdlib.h> // mkstemp
 #endif
 
-#ifndef _GLIBCXX_HAVE_SYMLINK
+#if !defined _GLIBCXX_HAVE_SYMLINK && !defined _GLIBCXX_FILESYSTEM_IS_WINDOWS
 #define NO_SYMLINKS
 #endif
 
@@ -67,6 +67,8 @@ namespace __gnu_test
   compare_paths(const test_fs::path& p1,
 		const test_fs::path& p2)
   {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
     PATH_CHK( p1, p2, native );
     PATH_CHK( p1, p2, string );
     PATH_CHK( p1, p2, empty );
@@ -90,7 +92,7 @@ namespace __gnu_test
       throw test_fs::filesystem_error(
 	  "!equal(begin1, end1, begin2)", p1, p2,
 	  std::make_error_code(std::errc::invalid_argument) );
-
+#pragma GCC diagnostic pop
   }
 
   const std::string test_paths[] = {

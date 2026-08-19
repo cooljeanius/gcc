@@ -1,3 +1,24 @@
+2026-05-30  Dhruv Chawla  <dhruvc@nvidia.com>
+
+	* decBasic.c (decCanonical): Fix typos.
+	(decDivide): Likewise.
+	(decFiniteMultiply): Likewise.
+	(decFloatMultiply): Likewise.
+	(decFloatQuantize): Likewise.
+	(decToInt32): Likewise.
+	* decCommon.c (decFinalize): Likewise.
+	(decFloatFromString): Likewise.
+	* decContext.c (decContextGetStatus): Likewise.
+	* decNumber.c (decToString): Likewise.
+	(decAddOp): Likewise.
+	(decMalloc): Likewise.
+	* decNumberLocal.h: Likewise.
+
+2026-01-09  Ben Boeckel  <ben.boeckel@kitware.com>
+
+	* configure: Regenerate.
+	* configure.ac: Replace gcc-bugs@ with bug reporting link.
+
 2024-04-02  Jakub Jelinek  <jakub@redhat.com>
 
 	* decCommon.c (decFinalize): Fix duplicated words in
@@ -788,7 +809,7 @@
 	* decDPD.h: Likewise.
 	* decLibrary.c, decRound.c: Likewise.
 
-Copyright (C) 2005-2025 Free Software Foundation, Inc.
+Copyright (C) 2005-2026 Free Software Foundation, Inc.
 
 Copying and distribution of this file, with or without modification,
 are permitted in any medium without royalty provided the copyright

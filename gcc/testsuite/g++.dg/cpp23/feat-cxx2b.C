@@ -353,8 +353,8 @@
 
 #ifndef __cpp_deduction_guides
 #  error "__cpp_deduction_guides"
-#elif __cpp_deduction_guides != 201907
-#  error "__cpp_deduction_guides != 201907"
+#elif __cpp_deduction_guides != 202207
+#  error "__cpp_deduction_guides != 202207"
 #endif
 
 #ifndef __cpp_if_constexpr
@@ -563,8 +563,8 @@
 
 #ifndef __cpp_named_character_escapes
 #  error "__cpp_named_character_escapes"
-#elif __cpp_named_character_escapes != 202207
-#  error "__cpp_named_character_escapes != 202207"
+#elif __cpp_named_character_escapes != 202606
+#  error "__cpp_named_character_escapes != 202606"
 #endif
 
 #ifndef __cpp_static_call_operator

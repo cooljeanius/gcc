@@ -1,6 +1,6 @@
 // Vector implementation -*- C++ -*-
 
-// Copyright (C) 2001-2025 Free Software Foundation, Inc.
+// Copyright (C) 2001-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -57,7 +57,7 @@
 #define _STL_VECTOR_H 1
 
 #include <bits/stl_iterator_base_funcs.h>
-#include <bits/functexcept.h>
+#include <bits/stdexcept_throw.h>
 #include <bits/concept_check.h>
 #if __cplusplus >= 201103L
 #include <initializer_list>
@@ -68,7 +68,7 @@
 #if __glibcxx_concepts // C++ >= C++20
 # include <bits/ranges_base.h>          // ranges::distance
 #endif
-#if __glibcxx_ranges_to_container // C++ >= 23
+#if __glibcxx_containers_ranges // C++ >= 23
 # include <bits/ranges_algobase.h>      // ranges::copy
 # include <bits/ranges_util.h>          // ranges::subrange
 #endif
@@ -317,6 +317,19 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       get_allocator() const _GLIBCXX_NOEXCEPT
       { return allocator_type(_M_get_Tp_allocator()); }
 
+      static _GLIBCXX20_CONSTEXPR size_t
+      _S_max_size(const _Tp_alloc_type& __a) _GLIBCXX_NOEXCEPT
+      {
+	// std::distance(begin(), end()) cannot be greater than PTRDIFF_MAX,
+	// and realistically we can't store more than PTRDIFF_MAX/sizeof(T)
+	// (even if std::allocator_traits::max_size says we can).
+	const size_t __diffmax =
+	  __gnu_cxx::__numeric_traits<ptrdiff_t>::__max / sizeof(_Tp);
+	const size_t __allocmax =
+	  __gnu_cxx::__alloc_traits<_Alloc>::max_size(__a);
+	return (std::min)(__diffmax, __allocmax);
+      }
+
 #if __cplusplus >= 201103L
       _Vector_base() = default;
 #else
@@ -372,8 +385,10 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX20_CONSTEXPR
       ~_Vector_base() _GLIBCXX_NOEXCEPT
       {
-	_M_deallocate(_M_impl._M_start,
-		      _M_impl._M_end_of_storage - _M_impl._M_start);
+	ptrdiff_t __n = _M_impl._M_end_of_storage - _M_impl._M_start;
+	if (__n < 0)
+	  __builtin_unreachable();
+	_M_deallocate(_M_impl._M_start, size_t(__n));
       }
 
     public:
@@ -385,6 +400,43 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       {
 	typedef __gnu_cxx::__alloc_traits<_Tp_alloc_type> _Tr;
 	return __n != 0 ? _Tr::allocate(_M_impl, __n) : pointer();
+      }
+
+      struct _Alloc_result { pointer __ptr; size_t __count; };
+
+      _GLIBCXX20_CONSTEXPR
+      _Alloc_result
+      _M_allocate_at_least(size_t __n)
+      {
+	typedef __gnu_cxx::__alloc_traits<_Tp_alloc_type> _Tr;
+	_Alloc_result __r;
+	if (__builtin_expect(__n != 0, true))
+	  {
+#ifdef __glibcxx_allocate_at_least  // C++23
+	    if constexpr (requires    { _Tr::allocate_at_least(_M_impl, __n); })
+	      {
+		auto [__ptr, __count] = _Tr::allocate_at_least(_M_impl, __n);
+		if (__count > __n)
+		  {
+		    size_t __max = _S_max_size(_M_get_Tp_allocator());
+		    if (__builtin_expect(__count > __max, false))
+		      __count = __max;
+		  }
+		__r = { __ptr, __count };
+	      }
+	    else
+#endif
+	      {
+		__r.__ptr = _Tr::allocate(_M_impl, __n);
+		__r.__count = __n;
+	      }
+	  }
+	else
+	  {
+	    __r.__ptr = pointer();
+	    __r.__count = 0;
+	  }
+	return __r;
       }
 
       _GLIBCXX20_CONSTEXPR
@@ -402,12 +454,12 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       void
       _M_create_storage(size_t __n)
       {
-	this->_M_impl._M_start = this->_M_allocate(__n);
-	this->_M_impl._M_finish = this->_M_impl._M_start;
-	this->_M_impl._M_end_of_storage = this->_M_impl._M_start + __n;
+	_Alloc_result __r = this->_M_allocate_at_least(__n);
+	this->_M_impl._M_finish = this->_M_impl._M_start = __r.__ptr;
+	this->_M_impl._M_end_of_storage = this->_M_impl._M_start + __r.__count;
       }
 
-#if __glibcxx_ranges_to_container // C++ >= 23
+#if __glibcxx_containers_ranges // C++ >= 23
       // Called by insert_range, and indirectly by assign_range, append_range.
       // Initializes new elements in storage at __ptr and updates __ptr to
       // point after the last new element.
@@ -478,6 +530,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       typedef _Vector_base<_Tp, _Alloc>			_Base;
       typedef typename _Base::_Tp_alloc_type		_Tp_alloc_type;
       typedef __gnu_cxx::__alloc_traits<_Tp_alloc_type>	_Alloc_traits;
+      typedef typename _Base::_Alloc_result             _Alloc_result;
 
     public:
       typedef _Tp					value_type;
@@ -518,34 +571,23 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	return _S_nothrow_relocate(__is_move_insertable<_Tp_alloc_type>{});
       }
 
-      static pointer
-      _S_do_relocate(pointer __first, pointer __last, pointer __result,
-		     _Tp_alloc_type& __alloc, true_type) noexcept
-      {
-	return std::__relocate_a(__first, __last, __result, __alloc);
-      }
-
-      static pointer
-      _S_do_relocate(pointer, pointer, pointer __result,
-		     _Tp_alloc_type&, false_type) noexcept
-      { return __result; }
-
       static _GLIBCXX20_CONSTEXPR pointer
       _S_relocate(pointer __first, pointer __last, pointer __result,
 		  _Tp_alloc_type& __alloc) noexcept
       {
-#if __cpp_if_constexpr
-	// All callers have already checked _S_use_relocate() so just do it.
-	return std::__relocate_a(__first, __last, __result, __alloc);
-#else
-	using __do_it = __bool_constant<_S_use_relocate()>;
-	return _S_do_relocate(__first, __last, __result, __alloc, __do_it{});
-#endif
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wc++17-extensions" // if constexpr
+	if constexpr (_S_use_relocate())
+	  return std::__relocate_a(__first, __last, __result, __alloc);
+	else
+	  return __result;
+#pragma GCC diagnostic pop
       }
 #endif // C++11
 
     protected:
       using _Base::_M_allocate;
+      using _Base::_M_allocate_at_least;
       using _Base::_M_deallocate;
       using _Base::_M_impl;
       using _Base::_M_get_Tp_allocator;
@@ -763,7 +805,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	}
 #endif
 
-#if __glibcxx_ranges_to_container // C++ >= 23
+#if __glibcxx_containers_ranges // C++ >= 23
       /**
        * @brief Construct a vector from a range.
        * @param __rg A range of values that are convertible to `bool`.
@@ -926,7 +968,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       }
 #endif
 
-#if __glibcxx_ranges_to_container // C++ >= 23
+#if __glibcxx_containers_ranges // C++ >= 23
       /**
        * @brief Assign a range to the vector.
        * @param __rg A range of values that are convertible to `value_type`.
@@ -982,7 +1024,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 		}
 	    }
 	}
-#endif // ranges_to_container
+#endif // containers_ranges
 
       /// Get a copy of the memory allocation object.
       using _Base::get_allocator;
@@ -1118,7 +1160,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       {
 	ptrdiff_t __dif = this->_M_impl._M_finish - this->_M_impl._M_start;
 	if (__dif < 0)
-	   __builtin_unreachable ();
+	   __builtin_unreachable();
 	return size_type(__dif);
       }
 
@@ -1126,7 +1168,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       _GLIBCXX_NODISCARD _GLIBCXX20_CONSTEXPR
       size_type
       max_size() const _GLIBCXX_NOEXCEPT
-      { return _S_max_size(_M_get_Tp_allocator()); }
+      { return _Base::_S_max_size(_M_get_Tp_allocator()); }
 
 #if __cplusplus >= 201103L
       /**
@@ -1164,7 +1206,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       resize(size_type __new_size, const value_type& __x)
       {
 	if (__new_size > size())
-	  _M_fill_insert(end(), __new_size - size(), __x);
+	  _M_fill_append(__new_size - size(), __x);
 	else if (__new_size < size())
 	  _M_erase_at_end(this->_M_impl._M_start + __new_size);
       }
@@ -1185,7 +1227,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       resize(size_type __new_size, value_type __x = value_type())
       {
 	if (__new_size > size())
-	  _M_fill_insert(end(), __new_size - size(), __x);
+	  _M_fill_append(__new_size - size(), __x);
 	else if (__new_size < size())
 	  _M_erase_at_end(this->_M_impl._M_start + __new_size);
       }
@@ -1210,7 +1252,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	ptrdiff_t __dif = this->_M_impl._M_end_of_storage
 			  - this->_M_impl._M_start;
 	if (__dif < 0)
-	   __builtin_unreachable ();
+	   __builtin_unreachable();
 	return size_type(__dif);
       }
 
@@ -1648,7 +1690,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	}
 #endif
 
-#if __glibcxx_ranges_to_container // C++ >= 23
+#if __glibcxx_containers_ranges // C++ >= 23
       /**
        * @brief Insert a range into the vector.
        * @param __rg A range of values that are convertible to `value_type`.
@@ -1692,16 +1734,17 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 		  return;
 		}
 
-	      const size_type __len = _M_check_len(__n, "vector::append_range");
+	      const size_type __ask = _M_check_len(__n, "vector::append_range");
 
 	      pointer __old_start = this->_M_impl._M_start;
 	      pointer __old_finish = this->_M_impl._M_finish;
 
-	      allocator_type& __a = _M_get_Tp_allocator();
-	      const pointer __start = this->_M_allocate(__len);
+	      auto [__ptr, __got] = this->_M_allocate_at_least(__ask);
+	      const pointer __start = __ptr;
 	      const pointer __mid = __start + __sz;
 	      const pointer __back = __mid + __n;
-	      _Guard_alloc __guard(__start, __len, *this);
+	      _Guard_alloc __guard(__start, __got, *this);
+	      allocator_type& __a = _M_get_Tp_allocator();
 	      std::__uninitialized_copy_a(ranges::begin(__rg),
 					  ranges::end(__rg),
 					  __mid, __a);
@@ -1743,7 +1786,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	      // Finally, take ownership of new storage:
 	      this->_M_impl._M_start = __start;
 	      this->_M_impl._M_finish = __back;
-	      this->_M_impl._M_end_of_storage = __start + __len;
+	      this->_M_impl._M_end_of_storage = __start + __got;
 	    }
 	  else
 	    {
@@ -1769,7 +1812,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	      append_range(__r); // This will take the fast path above.
 	    }
 	}
-#endif // ranges_to_container
+#endif // containers_ranges
 
       /**
        *  @brief  Remove element at given position.
@@ -1899,20 +1942,45 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     protected:
       /**
        *  Memory expansion handler.  Uses the member allocation function to
-       *  obtain @a n bytes of memory, and then copies [first,last) into it.
+       *  obtain at least `n` objects worth of memory, copies `[first,last)`
+       *  into it, reports what was actually allocated.
        */
       template<typename _ForwardIterator>
 	_GLIBCXX20_CONSTEXPR
-	pointer
+	_Alloc_result
 	_M_allocate_and_copy(size_type __n,
 			     _ForwardIterator __first, _ForwardIterator __last)
 	{
-	  _Guard_alloc __guard(this->_M_allocate(__n), __n, *this);
+	  _Alloc_result __r = this->_M_allocate_at_least(__n);
+	  _Guard_alloc __guard(__r.__ptr, __r.__count, *this);
 	  std::__uninitialized_copy_a
 	    (__first, __last, __guard._M_storage, _M_get_Tp_allocator());
-	  return __guard._M_release();
+	  (void) __guard._M_release();
+	  return __r;
 	}
 
+      _GLIBCXX20_CONSTEXPR void
+      _M_replace_storage(pointer __start, pointer __end, size_type __cap)
+      {
+	  _GLIBCXX_ASAN_ANNOTATE_REINIT;
+	  _M_deallocate(this->_M_impl._M_start,
+	    this->_M_impl._M_end_of_storage - this->_M_impl._M_start);
+	  this->_M_impl._M_start = __start;
+	  this->_M_impl._M_finish = __end;
+	  this->_M_impl._M_end_of_storage = __start + __cap;
+      }
+
+      template<typename _ForwardIterator>
+	_GLIBCXX20_CONSTEXPR
+	void
+	_M_replace_with(size_type __n,
+		_ForwardIterator __first, _ForwardIterator __last)
+	{
+	  _Alloc_result __r = _M_allocate_and_copy(__n, __first, __last);
+	  std::_Destroy(this->_M_impl._M_start,
+	    this->_M_impl._M_finish, _M_get_Tp_allocator());
+	  _M_replace_storage(__r.__ptr, __r.__ptr + __n, __r.__count);
+	}
 
       // Internal constructor functions follow.
 
@@ -1926,6 +1994,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	_M_initialize_dispatch(_Integer __int_n, _Integer __value, __true_type)
 	{
 	  const size_type __n = static_cast<size_type>(__int_n);
+	  // NB this is c++98 code, so has no allocate_at_least.
 	  pointer __start =
 	    _M_allocate(_S_check_init_len(__n, _M_get_Tp_allocator()));
 	  this->_M_impl._M_start = __start;
@@ -1981,9 +2050,11 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	_M_range_initialize_n(_Iterator __first, _Sentinel __last,
 			      size_type __n)
 	{
-	  pointer __start = this->_M_impl._M_start =
-	    this->_M_allocate(_S_check_init_len(__n, _M_get_Tp_allocator()));
-	  this->_M_impl._M_end_of_storage = __start + __n;
+	  _Alloc_result __r = this->_M_allocate_at_least(
+	    _S_check_init_len(__n, _M_get_Tp_allocator()));
+	  pointer __start = __r.__ptr;
+	  this->_M_impl._M_start = this->_M_impl._M_finish = __start;
+	  this->_M_impl._M_end_of_storage = __start + __r.__count;
 	  this->_M_impl._M_finish
 	      = std::__uninitialized_copy_a(_GLIBCXX_MOVE(__first), __last,
 					    __start, _M_get_Tp_allocator());
@@ -2097,6 +2168,11 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       void
       _M_fill_insert(iterator __pos, size_type __n, const value_type& __x);
 
+      // Called by resize(n,x), and the _M_fill_insert(end(), n, x)
+      _GLIBCXX20_CONSTEXPR
+      void
+      _M_fill_append(size_type __n, const value_type& __x);
+
 #if __cplusplus >= 201103L
       // Called by resize(n).
       _GLIBCXX20_CONSTEXPR
@@ -2195,33 +2271,25 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       size_type
       _M_check_len(size_type __n, const char* __s) const
       {
-	if (max_size() - size() < __n)
+	const size_type __room = max_size() - size();
+	if (__room < __n)
 	  __throw_length_error(__N(__s));
 
-	const size_type __len = size() + (std::max)(size(), __n);
-	return (__len < size() || __len > max_size()) ? max_size() : __len;
+	if (__n < size())
+	  __n = size();  // Grow by (at least) doubling ...
+	if (__n > __room)
+	  __n = __room;  //  ... but only as much as will fit.
+	return size() + __n;
       }
 
       // Called by constructors to check initial size.
       static _GLIBCXX20_CONSTEXPR size_type
       _S_check_init_len(size_type __n, const allocator_type& __a)
       {
-	if (__n > _S_max_size(_Tp_alloc_type(__a)))
+	if (__n > _Base::_S_max_size(_Tp_alloc_type(__a)))
 	  __throw_length_error(
 	      __N("cannot create std::vector larger than max_size()"));
 	return __n;
-      }
-
-      static _GLIBCXX20_CONSTEXPR size_type
-      _S_max_size(const _Tp_alloc_type& __a) _GLIBCXX_NOEXCEPT
-      {
-	// std::distance(begin(), end()) cannot be greater than PTRDIFF_MAX,
-	// and realistically we can't store more than PTRDIFF_MAX/sizeof(T)
-	// (even if std::allocator_traits::max_size says we can).
-	const size_t __diffmax
-	  = __gnu_cxx::__numeric_traits<ptrdiff_t>::__max / sizeof(_Tp);
-	const size_t __allocmax = _Alloc_traits::max_size(__a);
-	return (std::min)(__diffmax, __allocmax);
       }
 
       // Internal erase functions follow.
@@ -2313,9 +2381,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     vector(_InputIterator, _InputIterator, _Allocator = _Allocator())
       -> vector<_ValT, _Allocator>;
 
-#if __glibcxx_ranges_to_container // C++ >= 23
+#if __glibcxx_containers_ranges // C++ >= 23
   template<ranges::input_range _Rg,
-	   typename _Alloc = allocator<ranges::range_value_t<_Rg>>>
+	   __allocator_like _Alloc = allocator<ranges::range_value_t<_Rg>>>
     vector(from_range_t, _Rg&&, _Alloc = _Alloc())
       -> vector<ranges::range_value_t<_Rg>, _Alloc>;
 #endif

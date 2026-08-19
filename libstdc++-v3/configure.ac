@@ -100,11 +100,12 @@ GLIBCXX_CONFIGURE
 
 # Libtool setup.
 if test "x${with_newlib}" != "xyes" &&
+    test "x${with_picolibc}" != "xyes" &&
     test "x${with_avrlibc}" != "xyes" &&
     test "x$with_headers" != "xno"; then
   AC_LIBTOOL_DLOPEN
 fi
-AM_PROG_LIBTOOL
+LT_INIT
 ACX_LT_HOST_FLAGS
 AC_SUBST(enable_shared)
 AC_SUBST(enable_static)
@@ -149,7 +150,7 @@ AC_SUBST(glibcxx_compiler_pic_flag)
 AC_SUBST(glibcxx_compiler_shared_flag)
 
 # Override the libtool's pic_flag and pic_mode.
-# Do this step after AM_PROG_LIBTOOL, but before AC_OUTPUT.
+# Do this step after LT_INIT, but before AC_OUTPUT.
 # NB: this impacts --with-pic and --without-pic.
 lt_prog_compiler_pic_CXX="$glibcxx_compiler_pic_flag $glibcxx_compiler_shared_flag"
 pic_mode='default'
@@ -158,7 +159,7 @@ pic_mode='default'
 postdeps_CXX=`echo " $postdeps_CXX " | sed 's, -lstdc++ ,,g'`
 
 # Possibly disable most of the library.
-## TODO: Consider skipping unncessary tests altogether in this case, rather
+## TODO: Consider skipping unnecessary tests altogether in this case, rather
 ## than just ignoring the results.  Faster /and/ more correct, win win.
 GLIBCXX_ENABLE_HOSTED
 
@@ -377,10 +378,10 @@ dnl # rather than hardcoding that information.
       tanhl tanl])
 
     # Support for iconv in newlib is configurable.
-    AC_TRY_COMPILE([#include <newlib.h>], [
+    AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#include <newlib.h>]], [[
       #ifndef _ICONV_ENABLED
       #error
-      #endif], [ac_newlib_iconv_enabled=yes], [ac_newlib_iconv_enabled=no])
+      #endif]])], [ac_newlib_iconv_enabled=yes], [ac_newlib_iconv_enabled=no])
     if test "$ac_newlib_iconv_enabled" = yes; then
       AC_DEFINE(HAVE_ICONV)
     fi
@@ -399,6 +400,8 @@ dnl # rather than hardcoding that information.
         AC_DEFINE(HAVE_ALIGNED_ALLOC)
         AC_DEFINE(HAVE_AT_QUICK_EXIT)
         AC_DEFINE(HAVE_LINK)
+        AC_DEFINE(HAVE_SYS_STAT_H)
+        AC_DEFINE(HAVE_SYS_TYPES_H)
         AC_DEFINE(HAVE_QUICK_EXIT)
         AC_DEFINE(HAVE_READLINK)
         AC_DEFINE(HAVE_SETENV)
@@ -406,7 +409,16 @@ dnl # rather than hardcoding that information.
         AC_DEFINE(HAVE_SOCKATMARK)
         AC_DEFINE(HAVE_STRERROR_L)
         AC_DEFINE(HAVE_SYMLINK)
+        AC_DEFINE(HAVE_S_ISREG)
         AC_DEFINE(HAVE_TRUNCATE)
+        AC_DEFINE(HAVE_UNISTD_H)
+        AC_DEFINE(HAVE_UNLINKAT)
+        AC_DEFINE(HAVE_USLEEP)
+        AC_DEFINE(_GLIBCXX_USE_CHMOD)
+        AC_DEFINE(_GLIBCXX_USE_MKDIR)
+        AC_DEFINE(_GLIBCXX_USE_CHDIR)
+        AC_DEFINE(_GLIBCXX_USE_GETCWD)
+        AC_DEFINE(_GLIBCXX_USE_UTIME)
         AC_DEFINE(HAVE_USLEEP)
 
         # These functions are defined in librtemscpu.  We don't use
@@ -417,6 +429,67 @@ dnl # rather than hardcoding that information.
         glibcxx_cv_mkdir=yes
         ;;
     esac
+  elif test "x${with_picolibc}" = "xyes"; then
+    os_include_dir="os/picolibc"
+    AC_DEFINE(HAVE_HYPOT)
+
+    # GLIBCXX_CHECK_STDLIB_SUPPORT
+    AC_DEFINE(HAVE_STRTOF)
+
+    AC_DEFINE(HAVE_ACOSF)
+    AC_DEFINE(HAVE_ASINF)
+    AC_DEFINE(HAVE_ATAN2F)
+    AC_DEFINE(HAVE_ATANF)
+    AC_DEFINE(HAVE_CEILF)
+    AC_DEFINE(HAVE_COSF)
+    AC_DEFINE(HAVE_COSHF)
+    AC_DEFINE(HAVE_EXPF)
+    AC_DEFINE(HAVE_FABSF)
+    AC_DEFINE(HAVE_FLOORF)
+    AC_DEFINE(HAVE_FMODF)
+    AC_DEFINE(HAVE_FREXPF)
+    AC_DEFINE(HAVE_HYPOTF)
+    AC_DEFINE(HAVE_LDEXPF)
+    AC_DEFINE(HAVE_LOG10F)
+    AC_DEFINE(HAVE_LOGF)
+    AC_DEFINE(HAVE_MODFF)
+    AC_DEFINE(HAVE_POWF)
+    AC_DEFINE(HAVE_SINF)
+    AC_DEFINE(HAVE_SINHF)
+    AC_DEFINE(HAVE_SQRTF)
+    AC_DEFINE(HAVE_TANF)
+    AC_DEFINE(HAVE_TANHF)
+
+    # Support for iconv in picolibc is configurable.
+    AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#include <picolibc.h>]], [[
+      #ifndef _ICONV_ENABLED
+      #error
+      #endif]])], [ac_picolibc_iconv_enabled=yes], [ac_picolibc_iconv_enabled=no])
+    if test "$ac_picolibc_iconv_enabled" = yes; then
+      AC_DEFINE(HAVE_ICONV)
+    fi
+
+    AC_DEFINE(HAVE_MEMALIGN)
+
+    # Check for TLS
+    AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#include <picolibc.h>]], [[
+      #ifndef __THREAD_LOCAL_STORAGE
+      #error
+      #endif]])], [ac_picolibc_tls_enabled=yes], [ac_picolibc_tls_enabled=no])
+    if test "$ac_picolibc_tls_enabled" = yes; then
+      AC_DEFINE(HAVE_TLS)
+    fi
+
+    AC_DEFINE(HAVE_ALIGNED_ALLOC)
+    AC_DEFINE(HAVE_AT_QUICK_EXIT)
+    AC_DEFINE(HAVE_LINK)
+    AC_DEFINE(HAVE_SYS_STAT_H)
+    AC_DEFINE(HAVE_SYS_TYPES_H)
+    AC_DEFINE(HAVE_SETENV)
+    AC_DEFINE(HAVE_STRERROR_L)
+    AC_DEFINE(HAVE_S_ISREG)
+    AC_DEFINE(HAVE_UNISTD_H)
+
   elif test "x$with_headers" != "xno"; then
     GLIBCXX_CROSSCONFIG
   fi
@@ -475,11 +548,11 @@ case "$target" in
   sparc*-*-linux* | \
   s390*-*-linux* | \
   alpha*-*-linux*)
-  AC_TRY_COMPILE(, [
+  AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[]], [[
 #if !defined __LONG_DOUBLE_128__ || (defined(__sparc__) && defined(__arch64__))
 #error no need for long double compatibility
 #endif
-  ], [ac_ldbl_compat=yes], [ac_ldbl_compat=no])
+  ]])], [ac_ldbl_compat=yes], [ac_ldbl_compat=no])
   if test "$ac_ldbl_compat" = yes; then
     AC_DEFINE([_GLIBCXX_LONG_DOUBLE_COMPAT],1,
 	      [Define if compatibility should be provided for -mlong-double-64.])
@@ -493,11 +566,11 @@ case "$target" in
                      [ac_ldbl_ieee128_in_libc=no])
         if test $ac_ldbl_ieee128_in_libc = yes; then
           # Determine which long double format is the compiler's default:
-          AC_TRY_COMPILE(, [
+          AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[]], [[
             #ifndef __LONG_DOUBLE_IEEE128__
             #error compiler defaults to ibm128
             #endif
-          ], [ac_ldbl_ieee128_default=yes], [ac_ldbl_ieee128_default=no])
+          ]])], [ac_ldbl_ieee128_default=yes], [ac_ldbl_ieee128_default=no])
           # Library objects should use default long double format.
           if test "$ac_ldbl_ieee128_default" = yes; then
             LONG_DOUBLE_128_FLAGS="-mno-gnu-attribute"
@@ -572,6 +645,9 @@ GLIBCXX_EMERGENCY_EH_ALLOC
 # For src/c++20/tzdb.cc defaults.
 GLIBCXX_ZONEINFO_DIR
 
+# For std::chrono formatters to use tm::tm_zone
+GLIBCXX_STRUCT_TM_TM_ZONE
+
 # For src/c++11/shared_ptr.cc alignment.
 GLIBCXX_CHECK_ALIGNAS_CACHELINE
 
@@ -584,7 +660,11 @@ GLIBCXX_CHECK_FILEBUF_NATIVE_HANDLES
 # For std::text_encoding
 GLIBCXX_CHECK_TEXT_ENCODING
 
-AC_STRUCT_TIMEZONE
+# For std::is_debugger_present
+GLIBCXX_CHECK_DEBUGGING
+
+# For std::print
+GLIBCXX_CHECK_STDIO_LOCKING
 
 # Define documentation rules conditionally.
 
@@ -722,7 +802,7 @@ AC_CONFIG_FILES([src/libbacktrace/backtrace-supported.h])
 # append it here.  Only modify Makefiles that have just been created.
 #
 # Also, get rid of this simulated-VPATH thing that automake does.
-AC_CONFIG_FILES(AC_FOREACH([DIR], glibcxx_SUBDIRS, [DIR/Makefile ]),
+AC_CONFIG_FILES(m4_foreach_w([DIR], glibcxx_SUBDIRS, [DIR/Makefile ]),
   [cat > vpsed$$ << \_EOF
 s!`test -f '$<' || echo '$(srcdir)/'`!!
 _EOF

@@ -1,6 +1,6 @@
 // { dg-do compile { target c++11 } }
 
-// Copyright (C) 2011-2025 Free Software Foundation, Inc.
+// Copyright (C) 2011-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -715,7 +715,11 @@ static_assert(!std::is_constructible<const DelnAny, Empty, B, D>::value,
 	      "Error");
 
 // Deleted members in unions with non-trivial members:
+#if __cpp_trivial_union >= 202502L
+static_assert(std::is_constructible<NontrivialUnion>::value, "Error");
+#else
 static_assert(!std::is_constructible<NontrivialUnion>::value, "Error");
+#endif
 static_assert(!std::is_constructible<NontrivialUnion,
 	      const NontrivialUnion&>::value, "Error");
 

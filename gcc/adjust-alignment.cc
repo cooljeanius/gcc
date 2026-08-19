@@ -1,5 +1,5 @@
 /* Adjust alignment for local variable.
-   Copyright (C) 2020-2025 Free Software Foundation, Inc.
+   Copyright (C) 2020-2026 Free Software Foundation, Inc.
    Contributed by Kito Cheng <kito.cheng@sifive.com>
 
 This file is part of GCC.
@@ -64,7 +64,7 @@ pass_adjust_alignment::execute (function *fun)
 
   FOR_EACH_LOCAL_DECL (fun, i, var)
     {
-      /* Don't adjust aligment for static local var and hard register var.  */
+      /* Don't adjust alignment for static local var and hard register var.  */
       if (is_global_var (var) || DECL_HARD_REGISTER (var))
 	continue;
 

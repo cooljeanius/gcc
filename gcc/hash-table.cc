@@ -1,5 +1,5 @@
 /* A type-safe hash table template.
-   Copyright (C) 2012-2025 Free Software Foundation, Inc.
+   Copyright (C) 2012-2026 Free Software Foundation, Inc.
    Contributed by Lawrence Crowl <crowl@google.com>
 
 This file is part of GCC.
@@ -99,17 +99,6 @@ hash_table_higher_prime_index (unsigned long n)
   gcc_assert (n <= prime_tab[low].prime);
 
   return low;
-}
-
-/* Return a reference to the lazily initialized hash-table usage description.
-   This needs to be a function rather than a simple global variable so that it
-   is reliably initialized before hash table variables in other files such as
-   sem_item::m_type_hash_cache.  */
-mem_alloc_description<mem_usage>&
-hash_table_usage ()
-{
-  static mem_alloc_description<mem_usage> usage;
-  return usage;
 }
 
 /* Support function for statistics.  */

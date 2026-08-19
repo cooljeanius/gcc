@@ -1,6 +1,6 @@
 ## Makefile for the C++11 sources of the GNU C++ Standard library.
 ##
-## Copyright (C) 1997-2025 Free Software Foundation, Inc.
+## Copyright (C) 1997-2026 Free Software Foundation, Inc.
 ##
 ## This file is part of the libstdc++ version 3 distribution.
 ## Process this file with automake to produce Makefile.in.
@@ -45,6 +45,26 @@ endif
 ## Keep this list sync'd with acinclude.m4:GLIBCXX_CONFIGURE.
 SUBDIRS = c++98 c++11 c++17 c++20 c++23 c++26 \
 	$(filesystem_dir) $(backtrace_dir) $(experimental_dir)
+
+# automake walks SUBDIRS with a shell loop, so the source directories are
+# built strictly one after another however large -j is.  They are independent
+# of each other apart from the convenience archives that src/experimental
+# links, so build them from make instead and let it overlap them.  automake's
+# own loop still runs afterwards, where it finds everything already built and
+# costs nothing, and the recursion for install, clean and the rest is
+# untouched.
+all-recursive: all-parallel-subdirs
+
+all-parallel-subdirs: $(SUBDIRS:%=all-in-%)
+
+all-in-%:
+	$(MAKE) $(AM_MAKEFLAGS) -C $* all
+
+# src/experimental links the convenience archives of these directories.
+all-in-experimental: all-in-c++23 all-in-c++26 \
+	$(filesystem_dir:%=all-in-%) $(backtrace_dir:%=all-in-%)
+
+.PHONY: all-parallel-subdirs
 
 # Cross compiler support.
 if VTV_CYGMIN
@@ -145,7 +165,8 @@ libstdc___la_LIBADD = \
 	$(top_builddir)/src/c++98/libc++98convenience.la \
 	$(top_builddir)/src/c++11/libc++11convenience.la \
 	$(top_builddir)/src/c++17/libc++17convenience.la \
-	$(top_builddir)/src/c++20/libc++20convenience.la
+	$(top_builddir)/src/c++20/libc++20convenience.la \
+	$(top_builddir)/src/c++23/libmodulesconvenience.la
 
 libstdc___la_DEPENDENCIES = \
 	${version_dep} \
@@ -153,7 +174,8 @@ libstdc___la_DEPENDENCIES = \
 	$(top_builddir)/src/c++98/libc++98convenience.la \
 	$(top_builddir)/src/c++11/libc++11convenience.la \
 	$(top_builddir)/src/c++17/libc++17convenience.la \
-	$(top_builddir)/src/c++20/libc++20convenience.la
+	$(top_builddir)/src/c++20/libc++20convenience.la \
+	$(top_builddir)/src/c++23/libmodulesconvenience.la
 
 if ENABLE_DARWIN_AT_RPATH
 libstdc___darwin_rpath = -Wc,-nodefaultrpaths

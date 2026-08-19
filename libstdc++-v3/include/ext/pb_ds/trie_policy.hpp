@@ -1,6 +1,6 @@
 // -*- C++ -*-
 
-// Copyright (C) 2005-2025 Free Software Foundation, Inc.
+// Copyright (C) 2005-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the terms
@@ -283,7 +283,7 @@ namespace __gnu_pbds
     inline iterator
     find_by_order(size_type);
 
-    /// Returns the order of a key within a sequence. For exapmle, if
+    /// Returns the order of a key within a sequence. For example, if
     /// r_key is the smallest key, this method will return 0; if r_key
     /// is a key between the smallest and next key, this method will
     /// return 1; if r_key is a key larger than the largest key, this
@@ -291,7 +291,7 @@ namespace __gnu_pbds
     inline size_type
     order_of_key(key_const_reference) const;
 
-    /// Returns the order of a prefix within a sequence. For exapmle,
+    /// Returns the order of a prefix within a sequence. For example,
     /// if [b, e] is the smallest prefix, this method will return 0; if
     /// r_key is a key between the smallest and next key, this method
     /// will return 1; if r_key is a key larger than the largest key,

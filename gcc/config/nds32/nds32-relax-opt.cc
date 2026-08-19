@@ -1,5 +1,5 @@
 /* relax-opt pass of Andes NDS32 cpu for GNU compiler
-   Copyright (C) 2012-2025 Free Software Foundation, Inc.
+   Copyright (C) 2012-2026 Free Software Foundation, Inc.
    Contributed by Andes Technology Corporation.
 
    This file is part of GCC.
@@ -193,7 +193,7 @@ nds32_plus_reg_load_store_p (rtx_insn *insn)
   return false;
 }
 
-/* Return true if x is const and the referance is ict symbol.  */
+/* Return true if x is const and the reference is ict symbol.  */
 static bool
 nds32_ict_const_p (rtx x)
 {

@@ -1,7 +1,7 @@
 /* Routines for saving various data types to a file stream.  This deals
    with various data types like strings, integers, enums, etc.
 
-   Copyright (C) 2011-2025 Free Software Foundation, Inc.
+   Copyright (C) 2011-2026 Free Software Foundation, Inc.
    Contributed by Diego Novillo <dnovillo@google.com>
 
 This file is part of GCC.
@@ -443,10 +443,14 @@ streamer_write_vrange (struct output_block *ob, const vrange &v)
       // Stream out bounds.
       if (kind != VR_NAN)
 	{
-	  REAL_VALUE_TYPE lb = r.lower_bound ();
-	  REAL_VALUE_TYPE ub = r.upper_bound ();
-	  streamer_write_real_value (ob, &lb);
-	  streamer_write_real_value (ob, &ub);
+	  streamer_write_uhwi (ob, r.num_pairs ());
+	  for (unsigned i = 0; i < r.num_pairs (); ++i)
+	    {
+	      REAL_VALUE_TYPE lb = r.lower_bound (i);
+	      REAL_VALUE_TYPE ub = r.upper_bound (i);
+	      streamer_write_real_value (ob, &lb);
+	      streamer_write_real_value (ob, &ub);
+	    }
 	}
       return;
     }

@@ -1,5 +1,5 @@
 /* Definition of RISC-V target for GNU compiler.
-   Copyright (C) 2011-2025 Free Software Foundation, Inc.
+   Copyright (C) 2011-2026 Free Software Foundation, Inc.
    Contributed by Andrew Waterman (andrew@sifive.com).
    Based on MIPS target for GNU compiler.
 
@@ -43,7 +43,7 @@ along with GCC; see the file COPYING3.  If not see
 #endif
 
 #ifndef RISCV_TUNE_STRING_DEFAULT
-#define RISCV_TUNE_STRING_DEFAULT "rocket"
+#define RISCV_TUNE_STRING_DEFAULT "generic"
 #endif
 
 extern const char *riscv_expand_arch (int argc, const char **argv);
@@ -60,23 +60,27 @@ extern const char *riscv_arch_help (int argc, const char **argv);
   { "riscv_arch_help", riscv_arch_help },
 
 /* Support for a compile-time default CPU, et cetera.  The rules are:
+   --with-cpu is ignored if -mcpu is specified.
    --with-arch is ignored if -march or -mcpu is specified.
    --with-abi is ignored if -mabi is specified.
    --with-tune is ignored if -mtune or -mcpu is specified.
    --with-isa-spec is ignored if -misa-spec is specified.
    --with-tls is ignored if -mtls-dialect is specified.
+   --with-cmodel is ignored if -mcmodel is specified.
 
-   But using default -march/-mtune value if -mcpu don't have valid option.  */
+   Uses default values if -mcpu doesn't have a valid option.  */
 #define OPTION_DEFAULT_SPECS \
+  {"cpu", "%{!mcpu=*:-mcpu=%(VALUE)}" },				\
   {"tune", "%{!mtune=*:"						\
 	   "  %{!mcpu=*:-mtune=%(VALUE)}"				\
 	   "  %{mcpu=*:-mtune=%:riscv_default_mtune(%* %(VALUE))}}" },	\
-  {"arch", "%{!march=*:"						\
+  {"arch", "%{!march=*|march=unset:"					\
 	   "  %{!mcpu=*:-march=%(VALUE)}"				\
 	   "  %{mcpu=*:%:riscv_expand_arch_from_cpu(%* %(VALUE))}}" },	\
   {"abi", "%{!mabi=*:-mabi=%(VALUE)}" },				\
   {"isa_spec", "%{!misa-spec=*:-misa-spec=%(VALUE)}" },			\
   {"tls", "%{!mtls-dialect=*:-mtls-dialect=%(VALUE)}"},         	\
+  {"cmodel", "%{!mcmodel=*:-mcmodel=%(VALUE)}" },			\
 
 #ifdef IN_LIBGCC2
 #undef TARGET_64BIT
@@ -111,13 +115,19 @@ extern const char *riscv_arch_help (int argc, const char **argv);
 %(subtarget_asm_spec)" \
 ASM_MISA_SPEC
 
+/* Drop all -march=* options before -march=unset.  */
+#define ARCH_UNSET_CLEANUP_SPECS  \
+  "%{march=unset:%<march=*} "  \
+
 #undef DRIVER_SELF_SPECS
 #define DRIVER_SELF_SPECS					\
+ARCH_UNSET_CLEANUP_SPECS \
 "%{march=help:%:riscv_arch_help()} "				\
 "%{print-supported-extensions:%:riscv_arch_help()} "		\
 "%{-print-supported-extensions:%:riscv_arch_help()} "		\
 "%{march=*:%:riscv_expand_arch(%*)} "				\
-"%{!march=*:%{mcpu=*:%:riscv_expand_arch_from_cpu(%*)}} "
+"%{!march=*|march=unset:%{mcpu=*:%:riscv_expand_arch_from_cpu(%*)}} " \
+"%{march=unset:%{!mcpu=*:%eAt least one valid -mcpu option must be given after -march=unset}} "
 
 #define LOCAL_LABEL_PREFIX	"."
 #define USER_LABEL_PREFIX	""
@@ -169,7 +179,8 @@ ASM_MISA_SPEC
 
 /* The `Q' extension is not yet supported.  */
 #define UNITS_PER_FP_REG (TARGET_DOUBLE_FLOAT ? 8 : 4)
-/* Size per vector register. For VLEN = 32, size = poly (4, 4). Otherwise, size = poly (8, 8). */
+/* Size per vector register.  For VLEN = 32, size = poly (4, 4).
+   Otherwise, size = poly (8, 8).  */
 #define UNITS_PER_V_REG (riscv_vector_chunks * riscv_bytes_per_vector_chunk)
 
 /* The largest type that can be passed in floating-point registers.  */
@@ -419,10 +430,11 @@ ASM_MISA_SPEC
 
 /* Registers used as temporaries in prologue/epilogue code.
 
-   The prologue registers mustn't conflict with any
-   incoming arguments, the static chain pointer, or the frame pointer.
-   The epilogue temporary mustn't conflict with the return registers,
-   the frame pointer, the EH stack adjustment, or the EH data registers. */
+   The prologue temporaries mustn't conflict with any incoming arguments,
+   the static chain pointer, or the frame pointer.
+   The epilogue temporaries mustn't conflict with the return registers,
+   the frame pointer, the EH stack adjustment, the EH data registers, or
+   any register in SIBCALL_REGS.  */
 
 #define RISCV_PROLOGUE_TEMP_REGNUM (GP_TEMP_FIRST)
 #define RISCV_PROLOGUE_TEMP(MODE) gen_rtx_REG (MODE, RISCV_PROLOGUE_TEMP_REGNUM)
@@ -561,7 +573,7 @@ enum reg_class
 #define REG_CLASS_CONTENTS						\
 {									\
   { 0x00000000, 0x00000000, 0x00000000, 0x00000000 },	/* NO_REGS */		\
-  { 0xf003fcc0, 0x00000000, 0x00000000, 0x00000000 },	/* SIBCALL_REGS */	\
+  { 0xf003fc80, 0x00000000, 0x00000000, 0x00000000 },	/* SIBCALL_REGS */	\
   { 0x0000ff00, 0x00000000, 0x00000000, 0x00000000 },	/* RVC_GR_REGS */	\
   { 0xffffffc0, 0x00000000, 0x00000000, 0x00000000 },	/* JALR_REGS */		\
   { 0xffffffff, 0x00000000, 0x00000000, 0x00000000 },	/* GR_REGS */		\
@@ -759,12 +771,6 @@ enum reg_class
 
 #define CALLEE_SAVED_FREG_NUMBER(REGNO) CALLEE_SAVED_REG_NUMBER (REGNO - 32)
 
-#define LIBCALL_VALUE(MODE) \
-  riscv_function_value (NULL_TREE, NULL_TREE, MODE)
-
-#define FUNCTION_VALUE(VALTYPE, FUNC) \
-  riscv_function_value (VALTYPE, FUNC, VOIDmode)
-
 /* 1 if N is a possible register number for function argument passing.
    We have no FP argument registers when soft-float.  */
 
@@ -779,12 +785,25 @@ enum riscv_cc
 {
   RISCV_CC_BASE = 0, /* Base standard RISC-V ABI.  */
   RISCV_CC_V, /* For functions that pass or return values in V registers.  */
+  /* For functions that pass or return values in V registers.  */
+  RISCV_CC_VLS_V_32,
+  RISCV_CC_VLS_V_64,
+  RISCV_CC_VLS_V_128,
+  RISCV_CC_VLS_V_256,
+  RISCV_CC_VLS_V_512,
+  RISCV_CC_VLS_V_1024,
+  RISCV_CC_VLS_V_2048,
+  RISCV_CC_VLS_V_4096,
+  RISCV_CC_VLS_V_8192,
+  RISCV_CC_VLS_V_16384,
   RISCV_CC_UNKNOWN
 };
 
 typedef struct {
   /* The calling convention that current function used.  */
   enum riscv_cc variant_cc;
+
+  unsigned int abi_vlen;
 
   /* Number of integer registers used so far, up to MAX_ARGS_IN_REGISTERS. */
   unsigned int num_gprs;
@@ -809,7 +828,7 @@ extern enum riscv_cc get_riscv_cc (const rtx use);
 
 #define INIT_CUMULATIVE_ARGS(CUM, FNTYPE, LIBNAME, INDIRECT, N_NAMED_ARGS) \
   riscv_init_cumulative_args (&(CUM), (FNTYPE), (LIBNAME), (INDIRECT),     \
-			(N_NAMED_ARGS) != -1)
+			(N_NAMED_ARGS) != -1, /* check_only */false)
 
 #define EPILOGUE_USES(REGNO)	riscv_epilogue_uses (REGNO)
 
@@ -886,9 +905,9 @@ extern enum riscv_cc get_riscv_cc (const rtx use);
 
 #undef ASM_OUTPUT_OPCODE
 #define ASM_OUTPUT_OPCODE(STREAM, PTR)	\
-  (PTR) = riscv_asm_output_opcode(STREAM, PTR)
+  (PTR) = riscv_asm_output_opcode (STREAM, PTR)
 
-#define JUMP_TABLES_IN_TEXT_SECTION 0
+#define JUMP_TABLES_IN_TEXT_SECTION (riscv_cmodel == CM_LARGE)
 #define CASE_VECTOR_MODE SImode
 #define CASE_VECTOR_PC_RELATIVE (riscv_cmodel != CM_MEDLOW)
 
@@ -956,7 +975,8 @@ extern enum riscv_cc get_riscv_cc (const rtx use);
 #define TARGET_SFB_ALU \
  ((riscv_microarchitecture == sifive_7) \
   || (riscv_microarchitecture == sifive_p400) \
-  || (riscv_microarchitecture == sifive_p600))
+  || (riscv_microarchitecture == sifive_p600) \
+  || (riscv_microarchitecture == andes_45_series))
 
 /* True if the target supports misaligned vector loads and stores.  */
 #define TARGET_VECTOR_MISALIGN_SUPPORTED \
@@ -1087,6 +1107,13 @@ extern enum riscv_cc get_riscv_cc (const rtx use);
   fprintf (STREAM, "\t.word\t%sL%d-%sL%d\n",				\
 	   LOCAL_LABEL_PREFIX, VALUE, LOCAL_LABEL_PREFIX, REL)
 
+/* For Zicfilp, labels that may be indirect jump targets need 4-byte
+   alignment so that the lpad instruction after them is properly aligned.  */
+#define LABEL_ALIGN(LABEL)						\
+  (TARGET_ZICFILP && LABEL_PRESERVE_P (LABEL)				\
+   ? ((align_labels.levels[0].log > 2) ? align_labels : align_flags (2)) \
+   : align_labels)
+
 /* This is how to output an assembler line
    that says to advance the location counter
    to a multiple of 2**LOG bytes.  */
@@ -1192,6 +1219,7 @@ extern bool riscv_user_wants_strict_align;
 extern unsigned riscv_stack_boundary;
 extern unsigned riscv_bytes_per_vector_chunk;
 extern poly_uint16 riscv_vector_chunks;
+extern bool riscv_registering_builtins;
 extern poly_int64 riscv_v_adjust_nunits (enum machine_mode, int);
 extern poly_int64 riscv_v_adjust_nunits (machine_mode, bool, int, int);
 extern poly_int64 riscv_v_adjust_precision (enum machine_mode, int);
@@ -1268,7 +1296,7 @@ extern void riscv_remove_unneeded_save_restore_calls (void);
 #define DWARF_REG_TO_UNWIND_COLUMN(REGNO) \
   ((REGNO == RISCV_DWARF_VLENB) ? (FIRST_PSEUDO_REGISTER + 1) : REGNO)
 
-/* Like s390, riscv also defined this macro for the vector comparision.  Then
+/* Like s390, riscv also defined this macro for the vector comparison.  Then
    the simplify-rtx relational_result will canonicalize the result to the
    CONST1_RTX for the simplification.  */
 #define VECTOR_STORE_FLAG_VALUE(MODE) CONSTM1_RTX (GET_MODE_INNER (MODE))
@@ -1312,11 +1340,22 @@ extern void riscv_remove_unneeded_save_restore_calls (void);
 		STACK_BOUNDARY / BITS_PER_UNIT)		   \
     : (crtl->outgoing_args_size + STACK_POINTER_OFFSET))
 
-/* According to the RISC-V C API, the arch string may contains ','. To avoid
+/* According to the RISC-V C API, the arch string may contain ','.  To avoid
    the conflict with the default separator, we choose '#' as the separator for
    the target attribute.  */
 #define TARGET_CLONES_ATTR_SEPARATOR '#'
 
 #define TARGET_HAS_FMV_TARGET_ATTRIBUTE 0
+
+/* mips pref valid offset range.  */
+#define MIPS_RISCV_9BIT_OFFSET_P(OFFSET) (IN_RANGE (OFFSET, 0, 511))
+
+/* mips pref cache hint type.  */
+typedef enum {
+    ICACHE_HINT = 0 << 3,
+    DCACHE_HINT = 1 << 3,
+    SCACHE_HINT = 2 << 3,
+    TCACHE_HINT = 3 << 3
+} CacheHint;
 
 #endif /* ! GCC_RISCV_H */

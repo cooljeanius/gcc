@@ -1,5 +1,5 @@
 /* ACLE support for AArch64 SVE (__ARM_FEATURE_SVE intrinsics)
-   Copyright (C) 2020-2025 Free Software Foundation, Inc.
+   Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
    This file is part of GCC.
 
@@ -20,11 +20,12 @@
 #ifndef GCC_AARCH64_SVE_BUILTINS_SVE2_H
 #define GCC_AARCH64_SVE_BUILTINS_SVE2_H
 
-namespace aarch64_sve
+namespace aarch64_acle
 {
   namespace functions
   {
     extern const function_base *const svaba;
+    extern const function_base *const svabal;
     extern const function_base *const svabalb;
     extern const function_base *const svabalt;
     extern const function_base *const svabdlb;
@@ -42,7 +43,11 @@ namespace aarch64_sve
     extern const function_base *const svaddwb;
     extern const function_base *const svaddwt;
     extern const function_base *const svaesd;
+    extern const function_base *const svaesd_lane;
+    extern const function_base *const svaesdimc_lane;
     extern const function_base *const svaese;
+    extern const function_base *const svaese_lane;
+    extern const function_base *const svaesemc_lane;
     extern const function_base *const svaesimc;
     extern const function_base *const svaesmc;
     extern const function_base *const svandqv;
@@ -64,10 +69,14 @@ namespace aarch64_sve
     extern const function_base *const svcvt1;
     extern const function_base *const svcvt2;
     extern const function_base *const svcvtl;
+    extern const function_base *const svcvtl1;
+    extern const function_base *const svcvtl2;
     extern const function_base *const svcvtlt;
     extern const function_base *const svcvtlt1;
     extern const function_base *const svcvtlt2;
     extern const function_base *const svcvtn;
+    extern const function_base *const svcvtt;
+    extern const function_base *const svcvtb;
     extern const function_base *const svcvtnb;
     extern const function_base *const svcvtnt;
     extern const function_base *const svcvtx;
@@ -78,11 +87,13 @@ namespace aarch64_sve
     extern const function_base *const sveorqv;
     extern const function_base *const sveortb;
     extern const function_base *const svextq;
+    extern const function_base *const svfirstp;
     extern const function_base *const svhadd;
     extern const function_base *const svhistcnt;
     extern const function_base *const svhistseg;
     extern const function_base *const svhsub;
     extern const function_base *const svhsubr;
+    extern const function_base *const svlastp;
     extern const function_base *const svld1q_gather;
     extern const function_base *const svld1udq;
     extern const function_base *const svld1uwq;
@@ -132,13 +143,16 @@ namespace aarch64_sve
     extern const function_base *const svnmatch;
     extern const function_base *const svorqv;
     extern const function_base *const svpext_lane;
+    extern const function_base *const svpmlal_pair;
     extern const function_base *const svpmov;
     extern const function_base *const svpmov_lane;
     extern const function_base *const svpmul;
+    extern const function_base *const svpmull_pair;
     extern const function_base *const svpmullb;
     extern const function_base *const svpmullb_pair;
     extern const function_base *const svpmullt;
     extern const function_base *const svpmullt_pair;
+    extern const function_base *const svpmlal_pair;
     extern const function_base *const svpsel_lane;
     extern const function_base *const svqabs;
     extern const function_base *const svqcadd;
@@ -171,6 +185,8 @@ namespace aarch64_sve
     extern const function_base *const svqrdmulh_lane;
     extern const function_base *const svqrshl;
     extern const function_base *const svqrshr;
+    extern const function_base *const svqshrn;
+    extern const function_base *const svqshrun;
     extern const function_base *const svqrshrn;
     extern const function_base *const svqrshrnb;
     extern const function_base *const svqrshrnt;
@@ -194,6 +210,10 @@ namespace aarch64_sve
     extern const function_base *const svrax1;
     extern const function_base *const svrevd;
     extern const function_base *const svrhadd;
+    extern const function_base *const svrint32x;
+    extern const function_base *const svrint32z;
+    extern const function_base *const svrint64x;
+    extern const function_base *const svrint64z;
     extern const function_base *const svrshl;
     extern const function_base *const svrshr;
     extern const function_base *const svrshrnb;

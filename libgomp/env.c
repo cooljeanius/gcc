@@ -1,4 +1,4 @@
-/* Copyright (C) 2005-2025 Free Software Foundation, Inc.
+/* Copyright (C) 2005-2026 Free Software Foundation, Inc.
    Contributed by Richard Henderson <rth@redhat.com>.
 
    This file is part of the GNU Offloading and Multi Processing Library
@@ -923,7 +923,7 @@ parse_places_var (const char *name, bool ignore)
   return false;
 }
 
-/* Parse the OMP_STACKSIZE environment varible.  Return true if one was
+/* Parse the OMP_STACKSIZE environment variable.  Return true if one was
    present and it was successfully parsed.  */
 
 static bool
@@ -983,7 +983,7 @@ parse_stacksize (const char *env, const char *val, void *const params[])
   return false;
 }
 
-/* Parse the GOMP_SPINCOUNT environment varible.  Return true if one was
+/* Parse the GOMP_SPINCOUNT environment variable.  Return true if one was
    present and it was successfully parsed.  */
 
 static bool
@@ -1131,7 +1131,7 @@ parse_wait_policy (const char *env, const char *val, void *const params[])
   return false;
 }
 
-/* Parse the GOMP_CPU_AFFINITY environment varible.  Return true if one was
+/* Parse the GOMP_CPU_AFFINITY environment variable.  Return true if one was
    present and it was successfully parsed.  */
 
 static bool
@@ -1227,9 +1227,15 @@ parse_affinity (bool ignore)
   return true;
 
  invalid:
-  gomp_error ("Invalid value for enviroment variable GOMP_CPU_AFFINITY");
+  gomp_error ("Invalid value for environment variable GOMP_CPU_AFFINITY");
   return false;
 }
+
+/* These are reminders to add new allocators to parse_allocator.  */
+_Static_assert (GOMP_OMP_PREDEF_ALLOC_MAX == omp_thread_mem_alloc);
+_Static_assert (GOMP_OMPX_PREDEF_ALLOC_MAX == ompx_gnu_managed_mem_alloc);
+_Static_assert (GOMP_OMP_PREDEF_MEMSPACE_MAX == omp_low_lat_mem_space);
+_Static_assert (GOMP_OMPX_PREDEF_MEMSPACE_MAX == ompx_gnu_managed_mem_space);
 
 /* Parse the OMP_ALLOCATOR environment variable and return the value.  */
 static bool
@@ -1249,12 +1255,12 @@ parse_allocator (const char *env, const char *val, void *const params[])
     ++val;
   if (0)
     ;
-#define C(v, m) \
+#define C(v, is_memspace) \
   else if (strncasecmp (val, #v, sizeof (#v) - 1) == 0)	\
     {							\
       *ret = v;						\
       val += sizeof (#v) - 1;				\
-      memspace = m;					\
+      memspace = is_memspace;					\
     }
   C (omp_default_mem_alloc, false)
   C (omp_large_cap_mem_alloc, false)
@@ -1265,11 +1271,13 @@ parse_allocator (const char *env, const char *val, void *const params[])
   C (omp_pteam_mem_alloc, false)
   C (omp_thread_mem_alloc, false)
   C (ompx_gnu_pinned_mem_alloc, false)
+  C (ompx_gnu_managed_mem_alloc, false)
   C (omp_default_mem_space, true)
   C (omp_large_cap_mem_space, true)
   C (omp_const_mem_space, true)
   C (omp_high_bw_mem_space, true)
   C (omp_low_lat_mem_space, true)
+  C (ompx_gnu_managed_mem_space, true)
 #undef C
   else
     goto invalid;
@@ -1769,7 +1777,7 @@ omp_display_env (int verbose)
 
   fputs ("\nOPENMP DISPLAY ENVIRONMENT BEGIN\n", stderr);
 
-  fputs ("  _OPENMP = '201511'\n", stderr);
+  fputs ("  _OPENMP = '202111'\n", stderr);
 
   fprintf (stderr, "  [host] OMP_DYNAMIC = '%s'\n",
 	   none->icvs.dyn_var ? "TRUE" : "FALSE");
@@ -2426,7 +2434,7 @@ initialize_env (void)
     {
       /* Using a rough estimation of 100000 spins per msec,
 	 use 5 min blocking for OMP_WAIT_POLICY=active,
-	 3 msec blocking when OMP_WAIT_POLICY is not specificed
+	 3 msec blocking when OMP_WAIT_POLICY is not specified
 	 and 0 when OMP_WAIT_POLICY=passive.
 	 Depending on the CPU speed, this can be e.g. 5 times longer
 	 or 5 times shorter.  */
@@ -2455,7 +2463,7 @@ initialize_env (void)
       const char *env = getenv ("GOMP_STACKSIZE");
       if (env != NULL
 	  && parse_stacksize ("GOMP_STACKSIZE", env,
-			      (void *[3]) {&none->icvs.stacksize}))
+			      (void *[]) {&none->icvs.stacksize}))
 	gomp_set_icv_flag (&none->flags, GOMP_ICV_STACKSIZE);
     }
   if (none != NULL && gomp_get_icv_flag (none->flags, GOMP_ICV_STACKSIZE))
@@ -2465,7 +2473,7 @@ initialize_env (void)
 
   if ((none != NULL && gomp_get_icv_flag (none->flags, GOMP_ICV_STACKSIZE))
       || (all != NULL && gomp_get_icv_flag (all->flags, GOMP_ICV_STACKSIZE))
-      || GOMP_DEFAULT_STACKSIZE)
+      || GOMP_DEFAULT_STACKSIZE != 0)
     {
       int err;
 
@@ -2502,4 +2510,19 @@ initialize_env (void)
 
   goacc_profiling_initialize ();
 }
+
+
+/* Stub implementation; to be moved to ompt.cc once implemented.  */
+
+ialias (omp_control_tool)
+
+omp_control_tool_result_t
+omp_control_tool (omp_control_tool_t command, int modifier, void *arg)
+{
+  (void) command;
+  (void) modifier;
+  (void) arg;
+  return omp_control_tool_notool;
+}
+
 #endif /* LIBGOMP_OFFLOADED_ONLY */

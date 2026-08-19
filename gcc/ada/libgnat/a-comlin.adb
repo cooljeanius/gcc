@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2025, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -31,7 +31,9 @@
 
 with System; use System;
 
-package body Ada.Command_Line is
+package body Ada.Command_Line with
+   Refined_State => (Program_Exit_Status => null)
+is
 
    function Arg_Count return Natural;
    pragma Import (C, Arg_Count, "__gnat_arg_count");

@@ -1,7 +1,7 @@
 /* This file contains the definitions of the cgraph_inline_failed_t
    enums used in GCC.
 
-   Copyright (C) 2008-2025 Free Software Foundation, Inc.
+   Copyright (C) 2008-2026 Free Software Foundation, Inc.
    Contributed by Doug Kwan <dougkwan@google.com>
 
 This file is part of GCC.
@@ -103,7 +103,7 @@ DEFCIFCODE(VARIADIC_THUNK, CIF_FINAL_ERROR,
 DEFCIFCODE(ORIGINALLY_INDIRECT_CALL, CIF_FINAL_NORMAL,
 	   N_("originally indirect function call not considered for inlining"))
 
-/* Ths edge represents an indirect edge with a yet-undetermined callee .  */
+/* The edge represents an indirect edge with a yet-undetermined callee .  */
 DEFCIFCODE(INDIRECT_UNKNOWN_CALL, CIF_FINAL_NORMAL,
 	   N_("indirect function call with a yet undetermined callee"))
 
@@ -139,6 +139,16 @@ DEFCIFCODE(EXTERN_LIVE_ONLY_STATIC, CIF_FINAL_ERROR,
 	   N_("function has external linkage when the user requests only"
 	      " inlining static for live patching"))
 
+/* We can't inline because callee must remain in translation unit
+   and caller is in another.  */
+DEFCIFCODE(MUST_REMAIN_IN_TU, CIF_FINAL_ERROR,
+	   N_("callee must remain in translation unit"))
+
 /* We proved that the call is unreachable.  */
 DEFCIFCODE(UNREACHABLE, CIF_FINAL_ERROR,
 	   N_("unreachable"))
+
+/* Callback edges cannot be inlined, as the corresponding call
+   statement does not exist.  */
+DEFCIFCODE(CALLBACK_EDGE, CIF_FINAL_ERROR,
+	   N_("callback edges cannot be inlined"))

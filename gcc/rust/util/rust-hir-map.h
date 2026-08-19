@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2025 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -264,6 +264,7 @@ public:
   void insert_lang_item_node (LangItem::Kind item_type, NodeId node_id);
   tl::optional<NodeId &> lookup_lang_item_node (LangItem::Kind item_type);
   NodeId get_lang_item_node (LangItem::Kind item_type);
+  std::string &get_lang_item_identifier (LangItem::Kind item_type);
 
   // This will fatal_error when this lang item does not exist
   DefId get_lang_item (LangItem::Kind item_type, location_t locus);
@@ -279,7 +280,7 @@ public:
   lookup_macro_invocation (AST::MacroInvocation &invoc);
 
   void insert_exported_macro (AST::MacroRulesDefinition &def);
-  std::vector<NodeId> &get_exported_macros ();
+  std::vector<AST::MacroRulesDefinition> get_exported_macros ();
 
   void insert_derive_proc_macros (CrateNum num,
 				  std::vector<CustomDeriveProcMacro> macros);
@@ -321,8 +322,12 @@ public:
   void insert_visibility (NodeId id, Privacy::ModuleVisibility visibility);
   tl::optional<Privacy::ModuleVisibility &> lookup_visibility (NodeId id);
 
-  void insert_ast_module (AST::Module *);
-  tl::optional<AST::Module *> lookup_ast_module (NodeId id);
+  void insert_glob_container (NodeId, AST::GlobContainer *);
+  tl::optional<AST::GlobContainer *> lookup_glob_container (NodeId id);
+
+  void insert_module_id (NodeId);
+  bool is_module (NodeId id);
+
   void insert_module_child (NodeId module, NodeId child);
   tl::optional<std::vector<NodeId> &> lookup_module_children (NodeId module);
 
@@ -350,6 +355,12 @@ public:
   void add_capture (NodeId closure, NodeId definition);
   tl::optional<std::vector<NodeId>> lookup_captures (NodeId closure);
 
+  void add_derived_node (NodeId node_id);
+  bool is_derived_node (NodeId node_id);
+
+  void add_function_node (NodeId node_id);
+  bool is_function_node (NodeId node_id);
+
 private:
   Mappings ();
 
@@ -359,6 +370,8 @@ private:
   NodeId nodeIdIter;
   std::map<CrateNum, LocalDefId> localIdIter;
   HIR::ImplBlock *builtinMarker;
+
+  AST::Crate *get_ast_crate_by_node_id_raw (NodeId id);
 
   std::map<NodeId, CrateNum> crate_node_to_crate_num;
   std::map<CrateNum, AST::Crate *> ast_crate_mappings;
@@ -408,7 +421,7 @@ private:
   std::map<NodeId, std::pair<AST::MacroRulesDefinition *, CrateNum>>
     macroMappings;
   std::map<NodeId, AST::MacroRulesDefinition *> macroInvocations;
-  std::vector<NodeId> exportedMacros;
+  std::vector<AST::MacroRulesDefinition> exportedMacros;
 
   // Procedural macros
   std::map<CrateNum, std::vector<CustomDeriveProcMacro>>
@@ -433,16 +446,23 @@ private:
   // Module tree maps
 
   // Maps each module's node id to a list of its children
+  // TODO: I think these are only used by the old resolved and can be removed
   std::map<NodeId, std::vector<NodeId>> module_child_map;
   std::map<NodeId, std::vector<Resolver::CanonicalPath>> module_child_items;
   std::map<NodeId, NodeId> child_to_parent_module_map;
-  std::map<NodeId, AST::Module *> modules;
+
+  std::map<NodeId, AST::GlobContainer *> glob_containers;
+  std::set<NodeId> module_ids;
 
   // AST mappings
   std::map<NodeId, AST::Item *> ast_item_mappings;
 
   // Closure AST NodeId -> vector of Definition node ids
   std::unordered_map<NodeId, std::vector<NodeId>> captures;
+
+  std::set<NodeId> derived_nodes;
+
+  std::set<NodeId> function_nodes;
 };
 
 } // namespace Analysis

@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1991-2025, Free Software Foundation, Inc.         --
+--          Copyright (C) 1991-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -25,10 +25,12 @@
 
 with Atree;    use Atree;
 with Err_Vars; use Err_Vars;
+with Errid;    use Errid;
 with Erroutc;  use Erroutc;
 with Namet;    use Namet;
 with Opt;      use Opt;
 with Output;   use Output;
+with Rident;   use Rident;
 with Scans;    use Scans;
 with Sinput;   use Sinput;
 with Stringt;  use Stringt;
@@ -63,6 +65,11 @@ package body Errutil is
    --  Flag is the location at which the error is to be posted, which is used
    --  to determine whether or not the # insertion needs a file name. The
    --  variables Msg_Buffer, Msglen and Is_Unconditional_Msg are set on return.
+
+   procedure Write_All_Errors_In_Verbose_Format (Source_Type : String);
+   --  Emit all error messages in the errors table using the verbose format
+   --  activated by -gnatv where the error line is also printed along with the
+   --  error msg.
 
    ------------------
    -- Error_Msg_AP --
@@ -185,9 +192,7 @@ package body Errutil is
       --  Immediate return if warning message and warnings are suppressed.
       --  Note that style messages are not warnings for this purpose.
 
-      if Error_Msg_Kind = Warning
-        and then Warnings_Suppressed (Sptr) /= No_String
-      then
+      if Error_Msg_Kind = Warning and then Warnings_Suppressed (Sptr) then
          Cur_Msg := No_Error_Msg;
          return;
       end if;
@@ -206,12 +211,19 @@ package body Errutil is
             Line                => Get_Physical_Line_Number (Sptr),
             Col                 => Get_Column_Number (Sptr),
             Compile_Time_Pragma => Is_Compile_Time_Msg,
-            Warn_Err            => Warning_Mode = Treat_As_Error,
+            Warn_Err            => (if Warning_Mode = Treat_As_Error
+                                    then From_Warn_As_Err
+                                    else None),
             Warn_Chr            => Warning_Msg_Char,
             Uncond              => Is_Unconditional_Msg,
             Msg_Cont            => Continuation,
             Deleted             => False,
-            Kind                => Error_Msg_Kind));
+            Kind                => Error_Msg_Kind,
+            Id                  => No_Diagnostic_Id,
+            Switch              => No_Switch_Id,
+            Restriction         => Not_A_Restriction_Id,
+            Locations           => No_Labeled_Span,
+            Fixes               => No_Fix));
 
       Cur_Msg := Errors.Last;
       Prev_Msg := No_Error_Msg;
@@ -309,47 +321,16 @@ package body Errutil is
    --------------
 
    procedure Finalize (Source_Type : String := "project") is
-      Cur      : Error_Msg_Id;
-      Nxt      : Error_Msg_Id;
-      E, F     : Error_Msg_Id;
+      E        : Error_Msg_Id;
       Err_Flag : Boolean;
 
    begin
-      --  Eliminate any duplicated error messages from the list. This is
-      --  done after the fact to avoid problems with Change_Error_Text.
-
-      Cur := First_Error_Msg;
-      while Cur /= No_Error_Msg loop
-         Nxt := Errors.Table (Cur).Next;
-
-         F := Nxt;
-         while F /= No_Error_Msg
-           and then Errors.Table (F).Sptr = Errors.Table (Cur).Sptr
-         loop
-            Check_Duplicate_Message (Cur, F);
-            F := Errors.Table (F).Next;
-         end loop;
-
-         Cur := Nxt;
-      end loop;
+      Delete_Duplicate_Errors;
 
       --  Brief Error mode
 
       if Brief_Output or (not Full_List and not Verbose_Mode) then
-         E := First_Error_Msg;
-         Set_Standard_Error;
-
-         while E /= No_Error_Msg loop
-            if not Errors.Table (E).Deleted then
-               Output_Msg_Location (E);
-               Output_Msg_Text (E);
-               Write_Eol;
-            end if;
-
-            E := Errors.Table (E).Next;
-         end loop;
-
-         Set_Standard_Output;
+         Write_All_Errors_In_Brief_Format;
       end if;
 
       --  Full source listing case
@@ -395,19 +376,7 @@ package body Errutil is
       --  Verbose mode (error lines only with error flags)
 
       if Verbose_Mode then
-         E := First_Error_Msg;
-
-         --  Loop through error lines
-
-         while E /= No_Error_Msg loop
-            Write_Eol;
-            Output_Source_Line
-              (Errors.Table (E).Line,
-               Errors.Table (E).Sfile,
-               True,
-               Source_Type);
-            Output_Error_Msgs (E);
-         end loop;
+         Write_All_Errors_In_Verbose_Format (Source_Type);
       end if;
 
       --  Output error summary if verbose or full list mode
@@ -416,20 +385,7 @@ package body Errutil is
          Write_Error_Summary;
       end if;
 
-      if Maximum_Messages /= 0 then
-         if Warnings_Detected >= Maximum_Messages then
-            Set_Standard_Error;
-            Write_Line ("maximum number of warnings detected");
-
-            Warning_Mode := Suppress;
-         end if;
-
-         if Total_Errors_Detected >= Maximum_Messages then
-            Set_Standard_Error;
-            Write_Line ("fatal error: maximum errors reached");
-            Set_Standard_Output;
-         end if;
-      end if;
+      Write_Max_Errors;
 
       --  Even though Warning_Info_Messages are a subclass of warnings, they
       --  must not be treated as errors when -gnatwe is in effect.
@@ -635,5 +591,24 @@ package body Errutil is
 
       end loop;
    end Set_Msg_Text;
+
+   ----------------------------------------
+   -- Write_All_Errors_In_Verbose_Format --
+   ----------------------------------------
+
+   procedure Write_All_Errors_In_Verbose_Format (Source_Type : String) is
+      E : Error_Msg_Id;
+   begin
+      E := First_Error_Msg;
+
+      --  Loop through error lines
+
+      while E /= No_Error_Msg loop
+         Write_Eol;
+         Output_Source_Line
+           (Errors.Table (E).Line, Errors.Table (E).Sfile, True, Source_Type);
+         Output_Error_Msgs (E);
+      end loop;
+   end Write_All_Errors_In_Verbose_Format;
 
 end Errutil;

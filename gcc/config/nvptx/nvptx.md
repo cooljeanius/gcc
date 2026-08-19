@@ -1,5 +1,5 @@
 ;; Machine description for NVPTX.
-;; Copyright (C) 2014-2025 Free Software Foundation, Inc.
+;; Copyright (C) 2014-2026 Free Software Foundation, Inc.
 ;; Contributed by Bernd Schmidt <bernds@codesourcery.com>
 ;;
 ;; This file is part of GCC.
@@ -89,7 +89,7 @@
 
 ;; The nvptx operand predicates, in general, don't permit subregs and
 ;; only literal constants, which differ from the generic ones, which
-;; permit subregs and symbolc constants (as appropriate)
+;; permit subregs and symbolic constants (as appropriate)
 (define_predicate "nvptx_register_operand"
   (match_code "reg")
 {
@@ -1644,7 +1644,9 @@
   [(const_int 0)]
   ""
 {
-  sorry ("exception handling not supported");
+  if (!fake_exceptions)
+    sorry ("exception handling not supported");
+  DONE;
 })
 
 (define_expand "nonlocal_goto"

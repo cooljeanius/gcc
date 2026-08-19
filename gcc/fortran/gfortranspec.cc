@@ -1,5 +1,5 @@
 /* Specific flags and argument handling of the Fortran front-end.
-   Copyright (C) 1997-2025 Free Software Foundation, Inc.
+   Copyright (C) 1997-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -60,6 +60,10 @@ along with GCC; see the file COPYING3.  If not see
 
 #ifndef FORTRAN_LIBRARY
 #define FORTRAN_LIBRARY "gfortran"
+#endif
+
+#ifndef CAF_SHMEM_LIBRARY
+#define CAF_SHMEM_LIBRARY "caf_shmem"
 #endif
 
 /* Name of the spec file.  */
@@ -205,6 +209,9 @@ lang_specific_driver (struct cl_decoded_option **in_decoded_options,
   /* Whether we need to link statically.  */
   int static_linking = 0;
 
+  /* Whether -fcoarray=shared was given; triggers auto-link of -lcaf_shmem.  */
+  int need_caf_shmem = 0;
+
   /* The number of input and output files in the incoming arg list.  */
   int n_infiles = 0;
   int n_outfiles = 0;
@@ -272,13 +279,18 @@ lang_specific_driver (struct cl_decoded_option **in_decoded_options,
 	  ++n_outfiles;
 	  break;
 
+	case OPT_fcoarray_:
+	  if (decoded_options[i].value == GFC_FCOARRAY_SHARED)
+	    need_caf_shmem = 1;
+	  break;
+
 	case OPT_v:
 	  verbose = 1;
 	  break;
 
 	case OPT__version:
 	  printf ("GNU Fortran %s%s\n", pkgversion_string, version_string);
-	  printf ("Copyright %s 2025 Free Software Foundation, Inc.\n",
+	  printf ("Copyright %s 2026 Free Software Foundation, Inc.\n",
 		  _("(C)"));
 	  fputs (_("This is free software; see the source for copying conditions.  There is NO\n\
 warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n"),
@@ -349,6 +361,16 @@ warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n"
 	      saw_speclang = (strcmp (lang, "none") != 0);
 	    }
 
+	  /* -fcoarray=shared is a driver-level alias for -fcoarray=lib that
+	     also arranges for -lcaf_shmem to be linked automatically.  Pass
+	     -fcoarray=lib to cc1 so the frontend uses the library code path.  */
+	  if (decoded_options[i].opt_index == OPT_fcoarray_
+	      && decoded_options[i].value == GFC_FCOARRAY_SHARED)
+	    {
+	      append_option (OPT_fcoarray_, "lib", GFC_FCOARRAY_LIB);
+	      continue;
+	    }
+
 	  append_arg (&decoded_options[i]);
 
 	  continue;
@@ -403,6 +425,12 @@ warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n"
 	    append_option (OPT_l, MATH_LIBRARY, 1);
 	default:
 	  break;
+	}
+
+      if (need_caf_shmem)
+	{
+	  append_option (OPT_l, CAF_SHMEM_LIBRARY, 1);
+	  append_option (OPT_l, "pthread", 1);
 	}
     }
 

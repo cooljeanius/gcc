@@ -1,5 +1,5 @@
 /* C-compiler utilities for types and variables storage layout
-   Copyright (C) 1987-2025 Free Software Foundation, Inc.
+   Copyright (C) 1987-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -2180,7 +2180,7 @@ finish_bitfield_representative (tree repr, tree field)
       || GET_MODE_BITSIZE (mode) > maxbitsize
       || GET_MODE_BITSIZE (mode) > MAX_FIXED_MODE_SIZE)
     {
-      if (TREE_CODE (TREE_TYPE (field)) == BITINT_TYPE)
+      if (BITINT_TYPE_P (TREE_TYPE (field)))
 	{
 	  struct bitint_info info;
 	  unsigned prec = TYPE_PRECISION (TREE_TYPE (field));
@@ -2459,15 +2459,19 @@ layout_type (tree type)
     case BOOLEAN_TYPE:
     case INTEGER_TYPE:
     case ENUMERAL_TYPE:
-      {
-	scalar_int_mode mode
-	  = smallest_int_mode_for_size (TYPE_PRECISION (type)).require ();
-	SET_TYPE_MODE (type, mode);
-	TYPE_SIZE (type) = bitsize_int (GET_MODE_BITSIZE (mode));
-	/* Don't set TYPE_PRECISION here, as it may be set by a bitfield.  */
-	TYPE_SIZE_UNIT (type) = size_int (GET_MODE_SIZE (mode));
-	break;
-      }
+      if (TREE_CODE (type) != ENUMERAL_TYPE
+	  || TREE_TYPE (type) == NULL_TREE
+	  || TREE_CODE (TREE_TYPE (type)) != BITINT_TYPE)
+	{
+	  scalar_int_mode mode
+	    = smallest_int_mode_for_size (TYPE_PRECISION (type)).require ();
+	  SET_TYPE_MODE (type, mode);
+	  TYPE_SIZE (type) = bitsize_int (GET_MODE_BITSIZE (mode));
+	  /* Don't set TYPE_PRECISION here, as it may be set by a bitfield.  */
+	  TYPE_SIZE_UNIT (type) = size_int (GET_MODE_SIZE (mode));
+	  break;
+	}
+      /* FALLTHRU */
 
     case BITINT_TYPE:
       {
@@ -2558,7 +2562,7 @@ layout_type (tree type)
       TYPE_UNSIGNED (type) = TYPE_UNSIGNED (TREE_TYPE (type));
       if (TYPE_MODE (TREE_TYPE (type)) == BLKmode)
 	{
-	  gcc_checking_assert (TREE_CODE (TREE_TYPE (type)) == BITINT_TYPE);
+	  gcc_checking_assert (BITINT_TYPE_P (TREE_TYPE (type)));
 	  SET_TYPE_MODE (type, BLKmode);
 	  TYPE_SIZE (type)
 	    = int_const_binop (MULT_EXPR, TYPE_SIZE (TREE_TYPE (type)),
@@ -2591,16 +2595,21 @@ layout_type (tree type)
 	/* Several boolean vector elements may fit in a single unit.  */
 	if (VECTOR_BOOLEAN_TYPE_P (type)
 	    && type->type_common.mode != BLKmode)
-	  TYPE_SIZE_UNIT (type)
-	    = size_int (GET_MODE_SIZE (type->type_common.mode));
+	  {
+	    TYPE_SIZE_UNIT (type)
+	      = size_int (GET_MODE_SIZE (type->type_common.mode));
+	    TYPE_SIZE (type)
+	      = bitsize_int (GET_MODE_BITSIZE (type->type_common.mode));
+	  }
 	else
-	  TYPE_SIZE_UNIT (type) = int_const_binop (MULT_EXPR,
-						   TYPE_SIZE_UNIT (innertype),
-						   size_int (nunits));
-	TYPE_SIZE (type) = int_const_binop
-	  (MULT_EXPR,
-	   bits_from_bytes (TYPE_SIZE_UNIT (type)),
-	   bitsize_int (BITS_PER_UNIT));
+	  {
+	    TYPE_SIZE_UNIT (type)
+	      = size_int (GET_MODE_SIZE (SCALAR_TYPE_MODE (innertype))
+			  * nunits);
+	    TYPE_SIZE (type)
+	      = bitsize_int (GET_MODE_BITSIZE (SCALAR_TYPE_MODE (innertype))
+			     * nunits);
+	  }
 
 	/* For vector types, we do not default to the mode's alignment.
 	   Instead, query a target hook, defaulting to natural alignment.
@@ -3162,7 +3171,7 @@ bit_field_mode_iterator::prefer_smaller_modes ()
    decide which of the above modes should be used.  */
 
 bool
-get_best_mode (int bitsize, int bitpos,
+get_best_mode (HOST_WIDE_INT bitsize, HOST_WIDE_INT bitpos,
 	       poly_uint64 bitregion_start, poly_uint64 bitregion_end,
 	       unsigned int align,
 	       unsigned HOST_WIDE_INT largest_mode_bitsize, bool volatilep,

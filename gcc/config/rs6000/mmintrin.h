@@ -1,4 +1,4 @@
-/* Copyright (C) 2002-2025 Free Software Foundation, Inc.
+/* Copyright (C) 2002-2026 Free Software Foundation, Inc.
 
    This file is part of GCC.
 
@@ -47,7 +47,7 @@
 
    Most MMX intrinsic operations can be performed efficiently as
    C language 64-bit scalar operation or optimized to use the newer
-   128-bit SSE/Altivec operations.  We recomend this for new
+   128-bit SSE/Altivec operations.  We recommend this for new
    applications.  */
 #error "Please read comment above.  Use -DNO_WARN_X86_INTRINSICS to disable this error."
 #endif

@@ -1,5 +1,5 @@
 /* Header file for SSA dominator optimizations.
-   Copyright (C) 2013-2025 Free Software Foundation, Inc.
+   Copyright (C) 2013-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -340,7 +340,7 @@ avail_exprs_stack::lookup_avail_expr (gimple *stmt, bool insert, bool tbaa_p,
 	    && (ao_ref_init (&ref, gimple_assign_rhs1 (stmt)),
 		ref.base_alias_set = ref.ref_alias_set = tbaa_p ? -1 : 0, true)
 	    && walk_non_aliased_vuses (&ref, vuse2, true, vuse_eq, NULL, NULL,
-				       limit, vuse1) != NULL))
+				       NULL, limit, vuse1) != NULL))
 	{
 	  if (insert)
 	    {
@@ -664,7 +664,7 @@ hashable_expr_equal_p (const struct hashable_expr *expr0,
 			       expr1->ops.ternary.opnd2, 0))
 	return false;
 
-      /* BIT_INSERT_EXPR has an implict operand as the type precision
+      /* BIT_INSERT_EXPR has an implicit operand as the type precision
          of op1.  Need to check to make sure they are the same.  */
       if (expr0->ops.ternary.op == BIT_INSERT_EXPR
 	  && TREE_CODE (expr0->ops.ternary.opnd1) == INTEGER_CST

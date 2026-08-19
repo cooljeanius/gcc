@@ -1,5 +1,5 @@
 /* Backend support for Fortran 95 basic types and derived types.
-   Copyright (C) 2002-2025 Free Software Foundation, Inc.
+   Copyright (C) 2002-2026 Free Software Foundation, Inc.
    Contributed by Paul Brook <paul@nowt.org>
    and Steven Bosscher <s.bosscher@student.tudelft.nl>
 
@@ -36,10 +36,11 @@ along with GCC; see the file COPYING3.  If not see
 #include "trans-types.h"
 #include "trans-const.h"
 #include "trans-array.h"
+#include "trans-descriptor.h"
 #include "dwarf2out.h"	/* For struct array_descr_info.  */
 #include "attribs.h"
 #include "alias.h"
-
+
 
 #if (GFC_MAX_DIMENSIONS < 10)
 #define GFC_RANK_DIGITS 1
@@ -54,6 +55,7 @@ along with GCC; see the file COPYING3.  If not see
 /* array of structs so we don't have to worry about xmalloc or free */
 CInteropKind_t c_interop_kinds_table[ISOCBINDING_NUMBER];
 
+tree gfc_array_dim_rank_type;
 tree gfc_array_index_type;
 tree gfc_array_range_type;
 tree gfc_character1_type_node;
@@ -163,7 +165,7 @@ tree get_dtype_type_node (void)
       suppress_warning (field);
       field = gfc_add_field_to_struct_1 (dtype_node,
 					 get_identifier ("rank"),
-					 signed_char_type_node, &dtype_chain);
+					 gfc_array_dim_rank_type, &dtype_chain);
       suppress_warning (field);
       field = gfc_add_field_to_struct_1 (dtype_node,
 					 get_identifier ("type"),
@@ -800,6 +802,9 @@ gfc_init_kinds (void)
 
   gfc_index_integer_kind = get_int_kind_from_name (PTRDIFF_TYPE);
 
+  if (flag_external_blas64 && gfc_index_integer_kind != gfc_integer_8_kind)
+    gfc_fatal_error ("-fexternal-blas64 requires a 64-bit system");
+
   /* Pick a kind the same size as the C "int" type.  */
   gfc_c_int_kind = INT_TYPE_SIZE / 8;
 
@@ -1132,6 +1137,7 @@ gfc_init_types (void)
     {
       type = gfc_build_uint_type (gfc_character_kinds[index].bit_size);
       type = build_qualified_type (type, TYPE_UNQUALIFIED);
+      TYPE_STRING_FLAG (type) = 1;
       snprintf (name_buf, sizeof(name_buf), "character(kind=%d)",
 		gfc_character_kinds[index].kind);
       PUSH_TYPE (name_buf, type);
@@ -1139,11 +1145,6 @@ gfc_init_types (void)
       gfc_pcharacter_types[index] = build_pointer_type (type);
     }
   gfc_character1_type_node = gfc_character_types[0];
-
-  /* The middle end only recognizes a single unsigned type.  For
-     compatibility of existing test cases, let's just use the
-     character type.  The reader of tree dumps is expected to be able
-     to deal with this.  */
 
   if (flag_unsigned)
     {
@@ -1159,18 +1160,26 @@ gfc_init_types (void)
 		  break;
 		}
 	    }
-	  if (index_char > 0)
+	  if (index_char > -1)
 	    {
-	      gfc_unsigned_types[index] = gfc_character_types[index_char];
+	      type = gfc_character_types[index_char];
+	      if (TYPE_STRING_FLAG (type))
+		{
+		  type = build_distinct_type_copy (type);
+		  TYPE_CANONICAL (type)
+		    = TYPE_CANONICAL (gfc_character_types[index_char]);
+		}
+	      else
+		type = build_variant_type_copy (type);
+	      TYPE_NAME (type) = NULL_TREE;
+	      TYPE_STRING_FLAG (type) = 0;
 	    }
 	  else
-	    {
-	      type = gfc_build_unsigned_type (&gfc_unsigned_kinds[index]);
-	      gfc_unsigned_types[index] = type;
-	      snprintf (name_buf, sizeof(name_buf), "unsigned(kind=%d)",
-			gfc_integer_kinds[index].kind);
-	      PUSH_TYPE (name_buf, type);
-	    }
+	    type = gfc_build_unsigned_type (&gfc_unsigned_kinds[index]);
+	  gfc_unsigned_types[index] = type;
+	  snprintf (name_buf, sizeof(name_buf), "unsigned(kind=%d)",
+		    gfc_integer_kinds[index].kind);
+	  PUSH_TYPE (name_buf, type);
 	}
     }
 
@@ -1217,6 +1226,12 @@ gfc_init_types (void)
   /* Character lengths are of type size_t, except signed.  */
   gfc_charlen_int_kind = get_int_kind_from_node (size_type_node);
   gfc_charlen_type_node = gfc_get_int_type (gfc_charlen_int_kind);
+
+  gfc_array_dim_rank_type
+		= build_range_type (signed_char_type_node,
+				    build_zero_cst (signed_char_type_node),
+				    build_int_cst (signed_char_type_node,
+						   GFC_MAX_DIMENSIONS));
 
   /* Fortran kind number of size_type_node (size_t). This is used for
      the _size member in vtables.  */
@@ -1274,7 +1289,7 @@ gfc_get_pchar_type (int kind)
   return index < 0 ? 0 : gfc_pcharacter_types[index];
 }
 
-
+
 /* Create a character type with the given kind and length.  */
 
 tree
@@ -1310,7 +1325,7 @@ gfc_get_character_type (int kind, gfc_charlen * cl)
 
   return gfc_get_character_type_len (kind, len);
 }
-
+
 /* Convert a basic type.  This will be an array for character types.  */
 
 tree
@@ -1373,9 +1388,6 @@ gfc_typenode_for_spec (gfc_typespec * spec, int codim)
     case BT_CLASS:
       basetype = gfc_get_derived_type (spec->u.derived, codim);
 
-      if (spec->type == BT_CLASS)
-	GFC_CLASS_TYPE_P (basetype) = 1;
-
       /* If we're dealing with either C_PTR or C_FUNPTR, we modified the
          type and kind to fit a (void *) and the basetype returned was a
          ptr_type_node.  We need to pass up this new information to the
@@ -1410,7 +1422,7 @@ gfc_typenode_for_spec (gfc_typespec * spec, int codim)
     }
   return basetype;
 }
-
+
 /* Build an INT_CST for constant expressions, otherwise return NULL_TREE.  */
 
 static tree
@@ -1423,7 +1435,7 @@ gfc_conv_array_bound (gfc_expr * expr)
   /* Otherwise return NULL.  */
   return NULL_TREE;
 }
-
+
 /* Return the type of an element of the array.  Note that scalar coarrays
    are special.  In particular, for GFC_ARRAY_TYPE_P, the original argument
    (with POINTER_TYPE stripped) is returned.  */
@@ -1463,7 +1475,7 @@ gfc_get_element_type (tree type)
 
   return element;
 }
-
+
 /* Build an array.  This function is called from gfc_sym_type().
    Actually returns array descriptor type.
 
@@ -1643,7 +1655,7 @@ gfc_build_array_type (tree type, gfc_array_spec * as,
 				    corank, lbound, ubound, 0, akind,
 				    restricted);
 }
-
+
 /* Returns the struct descriptor_dimension type.  */
 
 static tree
@@ -2276,7 +2288,7 @@ gfc_get_array_type_bounds (tree etype, int dimen, int codimen, tree * lbound,
 
   return fat_type;
 }
-
+
 /* Build a pointer type. This function is called from gfc_sym_type().  */
 
 static tree
@@ -2451,7 +2463,7 @@ gfc_nonrestricted_type (tree t)
   return ret;
 }
 
-
+
 /* Return the type for a symbol.  Special handling is required for character
    types to get the correct level of indirection.
    For functions return the return type.
@@ -2580,7 +2592,7 @@ gfc_sym_type (gfc_symbol * sym, bool is_bind_c)
 
   return (type);
 }
-
+
 /* Layout and output debug info for a record type.  */
 
 void
@@ -2595,7 +2607,7 @@ gfc_finish_type (tree type)
   rest_of_type_compilation (type, 1);
   rest_of_decl_compilation (decl, 1, 0);
 }
-
+
 /* Add a field of given NAME and TYPE to the context of a UNION_TYPE
    or RECORD_TYPE pointed to by CONTEXT.  The new field is chained
    to the end of the field list pointed to by *CHAIN.
@@ -2963,6 +2975,8 @@ gfc_get_derived_type (gfc_symbol * derived, int codimen)
       TYPE_NAME (typenode) = get_identifier (derived->name);
       TYPE_PACKED (typenode) = flag_pack_derived;
       derived->backend_decl = typenode;
+      if (derived->attr.is_class)
+	GFC_CLASS_TYPE_P (typenode) = 1;
     }
 
   if (derived->components
@@ -3125,15 +3139,6 @@ gfc_get_derived_type (gfc_symbol * derived, int codimen)
 	  field_type = build_pointer_type_for_mode (TREE_TYPE (field_type),
 						    ptr_mode, true);
 
-      /* Ensure that the CLASS language specific flag is set.  */
-      if (c->ts.type == BT_CLASS)
-	{
-	  if (POINTER_TYPE_P (field_type))
-	    GFC_CLASS_TYPE_P (TREE_TYPE (field_type)) = 1;
-	  else
-	    GFC_CLASS_TYPE_P (field_type) = 1;
-	}
-
       field = gfc_add_field_to_struct (typenode,
 				       get_identifier (c->name),
 				       field_type, &chain);
@@ -3184,7 +3189,7 @@ copy_derived_types:
     for (c = derived->components; c; c = c->next)
       {
 	/* Do not add a caf_token field for class container components.  */
-	if ((codimen || coarray_flag) && !c->attr.dimension
+	if (codimen && coarray_flag && !c->attr.dimension
 	    && !c->attr.codimension && (c->attr.allocatable || c->attr.pointer)
 	    && !derived->attr.is_class)
 	  {
@@ -3205,6 +3210,9 @@ copy_derived_types:
       if (dt->dt_next == gfc_derived_types)
 	break;
     }
+
+  if (derived->attr.is_class)
+    GFC_CLASS_TYPE_P (derived->backend_decl) = 1;
 
   return derived->backend_decl;
 }
@@ -3228,18 +3236,40 @@ gfc_return_by_reference (gfc_symbol * sym)
 
   /* Possibly return complex numbers by reference for g77 compatibility.
      We don't do this for calls to intrinsics (as the library uses the
-     -fno-f2c calling convention), nor for calls to functions which always
+     -fno-f2c calling convention) except for calls to specific wrappers
+     (_gfortran_f2c_specific_*), nor for calls to functions which always
      require an explicit interface, as no compatibility problems can
      arise there.  */
   if (flag_f2c && sym->ts.type == BT_COMPLEX
       && !sym->attr.pointer
       && !sym->attr.allocatable
-      && !sym->attr.intrinsic && !sym->attr.always_explicit)
+      && !sym->attr.always_explicit)
     return 1;
 
   return 0;
 }
-
+
+static tree
+gfc_get_entry_result_type (gfc_symbol *sym)
+{
+  tree type;
+
+  type = gfc_sym_type (sym->result);
+
+  /* Mixed ENTRY master unions must use the ABI return type of each entry.
+     Under -ff2c, default REAL entries return C double even though their
+     Fortran result symbol remains default REAL.  */
+  if (flag_f2c
+      && sym->ts.type == BT_REAL
+      && sym->ts.kind == gfc_default_real_kind
+      && !sym->attr.pointer
+      && !sym->attr.allocatable
+      && !sym->attr.always_explicit)
+    type = gfc_get_real_type (gfc_default_double_kind);
+
+  return type;
+}
+
 static tree
 gfc_get_mixed_entry_union (gfc_namespace *ns)
 {
@@ -3268,7 +3298,8 @@ gfc_get_mixed_entry_union (gfc_namespace *ns)
       if (el == el2)
 	gfc_add_field_to_struct_1 (type,
 				   get_identifier (el->sym->result->name),
-				   gfc_sym_type (el->sym->result), &chain);
+				   gfc_get_entry_result_type (el->sym),
+				   &chain);
     }
 
   /* Finish off the type.  */
@@ -3276,7 +3307,7 @@ gfc_get_mixed_entry_union (gfc_namespace *ns)
   TYPE_DECL_SUPPRESS_DEBUG (TYPE_STUB_DECL (type)) = 1;
   return type;
 }
-
+
 /* Create a "fn spec" based on the formal arguments;
    cf. create_function_arglist.  */
 
@@ -3433,6 +3464,7 @@ gfc_get_function_type (gfc_symbol * sym, gfc_actual_arglist *actual_args,
 	}
     }
   if (sym->backend_decl == error_mark_node && actual_args != NULL
+      && sym->ts.interface == NULL
       && sym->formal == NULL && (sym->attr.proc == PROC_EXTERNAL
 				 || sym->attr.proc == PROC_UNKNOWN))
     gfc_get_formal_from_actual_arglist (sym, actual_args);
@@ -3596,7 +3628,7 @@ arg_type_list_done:
 
   return type;
 }
-
+
 /* Language hooks for middle-end access to type nodes.  */
 
 /* Return an integer type with BITS bits of precision,

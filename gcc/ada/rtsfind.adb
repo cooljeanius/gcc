@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2025, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -27,13 +27,11 @@ with Atree;          use Atree;
 with Casing;         use Casing;
 with Csets;          use Csets;
 with Debug;          use Debug;
-with Einfo;          use Einfo;
 with Einfo.Entities; use Einfo.Entities;
 with Einfo.Utils;    use Einfo.Utils;
 with Elists;         use Elists;
 with Errout;         use Errout;
 with Exp_Dist;
-with Fname;          use Fname;
 with Fname.UF;       use Fname.UF;
 with Ghost;          use Ghost;
 with Lib;            use Lib;
@@ -47,10 +45,9 @@ with Restrict;       use Restrict;
 with Sem;            use Sem;
 with Sem_Aux;        use Sem_Aux;
 with Sem_Ch7;        use Sem_Ch7;
-with Sem_Ch12;        use Sem_Ch12;
+with Sem_Ch12;       use Sem_Ch12;
 with Sem_Dist;       use Sem_Dist;
 with Sem_Util;       use Sem_Util;
-with Sinfo;          use Sinfo;
 with Sinfo.Nodes;    use Sinfo.Nodes;
 with Sinfo.Utils;    use Sinfo.Utils;
 with Stand;          use Stand;
@@ -566,11 +563,11 @@ package body Rtsfind is
 
    subtype Ada_Numerics_Descendant is Ada_Descendant
      range Ada_Numerics_Big_Numbers ..
-           Ada_Numerics_Big_Numbers_Big_Integers_Ghost;
+           Ada_Numerics_Big_Numbers_Big_Integers;
 
    subtype Ada_Numerics_Big_Numbers_Descendant is Ada_Descendant
      range Ada_Numerics_Big_Numbers_Big_Integers ..
-           Ada_Numerics_Big_Numbers_Big_Integers_Ghost;
+           Ada_Numerics_Big_Numbers_Big_Integers;
 
    subtype Ada_Real_Time_Descendant is Ada_Descendant
      range Ada_Real_Time_Delays .. Ada_Real_Time_Timing_Events;
@@ -1030,8 +1027,7 @@ package body Rtsfind is
       U        : RT_Unit_Table_Record renames RT_Unit_Table (U_Id);
       Priv_Par : constant Elist_Id := New_Elmt_List;
       Lib_Unit : Node_Id;
-      Saved_GM  : constant Ghost_Mode_Type := Ghost_Mode;
-      Saved_IGR : constant Node_Id         := Ignored_Ghost_Region;
+      Saved_Ghost_Config : constant Ghost_Config_Type := Ghost_Config;
       Saved_ISMP : constant Boolean        :=
                      Ignore_SPARK_Mode_Pragmas_In_Instance;
       Saved_SM  : constant SPARK_Mode_Type := SPARK_Mode;
@@ -1099,7 +1095,7 @@ package body Rtsfind is
       procedure Restore_SPARK_Context is
       begin
          Ignore_SPARK_Mode_Pragmas_In_Instance := Saved_ISMP;
-         Restore_Ghost_Region (Saved_GM, Saved_IGR);
+         Restore_Ghost_Region (Saved_Ghost_Config);
          Restore_SPARK_Mode   (Saved_SM, Saved_SMP);
       end Restore_SPARK_Context;
 
@@ -1115,7 +1111,7 @@ package body Rtsfind is
       --  Provide a clean environment for the unit
 
       Ignore_SPARK_Mode_Pragmas_In_Instance := False;
-      Install_Ghost_Region (None, Empty);
+      Install_Ghost_Region (None, Empty, Empty);
       Install_SPARK_Mode   (None, Empty);
 
       --  Otherwise we need to load the unit, First build unit name from the
@@ -1288,33 +1284,51 @@ package body Rtsfind is
       --  for this unit to the current compilation unit.
 
       declare
-         LibUnit  : constant Node_Id         := Unit (Cunit (U.Unum));
-         Saved_GM : constant Ghost_Mode_Type := Ghost_Mode;
-         Clause   : Node_Id;
-         Withn    : Node_Id;
+         LibUnit : constant Node_Id := Unit (Cunit (U.Unum));
+         Clause  : Node_Id;
+         Withn   : Node_Id;
+         Orig    : Node_Id;
 
       begin
          Clause := U.First_Implicit_With;
          while Present (Clause) loop
-            if Parent (Clause) = Cunit (Current_Sem_Unit) then
+
+            if Parent (Clause) = Cunit (Current_Sem_Unit)
+              and then
+                --  Skip when there is a non-ignored with clause already
+                (not Is_Ignored_Ghost_Node (Clause)
+                 or else
+                   --  Skip if we are going to add a ignored with clause when
+                   --  we already have an ignored with clause.
+                   (Is_Ignored_Ghost_Node (Clause)
+                    and then Ghost_Config.Ghost_Mode = Ignore))
+            then
                return;
             end if;
+
+            --  RTE can be accessed after ignored ghost code has been removed.
+            --  Use the Orignal_Node to iterate over the implicit with clause
+            --  chain.
+
+            while Nkind (Clause) /= N_With_Clause loop
+               Orig := Original_Node (Clause);
+
+               --  Break out of an infinite loop if something has gone horribly
+               --  wrong.
+
+               exit when Orig = Clause;
+               Clause := Orig;
+            end loop;
+            pragma Assert (Nkind (Clause) = N_With_Clause);
 
             Clause := Next_Implicit_With (Clause);
          end loop;
 
-         --  We want to make sure that the "with" we create below isn't
-         --  marked as ignored ghost code because this list may be walked
-         --  later, after ignored ghost code is converted to a null
-         --  statement.
-
-         Ghost_Mode := None;
          Withn :=
            Make_With_Clause (Standard_Location,
              Name =>
                Make_Unit_Name
                  (U, Defining_Unit_Name (Specification (LibUnit))));
-         Ghost_Mode := Saved_GM;
 
          Set_Corresponding_Spec  (Withn, U.Entity);
          Set_First_Name          (Withn);
@@ -1326,7 +1340,13 @@ package body Rtsfind is
 
          Mark_Rewrite_Insertion (Withn);
          Append (Withn, Context_Items (Cunit (Current_Sem_Unit)));
-         Check_Restriction_No_Dependence (Name (Withn), Current_Error_Node);
+
+         --  We can add the dependency now for analysis but the with clause was
+         --  generated in an ignored context, meaning it will be removed later.
+
+         if Ghost_Config.Ghost_Mode /= Ignore then
+            Check_Restriction_No_Dependence (Name (Withn), Current_Error_Node);
+         end if;
       end;
    end Maybe_Add_With;
 
@@ -1531,12 +1551,16 @@ package body Rtsfind is
       Lib_Unit : Node_Id;
       Pkg_Ent  : Entity_Id;
 
-      Save_Front_End_Inlining : constant Boolean := Front_End_Inlining;
+      Saved_Front_End_Inlining : constant Boolean := Front_End_Inlining;
       --  This flag is used to disable front-end inlining when RTE is invoked.
       --  This prevents the analysis of other runtime bodies when a particular
-      --  spec is loaded through Rtsfind. This is both efficient, and prevents
-      --  spurious visibility conflicts between use-visible user entities, and
+      --  spec is loaded through Rtsfind. This is efficient, and also prevents
+      --  spurious visibility conflicts between use-visible user entities and
       --  entities in run-time packages.
+
+      Saved_In_Inlined_Body : constant Boolean := In_Inlined_Body;
+      --  This flag is used to preserve and reset In_Inlined_Body when RTE is
+      --  invoked.
 
    --  Start of processing for RTE
 
@@ -1560,6 +1584,7 @@ package body Rtsfind is
       end if;
 
       Front_End_Inlining := False;
+      In_Inlined_Body := False;
 
       --  Load unit if unit not previously loaded
 
@@ -1576,8 +1601,7 @@ package body Rtsfind is
          if Nkind (Lib_Unit) = N_Subprogram_Declaration then
             RE_Table (E) := U.Entity;
 
-         --  Otherwise we must have the package case. First check package
-         --  entity itself (e.g. RTE_Name for System.Interrupts.Name)
+         --  Otherwise we must have the package case
 
          else
             pragma Assert (Nkind (Lib_Unit) = N_Package_Declaration);
@@ -1627,12 +1651,16 @@ package body Rtsfind is
       --  is pulled within an ignored Ghost context because all this code will
       --  disappear.
 
-      if U_Id = System_Secondary_Stack and then Ghost_Mode /= Ignore then
+      if U_Id = System_Secondary_Stack
+        and then Ghost_Config.Ghost_Mode /= Ignore
+      then
          Sec_Stack_Used := True;
       end if;
 
       Maybe_Add_With (U);
-      Front_End_Inlining := Save_Front_End_Inlining;
+
+      Front_End_Inlining := Saved_Front_End_Inlining;
+      In_Inlined_Body := Saved_In_Inlined_Body;
 
       return Check_CRT (E, RE_Table (E));
    end RTE;
@@ -1682,21 +1710,24 @@ package body Rtsfind is
       Lib_Unit : Node_Id;
       Pkg_Ent  : Entity_Id;
 
-      --  The following flag is used to disable front-end inlining when
+      Saved_Front_End_Inlining : constant Boolean := Front_End_Inlining;
+      --  This flags is used to disable front-end inlining when
       --  RTE_Record_Component is invoked. This prevents the analysis of other
       --  runtime bodies when a particular spec is loaded through Rtsfind. This
-      --  is both efficient, and it prevents spurious visibility conflicts
-      --  between use-visible user entities, and entities in run-time packages.
+      --  is efficient, and also prevents spurious visibility conflicts between
+      --  use-visible user entities and entities in run-time packages.
 
-      Save_Front_End_Inlining : Boolean;
+      Saved_In_Inlined_Body : constant Boolean := In_Inlined_Body;
+      --  This flag is used to preserve and reset In_Inlined_Body when
+      --  RTE_Record_Component is invoked.
 
    begin
       --  Note: Contrary to subprogram RTE, there is no need to do any special
       --  management with package system.ads because it has no record type
       --  declarations.
 
-      Save_Front_End_Inlining := Front_End_Inlining;
-      Front_End_Inlining      := False;
+      Front_End_Inlining := False;
+      In_Inlined_Body := False;
 
       --  Load unit if unit not previously loaded
 
@@ -1735,7 +1766,9 @@ package body Rtsfind is
 
       Maybe_Add_With (U);
 
-      Front_End_Inlining := Save_Front_End_Inlining;
+      Front_End_Inlining := Saved_Front_End_Inlining;
+      In_Inlined_Body := Saved_In_Inlined_Body;
+
       return Check_CRT (E, Found_E);
    end RTE_Record_Component;
 

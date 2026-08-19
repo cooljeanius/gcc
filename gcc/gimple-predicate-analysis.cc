@@ -1,6 +1,6 @@
 /* Support for simple predicate analysis.
 
-   Copyright (C) 2001-2025 Free Software Foundation, Inc.
+   Copyright (C) 2001-2026 Free Software Foundation, Inc.
    Contributed by Xinliang David Li <davidxl@google.com>
    Generalized by Martin Sebor <msebor@redhat.com>
 
@@ -209,7 +209,7 @@ static bool
 find_matching_predicate_in_rest_chains (const pred_info &pred,
 					const pred_chain_union &preds)
 {
-  /* Trival case.  */
+  /* Trivial case.  */
   if (preds.length () == 1)
     return true;
 
@@ -243,7 +243,7 @@ find_matching_predicate_in_rest_chains (const pred_info &pred,
    is no predicate of the "FLAG_VAR CMP CONST" form, try to find one
    of that's the form "FLAG_VAR CMP FLAG_VAR" with value range info.
    PHI is the phi node whose incoming (interesting) paths need to be
-   examined.  On success, return the comparison code, set defintion
+   examined.  On success, return the comparison code, set definition
    gimple of FLAG_DEF and BOUNDARY_CST.  Otherwise return ERROR_MARK.
    I is the running iterator so the function can be called repeatedly
    to gather all candidates.  */
@@ -385,7 +385,8 @@ bool
 uninit_analysis::prune_phi_opnds (gphi *phi, unsigned opnds, gphi *flag_def,
 				  tree boundary_cst, tree_code cmp_code,
 				  hash_set<gphi *> *visited_phis,
-				  bitmap *visited_flag_phis)
+				  bitmap *visited_flag_phis,
+				  unsigned &max_attempts)
 {
   /* The Boolean predicate guarding the PHI definition.  Initialized
      lazily from PHI in the first call to is_use_guarded() and cached
@@ -397,6 +398,10 @@ uninit_analysis::prune_phi_opnds (gphi *phi, unsigned opnds, gphi *flag_def,
     {
       if (!MASK_TEST_BIT (opnds, i))
 	continue;
+
+      if (max_attempts == 0)
+	return false;
+      --max_attempts;
 
       tree flag_arg = gimple_phi_arg_def (flag_def, i);
       if (!is_gimple_constant (flag_arg))
@@ -432,7 +437,7 @@ uninit_analysis::prune_phi_opnds (gphi *phi, unsigned opnds, gphi *flag_def,
 	  unsigned opnds_arg_phi = m_eval.phi_arg_set (phi_arg_def);
 	  if (!prune_phi_opnds (phi_arg_def, opnds_arg_phi, flag_arg_def,
 				boundary_cst, cmp_code, visited_phis,
-				visited_flag_phis))
+				visited_flag_phis, max_attempts))
 	    return false;
 
 	  bitmap_clear_bit (*visited_flag_phis, SSA_NAME_VERSION (phi_result));
@@ -545,7 +550,7 @@ uninit_analysis::func_t::phi_arg_set (gphi *phi)
 }
 
 /* Determine if the predicate set of the use does not overlap with that
-   of the interesting paths.  The most common senario of guarded use is
+   of the interesting paths.  The most common scenario of guarded use is
    in Example 1:
      Example 1:
 	   if (some_cond)
@@ -634,9 +639,10 @@ uninit_analysis::overlap (gphi *phi, unsigned opnds, hash_set<gphi *> *visited,
 	 value that is in conflict with the use guard/predicate.  */
       bitmap visited_flag_phis = NULL;
       gphi *phi_def = as_a<gphi *> (flag_def);
+      unsigned max_attempts = param_uninit_max_prune_work;
       bool all_pruned = prune_phi_opnds (phi, opnds, phi_def, boundary_cst,
 					 cmp_code, visited,
-					 &visited_flag_phis);
+					 &visited_flag_phis, max_attempts);
       if (visited_flag_phis)
 	BITMAP_FREE (visited_flag_phis);
       if (all_pruned)
@@ -820,6 +826,42 @@ predicate::superset_of (const predicate &preds) const
   return true;
 }
 
+/* Remove from every chain in *THIS any (comparison) conjunct whose domain is
+   a superset of every predicate in EDGE_CONDS, i.e. a conjunct implied by all
+   of them.  Returns true if any conjunct was removed.  */
+
+bool
+predicate::drop_conjuncts_implied_by (const vec<pred_info> &edge_conds)
+{
+  if (edge_conds.is_empty ())
+    return false;
+
+  bool changed = false;
+  for (unsigned i = 0; i < m_preds.length (); i++)
+    {
+      pred_chain &chain = m_preds[i];
+      for (unsigned j = 0; j < chain.length (); )
+	{
+	  /* Only reason about comparison conjuncts: subset_of negates the
+	     code for inverted predicates, which is invalid for e.g. the
+	     BIT_AND_EXPR of an "x & mask" predicate.  */
+	  bool implied = TREE_CODE_CLASS (chain[j].cond_code) == tcc_comparison;
+	  for (unsigned k = 0; implied && k < edge_conds.length (); k++)
+	    if (!subset_of (edge_conds[k], chain[j]))
+	      implied = false;
+
+	  if (implied)
+	    {
+	      chain.ordered_remove (j);
+	      changed = true;
+	    }
+	  else
+	    j++;
+	}
+    }
+  return changed;
+}
+
 /* Create a predicate of the form OP != 0 and push it the work list CHAIN.  */
 
 static void
@@ -848,6 +890,22 @@ get_pred_info_from_cmp (const gimple *cmp_assign)
   pred.pred_rhs = gimple_assign_rhs2 (cmp_assign);
   pred.cond_code = gimple_assign_rhs_code (cmp_assign);
   pred.invert = false;
+  return pred;
+}
+
+/* Return a pred_info for the GIMPLE_COND ending E's source block.  The true
+   edge corresponds to the condition holding, so a false edge yields the
+   inverted predicate.  */
+
+static pred_info
+get_pred_info_from_cond_edge (edge e)
+{
+  gcond *cond = as_a<gcond *> (*gsi_last_bb (e->src));
+  pred_info pred;
+  pred.pred_lhs = gimple_cond_lhs (cond);
+  pred.pred_rhs = gimple_cond_rhs (cond);
+  pred.cond_code = gimple_cond_code (cond);
+  pred.invert = !!(e->flags & EDGE_FALSE_VALUE);
   return pred;
 }
 
@@ -1820,11 +1878,7 @@ predicate::init_from_control_deps (const vec<edge> *dep_chains,
 	      /* The true edge corresponds to the uninteresting condition.
 		 Add the negated predicate(s) for the edge to record
 		 the interesting condition.  */
-	      pred_info one_pred;
-	      one_pred.pred_lhs = gimple_cond_lhs (cond_stmt);
-	      one_pred.pred_rhs = gimple_cond_rhs (cond_stmt);
-	      one_pred.cond_code = gimple_cond_code (cond_stmt);
-	      one_pred.invert = !!(e->flags & EDGE_FALSE_VALUE);
+	      pred_info one_pred = get_pred_info_from_cond_edge (e);
 
 	      t_chain.safe_push (one_pred);
 
@@ -1974,7 +2028,7 @@ predicate::dump (FILE *f, gimple *stmt, const char *msg) const
 }
 
 /* Initialize USE_PREDS with the predicates of the control dependence chains
-   between the basic block DEF_BB that defines a variable of interst and
+   between the basic block DEF_BB that defines a variable of interest and
    USE_BB that uses the variable, respectively.  */
 
 bool
@@ -2235,6 +2289,44 @@ uninit_analysis::is_use_guarded (gimple *use_stmt, basic_block use_bb,
      USE_PREDS).  */
   if (m_phi_def_preds.superset_of (use_preds))
     return true;
+
+  /* The superset test fails when a guard that distinguishes the defined from
+     the undefined value sits on the PHI's maybe-undef incoming edge rather
+     than on the use's control-dependence chain -- e.g. after ifcombine merges
+     the conditions guarding the definition.  A conjunct of the definition
+     predicate that is implied by the incoming-edge condition of every
+     maybe-undef operand cannot make the use unsafe: when that conjunct is
+     false the maybe-undef edge is not taken either, so no undefined value
+     reaches the PHI.  Drop such conjuncts from a copy of the definition
+     predicate and retry; bail unless every maybe-undef operand arrives on a
+     simple conditional edge.  */
+  auto_vec<pred_info, 4> edge_conds;
+  unsigned nargs = gimple_phi_num_args (phi);
+  for (unsigned i = 0; i < nargs && i < m_eval.max_phi_args; i++)
+    {
+      if (!MASK_TEST_BIT (opnds, i))
+	continue;
+      edge e = gimple_phi_arg_edge (phi, i);
+      /* Walk up through forwarder blocks to the controlling conditional; a
+	 single-predecessor forwarder preserves the implication.  */
+      while (single_pred_p (e->src) && single_succ_p (e->src))
+	e = single_pred_edge (e->src);
+      if (EDGE_COUNT (e->src->succs) != 2
+	  || !safe_dyn_cast <gcond *> (*gsi_last_bb (e->src)))
+	{
+	  edge_conds.truncate (0);
+	  break;
+	}
+      edge_conds.safe_push (get_pred_info_from_cond_edge (e));
+    }
+
+  if (!edge_conds.is_empty ())
+    {
+      predicate relaxed (m_phi_def_preds);
+      if (relaxed.drop_conjuncts_implied_by (edge_conds)
+	  && relaxed.superset_of (use_preds))
+	return true;
+    }
 
   return false;
 }

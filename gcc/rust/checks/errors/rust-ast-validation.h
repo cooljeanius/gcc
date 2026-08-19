@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2025 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -41,6 +41,7 @@ public:
   virtual void visit (AST::Union &item);
   virtual void visit (AST::Function &function);
   virtual void visit (AST::Trait &trait);
+  virtual void visit (AST::SlicePattern &pattern);
 };
 
 } // namespace Rust

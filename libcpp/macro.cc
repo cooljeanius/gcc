@@ -1,5 +1,5 @@
 /* Part of CPP library.  (Macro and #define handling.)
-   Copyright (C) 1986-2025 Free Software Foundation, Inc.
+   Copyright (C) 1986-2026 Free Software Foundation, Inc.
    Written by Per Bothner, 1994.
    Based on CCCP program by Paul Rubin, June 1986
    Adapted to ANSI C, Richard Stallman, Jan 1987
@@ -582,7 +582,7 @@ _cpp_builtin_macro_text (cpp_reader *pfile, cpp_hashnode *node,
 	cpp_buffer *pbuffer = cpp_get_buffer (pfile);
 	if (pbuffer->timestamp == NULL)
 	  {
-	    /* Initialize timestamp value of the assotiated file. */
+	    /* Initialize timestamp value of the associated file. */
             struct _cpp_file *file = cpp_get_file (pbuffer);
 	    if (file)
 	      {
@@ -733,6 +733,9 @@ _cpp_builtin_macro_text (cpp_reader *pfile, cpp_hashnode *node,
 		   "%<__COUNTER__%> expanded inside directive with "
 		   "%<-fdirectives-only%>");
       number = pfile->counter++;
+      if (number == 0x80000000U)
+	cpp_error (pfile, CPP_DL_ERROR,
+		   "%<__COUNTER__%> expanded more than 2147483648 times");
       break;
 
     case BT_HAS_ATTRIBUTE:
@@ -1003,7 +1006,10 @@ stringify_arg (cpp_reader *pfile, const cpp_token **first, unsigned int count)
   /* Ignore the final \ of invalid string literals.  */
   if (backslash_count & 1)
     {
-      cpp_error (pfile, CPP_DL_WARNING,
+      cpp_error (pfile,
+		 CPP_OPTION (pfile, cplusplus)
+		 && CPP_OPTION (pfile, lang) >= CLK_GNUCXX26
+		 ? CPP_DL_PEDWARN : CPP_DL_WARNING,
 		 "invalid string literal, ignoring final %<\\%>");
       dest--;
     }
@@ -1068,7 +1074,7 @@ paste_tokens (cpp_reader *pfile, location_t location,
       /* Mandatory error for all apart from assembler.  */
       if (CPP_OPTION (pfile, lang) != CLK_ASM)
 	cpp_error_with_line (pfile, CPP_DL_ERROR, location, 0,
-			     "pasting \"%.*s\" and \"%.*s\" does not give "
+			     "pasting %<%.*s%> and %<%.*s%> does not give "
 			     "a valid preprocessing token",
 			     (int) (lhsend - buf), buf,
 			     (int) (end - rhsstart), rhsstart);
@@ -1794,7 +1800,7 @@ arg_token_ptr_at (const macro_arg *arg, size_t index,
 
   if (tokens_ptr == NULL)
     /* This can happen for e.g, an empty token argument to a
-       funtion-like macro.  */
+       function-like macro.  */
     return tokens_ptr;
 
   if (virt_location)
@@ -1989,6 +1995,7 @@ replace_args (cpp_reader *pfile, cpp_hashnode *node, cpp_macro *macro,
   location_t *virt_locs = NULL;
   unsigned int exp_count;
   const line_map_macro *map = NULL;
+  size_t map_idx = 0;
   int track_macro_exp;
 
   /* First, fully macro-expand arguments, calculating the number of
@@ -2099,6 +2106,7 @@ replace_args (cpp_reader *pfile, cpp_hashnode *node, cpp_macro *macro,
       map = linemap_enter_macro (pfile->line_table, node,
 				 expansion_point_loc,
 				 num_macro_tokens);
+      map_idx = map - pfile->line_table->info_macro.maps;
     }
   i = 0;
   vaopt_state vaopt_tracker (pfile, macro->variadic, &args[macro->paramc - 1]);
@@ -2220,6 +2228,11 @@ replace_args (cpp_reader *pfile, cpp_hashnode *node, cpp_macro *macro,
 					 NULL, 0);
 		}
 	    }
+	  else if (vostate == vaopt_state::DROP && map)
+	    /* For the DROP case vaopt_tracker.update (src) can call
+	       expand_arg and that can reallocate the maps, so need to
+	       update the map pointer.  */
+	    map = pfile->line_table->info_macro.maps + map_idx;
 	  continue;
 	}
 
@@ -2241,7 +2254,7 @@ replace_args (cpp_reader *pfile, cpp_hashnode *node, cpp_macro *macro,
       /* SRC is a macro parameter that we need to replace with its
 	 corresponding argument.  So at some point we'll need to
 	 iterate over the tokens of the macro argument and copy them
-	 into the "place" now holding the correspondig macro
+	 into the "place" now holding the corresponding macro
 	 parameter.  We are going to use the iterator type
 	 macro_argo_token_iter to handle that iterating.  The 'if'
 	 below is to initialize the iterator depending on the type of
@@ -2925,7 +2938,7 @@ reached_end_of_context (cpp_context *context)
 
 /* Consume the next token contained in the current context of PFILE,
    and return it in *TOKEN. It's "full location" is returned in
-   *LOCATION. If -ftrack-macro-location is in effeect, fFull location"
+   *LOCATION. If -ftrack-macro-location is in effect, fFull location"
    means the location encoding the locus of the token across macro
    expansion; otherwise it's just is the "normal" location of the
    token which (*TOKEN)->src_loc.  */
@@ -3003,7 +3016,7 @@ cpp_get_token_1 (cpp_reader *pfile, location_t *location)
   /* This token is a virtual token that either encodes a location
      related to macro expansion or a spelling location.  */
   location_t virt_loc = 0;
-  /* pfile->about_to_expand_macro_p can be overriden by indirect calls
+  /* pfile->about_to_expand_macro_p can be overridden by indirect calls
      to functions that push macro contexts.  So let's save it so that
      we can restore it when we are about to leave this routine.  */
   bool saved_about_to_expand_macro = pfile->about_to_expand_macro_p;
@@ -3154,7 +3167,7 @@ cpp_get_token_1 (cpp_reader *pfile, location_t *location)
       && !(result->type == CPP_PADDING || result->type == CPP_COMMENT)
       && !(15 & --pfile->state.directive_file_token))
     {
-      /* Do header-name frobbery.  Concatenate < ... > as approprate.
+      /* Do header-name frobbery.  Concatenate < ... > as appropriate.
 	 Do header search if needed, and finally drop the outer <> or
 	 "".  */
       pfile->state.angled_headers = false;
@@ -3408,7 +3421,14 @@ warn_of_redefinition (cpp_reader *pfile, cpp_hashnode *node,
 {
   /* Some redefinitions need to be warned about regardless.  */
   if (node->flags & NODE_WARN)
-    return true;
+    {
+      /* Ignore NODE_WARN on -Wkeyword-macro registered identifiers though
+	 or during cpp_define.  */
+      if (!CPP_OPTION (pfile, suppress_builtin_macro_warnings)
+	  && (!CPP_OPTION (pfile, cpp_warn_keyword_macro)
+	      || !cpp_keyword_p (node)))
+	return true;
+    }
 
   /* Suppress warnings for builtins that lack the NODE_WARN flag,
      unless Wbuiltin-macro-redefined.  */
@@ -3610,9 +3630,10 @@ parse_params (cpp_reader *pfile, unsigned *n_ptr, bool *variadic_ptr)
 	  if (!prev_ident)
 	    {
 	      /* An ISO bare ellipsis.  */
-	      _cpp_save_parameter (pfile, nparms,
-				   pfile->spec_nodes.n__VA_ARGS__,
-				   pfile->spec_nodes.n__VA_ARGS__);
+	      if (!_cpp_save_parameter (pfile, nparms,
+					pfile->spec_nodes.n__VA_ARGS__,
+					pfile->spec_nodes.n__VA_ARGS__))
+		goto out;
 	      nparms++;
 	      pfile->state.va_args_ok = 1;
 	      if (! CPP_OPTION (pfile, c99)
@@ -3696,7 +3717,7 @@ create_iso_definition (cpp_reader *pfile)
   pfile->cur_token = saved_cur_token;
 
   if (token->flags & PREV_WHITE)
-    /* Preceeded by space, must be part of expansion.  */;
+    /* Preceded by space, must be part of expansion.  */;
   else if (token->type == CPP_OPEN_PAREN)
     {
       /* An open-paren, get a parameter list.  */
@@ -3945,6 +3966,27 @@ _cpp_create_definition (cpp_reader *pfile, cpp_hashnode *node,
   if (name_loc)
     macro->line = name_loc;
 
+  /* Handle -Wkeyword-macro registered identifiers.  */
+  if (CPP_OPTION (pfile, cpp_warn_keyword_macro)
+      && !CPP_OPTION (pfile, suppress_builtin_macro_warnings)
+      && cpp_keyword_p (node))
+    {
+      if (macro->fun_like
+	  && CPP_OPTION (pfile, cplusplus)
+	  && (strcmp ((const char *) NODE_NAME (node), "likely") == 0
+	      || strcmp ((const char *) NODE_NAME (node), "unlikely") == 0))
+	/* likely and unlikely can be defined as function-like macros.  */;
+      else if (CPP_OPTION (pfile, cpp_pedantic)
+	       && CPP_OPTION (pfile, cplusplus)
+	       && CPP_OPTION (pfile, lang) >= CLK_GNUCXX26)
+	cpp_pedwarning_with_line (pfile, CPP_W_KEYWORD_MACRO, macro->line, 0,
+				  "keyword %qs defined as macro",
+				  NODE_NAME (node));
+      else
+	cpp_warning_with_line (pfile, CPP_W_KEYWORD_MACRO, macro->line, 0,
+			       "keyword %qs defined as macro",
+			       NODE_NAME (node));
+    }
   if (cpp_macro_p (node))
     {
       if (CPP_OPTION (pfile, warn_unused_macros))
@@ -3953,12 +3995,12 @@ _cpp_create_definition (cpp_reader *pfile, cpp_hashnode *node,
       if (warn_of_redefinition (pfile, node, macro))
 	{
           const enum cpp_warning_reason reason
-	    = (cpp_builtin_macro_p (node) && !(node->flags & NODE_WARN))
-	    ? CPP_W_BUILTIN_MACRO_REDEFINED : CPP_W_NONE;
+	    = (cpp_builtin_macro_p (node) && !(node->flags & NODE_WARN)
+	       ? CPP_W_BUILTIN_MACRO_REDEFINED : CPP_W_NONE);
 
 	  bool warned
-	    =  cpp_pedwarning_with_line (pfile, reason, macro->line, 0,
-					 "%qs redefined", NODE_NAME (node));
+	    = cpp_pedwarning_with_line (pfile, reason, macro->line, 0,
+					"%qs redefined", NODE_NAME (node));
 
 	  if (warned && cpp_user_macro_p (node))
 	    cpp_error_with_line (pfile, CPP_DL_NOTE, node->value.macro->line,
@@ -3967,6 +4009,11 @@ _cpp_create_definition (cpp_reader *pfile, cpp_hashnode *node,
 	}
       _cpp_free_definition (node);
     }
+  else if ((node->flags & NODE_WARN)
+	   && !CPP_OPTION (pfile, suppress_builtin_macro_warnings)
+	   && !cpp_keyword_p (node))
+    cpp_error_with_line (pfile, CPP_DL_WARNING, macro->line, 0,
+			 "%qs defined", NODE_NAME (node));
 
   /* Enter definition in hash table.  */
   node->type = NT_USER_MACRO;
@@ -4034,7 +4081,7 @@ get_deferred_or_lazy_macro (cpp_reader *pfile, cpp_hashnode *node,
 }
 
 /* Notify the use of NODE in a macro-aware context (i.e. expanding it,
-   or testing its existance).  Also applies any lazy definition.
+   or testing its existence).  Also applies any lazy definition.
    Return FALSE if the macro isn't really there.  */
 
 extern bool

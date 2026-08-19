@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2025 Symas Corporation
+ * Copyright (c) 2021-2026 Symas Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -30,10 +30,18 @@
 #ifndef GCOBOLIO_H_
 #define GCOBOLIO_H_
 
-#include <stdio.h>
+#include <cstdio>
+
 #include <map>
 #include <unordered_map>
 #include <vector>
+
+// RUNTIME structures *must* match the ones created in structs.c and initialized
+// and used in genapi.c.  It's actually not all that important to emphasize that
+// fact, since the compiled executable will crash and burn quickly if they don't
+// match precisely.
+
+// Note that it must match the same structure in the GDB-COBOL debugger
 
 typedef struct cblc_field_t
     {
@@ -48,13 +56,29 @@ typedef struct cblc_field_t
     struct cblc_field_t *parent;// This field's immediate parent field
     size_t occurs_lower;        // non-zero for a table
     size_t occurs_upper;        // non-zero for a table
-    size_t attr;                // See cbl_field_attr_t
+    unsigned long long attr;    // See cbl_field_attr_t
     signed char type;           // A one-byte copy of cbl_field_type_t
-    signed char level;          // This variable's level in the naming heirarchy
+    signed char level;          // This variable's level in the naming hierarchy
     signed char digits;         // Digits specified in PIC string; e.g. 5 for 99v999
     signed char rdigits;        // Digits to the right of the decimal point. 3 for 99v999
-    int    dummy;               // GCC seems to want an even number of 32-bit values
+    cbl_encoding_t encoding;    //
+    int            alphabet;    // Same as cbl_field_t::codeset::language
     } cblc_field_t;
+
+typedef struct cblc_referlet_t
+    {
+    cblc_field_t        *field;
+    size_t               offset;
+    size_t               size;
+    } cblc_referlet_t;
+
+typedef struct cblc_refer_t
+    {
+    cblc_field_t        *field;
+    size_t               offset;
+    size_t               size;
+    int                  flags;
+    } cblc_refer_t;
 
 /*
  * Implementation details
@@ -72,16 +96,31 @@ enum cblc_file_prior_op_t
   file_op_rewrite,
   file_op_delete,
   file_op_close,
+  file_op_remove,
   };
 
 /* end implementation details */
+
+enum cblc_file_flags_t
+    {
+    file_flag_none_e          = 0x00000,
+    file_flag_optional_e      = 0x00001,
+    file_flag_existed_e       = 0x00002,
+    file_name_quoted_e        = 0x00004,
+    file_flag_initialized_e   = 0x00008,
+    };
 
 typedef struct cblc_file_t
     {
     // This structure must match the code in structs.cc
     char                *name;             // This is the name of the structure; might be the name of an environment variable
+    size_t               symbol_table_index;  // of the related cbl_field_t structure
     char                *filename;         // The name of the file to be opened
     FILE                *file_pointer;     // The FILE *pointer
+    size_t               file_fpos;        // Calculated file position
+    char                *buffer;           // read buffer
+    size_t               buffer_pos;       // next character from the buffer
+    size_t               buffer_len;       // number of characters in the buffer
     cblc_field_t        *default_record;   // The record_area
     size_t               record_area_min;  // The size of the smallest 01 record in the FD
     size_t               record_area_max;  // The size of the largest  01 record in the FD
@@ -103,12 +142,16 @@ typedef struct cblc_file_t
     int                  errnum;           // most recent errno; can't reuse "errno" as the name
     file_status_t        io_status;        // See 2014 standard, section 9.1.12
     int                  padding;          // Actually a char
-    int                  delimiter;        // ends a record; defaults to '\n'.
+    uint32_t             delimiter;        // ends a record; defaults to '\n'.
+    int                  stride;           // Width of a character
     int                  flags;            // cblc_file_flags_t
-    int                  recent_char;      // This is the most recent char sent to the file
+    uint32_t             recent_char;      // This is the most recent char sent to the file
     int                  recent_key;
     cblc_file_prior_op_t prior_op;         // run-time type is INT
-    int                  dummy;
+    cbl_encoding_t       encoding;         // We assume size int
+    int                  alphabet;         // Actually cbl_encoding_t
     } cblc_file_t;
+
+#define FILE_BUFFER_SIZE (64 * 1024)
 
 #endif

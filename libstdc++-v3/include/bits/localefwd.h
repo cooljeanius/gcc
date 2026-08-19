@@ -1,6 +1,6 @@
 // <locale> Forward declarations -*- C++ -*-
 
-// Copyright (C) 1997-2025 Free Software Foundation, Inc.
+// Copyright (C) 1997-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -40,7 +40,7 @@
 
 #include <bits/c++config.h>
 #include <bits/c++locale.h>  // Defines __c_locale, config-specific include
-#include <iosfwd>            // For ostreambuf_iterator, istreambuf_iterator
+#include <bits/iosfwd.h>     // For ostreambuf_iterator, istreambuf_iterator
 #include <cctype>
 
 namespace std _GLIBCXX_VISIBILITY(default)

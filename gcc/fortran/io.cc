@@ -1,5 +1,5 @@
 /* Deal with I/O statements & related stuff.
-   Copyright (C) 2000-2025 Free Software Foundation, Inc.
+   Copyright (C) 2000-2026 Free Software Foundation, Inc.
    Contributed by Andy Vaught
 
 This file is part of GCC.
@@ -29,7 +29,7 @@ along with GCC; see the file COPYING3.  If not see
 
 gfc_st_label
 format_asterisk = {0, NULL, NULL, -1, ST_LABEL_FORMAT, ST_LABEL_FORMAT, NULL,
-		   0, {NULL, NULL}, NULL, 0};
+		   0, {NULL, {NULL}}, NULL, 0};
 
 typedef struct
 {
@@ -103,7 +103,7 @@ static const io_tag
 	tag_err		= {"ERR", " err =", " %l", BT_UNKNOWN},
 	tag_end		= {"END", " end =", " %l", BT_UNKNOWN},
 	tag_eor		= {"EOR", " eor =", " %l", BT_UNKNOWN},
-	tag_id		= {"ID", " id =", " %v", BT_INTEGER},
+	tag_id		= {"ID", " id =", " %e", BT_INTEGER},
 	tag_pending	= {"PENDING", " pending =", " %v", BT_LOGICAL},
 	tag_newunit	= {"NEWUNIT", " newunit =", " %v", BT_INTEGER},
 	tag_s_iqstream	= {"STREAM", " stream =", " %v", BT_CHARACTER};
@@ -118,11 +118,11 @@ static gfc_dt *current_dt;
 enum format_token
 {
   FMT_NONE, FMT_UNKNOWN, FMT_SIGNED_INT, FMT_ZERO, FMT_POSINT, FMT_PERIOD,
-  FMT_COMMA, FMT_COLON, FMT_SLASH, FMT_DOLLAR, FMT_LPAREN,
-  FMT_RPAREN, FMT_X, FMT_SIGN, FMT_BLANK, FMT_CHAR, FMT_P, FMT_IBOZ, FMT_F,
-  FMT_E, FMT_EN, FMT_ES, FMT_G, FMT_L, FMT_A, FMT_D, FMT_H, FMT_END,
-  FMT_ERROR, FMT_DC, FMT_DP, FMT_T, FMT_TR, FMT_TL, FMT_STAR, FMT_RC,
-  FMT_RD, FMT_RN, FMT_RP, FMT_RU, FMT_RZ, FMT_DT
+  FMT_COMMA, FMT_COLON, FMT_SLASH, FMT_DOLLAR, FMT_LPAREN, FMT_RPAREN, FMT_X,
+  FMT_SIGN, FMT_BLANK, FMT_CHAR, FMT_P, FMT_IBOZ, FMT_F, FMT_E, FMT_EN, FMT_ES,
+  FMT_G, FMT_L, FMT_A, FMT_D, FMT_H, FMT_END, FMT_ERROR, FMT_DC, FMT_DP, FMT_T,
+  FMT_TR, FMT_TL, FMT_STAR, FMT_RC, FMT_RD, FMT_RN, FMT_RP, FMT_RU, FMT_RZ,
+  FMT_DT, FMT_EX, FMT_LPS, FMT_LPZ, FMT_LZ
 };
 
 /* Local variables for checking format strings.  The saved_token is
@@ -256,7 +256,7 @@ format_lex (void)
 	{
 	  c = next_char_not_space ();
 	  if (ISDIGIT (c))
-	    value = 10 * value + c - '0';
+	    value = 10 * value + (c - '0');
 	}
       while (ISDIGIT (c));
 
@@ -287,7 +287,7 @@ format_lex (void)
 	  c = next_char_not_space ();
 	  if (ISDIGIT (c))
 	    {
-	      value = 10 * value + c - '0';
+	      value = 10 * value + (c - '0');
 	      if (c != '0')
 		zflag = 0;
 	    }
@@ -422,6 +422,8 @@ format_lex (void)
 	token = FMT_EN;
       else if (c == 'S')
         token = FMT_ES;
+      else if (c == 'X')
+	token = FMT_EX;
       else
 	{
 	  token = FMT_E;
@@ -439,6 +441,37 @@ format_lex (void)
       break;
 
     case 'L':
+      c = next_char_not_space ();
+      switch (c)
+	{
+	case 'P':
+	  c = next_char_not_space ();
+	  switch (c)
+	  {
+	    case 'S':
+	      token = FMT_LPS;
+	      break;
+
+	    case 'Z':
+	      token = FMT_LPZ;
+	      break;
+
+	    default:
+	      token = FMT_UNKNOWN;
+	      unget_char ();
+	      break;
+	  }
+	  break;
+
+	case 'Z':
+	  token = FMT_LZ;
+	  break;
+
+	default:
+	  token = FMT_UNKNOWN;
+	  unget_char ();
+	  break;
+	}
       token = FMT_L;
       break;
 
@@ -746,6 +779,7 @@ format_item_1:
     case FMT_E:
     case FMT_EN:
     case FMT_ES:
+    case FMT_EX:
     case FMT_G:
     case FMT_L:
     case FMT_A:
@@ -879,6 +913,7 @@ data_desc:
 
     case FMT_D:
     case FMT_E:
+    case FMT_EX:
     case FMT_G:
     case FMT_EN:
     case FMT_ES:
@@ -1129,13 +1164,16 @@ data_desc:
       break;
 
     case FMT_H:
-      if (!(gfc_option.allow_std & GFC_STD_GNU) && !inhibit_warnings)
+      if (!(gfc_option.allow_std & GFC_STD_LEGACY))
 	{
-	  if (mode != MODE_FORMAT)
-	    format_locus.nextc += format_string_pos;
-	  gfc_warning (0, "The H format specifier at %L is"
-		       " a Fortran 95 deleted feature", &format_locus);
+	  error = G_("The H format specifier at %L is a Fortran 95 deleted"
+		     " feature");
+	  goto syntax;
 	}
+      if (mode != MODE_FORMAT)
+	format_locus.nextc += format_string_pos;
+      gfc_warning (0, "The H format specifier at %L is"
+		   " a Fortran 95 deleted feature", &format_locus);
       if (mode == MODE_STRING)
 	{
 	  format_string += value;
@@ -1144,7 +1182,7 @@ data_desc:
 	}
       else
 	{
-	  while (repeat >0)
+	  while (repeat > 0)
 	   {
 	     next_char (INSTRING_WARN);
 	     repeat -- ;
@@ -1228,7 +1266,8 @@ between_desc:
     default:
       if (mode != MODE_FORMAT)
 	format_locus.nextc += format_string_pos - 1;
-      if (!gfc_notify_std (GFC_STD_GNU, "Missing comma at %L", &format_locus))
+      if (!gfc_notify_std (GFC_STD_LEGACY,
+	  "Missing comma in FORMAT string at %L", &format_locus))
 	return false;
       /* If we do not actually return a failure, we need to unwind this
          before the next round.  */
@@ -1290,7 +1329,8 @@ extension_optional_comma:
     default:
       if (mode != MODE_FORMAT)
 	format_locus.nextc += format_string_pos;
-      if (!gfc_notify_std (GFC_STD_GNU, "Missing comma at %L", &format_locus))
+      if (!gfc_notify_std (GFC_STD_LEGACY,
+	  "Missing comma in FORMAT string at %L", &format_locus))
 	return false;
       /* If we do not actually return a failure, we need to unwind this
          before the next round.  */
@@ -1755,6 +1795,7 @@ resolve_tag_format (gfc_expr *e)
 	  return false;
 	}
 
+      gfc_value_used_expr (e, VALUE_USED);
       return true;
     }
 
@@ -1795,6 +1836,7 @@ resolve_tag_format (gfc_expr *e)
 	}
     }
 
+  gfc_value_used_expr (e, VALUE_USED);
   return true;
 }
 
@@ -1864,6 +1906,12 @@ resolve_tag (const io_tag *tag, gfc_expr *e)
 	return false;
     }
 
+  if (tag == &tag_convert)
+    {
+      if (!gfc_notify_std (GFC_STD_GNU, "CONVERT tag at %L", &e->where))
+	return false;
+    }
+
   /* NEWUNIT, IOSTAT, SIZE and IOMSG are variable definition contexts.  */
   if (tag == &tag_newunit || tag == &tag_iostat
       || tag == &tag_size || tag == &tag_iomsg)
@@ -1873,13 +1921,11 @@ resolve_tag (const io_tag *tag, gfc_expr *e)
       sprintf (context, _("%s tag"), tag->name);
       if (!gfc_check_vardef_context (e, false, false, false, context))
 	return false;
-    }
 
-  if (tag == &tag_convert)
-    {
-      if (!gfc_notify_std (GFC_STD_GNU, "CONVERT tag at %L", &e->where))
-	return false;
+      gfc_expr_set_at (e, &e->where, VALUE_VARDEF);
     }
+  else
+    gfc_value_used_expr (e, VALUE_USED);
 
   return true;
 }
@@ -2177,7 +2223,7 @@ check_open_constraints (gfc_open *open, locus *where)
     } \
 }
 
-  bool warn = (open->err || open->iostat) ? true : false;
+  bool warn = open->err || open->iostat;
 
   /* Checks on the ACCESS specifier.  */
   if (open->access && open->access->expr_type == EXPR_CONSTANT)
@@ -2242,10 +2288,6 @@ check_open_constraints (gfc_open *open, locus *where)
   /* Checks on the BLANK specifier.  */
   if (open->blank)
     {
-      if (!gfc_notify_std (GFC_STD_F2003, "BLANK= at %L "
-			   "not allowed in Fortran 95", &open->blank->where))
-	return false;
-
       if (open->blank->expr_type == EXPR_CONSTANT)
 	{
 	  static const char *blank[] = { "ZERO", "NULL", NULL };
@@ -2708,7 +2750,7 @@ cleanup:
 static bool
 check_close_constraints (gfc_close *close, locus *where)
 {
-  bool warn = (close->iostat || close->err) ? true : false;
+  bool warn = close->iostat || close->err;
 
   if (close->unit == NULL)
     {
@@ -3110,6 +3152,7 @@ match_dt_element (io_kind k, gfc_dt *dt)
   char name[GFC_MAX_SYMBOL_LEN + 1];
   gfc_symbol *sym;
   match m;
+  locus where;
 
   if (gfc_match (" unit =") == MATCH_YES)
     {
@@ -3125,6 +3168,7 @@ match_dt_element (io_kind k, gfc_dt *dt)
 	return m;
     }
 
+  where = gfc_current_locus;
   if (gfc_match (" nml = %n", name) == MATCH_YES)
     {
       if (dt->namelist != NULL)
@@ -3144,6 +3188,7 @@ match_dt_element (io_kind k, gfc_dt *dt)
 	}
 
       dt->namelist = sym;
+      dt->nml_where = where;
       if (k == M_READ && check_namelist (sym))
 	return MATCH_ERROR;
 
@@ -3264,6 +3309,7 @@ gfc_resolve_dt (gfc_code *dt_code, gfc_dt *dt, locus *loc)
 {
   gfc_expr *e;
   io_kind k;
+  bool internal_unit;
 
   /* This is set in any case.  */
   gcc_assert (dt->dt_io_kind);
@@ -3312,6 +3358,7 @@ gfc_resolve_dt (gfc_code *dt_code, gfc_dt *dt, locus *loc)
       return false;
     }
 
+  internal_unit = false;
   if (gfc_resolve_expr (e)
       && (e->ts.type != BT_INTEGER
 	  && (e->ts.type != BT_CHARACTER || e->expr_type != EXPR_VARIABLE)))
@@ -3351,6 +3398,7 @@ gfc_resolve_dt (gfc_code *dt_code, gfc_dt *dt, locus *loc)
 
   if (e->ts.type == BT_CHARACTER)
     {
+      internal_unit = true;
       if (gfc_has_vector_index (e))
 	{
 	  gfc_error ("Internal unit with vector subscript at %L", &e->where);
@@ -3359,10 +3407,16 @@ gfc_resolve_dt (gfc_code *dt_code, gfc_dt *dt, locus *loc)
 
       /* If we are writing, make sure the internal unit can be changed.  */
       gcc_assert (k != M_PRINT);
-      if (k == M_WRITE
-	  && !gfc_check_vardef_context (e, false, false, false,
+      if (k == M_WRITE)
+	{
+	  if (!gfc_check_vardef_context (e, false, false, false,
 					_("internal unit in WRITE")))
-	return false;
+	    return false;
+
+	  gfc_expr_set_at (e, &e->where, VALUE_VARDEF);
+	}
+      else
+	gfc_value_used_expr (e, VALUE_USED);
     }
 
   if (e->rank && e->ts.type != BT_CHARACTER)
@@ -3379,6 +3433,9 @@ gfc_resolve_dt (gfc_code *dt_code, gfc_dt *dt, locus *loc)
       return false;
     }
 
+  if (!internal_unit)
+    gfc_value_used_expr (e, VALUE_USED);
+
   /* If we are reading and have a namelist, check that all namelist symbols
      can appear in a variable definition context.  */
   if (dt->namelist)
@@ -3389,9 +3446,10 @@ gfc_resolve_dt (gfc_code *dt_code, gfc_dt *dt, locus *loc)
 	  gfc_expr* e;
 	  bool t;
 
+	  e = gfc_get_variable_expr (gfc_find_sym_in_symtree (n->sym));
+
 	  if (k == M_READ)
 	    {
-	      e = gfc_get_variable_expr (gfc_find_sym_in_symtree (n->sym));
 	      t = gfc_check_vardef_context (e, false, false, false, NULL);
 	      gfc_free_expr (e);
 
@@ -3403,7 +3461,16 @@ gfc_resolve_dt (gfc_code *dt_code, gfc_dt *dt, locus *loc)
 			     dt->namelist->name, loc, n->sym->name);
 		  return false;
 		}
+	      gfc_value_set_at (n->sym, &dt->nml_where, VALUE_READ);
 	    }
+	  else if (k == M_WRITE || k == M_PRINT)
+	    {
+	      e->where = dt->nml_where;
+	      gfc_value_used_expr (e,  VALUE_USED);
+	      gfc_free_expr (e);
+	    }
+
+	  n->sym->attr.referenced = 1;
 
 	  t = dtio_procs_present (n->sym, k);
 
@@ -3775,7 +3842,7 @@ if (condition) \
   gfc_symbol *sym = NULL;
   bool warn, unformatted;
 
-  warn = (dt->err || dt->iostat) ? true : false;
+  warn = dt->err || dt->iostat;
   unformatted = dt->format_expr == NULL && dt->format_label == NULL
 		&& dt->namelist == NULL;
 
@@ -4218,7 +4285,21 @@ match_io (io_kind k)
       if (gfc_current_form == FORM_FREE)
 	{
 	  char c = gfc_peek_ascii_char ();
-	  if (c != ' ' && c != '*' && c != '\'' && c != '"')
+
+	  /* Issue a warning for an invalid tab in 'print<tab>*'.  After
+	     the warning is issued, consume any other whitespace and check
+	     that the next char is an *, ', or ".  */
+	  if (c == '\t')
+	    {
+	      gfc_gobble_whitespace ();
+	      c = gfc_peek_ascii_char ();
+	      if (c != '*' && c != '\'' && c != '"')
+		{
+		  m = MATCH_NO;
+		  goto cleanup;
+		}
+	    }
+	  else if (c != ' ' && c != '*' && c != '\'' && c != '"')
 	    {
 	      m = MATCH_NO;
 	      goto cleanup;
@@ -4332,6 +4413,7 @@ match_io (io_kind k)
 	      m = MATCH_ERROR;
 	      goto cleanup;
 	    }
+	  dt->nml_where = where;
 	  goto next;
 	}
     }
@@ -4550,7 +4632,7 @@ match_inquire_element (gfc_inquire *inquire)
   RETM m = match_vtag (&tag_convert, &inquire->convert);
   RETM m = match_out_tag (&tag_strm_out, &inquire->strm_pos);
   RETM m = match_vtag (&tag_pending, &inquire->pending);
-  RETM m = match_vtag (&tag_id, &inquire->id);
+  RETM m = match_etag (&tag_id, &inquire->id);
   RETM m = match_vtag (&tag_s_iqstream, &inquire->iqstream);
   RETM m = match_dec_vtag (&tag_v_share, &inquire->share);
   RETM m = match_dec_vtag (&tag_v_cc, &inquire->cc);
@@ -4726,6 +4808,7 @@ gfc_resolve_inquire (gfc_inquire *inquire)
       if (gfc_check_vardef_context ((expr), false, false, false, \
 				    context) == false) \
 	return false; \
+      gfc_expr_set_at (expr, &expr->where, VALUE_VARDEF);	\
     }
   INQUIRE_RESOLVE_TAG (&tag_iomsg, inquire->iomsg);
   INQUIRE_RESOLVE_TAG (&tag_iostat, inquire->iostat);

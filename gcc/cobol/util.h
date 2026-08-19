@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2025 Symas Corporation
+ * Copyright (c) 2021-2026 Symas Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -31,19 +31,41 @@
 #ifndef _UTIL_H_
 #define _UTIL_H_
 
-void cbl_message(int fd, const char *format_string, ...);
-void cbl_internal_error(const char *format_string, ...);
-
-void cbl_err(const char *format_string, ...);
-void cbl_errx(const char *format_string, ...);
-
 bool fisdigit(int c);
 bool fisspace(int c);
 int  ftolower(int c);
+int  ftoupper(int c);
 bool fisprint(int c);
 
-const char * cobol_filename_restore();
-const char * cobol_lineno_save();
+void cobol_set_pp_option(int opt);
+void cobol_trunc_binary( int cobol_trunc_binary );
+bool cobol_trunc_binary();
 
+void cobol_filename_restore();
+const char * cobol_lineno( int );
+int cobol_lineno(void);
+
+unsigned long gb4( size_t input );
+
+template <typename P>
+static inline const void *
+as_voidp( P p ) {
+  return static_cast<const void *>(p);
+}
+
+/*
+ * Functions that validate every PERFORM calls a unique reference.
+ */
+namespace match_proc {
+  typedef char cbl_name_t[64];
+
+  // Supply each target as it's mentioned.
+  void statement_compose( int iline, size_t isection,
+                          const cbl_name_t para, const cbl_name_t qual );
+  // Add PERFORM to statement list.
+  void statement_add();
+  // Verify all statements and report problems. 
+  bool statements_verify();
+}
 
 #endif

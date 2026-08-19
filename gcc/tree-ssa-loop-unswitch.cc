@@ -1,5 +1,5 @@
 /* Loop unswitching.
-   Copyright (C) 2004-2025 Free Software Foundation, Inc.
+   Copyright (C) 2004-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -26,7 +26,6 @@ along with GCC; see the file COPYING3.  If not see
 #include "tree-pass.h"
 #include "ssa.h"
 #include "fold-const.h"
-#include "gimplify.h"
 #include "tree-cfg.h"
 #include "tree-ssa.h"
 #include "tree-ssa-loop-niter.h"
@@ -117,7 +116,13 @@ struct unswitch_predicate
     false_range = true_range;
     if (!false_range.varying_p ()
 	&& !false_range.undefined_p ())
-      false_range.invert ();
+      {
+	if (!false_range.invert ())
+	  {
+	    true_range.set_varying (TREE_TYPE (lhs));
+	    false_range.set_varying (TREE_TYPE (lhs));
+	  }
+      }
     count = e->count ();
     num = predicates->length ();
     predicates->safe_push (this);
@@ -136,7 +141,8 @@ struct unswitch_predicate
     tree rhs = gimple_cond_rhs (stmt);
     enum tree_code code = gimple_cond_code (stmt);
     condition = build2 (code, boolean_type_node, lhs, rhs);
-    count = EDGE_SUCC (bb, 0)->count ().max (EDGE_SUCC (bb, 1)->count ());
+    count = profile_count::max_prefer_initialized (EDGE_SUCC (bb, 0)->count (),
+						   EDGE_SUCC (bb, 1)->count ());
     if (irange::supports_p (TREE_TYPE (lhs)))
       {
 	auto range_op = range_op_handler (code);
@@ -249,6 +255,21 @@ set_predicates_for_bb (basic_block bb, vec<unswitch_predicate *> predicates)
   bb_predicates->safe_push (predicates);
 }
 
+/* Estimate number of instructions in LOOP using eni_size_weights.  */
+
+static unsigned
+estimate_loop_insns (class loop *loop)
+{
+  unsigned insns = 0;
+  basic_block *body = get_loop_body (loop);
+  for (unsigned i = 0; i < loop->num_nodes; i++)
+    for (gimple_stmt_iterator gsi = gsi_start_bb (body[i]);
+	 !gsi_end_p (gsi); gsi_next (&gsi))
+      insns += estimate_num_insns (gsi_stmt (gsi), &eni_size_weights);
+  free (body);
+  return insns;
+}
+
 /* Initialize LOOP information reused during the unswitching pass.
    Return total number of instructions in the loop.  Adjusts LOOP to
    the outermost loop all candidates are invariant in.  */
@@ -261,13 +282,35 @@ init_loop_unswitch_info (class loop *&loop, unswitch_predicate *&hottest,
 
   basic_block *bbs = get_loop_body (loop);
 
-  /* Unswitch only nests with no sibling loops.  */
+  /* Unswitch only nests with no sibling loops.  Since predicates come from
+     the innermost loop, only the outer-loop bodies get duplicated by hoisting
+     the unswitching out; the innermost loop is shared in the cost estimate.  */
   class loop *outer_loop = loop;
   unsigned max_depth = param_max_unswitch_depth;
+  unsigned innermost_size = estimate_loop_insns (loop);
   while (loop_outer (outer_loop)->num != 0
-	 && !loop_outer (outer_loop)->inner->next
-	 && --max_depth != 0)
-    outer_loop = loop_outer (outer_loop);
+	 && !loop_outer (outer_loop)->inner->next)
+    {
+      if (--max_depth == 0)
+	break;
+
+      class loop *candidate = loop_outer (outer_loop);
+      unsigned candidate_size = estimate_loop_insns (candidate);
+
+      if (candidate_size - innermost_size
+	  > (unsigned) param_max_unswitch_insns)
+	{
+	  if (dump_enabled_p ())
+	    dump_printf_loc (MSG_NOTE, find_loop_location (loop),
+			     "Not unswitching outer loop, duplicated size %u "
+			     "exceeds max-unswitch-insns %u\n",
+			     candidate_size - innermost_size,
+			     (unsigned) param_max_unswitch_insns);
+	  break;
+	}
+
+      outer_loop = candidate;
+    }
   hottest = NULL;
   hottest_bb = NULL;
   /* Find all unswitching candidates in the innermost loop.  */
@@ -1458,7 +1501,8 @@ hoist_guard (class loop *loop, edge guard)
 
   if (skip_count > e->count ())
     {
-      fprintf (dump_file, "  Capping count; expect profile inconsistency\n");
+      if (dump_file && (dump_flags & TDF_DETAILS))
+	fprintf (dump_file, "  Capping count; expect profile inconsistency\n");
       skip_count = e->count ();
     }
   if (dump_enabled_p ())
@@ -1675,5 +1719,4 @@ make_pass_tree_unswitch (gcc::context *ctxt)
 {
   return new pass_tree_unswitch (ctxt);
 }
-
 

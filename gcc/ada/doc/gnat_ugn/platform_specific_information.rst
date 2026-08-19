@@ -292,7 +292,7 @@ This gets the effective user id and if it's not 0 (i.e. root), it raises
 Program_Error. Note that if you're running the code in a container, this may
 not be sufficient as you may have sufficient privilege on the container,
 but not on the host machine running the container, so check that you also
-have sufficient priviledge for running the container image.
+have sufficient privilege for running the container image.
 
 .. _A_GNU_Linux_debug_quirk:
 
@@ -586,7 +586,7 @@ least the following data::
    </assembly>
 
 Without the manifest file, the socket timeout will be overcorrected on
-these Windows Server versions and the actual time wil be 500
+these Windows Server versions and the actual time will be 500
 milliseconds shorter than what was set with
 ``GNAT.Sockets.Set_Socket_Option``.  Note that on Microsoft Windows
 versions where correction is necessary, there is no way to set a
@@ -1617,6 +1617,12 @@ You may specify any of the following switches to ``gnatdll``:
   ``file`` contains the name of an ALI or object file.
 
 
+  .. index:: -m (gnatdll)
+
+:switch:`-m`
+  Generate map file
+
+
   .. index:: -n (gnatdll)
 
 :switch:`-n`
@@ -2212,11 +2218,12 @@ Setting Stack Size from ``gnatlink``
 You can specify the program stack size at link time. On most versions
 of Windows, starting with XP, this is mostly useful to set the size of
 the main stack (environment task). The other task stacks are set with
-pragma Storage_Size or with the *gnatbind -d* command.
+pragma Storage_Size or with the *gnatbind -d* command. The specified size will
+become the reserved memory size of the underlying thread.
 
 Since very old versions of Windows (2000, NT4, etc.) don't allow setting the
-reserve size of individual tasks, the link-time stack size applies to all
-tasks, and pragma Storage_Size has no effect.
+reserve size of individual tasks, for those versions the link-time stack size
+applies to all tasks, and pragma Storage_Size has no effect.
 In particular, Stack Overflow checks are made against this
 link-time specified size.
 

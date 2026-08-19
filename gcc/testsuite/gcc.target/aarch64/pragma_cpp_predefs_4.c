@@ -70,6 +70,12 @@
 #ifdef __ARM_FEATURE_SME_I16I64
 #error Foo
 #endif
+#ifdef __ARM_FEATURE_SME_F8F16
+#error Foo
+#endif
+#ifdef __ARM_FEATURE_SME_F8F32
+#error Foo
+#endif
 #ifdef __ARM_FEATURE_SME_B16B16
 #error Foo
 #endif
@@ -102,6 +108,39 @@
 #error Foo
 #endif
 #ifndef __ARM_FEATURE_SVE_B16B16
+#error Foo
+#endif
+
+#pragma GCC target "+nothing+sve-bfscale"
+#ifndef __ARM_FEATURE_SVE_BFSCALE
+#error "__ARM_FEATURE_SVE_BFSCALE should be defined but isn't"
+#endif
+
+#pragma GCC target "+nothing+sve2+sme-f8f16"
+#ifndef __ARM_FEATURE_SME_F8F16
+#error Foo
+#endif
+#ifndef __ARM_FEATURE_SME
+#error Foo
+#endif
+#ifndef __ARM_FEATURE_SME2
+#error Foo
+#endif
+#ifndef __ARM_FEATURE_FP8
+#error Foo
+#endif
+
+#pragma GCC target "+nothing+sve2+sme-f8f32"
+#ifndef __ARM_FEATURE_SME_F8F32
+#error Foo
+#endif
+#ifndef __ARM_FEATURE_SME
+#error Foo
+#endif
+#ifndef __ARM_FEATURE_SME2
+#error Foo
+#endif
+#ifndef __ARM_FEATURE_FP8
 #error Foo
 #endif
 
@@ -176,6 +215,20 @@
 #error Foo
 #endif
 #ifndef __ARM_FEATURE_SME2p1
+#error Foo
+#endif
+
+#pragma GCC target "+nothing+sve2+sme2p2"
+#ifndef __ARM_FEATURE_SME
+#error Foo
+#endif
+#ifndef __ARM_FEATURE_SME2
+#error Foo
+#endif
+#ifndef __ARM_FEATURE_SME2p1
+#error Foo
+#endif
+#ifndef __ARM_FEATURE_SME2p2
 #error Foo
 #endif
 
@@ -313,5 +366,60 @@
 #error Foo
 #endif
 #ifndef __ARM_FEATURE_FP8DOT2
+#error Foo
+#endif
+
+#pragma GCC target "arch=armv9.4-a"
+#ifdef __ARM_FEATURE_FAMINMAX
+#error Foo
+#endif
+
+#pragma GCC target "arch=armv9.5-a"
+#ifndef __ARM_FEATURE_FAMINMAX
+#error Foo
+#endif
+
+#pragma GCC target "arch=armv8-a+faminmax"
+#ifndef __ARM_FEATURE_FAMINMAX
+#error Foo
+#endif
+
+#pragma GCC target "arch=armv8-a+sve2+ssve-fexpa"
+#ifndef __ARM_FEATURE_SSVE_FEXPA
+#error Foo
+#endif
+
+#pragma GCC target "arch=armv8.8-a"
+#ifdef __ARM_FEATURE_CSSC
+#error Foo
+#endif
+
+#pragma GCC target "arch=armv8.9-a"
+#ifndef __ARM_FEATURE_CSSC
+#error Foo
+#endif
+
+#pragma GCC target "arch=armv9.3-a"
+#ifdef __ARM_FEATURE_CSSC
+#error Foo
+#endif
+
+#pragma GCC target "arch=armv9.4-a"
+#ifndef __ARM_FEATURE_CSSC
+#error Foo
+#endif
+
+#pragma GCC target "arch=armv8-a+cssc"
+#ifndef __ARM_FEATURE_CSSC
+#error Foo
+#endif
+
+#pragma GCC target "+nothing+cssc"
+#ifndef __ARM_FEATURE_CSSC
+#error Foo
+#endif
+
+#pragma GCC target "arch=armv8.9-a+nocssc"
+#ifdef __ARM_FEATURE_CSSC
 #error Foo
 #endif

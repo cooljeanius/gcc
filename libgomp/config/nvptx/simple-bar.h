@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2025 Free Software Foundation, Inc.
+/* Copyright (C) 2015-2026 Free Software Foundation, Inc.
    Contributed by Alexander Monakov <amonakov@ispras.ru>
 
    This file is part of the GNU Offloading and Multi Processing Library
@@ -24,7 +24,7 @@
    <http://www.gnu.org/licenses/>.  */
 
 /* This is a simplified barrier that is suitable for thread pool
-   synchronizaton.  Only a subset of full barrier API (bar.h) is exposed.
+   synchronization.  Only a subset of full barrier API (bar.h) is exposed.
    Here in the NVPTX-specific implementation, we expect that thread pool
    corresponds to a PTX CTA (thread block).  */
 

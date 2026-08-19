@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---                        Copyright (C) 2013-2025, AdaCore                  --
+--                        Copyright (C) 2013-2026, AdaCore                  --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -176,15 +176,12 @@ package body GNAT.CPP_Exceptions is
       Object_Addr : constant System.Address := Get_Object_Address (X);
       --  Address of the raised object
 
-      type T_Acc is access T;
-
-      function To_T_Acc is
-         new Ada.Unchecked_Conversion (System.Address, T_Acc);
-
       --  Import the object from the occurrence
-      Result : constant T_Acc := To_T_Acc (Object_Addr);
+      Result : aliased T;
+      pragma Import (Ada, Result);
+      for Result'Address use Object_Addr;
    begin
-      return Result;
+      return Result'Unchecked_Access;
    end Get_Access_To_Object;
 
    ---------------------------------
@@ -197,15 +194,12 @@ package body GNAT.CPP_Exceptions is
       Object_Addr : constant System.Address := Get_Object_Address (X);
       --  Address of the raised object
 
-      type T_Acc is access T'Class;
-
-      function To_T_Acc is
-         new Ada.Unchecked_Conversion (System.Address, T_Acc);
-
       --  Import the object from the occurrence
-      Result : constant T_Acc := To_T_Acc (Object_Addr);
+      Result : aliased T;
+      pragma Import (Ada, Result);
+      for Result'Address use Object_Addr;
    begin
-      return Result;
+      return Result'Unchecked_Access;
    end Get_Access_To_Tagged_Object;
 
    -------------------

@@ -1,5 +1,5 @@
 /* Dead and redundant store elimination
-   Copyright (C) 2004-2025 Free Software Foundation, Inc.
+   Copyright (C) 2004-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -37,7 +37,6 @@ along with GCC; see the file COPYING3.  If not see
 #include "tree-ssa-dse.h"
 #include "builtins.h"
 #include "gimple-fold.h"
-#include "gimplify.h"
 #include "tree-eh.h"
 #include "cfganal.h"
 #include "cgraph.h"
@@ -103,7 +102,7 @@ static bitmap need_ab_cleanup;
 
    Return TRUE if the statement was analyzed, FALSE otherwise.
 
-   It is always safe to return FALSE.  But typically better optimziation
+   It is always safe to return FALSE.  But typically better optimization
    can be achieved by analyzing more statements.  */
 
 static bool
@@ -181,10 +180,10 @@ initialize_ao_ref_for_dse (gimple *stmt, ao_ref *write, bool may_def_ok = false)
 	       can provide a may-def variant.  */
 	    if (may_def_ok)
 	      {
-		ao_ref_init_from_ptr_and_size (
-		  write, gimple_call_arg (stmt, 0),
-		  TYPE_SIZE_UNIT (
-		    TREE_TYPE (gimple_call_arg (stmt, stored_value_index))));
+		ao_ref_init_from_ptr_and_range (
+		  write, gimple_call_arg (stmt, 0), true, 0, -1,
+		  tree_to_poly_int64 (TYPE_SIZE (
+		    TREE_TYPE (gimple_call_arg (stmt, stored_value_index)))));
 		return true;
 	      }
 	    break;
@@ -423,8 +422,10 @@ compute_trims (ao_ref *ref, sbitmap live, int *trim_head, int *trim_tail,
      the bitmap extends through ref->max_size, so we know that in the original
      bitmap bits 0 .. ref->max_size were true.  But we need to check that this
      covers the bytes of REF exactly.  */
-  const unsigned int align = known_alignment (ref->offset);
-  if ((align > 0 && align < BITS_PER_UNIT)
+  const unsigned int offset_align = known_alignment (ref->offset);
+  const unsigned int size_align = known_alignment (ref->size);
+  if ((offset_align > 0 && offset_align < BITS_PER_UNIT)
+      || (size_align > 0 && size_align < BITS_PER_UNIT)
       || !known_eq (ref->size, ref->max_size))
     return;
 
@@ -566,16 +567,17 @@ maybe_trim_complex_store (ao_ref *ref, sbitmap live, gimple *stmt)
    The most common case for getting here is a CONSTRUCTOR with no elements
    being used to zero initialize an object.  We do not try to handle other
    cases as those would force us to fully cover the object with the
-   CONSTRUCTOR node except for the components that are dead.  */
+   CONSTRUCTOR node except for the components that are dead.
+   Also handles integer stores of 0 which can happen with memset/memcpy optimizations.  */
 
 static void
-maybe_trim_constructor_store (ao_ref *ref, sbitmap live, gimple *stmt)
+maybe_trim_constructor_store (ao_ref *ref, sbitmap live, gimple *stmt, bool was_integer_cst)
 {
   tree ctor = gimple_assign_rhs1 (stmt);
 
   /* This is the only case we currently handle.  It actually seems to
      catch most cases of actual interest.  */
-  gcc_assert (CONSTRUCTOR_NELTS (ctor) == 0);
+  gcc_assert (was_integer_cst ? integer_zerop (ctor) : CONSTRUCTOR_NELTS (ctor) == 0);
 
   int head_trim = 0;
   int tail_trim = 0;
@@ -587,6 +589,8 @@ maybe_trim_constructor_store (ao_ref *ref, sbitmap live, gimple *stmt)
     {
       /* We want &lhs for the MEM_REF expression.  */
       tree lhs_addr = build_fold_addr_expr (gimple_assign_lhs (stmt));
+
+      STRIP_USELESS_TYPE_CONVERSION (lhs_addr);
 
       if (! is_gimple_min_invariant (lhs_addr))
 	return;
@@ -802,10 +806,15 @@ maybe_trim_partially_dead_store (ao_ref *ref, sbitmap live, gimple *stmt)
       switch (gimple_assign_rhs_code (stmt))
 	{
 	case CONSTRUCTOR:
-	  maybe_trim_constructor_store (ref, live, stmt);
+	  maybe_trim_constructor_store (ref, live, stmt, false);
 	  break;
 	case COMPLEX_CST:
 	  maybe_trim_complex_store (ref, live, stmt);
+	  break;
+	case INTEGER_CST:
+	  if (integer_zerop (gimple_assign_rhs1 (stmt))
+	      && type_has_mode_precision_p (TREE_TYPE (gimple_assign_lhs (stmt))))
+	    maybe_trim_constructor_store (ref, live, stmt, true);
 	  break;
 	default:
 	  break;
@@ -834,7 +843,7 @@ live_bytes_read (ao_ref *use_ref, ao_ref *ref, sbitmap live)
 	return true;
 
       /* Now check if any of the remaining bits in use_ref are set in LIVE.  */
-      return bitmap_bit_in_range_p (live, start, (start + size - 1));
+      return bitmap_any_bit_in_range_p (live, start, (start + size - 1));
     }
   return true;
 }
@@ -1493,7 +1502,8 @@ dse_optimize_stmt (function *fun, gimple_stmt_iterator *gsi, sbitmap live_bytes)
 
   /* We know we have virtual definitions.  We can handle assignments and
      some builtin calls.  */
-  if (gimple_call_builtin_p (stmt, BUILT_IN_NORMAL))
+  if (gimple_call_builtin_p (stmt, BUILT_IN_NORMAL)
+      && !gimple_call_ctrl_altering_p (stmt))
     {
       tree fndecl = gimple_call_fndecl (stmt);
       switch (DECL_FUNCTION_CODE (fndecl))

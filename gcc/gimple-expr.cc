@@ -1,6 +1,6 @@
 /* Gimple decl, type, and expression support functions.
 
-   Copyright (C) 2007-2025 Free Software Foundation, Inc.
+   Copyright (C) 2007-2026 Free Software Foundation, Inc.
    Contributed by Aldy Hernandez <aldyh@redhat.com>
 
 This file is part of GCC.
@@ -116,8 +116,7 @@ useless_type_conversion_p (tree outer_type, tree inner_type)
 	 body, we need to prevent changing BITINT_TYPE to INTEGER_TYPE
 	 of the same precision or vice versa when passed to functions,
 	 especially for varargs.  */
-      if ((TREE_CODE (inner_type) == BITINT_TYPE)
-	  != (TREE_CODE (outer_type) == BITINT_TYPE))
+      if (BITINT_TYPE_P (inner_type) != BITINT_TYPE_P (outer_type))
 	return false;
 
       /* We don't need to preserve changes in the types minimum or
@@ -865,7 +864,7 @@ is_gimple_asm_val (tree t)
 bool
 is_gimple_min_lval (tree t)
 {
-  if (!(t = CONST_CAST_TREE (strip_invariant_refs (t))))
+  if (!(t = const_cast<tree> (strip_invariant_refs (t))))
     return false;
   return (is_gimple_id (t) || TREE_CODE (t) == MEM_REF);
 }
@@ -884,7 +883,7 @@ bool
 is_gimple_mem_ref_addr (tree t)
 {
   return (is_gimple_reg (t)
-	  || TREE_CODE (t) == INTEGER_CST
+	  || poly_int_tree_p (t)
 	  || (TREE_CODE (t) == ADDR_EXPR
 	      && (CONSTANT_CLASS_P (TREE_OPERAND (t, 0))
 		  || decl_address_invariant_p (TREE_OPERAND (t, 0)))));

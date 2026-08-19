@@ -1,5 +1,5 @@
 /* Loop distribution.
-   Copyright (C) 2006-2025 Free Software Foundation, Inc.
+   Copyright (C) 2006-2026 Free Software Foundation, Inc.
    Contributed by Georges-Andre Silber <Georges-Andre.Silber@ensmp.fr>
    and Sebastian Pop <sebastian.pop@amd.com>.
 
@@ -213,9 +213,9 @@ struct rdg_edge
 /* Kind of distributed loop.  */
 enum partition_kind {
     PKIND_NORMAL,
-    /* Partial memset stands for a paritition can be distributed into a loop
+    /* Partial memset stands for a partition can be distributed into a loop
        of memset calls, rather than a single memset call.  It's handled just
-       like a normal parition, i.e, distributed as separate loop, no memset
+       like a normal partition, i.e, distributed as separate loop, no memset
        call is generated.
 
        Note: This is a hacking fix trying to distribute ZERO-ing stmt in a
@@ -264,7 +264,7 @@ struct partition
   enum partition_type type;
   /* Data references in the partition.  */
   bitmap datarefs;
-  /* Information of builtin parition.  */
+  /* Information of builtin partition.  */
   struct builtin_info *builtin;
 };
 
@@ -622,7 +622,7 @@ class loop_distribution
   /* Build and return partition dependence graph for PARTITIONS.  RDG is
      reduced dependence graph for the loop to be distributed.  If IGNORE_ALIAS_P
      is true, data dependence caused by possible alias between references
-     is ignored, as if it doesn't exist at all; otherwise all depdendences
+     is ignored, as if it doesn't exist at all; otherwise all dependences
      are considered.  */
   struct graph *build_partition_graph (struct graph *rdg,
 				       vec<struct partition *> *partitions,
@@ -631,12 +631,12 @@ class loop_distribution
   /* Given reduced dependence graph RDG merge strong connected components
      of PARTITIONS.  If IGNORE_ALIAS_P is true, data dependence caused by
      possible alias between references is ignored, as if it doesn't exist
-     at all; otherwise all depdendences are considered.  */
+     at all; otherwise all dependences are considered.  */
   void merge_dep_scc_partitions (struct graph *rdg, vec<struct partition *>
 				 *partitions, bool ignore_alias_p);
 
-/* This is the main function breaking strong conected components in
-   PARTITIONS giving reduced depdendence graph RDG.  Store data dependence
+/* This is the main function breaking strong connected components in
+   PARTITIONS giving reduced dependence graph RDG.  Store data dependence
    relations for runtime alias check in ALIAS_DDRS.  */
   void break_alias_scc_partitions (struct graph *rdg, vec<struct partition *>
 				   *partitions, vec<ddr_p> *alias_ddrs);
@@ -1353,6 +1353,7 @@ destroy_loop (class loop *loop)
   redirect_edge_pred (exit, src);
   exit->flags &= ~(EDGE_TRUE_VALUE|EDGE_FALSE_VALUE);
   exit->flags |= EDGE_FALLTHRU;
+  exit->probability = profile_probability::always ();
   cancel_loop_tree (loop);
   rescan_loop_exit (exit, false, true);
 
@@ -1901,7 +1902,7 @@ loop_distribution::classify_partition (loop_p loop,
 	     reduction partitions.  As a result, this could cancel valid
 	     loop distribution especially for loop that induction variable
 	     is used outside of loop.  To workaround this issue, we skip
-	     marking partition as reudction if the reduction stmt belongs
+	     marking partition as reduction if the reduction stmt belongs
 	     to all partitions.  In such case, reduction will be computed
 	     correctly no matter how partitions are fused/distributed.  */
 	  if (!bitmap_bit_p (stmt_in_all_partitions, i))
@@ -2173,7 +2174,7 @@ loop_distribution::pg_add_dependence_edges (struct graph *rdg, int dir,
 	    }
 	  else if (DDR_ARE_DEPENDENT (ddr) == NULL_TREE)
 	    {
-	      /* Known dependences can still be unordered througout the
+	      /* Known dependences can still be unordered throughout the
 		 iteration space, see gcc.dg/tree-ssa/ldist-16.c and
 		 gcc.dg/tree-ssa/pr94969.c.  */
 	      if (DDR_NUM_DIST_VECTS (ddr) != 1)
@@ -2305,7 +2306,7 @@ add_partition_graph_edge (struct graph *pg, int i, int j, vec<ddr_p> *ddrs)
     }
 }
 
-/* Callback function for graph travesal algorithm.  It returns true
+/* Callback function for graph traversal algorithm.  It returns true
    if edge E should skipped when traversing the graph.  */
 
 static bool
@@ -2346,7 +2347,7 @@ free_partition_graph_vdata (struct graph *pg)
 /* Build and return partition dependence graph for PARTITIONS.  RDG is
    reduced dependence graph for the loop to be distributed.  If IGNORE_ALIAS_P
    is true, data dependence caused by possible alias between references
-   is ignored, as if it doesn't exist at all; otherwise all depdendences
+   is ignored, as if it doesn't exist at all; otherwise all dependences
    are considered.  */
 
 struct graph *
@@ -2535,8 +2536,8 @@ pg_unmark_merged_alias_ddrs (struct graph *, struct graph_edge *e, void *data)
     }
 }
 
-/* This is the main function breaking strong conected components in
-   PARTITIONS giving reduced depdendence graph RDG.  Store data dependence
+/* This is the main function breaking strong connected components in
+   PARTITIONS giving reduced dependence graph RDG.  Store data dependence
    relations for runtime alias check in ALIAS_DDRS.  */
 void
 loop_distribution::break_alias_scc_partitions (struct graph *rdg,
@@ -2854,7 +2855,7 @@ version_loop_by_alias_check (vec<struct partition *> *partitions,
   update_ssa (TODO_update_ssa_no_phi);
 }
 
-/* Return true if loop versioning is needed to distrubute PARTITIONS.
+/* Return true if loop versioning is needed to distribute PARTITIONS.
    ALIAS_DDRS are data dependence relations for runtime alias check.  */
 
 static inline bool
@@ -3966,7 +3967,8 @@ loop_distribution::execute (function *fun)
   if (changed)
     {
       /* Destroy loop bodies that could not be reused.  Do this late as we
-	 otherwise can end up refering to stale data in control dependences.  */
+	 otherwise can end up referring to stale data in control
+	 dependences.  */
       unsigned i;
       class loop *loop;
       FOR_EACH_VEC_ELT (loops_to_be_destroyed, i, loop)

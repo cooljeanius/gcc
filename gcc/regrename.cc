@@ -1,5 +1,5 @@
 /* Register renaming for the GNU compiler.
-   Copyright (C) 2000-2025 Free Software Foundation, Inc.
+   Copyright (C) 2000-2026 Free Software Foundation, Inc.
 
    This file is part of GCC.
 
@@ -630,17 +630,17 @@ init_rename_info (class bb_rename_info *p, basic_block bb)
 	  remove_range_from_hard_reg_set (&live_hard_regs, i, iri->nregs);
 	}
     }
-  for (i = 0; i < FIRST_PSEUDO_REGISTER; i++)
+  struct incoming_reg_info *iri;
+  unsigned int j = 0;
+  hard_reg_set_iterator hrsi;
+  EXECUTE_IF_SET_IN_HARD_REG_SET (start_chains_set, 0, j, hrsi)
     {
-      struct incoming_reg_info *iri = p->incoming + i;
-      if (TEST_HARD_REG_BIT (start_chains_set, i))
-	{
-	  du_head_p chain;
-	  if (dump_file)
-	    fprintf (dump_file, "opening incoming chain\n");
-	  chain = create_new_chain (i, iri->nregs, NULL, NULL, NO_REGS);
-	  bitmap_set_bit (&p->incoming_open_chains_set, chain->id);
-	}
+      du_head_p chain;
+      if (dump_file)
+	fprintf (dump_file, "opening incoming chain\n");
+      iri = p->incoming + j;
+      chain = create_new_chain (j, iri->nregs, NULL, NULL, NO_REGS);
+      bitmap_set_bit (&p->incoming_open_chains_set, chain->id);
     }
 }
 
@@ -1117,6 +1117,12 @@ scan_rtx_reg (rtx_insn *insn, rtx *loc, enum reg_class cl, enum scan_actions act
   unsigned this_regno = REGNO (x);
   int this_nregs = REG_NREGS (x);
 
+  /* Do not process write actions for the second instruction of
+     a macro-fused pair of two single_sets.  */
+  if ((action == mark_write || action == terminate_write)
+	&& single_output_fused_pair_p (insn))
+    return;
+
   if (action == mark_write)
     {
       if (type == OP_OUT)
@@ -1153,7 +1159,9 @@ scan_rtx_reg (rtx_insn *insn, rtx *loc, enum reg_class cl, enum scan_actions act
       return;
     }
 
-  if ((type == OP_OUT) != (action == terminate_write || action == mark_access))
+  if ((type == OP_OUT) != (action == terminate_write || action == mark_access)
+	&& ! (type == OP_OUT && action == mark_read
+	      && single_output_fused_pair_p (insn)))
     return;
 
   for (p = &open_chains; *p;)
@@ -1332,6 +1340,12 @@ scan_rtx_address (rtx_insn *insn, rtx *loc, enum reg_class cl,
 	rtx *locI = NULL;
 	rtx *locB = NULL;
 	enum rtx_code index_code = SCRATCH;
+
+	if (GET_CODE (op0) == UNSPEC)
+	  {
+	    /* We have a "segment" unspec; skip it.  */
+	    return scan_rtx_address (insn, &XEXP (x, 1), cl, action, mode, as);
+	  }
 
 	if (GET_CODE (op0) == SUBREG)
 	  {

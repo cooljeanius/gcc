@@ -1,5 +1,5 @@
 /* Language-level data type conversion for GNU C++.
-   Copyright (C) 1987-2025 Free Software Foundation, Inc.
+   Copyright (C) 1987-2026 Free Software Foundation, Inc.
    Hacked by Michael Tiemann (tiemann@cygnus.com)
 
 This file is part of GCC.
@@ -575,6 +575,19 @@ force_rvalue (tree expr, tsubst_flags_t complain)
   return expr;
 }
 
+/* Force EXPR to be an lvalue, if it isn't already.  */
+
+tree
+force_lvalue (tree expr, tsubst_flags_t complain)
+{
+  if (!lvalue_p (expr))
+    {
+      expr = cp_build_addr_expr (expr, complain);
+      expr = cp_build_indirect_ref (input_location, expr, RO_ARROW, complain);
+    }
+  return expr;
+}
+
 
 /* If EXPR and ORIG are INTEGER_CSTs, return a version of EXPR that has
    TREE_OVERFLOW set only if it is set in ORIG.  Otherwise, return EXPR
@@ -609,11 +622,12 @@ cp_fold_convert (tree type, tree expr)
   tree conv;
   if (TREE_TYPE (expr) == type)
     conv = expr;
-  else if (TREE_CODE (expr) == PTRMEM_CST
-	   && same_type_p (TYPE_PTRMEM_CLASS_TYPE (type),
-			   PTRMEM_CST_CLASS (expr)))
+  else if ((TREE_CODE (expr) == PTRMEM_CST
+	    && same_type_p (TYPE_PTRMEM_CLASS_TYPE (type),
+			    PTRMEM_CST_CLASS (expr)))
+	    || (REFLECT_EXPR_P (expr) && REFLECTION_TYPE_P (type)))
     {
-      /* Avoid wrapping a PTRMEM_CST in NOP_EXPR.  */
+      /* Avoid wrapping a PTRMEM_CST/REFLECT_EXPR in NOP_EXPR.  */
       conv = copy_node (expr);
       TREE_TYPE (conv) = type;
     }
@@ -824,10 +838,28 @@ ocp_convert (tree type, tree expr, int convtype, int flags,
 	  /* [expr.static.cast]
 
 	     8. A value of integral or enumeration type can be explicitly
-	     converted to an enumeration type. The value is unchanged if
-	     the original value is within the range of the enumeration
-	     values. Otherwise, the resulting enumeration value is
-	     unspecified.  */
+	     converted to a complete enumeration type.  If the enumeration
+	     type has a fixed underlying type, the value is first converted
+	     to that type by integral promotion or integral conversion, if
+	     necessary, and then to the enumeration type.  If the
+	     enumeration type does not have a fixed underlying type, the
+	     value is unchanged if the original value is within the range
+	     of the enumeration values, and otherwise, the behavior is
+	     undefined.  A value of floating-point type can also be
+	     explicitly converted to an enumeration type.  The resulting
+	     value is the same as converting the original value to the
+	     underlying type of the enumeration, and subsequently to the
+	     enumeration type.  */
+	  if ((ENUM_FIXED_UNDERLYING_TYPE_P (type)
+	       && INTEGRAL_OR_ENUMERATION_TYPE_P (intype))
+	      || SCALAR_FLOAT_TYPE_P (intype))
+	    {
+	      e = ocp_convert (ENUM_UNDERLYING_TYPE (type), e, convtype,
+			       flags, complain);
+	      if (e == error_mark_node)
+		return error_mark_node;
+	    }
+
 	  tree val = fold_for_warn (e);
 	  if ((complain & tf_warning)
 	      && TREE_CODE (val) == INTEGER_CST
@@ -872,15 +904,22 @@ ocp_convert (tree type, tree expr, int convtype, int flags,
 	  if (SCOPED_ENUM_P (intype) && (convtype & CONV_STATIC))
 	    e = build_nop (ENUM_UNDERLYING_TYPE (intype), e);
 	  if (complain & tf_warning)
-	    return cp_truthvalue_conversion (e, complain);
+	    e = cp_truthvalue_conversion (e, complain);
 	  else
 	    {
 	      /* Prevent bogus -Wint-in-bool-context warnings coming
 		 from c_common_truthvalue_conversion down the line.  */
 	      warning_sentinel w (warn_int_in_bool_context);
 	      warning_sentinel c (warn_sign_compare);
-	      return cp_truthvalue_conversion (e, complain);
+	      e = cp_truthvalue_conversion (e, complain);
 	    }
+
+	  /* Sometimes boolean types don't match if a non-standard boolean
+	     type has been invented by the target.  */
+	  if (tree e2 = targetm.convert_to_type (type, e))
+	    return e2;
+
+	  return e;
 	}
 
       converted = convert_to_integer_maybe_fold (type, e, dofold);
@@ -947,8 +986,11 @@ ocp_convert (tree type, tree expr, int convtype, int flags,
       if (abstract_virtuals_error (NULL_TREE, type, complain))
 	return error_mark_node;
 
-      if (BRACE_ENCLOSED_INITIALIZER_P (ctor))
-	ctor = perform_implicit_conversion (type, ctor, complain);
+      if (BRACE_ENCLOSED_INITIALIZER_P (ctor)
+	  /* We don't want to create a TARGET_EXPR in a template by the
+	     build_cplus_new below.  */
+	  || processing_template_decl)
+	ctor = perform_implicit_conversion_flags (type, ctor, complain, flags);
       else if ((flags & LOOKUP_ONLYCONVERTING)
 	       && ! (CLASS_TYPE_P (dtype) && DERIVED_FROM_P (type, dtype)))
 	/* For copy-initialization, first we create a temp of the proper type
@@ -974,8 +1016,13 @@ ocp_convert (tree type, tree expr, int convtype, int flags,
       if (invalid_nonstatic_memfn_p (loc, expr, complain))
 	/* We displayed the error message.  */;
       else
-	error_at (loc, "conversion from %qH to non-scalar type %qI requested",
-		  TREE_TYPE (expr), type);
+	{
+	  auto_diagnostic_group d;
+	  error_at (loc, "conversion from %qH to non-scalar type %qI requested",
+		    TREE_TYPE (expr), type);
+	  maybe_show_nonconverting_candidate (type, TREE_TYPE (expr), expr,
+					      flags);
+	}
     }
   return error_mark_node;
 }
@@ -1022,7 +1069,7 @@ cp_get_fndecl_from_callee (tree fn, bool fold /* = true */)
   if (type == NULL_TREE || !INDIRECT_TYPE_P (type))
     return NULL_TREE;
   if (fold)
-    fn = maybe_constant_init (fn);
+    fn = fold_non_dependent_expr (fn);
   STRIP_NOPS (fn);
   if (TREE_CODE (fn) == ADDR_EXPR
       || TREE_CODE (fn) == FDESC_EXPR)
@@ -1173,13 +1220,6 @@ convert_to_void (tree expr, impl_conv_void implicit, tsubst_flags_t complain)
 
   expr = maybe_undo_parenthesized_ref (expr);
 
-  expr = mark_discarded_use (expr);
-  if (implicit == ICV_CAST)
-    /* An explicit cast to void avoids all -Wunused-but-set* warnings.  */
-    mark_exp_read (expr);
-
-  if (!TREE_TYPE (expr))
-    return expr;
   if (invalid_nonstatic_memfn_p (loc, expr, complain))
     return error_mark_node;
   if (TREE_CODE (expr) == PSEUDO_DTOR_EXPR)
@@ -1191,11 +1231,25 @@ convert_to_void (tree expr, impl_conv_void implicit, tsubst_flags_t complain)
 
   /* Explicitly evaluate void-converted concept checks since their
      satisfaction may produce ill-formed programs.  */
-   if (concept_check_p (expr))
+   if (concept_check_p (expr) && !cp_unevaluated_operand)
      expr = evaluate_concept_check (expr);
+
+  /* Detect using expressions of consteval-only types outside manifestly
+     constant-evaluated contexts.  We are going to discard this expression,
+     so we can't wait till cp_fold_immediate_r.  FIXME This is too early;
+     code like "int i = (^^i, 42);" is OK.  We should stop discarding
+     expressions here (PR124249).  */
+  if (stmts_are_full_exprs_p () && check_out_of_consteval_use (expr))
+    return error_mark_node;
 
   if (VOID_TYPE_P (TREE_TYPE (expr)))
     return expr;
+
+  expr = mark_discarded_use (expr);
+  if (implicit == ICV_CAST)
+    /* An explicit cast to void avoids all -Wunused-but-set* warnings.  */
+    mark_exp_read (expr);
+
   switch (TREE_CODE (expr))
     {
     case COND_EXPR:

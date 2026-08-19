@@ -6,7 +6,7 @@
  *                                                                          *
  *                          C Implementation File                           *
  *                                                                          *
- *          Copyright (C) 1992-2025, Free Software Foundation, Inc.         *
+ *          Copyright (C) 1992-2026, Free Software Foundation, Inc.         *
  *                                                                          *
  * GNAT is free software;  you can  redistribute it  and/or modify it under *
  * terms of the  GNU General Public License as published  by the Free Soft- *
@@ -57,7 +57,7 @@ extern "C" {
 #endif
 
 /* Don't use macros versions of this functions on VxWorks since they cause
-   imcompatible changes in some VxWorks versions */
+   incompatible changes in some VxWorks versions */
 #ifdef __vxworks
 #undef getchar
 #undef putchar

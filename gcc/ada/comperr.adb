@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2025, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -37,7 +37,6 @@ with Namet;          use Namet;
 with Opt;            use Opt;
 with Osint;          use Osint;
 with Output;         use Output;
-with Sinfo;          use Sinfo;
 with Sinfo.Nodes;    use Sinfo.Nodes;
 with Sinput;         use Sinput;
 with Sprint;         use Sprint;
@@ -146,7 +145,7 @@ package body Comperr is
 
       if Serious_Errors_Detected /= 0 and then not Debug_Flag_K then
          Errout.Finalize (Last_Call => True);
-         Errout.Output_Messages;
+         Errout.Output_Messages (E_Errors);
 
          Set_Standard_Error;
          Write_Str ("compilation abandoned due to previous error");
@@ -297,7 +296,17 @@ package body Comperr is
             --  Otherwise we use the standard fixed text
 
             else
-               if Is_FSF_Version then
+               if Is_FSF_Version and then GNATprove_Mode then
+                  Write_Str
+                    ("| Please submit a bug report at the SPARK issue" &
+                     " tracker:");
+                  End_Line;
+
+                  Write_Str
+                    ("| https://github.com/AdaCore/spark2014 .");
+                  End_Line;
+
+               elsif Is_FSF_Version then
                   Write_Str
                     ("| Please submit a bug report; see" &
                      " https://gcc.gnu.org/bugs/ .");
@@ -307,16 +316,16 @@ package body Comperr is
 
                   Write_Str
                     ("| Please submit a bug report by email " &
-                     "to report@adacore.com.");
+                     "to support@adacore.com.");
                   End_Line;
 
                   Write_Str
-                    ("| GAP members can alternatively use GNAT Tracker:");
+                    ("| GAP members can alternatively use GNATtracker:");
                   End_Line;
 
                   Write_Str
-                    ("| https://www.adacore.com/login?mode=gap " &
-                     "section 'Create New Ticket'.");
+                    ("| https://support.adacore.com/csm " &
+                     "by using the button 'Create A New Case'.");
                   End_Line;
 
                   Write_Str
@@ -326,17 +335,17 @@ package body Comperr is
 
                else
                   Write_Str
-                    ("| Please submit a bug report using GNAT Tracker:");
+                    ("| Please submit a bug report using GNATtracker at");
                   End_Line;
 
                   Write_Str
-                    ("| https://www.adacore.com/login " &
-                     "section 'Create New Ticket'.");
+                    ("| https://support.adacore.com/csm " &
+                     "by using the button 'Create New Case'.");
                   End_Line;
 
                   Write_Str
                     ("| Or submit a bug report by email " &
-                     "to report@adacore.com");
+                     "to support@adacore.com");
                   End_Line;
 
                   Write_Str

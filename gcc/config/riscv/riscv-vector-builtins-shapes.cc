@@ -1,5 +1,5 @@
 /* function_shape implementation for RISC-V 'V' Extension for GNU compiler.
-   Copyright (C) 2022-2025 Free Software Foundation, Inc.
+   Copyright (C) 2022-2026 Free Software Foundation, Inc.
    Contributed by Ju-Zhe Zhong (juzhe.zhong@rivai.ai), RiVAI Technologies Ltd.
 
    This file is part of GCC.
@@ -105,7 +105,7 @@ supports_vectype_p (const function_group_info &group, unsigned int vec_type_idx)
 /* Add a function instance for every operand && predicate && args
    combination in GROUP.  Take the function base name from GROUP && operand
    suffix from operand_suffixes && mode suffix from type_suffixes && predication
-   suffix from predication_suffixes. Use apply_predication to add in
+   suffix from predication_suffixes.  Use apply_predication to add in
    the predicate.  */
 static void
 build_all (function_builder &b, const function_group_info &group)
@@ -124,10 +124,10 @@ build_all (function_builder &b, const function_group_info &group)
 /* Declare the function shape NAME, pointing it to an instance
    of class <NAME>_def.  */
 #define SHAPE(DEF, VAR) \
-  static CONSTEXPR const DEF##_def VAR##_obj; \
+  static constexpr const DEF##_def VAR##_obj; \
   namespace shapes { const function_shape *const VAR = &VAR##_obj; }
 
-#define BASE_NAME_MAX_LEN 17
+#define BASE_NAME_MAX_LEN 20
 
 /* Base class for build.  */
 struct build_base : public function_shape
@@ -608,7 +608,7 @@ struct reduc_alu_frm_def : public build_frm_base
   }
 };
 
-/* widen_alu_def class. Handle vwadd/vwsub. Unlike
+/* widen_alu_def class.  Handle vwadd/vwsub.  Unlike
    vadd.vx/vadd.vv/vwmul.vv/vwmul.vx, vwadd.vv/vwadd.vx/vwadd.wv/vwadd.wx has
    'OP' suffix in overloaded API.  */
 struct widen_alu_def : public build_base
@@ -634,7 +634,7 @@ struct widen_alu_def : public build_base
   }
 };
 
-/* no_mask_policy_def class. Such instructions belong to this class
+/* no_mask_policy_def class.  Such instructions belong to this class
    doesn't need mask policy.  */
 struct no_mask_policy_def : public build_base
 {
@@ -655,7 +655,7 @@ struct no_mask_policy_def : public build_base
   }
 };
 
-/* return_mask_def class. Such instructions belong to this class
+/* return_mask_def class.  Such instructions belong to this class
    is returning mask value.  */
 struct return_mask_def : public build_base
 {
@@ -683,7 +683,7 @@ struct return_mask_def : public build_base
   }
 };
 
-/* narrow_alu_def class. Handle narrowing instructions like vnsrl.wv.  */
+/* narrow_alu_def class.  Handle narrowing instructions like vnsrl.wv.  */
 struct narrow_alu_def : public build_base
 {
   char *get_name (function_builder &b, const function_instance &instance,
@@ -726,7 +726,7 @@ struct narrow_alu_def : public build_base
   }
 };
 
-/* move_def class. Handle vmv.v.v/vmv.v.x.  */
+/* move_def class.  Handle vmv.v.v/vmv.v.x.  */
 struct move_def : public build_base
 {
   char *get_name (function_builder &b, const function_instance &instance,
@@ -908,6 +908,8 @@ struct vset_def : public build_base
   {
     poly_int64 outer_size = GET_MODE_SIZE (c.arg_mode (0));
     poly_int64 inner_size = GET_MODE_SIZE (c.arg_mode (2));
+    if (maybe_eq (inner_size, 0))
+      return false;
     unsigned int nvecs = exact_div (outer_size, inner_size).to_constant ();
     return c.require_immediate (1, 0, nvecs - 1);
   }
@@ -920,6 +922,8 @@ struct vget_def : public misc_def
   {
     poly_int64 outer_size = GET_MODE_SIZE (c.arg_mode (0));
     poly_int64 inner_size = GET_MODE_SIZE (c.ret_mode ());
+    if (maybe_eq (inner_size, 0))
+      return false;
     unsigned int nvecs = exact_div (outer_size, inner_size).to_constant ();
     return c.require_immediate (1, 0, nvecs - 1);
   }
@@ -1316,7 +1320,7 @@ struct sf_vqmacc_def : public build_base
   }
 };
 
-/* sf_vfnrclip_def class. Handle instructions like vfnrclip.  */
+/* sf_vfnrclip_def class.  Handle instructions like vfnrclip.  */
 struct sf_vfnrclip_def : public build_base
 {
   char *get_name (function_builder &b, const function_instance &instance,
@@ -1342,6 +1346,52 @@ struct sf_vfnrclip_def : public build_base
     return b.finish_name ();
   }
 };
+
+/* sf_vcix_se_def class.  */
+struct sf_vcix_se_def : public build_base
+{
+  char *get_name (function_builder &b, const function_instance &instance,
+		  bool overloaded_p) const override
+  {
+    /* Return nullptr if it is overloaded.  */
+    if (overloaded_p)
+      return nullptr;
+
+    b.append_base_name (instance.base_name);
+
+    /* vop --> vop<op>_se_<type>.  */
+    if (!overloaded_p)
+      {
+	b.append_name (operand_suffixes[instance.op_info->op]);
+	b.append_name ("_se");
+	b.append_name (type_suffixes[instance.type.index].vector);
+      }
+    return b.finish_name ();
+  }
+};
+
+/* sf_vcix_def class.  */
+struct sf_vcix_def : public build_base
+{
+  char *get_name (function_builder &b, const function_instance &instance,
+		  bool overloaded_p) const override
+  {
+    /* Return nullptr if it is overloaded.  */
+    if (overloaded_p)
+      return nullptr;
+
+    b.append_base_name (instance.base_name);
+
+    /* vop --> vop_<type>.  */
+    if (!overloaded_p)
+      {
+	b.append_name (operand_suffixes[instance.op_info->op]);
+	b.append_name (type_suffixes[instance.type.index].vector);
+      }
+    return b.finish_name ();
+  }
+};
+
 
 SHAPE(vsetvl, vsetvl)
 SHAPE(vsetvl, vsetvlmax)
@@ -1379,4 +1429,6 @@ SHAPE(crypto_vi, crypto_vi)
 SHAPE(crypto_vv_no_op_type, crypto_vv_no_op_type)
 SHAPE (sf_vqmacc, sf_vqmacc)
 SHAPE (sf_vfnrclip, sf_vfnrclip)
+SHAPE(sf_vcix_se, sf_vcix_se)
+SHAPE(sf_vcix, sf_vcix)
 } // end namespace riscv_vector

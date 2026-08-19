@@ -1,3 +1,7 @@
+#![feature(no_core)]
+#![no_core]
+
+#![feature(lang_items)]
 #[lang = "sized"]
 pub trait Sized {}
 
@@ -8,7 +12,7 @@ pub fn f<'かに>() {
     // { dg-warning "unused name" "" { target *-*-* } .-1 }
     let 게 = "";
     // { dg-warning "unused name" "" { target *-*-* } .-1 }
-    let سلطعون = 0.;
+    let سلطعون = 0.15;
     // { dg-warning "unused name" "" { target *-*-* } .-1 }
 
     let _: &'かに () = &crab;
@@ -17,5 +21,5 @@ pub fn f<'かに>() {
 pub fn g<'β, γ>() {}
 
 struct _S {
-    δ: i32
+    δ: i32,
 }

@@ -1,5 +1,5 @@
 /* Target Code for ft32
-   Copyright (C) 2015-2025 Free Software Foundation, Inc.
+   Copyright (C) 2015-2026 Free Software Foundation, Inc.
    Contributed by FTDI <support@ftdi.com>
 
    This file is part of GCC.
@@ -357,7 +357,7 @@ ft32_init_machine_status (void)
 
 
 /* The TARGET_OPTION_OVERRIDE worker.
-   All this curently does is set init_machine_status.  */
+   All this currently does is set init_machine_status.  */
 static void
 ft32_option_override (void)
 {

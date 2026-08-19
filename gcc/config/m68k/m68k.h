@@ -1,5 +1,5 @@
 /* Definitions of target machine for GCC for Motorola 680x0/ColdFire.
-   Copyright (C) 1987-2025 Free Software Foundation, Inc.
+   Copyright (C) 1987-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -777,7 +777,7 @@ __transfer_from_trampoline ()					\
 #define ASM_PREFERRED_EH_DATA_FORMAT(CODE, GLOBAL)			   \
   (flag_pic								   \
    && !((TARGET_ID_SHARED_LIBRARY || TARGET_SEP_DATA)			   \
-	&& ((GLOBAL) || (CODE)))					   \
+	&& ((GLOBAL) || !!(CODE)))					   \
    ? ((GLOBAL) ? DW_EH_PE_indirect : 0) | DW_EH_PE_pcrel | DW_EH_PE_sdata4 \
    : DW_EH_PE_absptr)
 

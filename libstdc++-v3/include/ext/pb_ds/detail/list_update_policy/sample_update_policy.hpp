@@ -1,6 +1,6 @@
 // -*- C++ -*-
 
-// Copyright (C) 2005-2025 Free Software Foundation, Inc.
+// Copyright (C) 2005-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the terms
@@ -67,7 +67,7 @@ namespace __gnu_pbds
     /// Decides whether a metadata object should be moved to the front
     /// of the list. A list-update based containers object will call
     /// this method to decide whether to move a node to the front of
-    /// the list. The method shoule return true if the node should be
+    /// the list. The method should return true if the node should be
     /// moved to the front of the list.
     bool
     operator()(metadata_reference) const;

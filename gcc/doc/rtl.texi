@@ -1,4 +1,4 @@
-@c Copyright (C) 1988-2025 Free Software Foundation, Inc.
+@c Copyright (C) 1988-2026 Free Software Foundation, Inc.
 @c This is part of the GCC manual.
 @c For copying conditions, see the file gcc.texi.
 
@@ -1577,9 +1577,9 @@ Returns the number of fractional bits of a datum of fixed-point mode @var{m}.
 
 @findex GET_MODE_MASK
 @item GET_MODE_MASK (@var{m})
-Returns a bitmask containing 1 for all bits in a word that fit within
-mode @var{m}.  This macro can only be used for modes whose bitsize is
-less than or equal to @code{HOST_BITS_PER_INT}.
+Returns a bitmask containing 1 for all bits in a @code{HOST_WIDE_INT}
+that fit within mode @var{m}.  This macro can only be used for modes
+whose bitsize is less than or equal to @code{HOST_BITS_PER_WIDE_INT}.
 
 @findex GET_MODE_ALIGNMENT
 @item GET_MODE_ALIGNMENT (@var{m})
@@ -1917,7 +1917,7 @@ of relocation operator.  @var{m} should be a valid address mode.
 
 @findex high
 @item (high:@var{m} @var{exp})
-Represents the high-order bits of @var{exp}.  
+Represents the high-order bits of @var{exp}.
 The number of bits is machine-dependent and is
 normally the number of bits specified in an instruction that initializes
 the high order bits of a register.  It is used with @code{lo_sum} to
@@ -2066,7 +2066,8 @@ enclosed in a @code{subreg}.
 
 There are currently three supported types for the first operand of a
 @code{subreg}:
-@itemize
+
+@table @asis
 @item pseudo registers
 This is the most common case.  Most @code{subreg}s have pseudo
 @code{reg}s as their first operand.
@@ -2096,7 +2097,7 @@ It is seldom necessary to wrap hard registers in @code{subreg}s; such
 registers would normally reduce to a single @code{reg} rtx.  This use of
 @code{subreg}s is discouraged and may not be supported in the future.
 
-@end itemize
+@end table
 
 @code{subreg}s of @code{subreg}s are not supported.  Using
 @code{simplify_gen_subreg} is the recommended way to avoid this problem.
@@ -2123,7 +2124,7 @@ defined.
 
 The high-order bits of rvalues are defined in the following circumstances:
 
-@itemize
+@table @asis
 @item @code{subreg}s of @code{mem}
 When @var{m2} is smaller than a word, the macro @code{LOAD_EXTEND_OP},
 can control how the high-order bits are defined.
@@ -2134,7 +2135,7 @@ The upper bits are defined when @code{SUBREG_PROMOTED_VAR_P} is true.
 Such subregs usually represent local variables, register variables
 and parameter pseudo variables that have been promoted to a wider mode.
 
-@end itemize
+@end table
 
 @var{bytenum} is always zero for a paradoxical @code{subreg}, even on
 big-endian targets.
@@ -2619,7 +2620,7 @@ integers.
 @cindex bitwise complement
 @item (not:@var{m} @var{x})
 Represents the bitwise complement of the value represented by @var{x},
-carried out in mode @var{m}, which must be a fixed-point machine mode.
+carried out in mode @var{m}, which must be an integral machine mode.
 
 @findex and
 @cindex logical-and, bitwise
@@ -2627,23 +2628,23 @@ carried out in mode @var{m}, which must be a fixed-point machine mode.
 @item (and:@var{m} @var{x} @var{y})
 Represents the bitwise logical-and of the values represented by
 @var{x} and @var{y}, carried out in machine mode @var{m}, which must be
-a fixed-point machine mode.
+an integral machine mode.
 
 @findex ior
 @cindex inclusive-or, bitwise
 @cindex bitwise inclusive-or
 @item (ior:@var{m} @var{x} @var{y})
 Represents the bitwise inclusive-or of the values represented by @var{x}
-and @var{y}, carried out in machine mode @var{m}, which must be a
-fixed-point mode.
+and @var{y}, carried out in machine mode @var{m}, which must be an
+integral machine mode.
 
 @findex xor
 @cindex exclusive-or, bitwise
 @cindex bitwise exclusive-or
 @item (xor:@var{m} @var{x} @var{y})
 Represents the bitwise exclusive-or of the values represented by @var{x}
-and @var{y}, carried out in machine mode @var{m}, which must be a
-fixed-point mode.
+and @var{y}, carried out in machine mode @var{m}, which must be an
+integral machine mode.
 
 @findex ashift
 @findex ss_ashift
@@ -2663,8 +2664,8 @@ in case of a change in the sign bit; @code{ss_ashift} and @code{us_ashift}
 saturates to the minimum or maximum representable value if any of the bits
 shifted out differs from the final sign bit.
 
-@var{x} have mode @var{m}, a fixed-point machine mode.  @var{c}
-be a fixed-point mode or be a constant with mode @code{VOIDmode}; which
+@var{x} has mode @var{m}, an integral machine mode.  @var{c}
+be an integral mode or be a constant with mode @code{VOIDmode}; which
 mode is determined by the mode called for in the machine description
 entry for the left-shift instruction.  For example, on the VAX, the mode
 of @var{c} is @code{QImode} regardless of @var{m}.
@@ -2750,13 +2751,13 @@ integer of mode @var{m}.  The mode of @var{x} must be @var{m} or
 @findex bswap
 @item (bswap:@var{m} @var{x})
 Represents the value @var{x} with the order of bytes reversed, carried out
-in mode @var{m}, which must be a fixed-point machine mode.
+in mode @var{m}, which must be an integral machine mode.
 The mode of @var{x} must be @var{m} or @code{VOIDmode}.
 
 @findex bitreverse
 @item (bitreverse:@var{m} @var{x})
 Represents the value @var{x} with the order of bits reversed, carried out
-in mode @var{m}, which must be a fixed-point machine mode.
+in mode @var{m}, which must be an integral machine mode.
 The mode of @var{x} must be @var{m} or @code{VOIDmode}.
 
 @findex copysign
@@ -2825,13 +2826,13 @@ are not equal, otherwise 0.
 @cindex greater than
 @item (gt:@var{m} @var{x} @var{y})
 @code{STORE_FLAG_VALUE} if the @var{x} is greater than @var{y}.  If they
-are fixed-point, the comparison is done in a signed sense.
+are integral, the comparison is done in a signed sense.
 
 @findex gtu
 @cindex greater than
 @cindex unsigned greater than
 @item (gtu:@var{m} @var{x} @var{y})
-Like @code{gt} but does unsigned comparison, on fixed-point numbers only.
+Like @code{gt} but does unsigned comparison, on integral modes only.
 
 @findex lt
 @cindex less than
@@ -2995,21 +2996,21 @@ to do it.
 
 For all conversion operations, @var{x} must not be @code{VOIDmode}
 because the mode in which to do the conversion would not be known.
-The conversion must either be done at compile-time or @var{x}
+The conversion must either be done at compile time or @var{x}
 must be placed into a register.
 
 @table @code
 @findex sign_extend
 @item (sign_extend:@var{m} @var{x})
 Represents the result of sign-extending the value @var{x}
-to machine mode @var{m}.  @var{m} must be a fixed-point mode
-and @var{x} a fixed-point value of a mode narrower than @var{m}.
+to machine mode @var{m}.  @var{m} must be an integral mode
+and @var{x} an integral value of a mode narrower than @var{m}.
 
 @findex zero_extend
 @item (zero_extend:@var{m} @var{x})
 Represents the result of zero-extending the value @var{x}
-to machine mode @var{m}.  @var{m} must be a fixed-point mode
-and @var{x} a fixed-point value of a mode narrower than @var{m}.
+to machine mode @var{m}.  @var{m} must be an integral mode
+and @var{x} an integral value of a mode narrower than @var{m}.
 
 @findex float_extend
 @item (float_extend:@var{m} @var{x})
@@ -3020,21 +3021,21 @@ and @var{x} a floating point value of a mode narrower than @var{m}.
 @findex truncate
 @item (truncate:@var{m} @var{x})
 Represents the result of truncating the value @var{x}
-to machine mode @var{m}.  @var{m} must be a fixed-point mode
-and @var{x} a fixed-point value of a mode wider than @var{m}.
+to machine mode @var{m}.  @var{m} must be an integral mode
+and @var{x} an integral value of a mode wider than @var{m}.
 
 @findex ss_truncate
 @item (ss_truncate:@var{m} @var{x})
 Represents the result of truncating the value @var{x}
 to machine mode @var{m}, using signed saturation in the case of
-overflow.  Both @var{m} and the mode of @var{x} must be fixed-point
+overflow.  Both @var{m} and the mode of @var{x} must be integral
 modes.
 
 @findex us_truncate
 @item (us_truncate:@var{m} @var{x})
 Represents the result of truncating the value @var{x}
 to machine mode @var{m}, using unsigned saturation in the case of
-overflow.  Both @var{m} and the mode of @var{x} must be fixed-point
+overflow.  Both @var{m} and the mode of @var{x} must be integral
 modes.
 
 @findex float_truncate
@@ -3045,12 +3046,12 @@ and @var{x} a floating point value of a mode wider than @var{m}.
 
 @findex float
 @item (float:@var{m} @var{x})
-Represents the result of converting fixed point value @var{x},
+Represents the result of converting integral value @var{x},
 regarded as signed, to floating point mode @var{m}.
 
 @findex unsigned_float
 @item (unsigned_float:@var{m} @var{x})
-Represents the result of converting fixed point value @var{x},
+Represents the result of converting integral value @var{x},
 regarded as unsigned, to floating point mode @var{m}.
 
 @findex fix
@@ -3799,13 +3800,16 @@ function calls.  It is important to distinguish these instructions because
 they imply that certain registers and memory locations may be altered
 unpredictably.
 
-@findex CALL_INSN_FUNCTION_USAGE
 @code{call_insn} insns have the same extra fields as @code{insn} insns,
-accessed in the same way and in addition contain a field
-@code{CALL_INSN_FUNCTION_USAGE}, which contains a list (chain of
-@code{expr_list} expressions) containing @code{use}, @code{clobber} and
-sometimes @code{set} expressions that denote hard registers and
-@code{mem}s used or clobbered by the called function.
+accessed in the same way.  They have two further fields:
+
+@table @code
+@findex CALL_INSN_FUNCTION_USAGE
+@item CALL_INSN_FUNCTION_USAGE
+This field contains a list (chain of @code{expr_list} expressions)
+containing @code{use}, @code{clobber} and sometimes @code{set}
+expressions that denote hard registers and @code{mem}s used or
+clobbered by the called function.
 
 A @code{mem} generally points to a stack slot in which arguments passed
 to the libcall by reference (@pxref{Register Arguments,
@@ -3823,6 +3827,13 @@ If the list contains a @code{set} involving two registers, it indicates
 that the function returns one of its arguments.  Such a @code{set} may
 look like a no-op if the same register holds the argument and the return
 value.
+
+@findex CALL_INSN_ABI_ID
+@item CALL_INSN_ABI_ID
+This field identifies the callee's calling convention, as an index in
+the range [0, @code{NUM_ABI_IDS} - 1].  See @file{function-abi.h} for
+more details about the representation of these calling conventions.
+@end table
 
 @findex code_label
 @findex CODE_LABEL_NUMBER
@@ -4429,7 +4440,7 @@ using namespace rtl_ssa;
 However, this is purely a matter of taste, and the examples in the rest of
 this section do not require it.
 
-The RTL SSA represention is an optional on-the-side feature that applies
+The RTL SSA representation is an optional on-the-side feature that applies
 on top of the normal RTL instructions.  It is currently local to individual
 RTL passes and is not maintained across passes.
 
@@ -4519,7 +4530,7 @@ structures and the underlying CFG @code{basic_block} structures
 @cindex ``real'' instructions, RTL SSA
 @anchor{real RTL SSA insns}
 If a CFG basic block @var{bb} contains an RTL instruction @var{insn},
-the RTL SSA represenation of @var{bb} also contains an RTL SSA representation
+the RTL SSA representation of @var{bb} also contains an RTL SSA representation
 of @var{insn}@footnote{Note that this excludes non-instruction things like
 @code{note}s and @code{barrier}s that also appear in the chain of RTL
 instructions.}.  Within RTL SSA, these instructions are referred to as
@@ -4842,7 +4853,7 @@ definition of R by ebb4's phi instruction, with the input coming from A
 
 @itemize @bullet
 @item
-use of the ebb4's R phi definition of R by B
+use of ebb4's phi definition of R by D
 @end itemize
 @end itemize
 

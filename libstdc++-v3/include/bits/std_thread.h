@@ -1,6 +1,6 @@
 // std::thread declarations -*- C++ -*-
 
-// Copyright (C) 2008-2025 Free Software Foundation, Inc.
+// Copyright (C) 2008-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -37,7 +37,7 @@
 #if __cplusplus >= 201103L
 #include <bits/c++config.h>
 
-#include <iosfwd>		// std::basic_ostream
+#include <bits/iosfwd.h>	// std::basic_ostream
 #include <tuple>		// std::tuple
 #include <bits/functional_hash.h> // std::hash
 #include <bits/invoke.h>	// std::__invoke

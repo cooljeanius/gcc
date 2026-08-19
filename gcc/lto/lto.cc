@@ -1,5 +1,5 @@
 /* Top-level LTO routines.
-   Copyright (C) 2009-2025 Free Software Foundation, Inc.
+   Copyright (C) 2009-2026 Free Software Foundation, Inc.
    Contributed by CodeSourcery, Inc.
 
 This file is part of GCC.
@@ -166,6 +166,22 @@ materialize_cgraph (void)
   timevar_pop (lto_timer);
 }
 
+/* Stream out all the linemap sections so they are available for LTRANS.  */
+
+static void
+stream_out_linemaps (const char *filename)
+{
+  const auto file = lto_obj_file_open (filename, true);
+  if (!file)
+    fatal_error (input_location, "%<lto_obj_file_open()%> failed");
+  lto_set_current_out_file (file);
+  lto_copy_linemaps ();
+  free (const_cast<char *> (file->filename));
+  lto_set_current_out_file (nullptr);
+  lto_obj_file_close (file);
+  free (file);
+}
+
 /* Actually stream out ENCODER into TEMP_FILENAME.  */
 
 static void
@@ -180,7 +196,7 @@ stream_out (char *temp_filename, lto_symtab_encoder_t encoder, int part)
   streamer_dump_file = dump_begin (TDI_lto_stream_out, NULL, part);
   ipa_write_optimization_summaries (encoder, part == 0);
 
-  free (CONST_CAST (char *, file->filename));
+  free (const_cast<char *> (file->filename));
 
   lto_set_current_out_file (NULL);
   lto_obj_file_close (file);
@@ -265,9 +281,8 @@ stream_out_partitions (char *temp_filename, int blen, int min, int max,
 	      wait_for_child ();
 	    else
 	      {
-		/* There are no free tokens, lets do the job outselves.  */
+		/* There are no free tokens, lets do the job ourselves.  */
 		stream_out_partitions_1 (temp_filename, blen, min, max);
-		asm_nodes_output = true;
 		return;
 	      }
 	  }
@@ -296,7 +311,6 @@ stream_out_partitions (char *temp_filename, int blen, int min, int max,
       if (jinfo != NULL && jinfo->is_connected)
 	jinfo->disconnect ();
     }
-  asm_nodes_output = true;
 #else
   stream_out_partitions_1 (temp_filename, blen, min, max);
 #endif
@@ -359,6 +373,12 @@ lto_wpa_write_files (void)
       sets_per_worker = (n_sets + lto_parallelism - 1) / lto_parallelism;
     }
 
+  /* Write out all the linemaps since they will be needed during LTRANS.  */
+  sprintf (temp_filename + blen, "%u.o", n_sets);
+  const auto linemap_filename = xstrdup (temp_filename);
+  stream_out_linemaps (linemap_filename);
+
+  /* Write out the partitions.  */
   for (i = 0; i < n_sets; i++)
     {
       ltrans_partition part = ltrans_partitions[i];
@@ -381,14 +401,17 @@ lto_wpa_write_files (void)
 	       !lsei_end_p (lsei);
 	       lsei_next_in_partition (&lsei))
 	    {
-	      symtab_node *node = lsei_node (lsei);
-	      fprintf (symtab->dump_file, "%s ", node->dump_asm_name ());
+	      symtab_node *node = dyn_cast<symtab_node*> (lsei_node (lsei));
+	      if (node)
+		fprintf (symtab->dump_file, "%s ", node->dump_asm_name ());
 	    }
 	  fprintf (symtab->dump_file, "\n  Symbols in boundary: ");
 	  for (lsei = lsei_start (part->encoder); !lsei_end_p (lsei);
 	       lsei_next (&lsei))
 	    {
-	      symtab_node *node = lsei_node (lsei);
+	      symtab_node *node = dyn_cast<symtab_node*> (lsei_node (lsei));
+	      if (!node)
+		continue;
 	      if (!lto_symtab_encoder_in_partition_p (part->encoder, node))
 		{
 		  fprintf (symtab->dump_file, "%s ", node->dump_asm_name ());
@@ -427,6 +450,8 @@ lto_wpa_write_files (void)
   if (ltrans_output_list_stream == NULL)
     fatal_error (input_location,
 		 "opening LTRANS output list %s: %m", ltrans_output_list);
+  fprintf (ltrans_output_list_stream, "0\n%s\n", linemap_filename);
+  free (linemap_filename);
   for (i = 0; i < n_sets; i++)
     {
       unsigned int len = strlen (temp_filenames[i]);
@@ -547,7 +572,9 @@ do_whole_program_analysis (void)
 
   symtab_node::checking_verify_symtab_nodes ();
   bitmap_obstack_release (NULL);
-  if (flag_lto_partition == LTO_PARTITION_1TO1)
+  if (flag_ipa_reorder_for_locality)
+    lto_locality_map (param_max_locality_partition_size);
+  else if (flag_lto_partition == LTO_PARTITION_1TO1)
     lto_1_to_1_map ();
   else if (flag_lto_partition == LTO_PARTITION_MAX)
     lto_max_map ();
@@ -586,7 +613,7 @@ do_whole_program_analysis (void)
 
   /* Collect a last time - in lto_wpa_write_files we may end up forking
      with the idea that this doesn't increase memory usage.  So we
-     absoultely do not want to collect after that.  */
+     absolutely do not want to collect after that.  */
   ggc_collect ();
 
   timevar_start (TV_PHASE_STREAM_OUT);

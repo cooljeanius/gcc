@@ -1,5 +1,5 @@
 /* Header file for gimplification.
-   Copyright (C) 2013-2025 Free Software Foundation, Inc.
+   Copyright (C) 2013-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -62,9 +62,6 @@ extern tree get_initialized_tmp_var (tree, gimple_seq *, gimple_seq * = NULL,
 extern void declare_vars (tree, gimple *, bool);
 extern void gimple_add_tmp_var (tree);
 extern void gimple_add_tmp_var_fn (struct function *, tree);
-extern void copy_if_shared (tree *, void * = NULL);
-extern tree unshare_expr (tree);
-extern tree unshare_expr_without_location (tree);
 extern tree voidify_wrapper_expr (tree, tree);
 extern tree build_and_jump (tree *);
 extern enum gimplify_status gimplify_self_mod_expr (tree *, gimple_seq *,
@@ -78,6 +75,10 @@ extern enum gimplify_status gimplify_expr (tree *, gimple_seq *, gimple_seq *,
 
 extern tree omp_get_construct_context (void);
 int omp_has_novariants (void);
+
+extern gimple_seq *enter_omp_iterator_loop_context (tree, gomp_target *,
+						    gimple_seq * = NULL);
+extern void exit_omp_iterator_loop_context (tree);
 
 extern void gimplify_type_sizes (tree, gimple_seq *);
 extern void gimplify_one_sizepos (tree *, gimple_seq *);

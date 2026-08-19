@@ -1,5 +1,5 @@
 /* GCC backend definitions for the Renesas RX processor.
-   Copyright (C) 2008-2025 Free Software Foundation, Inc.
+   Copyright (C) 2008-2026 Free Software Foundation, Inc.
    Contributed by Red Hat.
 
    This file is part of GCC.
@@ -195,13 +195,10 @@ enum reg_class
 {							\
   { 0x00000000 },	/* No registers,  */		\
   { 0x0000ffff },	/* Integer registers.  */	\
-  { 0x0000ffff }	/* All registers.  */		\
+  { 0x0001ffff }	/* All registers. */		\
 }
 
 #define N_REG_CLASSES			(int) LIM_REG_CLASSES
-#define CLASS_MAX_NREGS(CLASS, MODE)    ((GET_MODE_SIZE (MODE) \
-					  + UNITS_PER_WORD - 1) \
-					 / UNITS_PER_WORD)
 
 #define GENERAL_REGS			GR_REGS
 #define BASE_REG_CLASS  		GR_REGS

@@ -1,4 +1,4 @@
-// Copyright (C) 2016-2025 Free Software Foundation, Inc.
+// Copyright (C) 2016-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -48,7 +48,7 @@ test02()
 
   auto str = p.string<char>();
   VERIFY( str == "abc" );
-  VERIFY( str == p.string() );
+  VERIFY( str == p.string() ); // { dg-warning "deprecated" "" { target c++26 } }
 
 #ifdef _GLIBCXX_USE_WCHAR_T
   auto strw = p.string<wchar_t>();

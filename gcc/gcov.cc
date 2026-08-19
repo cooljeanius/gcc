@@ -1,6 +1,6 @@
 /* Gcov.c: prepend line execution counts and branch probabilities to a
    source file.
-   Copyright (C) 1990-2025 Free Software Foundation, Inc.
+   Copyright (C) 1990-2026 Free Software Foundation, Inc.
    Contributed by James E. Wilson of Cygnus Support.
    Mangled by Bob Manson of Cygnus Support.
    Mangled further by Nathan Sidwell <nathan@codesourcery.com>
@@ -48,6 +48,7 @@ along with Gcov; see the file COPYING3.  If not see
 #include "json.h"
 #include "hwint.h"
 #include "xregex.h"
+#include "graphds.h"
 
 #include <zlib.h>
 #include <getopt.h>
@@ -84,6 +85,7 @@ class function_info;
 class block_info;
 class source_info;
 class condition_info;
+class path_info;
 
 /* Describes an arc between two basic blocks.  */
 
@@ -124,9 +126,82 @@ struct arc_info
   /* Is a false arc.  */
   unsigned int false_value : 1;
 
+  /* Is suppressed arc by #pragma GCC suppress_coverage.  */
+  unsigned int suppressed : 1;
+
   /* Links to next arc on src and dst lists.  */
   struct arc_info *succ_next;
   struct arc_info *pred_next;
+};
+
+/* Describes (prime) path coverage.  */
+class path_info
+{
+public:
+  path_info () : paths (), covered () {}
+
+  /* The prime paths of a function.  The paths will be
+     lexicographically ordered and identified by their index.  */
+  vector<vector<unsigned>> paths;
+
+  /* The covered paths.  This is really a large bitset partitioned
+     into buckets of gcov_type_unsigned, and bit n is set if the nth
+     path is covered.  */
+  vector<gcov_type_unsigned> covered;
+
+  /* The prime paths after #pragma GCC suppress_coverage has been taken into
+     account.  This is empty unless something is suppressed, in which case it
+     should be smaller than PATHS.  The paths are lexicographically sorted.  */
+  vector<vector<unsigned>> residual_paths;
+
+  /* The covered paths after #pragma GCC suppress_coverage has been taken into
+     account.  Like with COVERED, the bit N is set if the Nth path in
+     RESIDUAL_PATHS is covered.  */
+  vector<gcov_type_unsigned> residual_covered;
+
+  /* The size (in bits) of each bucket.  */
+  static const size_t
+  bucketsize = sizeof (gcov_type_unsigned) * BITS_PER_UNIT;
+
+  /* Helper for getting the right path set.  */
+  const vector<vector<unsigned>>& get_paths () const
+  { return !suppressed_p () ? paths : residual_paths; }
+
+  /* Get the number of paths, accounting for suppressed blocks.  */
+  size_t path_count () const
+  { return get_paths ().size (); }
+
+  /* Get the number of suppressed paths.  This is 0 unless there is a #pragma
+     GCC suppress_coverage somewhere.  */
+  size_t suppressed_count () const
+  { return paths.size () - path_count (); }
+
+  /* Check if any paths suppressed by #pragma GCC suppress_coverage.  */
+  bool suppressed_p () const
+  { return !residual_paths.empty (); }
+
+  /* Count the covered paths, accounting for #pragma GCC suppress_coverage.  */
+  unsigned covered_paths () const
+  {
+    unsigned cnt = 0;
+    for (gcov_type_unsigned v : (!suppressed_p () ? covered : residual_covered))
+      cnt += popcount_hwi (v);
+    return cnt;
+  }
+
+  /* Check if the nth path is covered.  */
+  bool covered_p (size_t n) const
+  {
+    if (covered.empty ())
+      return false;
+
+    const auto& cov = !suppressed_p () ? covered : residual_covered;
+    const size_t bucket = n / bucketsize;
+    const uint64_t bit = n % bucketsize;
+    return cov[bucket] & (gcov_type_unsigned (1) << bit);
+  }
+
+  void suppress_blocks (const vector<bool>& suppressed);
 };
 
 /* Describes which locations (lines and files) are associated with
@@ -203,6 +278,9 @@ public:
   /* Block is a landing pad for longjmp or throw.  */
   unsigned is_nonlocal_return : 1;
 
+  /* Block is suppressed by #pragma GCC suppress_coverage.  */
+  unsigned suppressed : 1;
+
   condition_info conditions;
 
   vector<block_location_info> locations;
@@ -225,7 +303,7 @@ public:
 block_info::block_info (): succ (NULL), pred (NULL), num_succ (0), num_pred (0),
   id (0), count (0), count_valid (0), valid_chain (0), invalid_chain (0),
   exceptional (0), is_call_site (0), is_call_return (0), is_nonlocal_return (0),
-  locations (), chain (NULL)
+  suppressed (0), locations (), chain (NULL)
 {
   cycle.arc = NULL;
 }
@@ -254,10 +332,12 @@ public:
   unsigned exists : 1;
   unsigned unexceptional : 1;
   unsigned has_unexecuted_block : 1;
+  /* Suppressed by #pragma GCC suppress_coverage.  */
+  unsigned suppressed : 1;
 };
 
 line_info::line_info (): count (0), branches (), blocks (), exists (false),
-  unexceptional (0), has_unexecuted_block (0)
+  unexceptional (0), has_unexecuted_block (0), suppressed (0)
 {
 }
 
@@ -317,6 +397,9 @@ public:
 
   vector<condition_info*> conditions;
 
+  /* Path coverage information.  */
+  path_info paths;
+
   /* Raw arc coverage counts.  */
   vector<gcov_type> counts;
 
@@ -340,6 +423,11 @@ public:
 
   /* Next function.  */
   class function_info *next;
+
+  /* Blocks suppressed by #pragma GCC suppress_coverage.  If any block is
+     suppressed this is non-empty, and the Nth bit is true if N is suppressed.
+     If suppressed_blocks[0] is true, the whole function is suppressed.  */
+  vector<bool> suppressed_blocks;
 
   /*  Get demangled name of a function.  The demangled name
       is converted when it is used for the first time.  */
@@ -366,6 +454,11 @@ public:
   {
     return blocks.size () - 2;
   }
+
+  bool suppressed_p () const
+  {
+    return !suppressed_blocks.empty () && suppressed_blocks.front ();
+  }
 };
 
 /* Function info comparer that will sort functions according to starting
@@ -386,20 +479,30 @@ struct function_line_start_cmp
 
 struct coverage_info
 {
+  int function_suppressed;
+
   int lines;
   int lines_executed;
+  int lines_suppressed;
 
   int branches;
   int branches_executed;
   int branches_taken;
+  int branches_suppressed;
 
   int conditions;
   int conditions_covered;
+  int conditions_suppressed;
 
   int calls;
   int calls_executed;
+  int calls_suppressed;
 
   char *name;
+
+  unsigned paths;
+  unsigned paths_covered;
+  unsigned paths_suppressed;
 };
 
 /* Describes a file mentioned in the block graph.  Contains an array
@@ -561,6 +664,7 @@ static unsigned object_runs;
 
 static unsigned total_lines;
 static unsigned total_executed;
+static unsigned total_suppressed;
 
 /* Modification time of graph file.  */
 
@@ -607,6 +711,17 @@ static bool flag_conditions = 0;
 /* Show unconditional branches too.  */
 static int flag_unconditional = 0;
 
+/* Output path coverage.  */
+static bool flag_prime_paths = false;
+
+/* Output path coverage - lines mode.  */
+static bool flag_prime_paths_lines_covered = false;
+static bool flag_prime_paths_lines_uncovered = false;
+
+/* Output path coverage - source mode.  */
+static bool flag_prime_paths_source_covered  = false;
+static bool flag_prime_paths_source_uncovered  = false;
+
 /* Output a gcov file if this is true.  This is on by default, and can
    be turned off by the -n option.  */
 
@@ -636,7 +751,7 @@ static int flag_long_names = 0;
 
 static int flag_hash_filenames = 0;
 
-/* Print verbose informations.  */
+/* Print verbose information.  */
 
 static int flag_verbose = 0;
 
@@ -750,11 +865,13 @@ static unsigned find_source (const char *);
 static void read_graph_file (void);
 static int read_count_file (void);
 static void solve_flow_graph (function_info *);
+static void find_prime_paths (function_info *fn);
 static void find_exception_blocks (function_info *);
 static void add_branch_counts (coverage_info *, const arc_info *);
 static void add_condition_counts (coverage_info *, const block_info *);
+static void add_path_counts (coverage_info &, const function_info &);
 static void add_line_counts (coverage_info *, function_info *);
-static void executed_summary (unsigned, unsigned);
+static void executed_summary (unsigned, unsigned, unsigned);
 static void function_summary (const coverage_info *);
 static void file_summary (const coverage_info *);
 static const char *format_gcov (gcov_type, gcov_type, int);
@@ -799,6 +916,223 @@ function_info::~function_info ()
 bool function_info::group_line_p (unsigned n, unsigned src_idx)
 {
   return is_group && src == src_idx && start_line <= n && n <= end_line;
+}
+
+/* Check if the block ID is a tombstone.  */
+static bool
+tombstone_p (unsigned id)
+{
+  return id == unsigned (-1);
+};
+
+/* Remove tombstones from VEC.  Preserves the order of remaining values.  */
+static vector<unsigned>
+remove_tombstones (vector<unsigned> vec)
+{
+  vec.erase (remove_if (vec.begin (), vec.end (), tombstone_p), vec.end ());
+  return vec;
+}
+
+/* Check if SUB is a a proper contiguous subsequence of SUPER with tombstones
+   functioning as wildcards.
+
+   If SUB and SUPER would be equal if tombstones are removed, SUB is not a
+   proper subsequence and this function returns false.
+
+   Examples:
+
+   SUB:   2 -1 12
+   SUPER: 2 -1 -1 12
+   Returns false because both sequences become [2 12] without tombstones.
+
+   SUB: 2 -1 12
+   SUPER: 2 7 12
+   Returns true because 2 12 appear in that order in SUPER and there is a
+   tombstone between 2 and 12.
+
+   SUB: 2 12
+   SUPER: 2 7 12
+   Returns false because 2 and 12 are not consecutive in SUPER.
+
+   SUB: 12 7
+   SUPER: 2 7 12
+   Returns false because 7 is before 12 in SUPER.
+
+   SUB: -1 7 12
+   SUPER: -1 7 -1 12 -1
+   Returns false because both sequences are 7 12 once tombstones are removed.
+*/
+static bool
+tombstone_subsequence_p (const vector<unsigned>& sub,
+			 const vector<unsigned>& super)
+{
+  if (&sub == &super)
+    return false;
+
+  auto xend = sub.end ();
+  auto yend = super.end ();
+  auto xitr = find_if_not (sub.begin (), xend, tombstone_p);
+  auto yitr = find_if_not (super.begin (), yend, tombstone_p);
+
+  /* If SUB is empty or all tombstones it is included in any other path.  */
+  if (xitr == xend)
+    return true;
+  /* If SUPER is empty or all tombstones it does not include anything.  */
+  if (yitr == yend)
+    return false;
+
+  bool equivalent = *yitr == *xitr;
+  /* Find the position in SUPER where the SUB may start.  */
+  if (!equivalent)
+    {
+      yitr = find (yitr, yend, *xitr);
+      if (yitr == yend)
+	return false;
+    }
+
+  for (; xitr != xend; ++xitr, ++yitr)
+    if (tombstone_p (*xitr))
+      {
+	/* Skip past any tombstones to find the next value.  We need to compare
+	   to the next non-tombstone value in SUPER to know if we skipped any
+	   values to check for equivalence, otherwise this could just be
+	   std::find for SUPER.  */
+	xitr = find_if_not (xitr, xend, tombstone_p);
+	yitr = find_if_not (yitr, yend, tombstone_p);
+
+	/* If there are no more non-tombstone blocks i SUB we're almost done,
+	   but we still need to if there are more blocks in SUPER.  */
+	if (xitr == xend)
+	  return yitr != yend || !equivalent;
+
+	if (yitr == yend)
+	  return false;
+
+	/* Now check for equivalence and look for the value in SUPER.  This is
+	   a no-op if we found it already.  */
+	equivalent = equivalent && *yitr == *xitr;
+	yitr = find (yitr, yend, *xitr);
+	if (yitr == yend)
+	  return false;
+      }
+    else if (*yitr != *xitr)
+      return false;
+
+  yitr = find_if_not (yitr, yend, tombstone_p);
+  return yitr == yend && !equivalent;
+}
+
+/* Check if NEEDLE is a proper subsequence of any sequence in HAYSTACK except
+   itself.  Suppressed blocks/tombstones function as wildcards and match any
+   subsequence.  If two sequences are equal once tombstones are removed they
+   are not proper subsequences of eachother.
+
+   We may get odd sequence when we remove parts of a path, so we
+   extend the when the path A subsumes B to include non-contiguous
+   subsequences.
+
+   Given a set of prime paths:
+    2 3 4 12
+    2 3 5 6 12
+    2 3 5 7 8 10 12
+    2 3 5 7 8 9 10 12
+    2 3 5 7 8 9 11 12
+
+   We have a blacklist of 3 4 5 6 8 9 10 which means these nodes should be
+   removed from all paths.  If we replace blacklisted nodes with tombstones
+   (-1) and remove duplicates we get:
+    2 -1 12
+    2 -1 7 -1 11 12
+    2 -1 7 -1 12
+
+   A path is prime if it is not a subpath of any other paths.  Suppressed
+   segments may be covered by any sequence of nodes, so the path:
+    2 -1 7 -1 11 12
+   would subsume (<:) the other paths:
+    2 -1 12   <: 2 [7 11] 12
+    2 -1 7 12 <: 2 7 [11] 12
+
+   Thus the only prime path is 2 7 11 12.  */
+static bool
+subsumed_by_any_p (const vector<unsigned>& needle,
+		   const vector<vector<unsigned>>& haystack)
+{
+  if (all_of (needle.begin (), needle.end (), tombstone_p))
+    return true;
+  for (const auto& seq : haystack)
+    if (tombstone_subsequence_p (needle, seq))
+      return true;
+  return false;
+}
+
+/* Compute the new paths and coverage by ignoring the blocks in SUPPRESSED.
+   Does nothing when SUPPRESSED is empty.  This only adds the new
+   interpretation and does not change the observed path and coverage info.  */
+void
+path_info::suppress_blocks (const vector<bool>& suppressed)
+{
+  if (suppressed.empty ())
+    return;
+
+  const unsigned tombstone = unsigned (-1);
+  /* Clean up the paths by replacing suppressed blocks with tombstones.  */
+  vector<vector<unsigned>> ipaths;
+  ipaths.reserve (paths.size ());
+  for (const auto& path : paths)
+    {
+      vector<unsigned> tmp;
+      tmp.reserve (path.size ());
+      for (auto v : path)
+	tmp.push_back (!suppressed[v] ? v : tombstone);
+      ipaths.push_back (std::move (tmp));
+    }
+
+  /* Changing paths means some paths may turn into subpaths, so we find and
+     store the new prime paths mapped to the original indices for later.
+     The new paths are map both sorts the paths and filters duplicates
+     duplicates.  */
+  map<vector<unsigned> /* path */, vector<size_t> /* indices */> nextpaths;
+  for (size_t i = 0; i != ipaths.size (); ++i)
+    if (!subsumed_by_any_p (ipaths[i], ipaths))
+      nextpaths[remove_tombstones (ipaths[i])].push_back (i);
+
+  /* Record the coverage of the new paths.  The new paths may be the result
+     of merging paths, and if either original path is covered then the merged
+     path should be covered.  */
+  vector<gcov_type_unsigned> nextcovered;
+  const size_t nbits = path_info::bucketsize;
+  const size_t nbuckets = (nextpaths.size () + (nbits - 1)) / nbits;
+  nextcovered.resize (nbuckets);
+  std::size_t n = 0;
+  for (const auto& np : nextpaths)
+    {
+      const size_t bucket = n / bucketsize;
+      const uint64_t bit = n % bucketsize;
+      for (size_t index : np.second)
+	if (covered_p (index))
+	  {
+	    nextcovered[bucket] |= (gcov_type_unsigned (1) << bit);
+	    break;
+	  }
+      n++;
+    }
+  residual_covered.swap (nextcovered);
+
+  /* Store the new paths.  The map iteration outputs the paths
+     lexicographically ordered.  */
+  for (auto& p : nextpaths)
+    residual_paths.push_back (std::move (p.first));
+}
+
+/* Find the arc that connects BLOCK to the block with id DEST, or nullptr if it
+   doesn't exist.  */
+static const arc_info*
+find_arc (const block_info &block, unsigned dest)
+{
+  for (const arc_info *arc = block.succ; arc; arc = arc->succ_next)
+    if (arc->dst->id == dest)
+      return arc;
+  return nullptr;
 }
 
 /* Cycle detection!
@@ -1008,7 +1342,7 @@ main (int argc, char **argv)
     }
 
   if (!flag_use_stdout)
-    executed_summary (total_lines, total_executed);
+    executed_summary (total_lines, total_executed, total_suppressed);
 
   return return_code;
 }
@@ -1030,6 +1364,15 @@ print_usage (int error_p)
                                     rather than percentages\n");
   fnotice (file, "  -g, --conditions                Include modified condition/decision\n\
                                     coverage (masking MC/DC) in output\n");
+  fnotice (file, "  -e, --prime-paths               Show prime path coverage summary\n");
+  fnotice (file, "      --prime-paths-lines[=TYPE]  Include paths in output\n\
+                                    line trace mode - does not affect json\n\
+                                    TYPE is 'covered', 'uncovered', or 'both'\n\
+                                    and defaults to 'uncovered'\n");
+  fnotice (file, "      --prime-paths-source[=TYPE] Include paths in output\n\
+                                    source trace mode - does not affect json\n\
+                                    TYPE is 'covered', 'uncovered', or 'both'\n\
+                                    and defaults to 'uncovered'\n");
   fnotice (file, "  -d, --display-progress          Display progress information\n");
   fnotice (file, "  -D, --debug			    Display debugging dumps\n");
   fnotice (file, "  -f, --function-summaries        Output summaries for each function\n");
@@ -1054,7 +1397,7 @@ print_usage (int error_p)
   fnotice (file, "  -t, --stdout                    Output to stdout instead of a file\n");
   fnotice (file, "  -u, --unconditional-branches    Show unconditional branch counts too\n");
   fnotice (file, "  -v, --version                   Print version number, then exit\n");
-  fnotice (file, "  -w, --verbose                   Print verbose informations\n");
+  fnotice (file, "  -w, --verbose                   Print verbose information\n");
   fnotice (file, "  -x, --hash-filenames            Hash long pathnames\n");
   fnotice (file, "\nObsolete options:\n");
   fnotice (file, "  -i, --json-format               Replaced with -j, --json-format\n");
@@ -1071,7 +1414,7 @@ print_version (void)
 {
   fnotice (stdout, "gcov %s%s\n", pkgversion_string, version_string);
   fnotice (stdout, "JSON format version: %s\n", GCOV_JSON_FORMAT_VERSION);
-  fprintf (stdout, "Copyright %s 2025 Free Software Foundation, Inc.\n",
+  fprintf (stdout, "Copyright %s 2026 Free Software Foundation, Inc.\n",
 	   _("(C)"));
   fnotice (stdout,
 	   _("This is free software; see the source for copying conditions.  There is NO\n\
@@ -1088,6 +1431,9 @@ static const struct option options[] =
   { "branch-probabilities", no_argument,       NULL, 'b' },
   { "branch-counts",        no_argument,       NULL, 'c' },
   { "conditions",	    no_argument,       NULL, 'g' },
+  { "prime-paths",	    no_argument,       NULL, 'e' },
+  { "prime-paths-lines",    optional_argument, NULL, 900 },
+  { "prime-paths-source",   optional_argument, NULL, 901 },
   { "json-format",	    no_argument,       NULL, 'j' },
   { "include",              required_argument, NULL, 'I' },
   { "exclude",              required_argument, NULL, 'E' },
@@ -1119,7 +1465,7 @@ process_args (int argc, char **argv)
 {
   int opt;
 
-  const char *opts = "abcdDfghHijklmMno:pqrs:tuvwx";
+  const char *opts = "abcdDefghHijklmMno:pqrs:tuvwx";
   while ((opt = getopt_long (argc, argv, opts, options, NULL)) != -1)
     {
       switch (opt)
@@ -1132,6 +1478,51 @@ process_args (int argc, char **argv)
 	  break;
 	case 'c':
 	  flag_counts = 1;
+	  break;
+	case 'e':
+	  flag_prime_paths = true;
+	  break;
+	case 900:
+	  flag_prime_paths = true;
+	  if (!optarg)
+	    flag_prime_paths_lines_uncovered = true;
+	  else if (strcmp (optarg, "uncovered") == 0)
+	    flag_prime_paths_lines_uncovered = true;
+	  else if (strcmp (optarg, "covered") == 0)
+	    flag_prime_paths_lines_covered = true;
+	  else if (strcmp (optarg, "both") == 0)
+	    {
+		flag_prime_paths_lines_covered = true;
+		flag_prime_paths_lines_uncovered = true;
+	    }
+	  else
+	    {
+	      fnotice (stderr, "invalid argument '%s' for "
+		       "'--prime-paths-lines'. Valid arguments are: "
+		       "'covered', 'uncovered', 'both'\n", optarg);
+	      exit (FATAL_EXIT_CODE);
+	    }
+	  break;
+	case 901:
+	  flag_prime_paths = true;
+	  if (!optarg)
+	    flag_prime_paths_source_uncovered = true;
+	  else if (strcmp (optarg, "uncovered") == 0)
+	    flag_prime_paths_source_uncovered = true;
+	  else if (strcmp (optarg, "covered") == 0)
+	    flag_prime_paths_source_covered = true;
+	  else if (strcmp (optarg, "both") == 0)
+	    {
+		flag_prime_paths_source_covered = true;
+		flag_prime_paths_source_uncovered = true;
+	    }
+	  else
+	    {
+	      fnotice (stderr, "invalid argument '%s' for "
+		       "'--prime-paths-source'. Valid arguments are: "
+		       "'covered', 'uncovered', 'both'\n", optarg);
+	      exit (FATAL_EXIT_CODE);
+	    }
 	  break;
 	case 'f':
 	  flag_function_summary = 1;
@@ -1256,7 +1647,11 @@ output_intermediate_json_line (json::array *object,
     for (it = line->branches.begin (); it != line->branches.end ();
 	 it++)
       {
-	if (!(*it)->is_unconditional && !(*it)->is_call_non_return)
+	if ((*it)->suppressed)
+	  {
+	    /* Skip.  */
+	  }
+	else if (!(*it)->is_unconditional && !(*it)->is_call_non_return)
 	  {
 	    json::object *branch = new json::object ();
 	    branch->set_integer ("count", (*it)->count);
@@ -1284,6 +1679,9 @@ output_intermediate_json_line (json::array *object,
     vector<block_info *>::const_iterator it;
     for (it = line->blocks.begin (); it != line->blocks.end (); it++)
       {
+	if ((*it)->suppressed)
+	  continue;
+
 	const condition_info& info = (*it)->conditions;
 	if (info.n_terms == 0)
 	    continue;
@@ -1331,7 +1729,7 @@ strip_extention (string str)
   return str;
 }
 
-/* Calcualte md5sum for INPUT string and return it in hex string format.  */
+/* Calculate md5sum for INPUT string and return it in hex string format.  */
 
 static string
 get_md5sum (const char *input)
@@ -1385,6 +1783,76 @@ get_gcov_intermediate_filename (const char *input_file_name)
   return str.c_str ();
 }
 
+/* Add prime path coverage from INFO to FUNCTION.  */
+static void
+json_set_prime_path_coverage (json::object &function, function_info &info)
+{
+  json::array *jpaths = new json::array ();
+  function.set_integer ("total_prime_paths", info.paths.path_count ());
+  function.set_integer ("covered_prime_paths", info.paths.covered_paths ());
+  function.set_integer ("suppressed_prime_paths",
+			info.paths.suppressed_count ());
+  function.set ("prime_path_coverage", jpaths);
+
+  size_t pathno = 0;
+  for (const vector<unsigned> &path : info.paths.get_paths ())
+    {
+      if (info.paths.covered_p (pathno++))
+	continue;
+
+      gcc_assert (!path.empty ());
+
+      json::object *jpath = new json::object ();
+      jpaths->append (jpath);
+      jpath->set_integer ("id", pathno - 1);
+
+      json::array *jlist = new json::array ();
+      jpath->set ("sequence", jlist);
+
+      for (size_t i = 0; i != path.size (); ++i)
+	{
+	  const unsigned bb = path[i];
+	  const block_info &block = info.blocks[bb];
+	  const char *edge_kind = "";
+	  if (i + 1 != path.size ())
+	    {
+	      const arc_info *arc = find_arc (block, path[i+1]);
+	      if (!arc)
+		edge_kind = "suppress";
+	      else if (arc->true_value)
+		edge_kind = "true";
+	      else if (arc->false_value)
+		edge_kind = "false";
+	      else if (arc->fall_through)
+		edge_kind = "fallthru";
+	      else if (arc->is_throw)
+		edge_kind = "throw";
+	    }
+
+	  json::object *jblock = new json::object ();
+	  json::array *jlocs = new json::array ();
+	  jblock->set_integer ("block_id", block.id);
+	  jblock->set ("locations", jlocs);
+	  jblock->set_string ("edge_kind", edge_kind);
+	  jlist->append (jblock);
+	  for (const block_location_info &loc : block.locations)
+	    {
+	      /* loc.lines could be empty when a statement is not anchored to a
+		 source file -- see g++.dg/gcov/gcov-23.C.  */
+	      if (loc.lines.empty ())
+		continue;
+	      json::object *jloc = new json::object ();
+	      json::array *jline_numbers = new json::array ();
+	      jlocs->append (jloc);
+	      jloc->set_string ("file", sources[loc.source_file_idx].name);
+	      jloc->set ("line_numbers", jline_numbers);
+	      for (unsigned line : loc.lines)
+		jline_numbers->append (new json::integer_number (line));
+	    }
+	}
+    }
+}
+
 /* Output the result in JSON intermediate format.
    Source info SRC is dumped into JSON_FILES which is JSON array.  */
 
@@ -1413,8 +1881,12 @@ output_json_intermediate_file (json::array *json_files, source_info *src)
       function->set_integer ("end_column", (*it)->end_column);
       function->set_integer ("blocks", (*it)->get_block_count ());
       function->set_integer ("blocks_executed", (*it)->blocks_executed);
+      function->set_integer ("blocks_suppressed",
+			     count ((*it)->suppressed_blocks.begin (),
+				    (*it)->suppressed_blocks.end (), true));
       function->set_integer ("execution_count", (*it)->blocks[0].count);
 
+      json_set_prime_path_coverage (*function, **it);
       functions->append (function);
     }
 
@@ -1575,6 +2047,19 @@ process_all_functions (void)
       function_info *fn = *it;
       unsigned src = fn->src;
 
+      if (!fn->suppressed_blocks.empty ())
+	{
+	  /* Set the ignore flag on blocks, arcs.  */
+	  for (block_info &b : fn->blocks)
+	    if (fn->suppressed_blocks[b.id] || fn->suppressed_p ())
+	      {
+		b.suppressed = 1;
+		for (arc_info *arc = b.succ; arc; arc = arc->succ_next)
+		  arc->suppressed = 1;
+		for (arc_info *arc = b.pred; arc; arc = arc->pred_next)
+		  arc->suppressed = 1;
+	      }
+	}
       if (!fn->counts.empty () || no_data_file)
 	{
 	  source_info *s = &sources[src];
@@ -1612,6 +2097,10 @@ process_all_functions (void)
 			    }
 			}
 		    }
+
+		  if (block->suppressed || fn->suppressed_p ())
+		    for (unsigned ln : block->locations[i].lines)
+		      s->lines[ln].suppressed = 1;
 		}
 	    }
 
@@ -1626,9 +2115,22 @@ process_all_functions (void)
 	  if (fn->is_group)
 	    fn->lines.resize (fn->end_line - fn->start_line + 1);
 
+	  /* Propagate the suppressed flag too.  */
+	  if (fn->is_group)
+	    {
+	      const auto& source = sources[fn->src];
+	      for (unsigned ln = fn->start_line, dst = 0; ln <= fn->end_line;
+		   ++ln, ++dst)
+		fn->lines[dst].suppressed = source.lines.at (ln).suppressed;
+	    }
+
 	  solve_flow_graph (fn);
 	  if (fn->has_catch)
 	    find_exception_blocks (fn);
+
+	  /* For path coverage.  */
+	  find_prime_paths (fn);
+	  fn->paths.suppress_blocks (fn->suppressed_blocks);
 	}
       else
 	{
@@ -1685,13 +2187,25 @@ generate_results (const char *file_name)
       coverage_info coverage;
 
       memset (&coverage, 0, sizeof (coverage));
+      if (fn->suppressed_p ())
+	coverage.function_suppressed = 1;
       coverage.name = fn->get_name ();
       add_line_counts (flag_function_summary ? &coverage : NULL, fn);
-      if (flag_function_summary)
-	{
-	  function_summary (&coverage);
-	  fnotice (stdout, "\n");
-	}
+
+      if (!flag_function_summary)
+	continue;
+
+      for (const block_info& block : fn->blocks)
+	for (arc_info *arc = block.succ; arc; arc = arc->succ_next)
+	  add_branch_counts (&coverage, arc);
+
+      for (const block_info& block : fn->blocks)
+	add_condition_counts (&coverage, &block);
+
+      add_path_counts (coverage, *fn);
+
+      function_summary (&coverage);
+      fnotice (stdout, "\n");
     }
 
   name_map needle;
@@ -1734,6 +2248,9 @@ generate_results (const char *file_name)
 	    continue;
 	}
 
+      for (function_info *fn : src->functions)
+	add_path_counts (src->coverage, *fn);
+
       accumulate_line_counts (src);
       if (flag_debug)
 	src->debug ();
@@ -1742,6 +2259,7 @@ generate_results (const char *file_name)
 	file_summary (&src->coverage);
       total_lines += src->coverage.lines;
       total_executed += src->coverage.lines_executed;
+      total_suppressed += src->coverage.lines_suppressed;
       if (flag_gcov_file)
 	{
 	  if (flag_json_format)
@@ -1880,7 +2398,7 @@ create_file_names (const char *file_name)
     }
 
   /* Remove the extension.  */
-  cptr = strrchr (CONST_CAST (char *, lbasename (name)), '.');
+  cptr = strrchr (const_cast<char *> (lbasename (name)), '.');
   if (cptr)
     *cptr = 0;
 
@@ -2126,6 +2644,7 @@ read_graph_file (void)
 	      arc->fall_through = !!(flags & GCOV_ARC_FALLTHROUGH);
 	      arc->true_value = !!(flags & GCOV_ARC_TRUE);
 	      arc->false_value = !!(flags & GCOV_ARC_FALSE);
+	      arc->suppressed = 0;
 
 	      arc->succ_next = src_blk->succ;
 	      src_blk->succ = arc;
@@ -2172,6 +2691,21 @@ read_graph_file (void)
 		  }
 	    }
 	}
+      else if (fn && tag == GCOV_TAG_SUPPRESS)
+	{
+	  const unsigned nblocks = GCOV_TAG_SUPPRESS_NUM (length);
+	  if (!fn->suppressed_blocks.empty ())
+	    fnotice (stderr, "%s:already seen suppressed blocks for '%s'\n",
+		     bbg_file_name, fn->get_name ());
+	  fn->suppressed_blocks.resize (fn->blocks.size (), false);
+	  for (unsigned i = 0; i != nblocks; ++i)
+	    {
+	      const unsigned idx = gcov_read_unsigned ();
+	      if (idx >= fn->blocks.size ())
+		goto corrupt;
+	      fn->suppressed_blocks[idx] = true;
+	    }
+	}
       else if (fn && tag == GCOV_TAG_CONDS)
 	{
 	  unsigned num_dests = GCOV_TAG_CONDS_NUM (length);
@@ -2193,6 +2727,13 @@ read_graph_file (void)
 	      info->n_terms = gcov_read_unsigned ();
 	      fn->conditions[i] = info;
 	    }
+    }
+      else if (fn && tag == GCOV_TAG_PATHS)
+	{
+	  const unsigned npaths = gcov_read_unsigned ();
+	  const size_t nbits = path_info::bucketsize;
+	  const size_t nbuckets = (npaths + (nbits - 1)) / nbits;
+	  fn->paths.covered.assign (nbuckets, 0);
 	}
       else if (fn && tag == GCOV_TAG_LINES)
 	{
@@ -2348,6 +2889,17 @@ read_count_file (void)
 	  if (read_length > 0)
 	    for (ix = 0; ix != fn->counts.size (); ix++)
 	      fn->counts[ix] += gcov_read_counter ();
+	}
+      else if (tag == GCOV_TAG_FOR_COUNTER (GCOV_COUNTER_PATHS) && fn)
+	{
+	  vector<gcov_type_unsigned> &covered = fn->paths.covered;
+	  length = abs (read_length);
+	  if (length != GCOV_TAG_COUNTER_LENGTH (covered.size ()))
+	    goto mismatch;
+
+	  if (read_length > 0)
+	    for (ix = 0; ix != covered.size (); ix++)
+	      covered[ix] = gcov_read_counter ();
 	}
       if (read_length < 0)
 	read_length = 0;
@@ -2623,13 +3175,74 @@ solve_flow_graph (function_info *fn)
 
   /* If the graph has been correctly solved, every block will have a
      valid count.  */
-  for (unsigned i = 0; ix < fn->blocks.size (); i++)
+  for (unsigned i = 0; i < fn->blocks.size (); i++)
     if (!fn->blocks[i].count_valid)
       {
 	fnotice (stderr, "%s:graph is unsolvable for '%s'\n",
 		 bbg_file_name, fn->get_name ());
 	break;
       }
+}
+
+/* Find the prime paths of the function from the CFG and add to FN
+   using the same function as gcc.  It relies on gcc recording the CFG
+   faithfully.  Storing the paths explicitly takes up way too much
+   space to be practical, but this means we need to recompute the
+   (exact) same paths in gcov.  This should give paths in
+   lexicographical order so that the nth path in gcc is the nth path
+   in gcov.  ENTRY_BLOCK and EXIT_BLOCK are both removed from all
+   paths.  */
+static void
+find_prime_paths (function_info *fn)
+{
+  if (!flag_prime_paths)
+    return;
+
+  /* If paths.covered being empty then this function was not
+     instrumented, probably because it exceeded #-of-paths limit.  In
+     this case we don't want to find the prime paths as it will take
+     too long, and covered paths are not measured.  */
+  if (fn->paths.covered.empty ())
+    return;
+
+  struct graph *cfg = new_graph (fn->blocks.size ());
+  for (block_info &block : fn->blocks)
+    {
+      cfg->vertices[block.id].data = &block;
+      for (arc_info *arc = block.succ; arc; arc = arc->succ_next)
+	if (!arc->fake)
+	  add_edge (cfg, arc->src->id, arc->dst->id)->data = arc;
+    }
+
+  vec<vec<int>> prime_paths (struct graph*, size_t);
+  /* TODO: Pass extra information in the PATH_TAG section.  In case
+     that is empty this might still need to be tunable should the
+     coverage be requested without instrumentation.  */
+  vec<vec<int>> paths = prime_paths (cfg, (size_t)-1);
+  fn->paths.paths.reserve (paths.length ());
+  for (vec<int> &path : paths)
+    {
+      const int *begin = path.begin ();
+      const int *end = path.end ();
+      if (begin != end && path.last () == EXIT_BLOCK)
+	--end;
+      if (begin != end && *begin == ENTRY_BLOCK)
+	++begin;
+
+      if (begin == end)
+	continue;
+
+      /* If this is an isolated vertex because abnormal edges and fake
+	 edges are removed, don't include it.  */
+      if (end - begin == 1 && !cfg->vertices[*begin].succ
+	  && !cfg->vertices[*begin].pred)
+	continue;
+
+      fn->paths.paths.emplace_back (begin, end);
+    }
+
+  release_vec_vec (paths);
+  free_graph (cfg);
 }
 
 /* Mark all the blocks only reachable via an incoming catch.  */
@@ -2670,16 +3283,20 @@ add_branch_counts (coverage_info *coverage, const arc_info *arc)
   if (arc->is_call_non_return)
     {
       coverage->calls++;
-      if (arc->src->count)
+      if (arc->suppressed)
+	coverage->calls_suppressed++;
+      else if (arc->src->count)
 	coverage->calls_executed++;
     }
   else if (!arc->is_unconditional)
     {
       coverage->branches++;
-      if (arc->src->count)
+      if (arc->src->count && !arc->suppressed)
 	coverage->branches_executed++;
-      if (arc->count)
+      if (arc->count && !arc->suppressed)
 	coverage->branches_taken++;
+      if (arc->suppressed)
+	coverage->branches_suppressed++;
     }
 }
 
@@ -2689,7 +3306,21 @@ static void
 add_condition_counts (coverage_info *coverage, const block_info *block)
 {
   coverage->conditions += 2 * block->conditions.n_terms;
-  coverage->conditions_covered += block->conditions.popcount ();
+  if (block->suppressed)
+    coverage->conditions_suppressed += 2 * block->conditions.n_terms;
+  else
+    coverage->conditions_covered += block->conditions.popcount ();
+}
+
+/* Increment path totals, number of paths and number of covered paths,
+   in COVERAGE according to FN.  */
+
+static void
+add_path_counts (coverage_info &coverage, const function_info &fn)
+{
+  coverage.paths += fn.paths.path_count ();
+  coverage.paths_covered += fn.paths.covered_paths ();
+  coverage.paths_suppressed += fn.paths.suppressed_count ();
 }
 
 /* Format COUNT, if flag_human_readable_numbers is set, return it human
@@ -2748,11 +3379,15 @@ format_gcov (gcov_type top, gcov_type bottom, int decimal_places)
 /* Summary of execution */
 
 static void
-executed_summary (unsigned lines, unsigned executed)
+executed_summary (unsigned lines, unsigned executed, unsigned suppressed)
 {
-  if (lines)
+  if (lines && suppressed == 0)
     fnotice (stdout, "Lines executed:%s of %d\n",
 	     format_gcov (executed, lines, 2), lines);
+  else if (lines && suppressed > 0)
+    fnotice (stdout, "Lines executed:%s of %d (%d of %d suppressed)\n",
+	     format_gcov (executed, lines - suppressed, 2), lines - suppressed,
+	     suppressed, lines);
   else
     fnotice (stdout, "No executable lines\n");
 }
@@ -2762,8 +3397,80 @@ executed_summary (unsigned lines, unsigned executed)
 static void
 function_summary (const coverage_info *coverage)
 {
+  if (coverage->function_suppressed)
+    {
+      fnotice (stdout, "Function '%s' suppressed\n", coverage->name);
+      return;
+    }
   fnotice (stdout, "%s '%s'\n", "Function", coverage->name);
-  executed_summary (coverage->lines, coverage->lines_executed);
+  executed_summary (coverage->lines, coverage->lines_executed,
+		    coverage->lines_suppressed);
+
+  if (coverage->branches)
+    {
+      const int branches = coverage->branches - coverage->branches_suppressed;
+      if (coverage->branches_suppressed == 0)
+	fnotice (stdout, "Branches executed:%s of %d\n",
+		 format_gcov (coverage->branches_executed, coverage->branches,
+			      2),
+		 coverage->branches);
+      else
+	fnotice (stdout, "Branches executed:%s of %d (%d of %d suppressed)\n",
+		 format_gcov (coverage->branches_executed, branches, 2),
+		 branches, coverage->branches_suppressed, coverage->branches);
+      fnotice (stdout, "Taken at least once:%s of %d\n",
+	       format_gcov (coverage->branches_taken, branches, 2), branches);
+    }
+  else
+    fnotice (stdout, "No branches\n");
+
+  if (coverage->calls && coverage->calls == 0)
+    fnotice (stdout, "Calls executed:%s of %d\n",
+	     format_gcov (coverage->calls_executed, coverage->calls, 2),
+	     coverage->calls);
+  else if (coverage->calls && coverage->calls_suppressed > 0)
+    fnotice (stdout, "Calls executed:%s of %d (%d of %d suppressed)\n",
+	     format_gcov (coverage->calls_executed, coverage->calls
+			  - coverage->calls_suppressed, 2),
+	     coverage->calls - coverage->calls_suppressed,
+	     coverage->calls_suppressed, coverage->calls);
+  else
+    fnotice (stdout, "No calls\n");
+
+  if (flag_conditions)
+    {
+      if (coverage->conditions && coverage->conditions_suppressed == 0)
+	fnotice (stdout, "Condition outcomes covered:%s of %d\n",
+		 format_gcov (coverage->conditions_covered,
+			      coverage->conditions, 2),
+		 coverage->conditions);
+      if (coverage->conditions && coverage->conditions_suppressed > 0)
+	fnotice (stdout, "Condition outcomes covered:%s of %d"
+		 " (%d of %d suppressed)\n",
+		 format_gcov (coverage->conditions_covered,
+			      coverage->conditions
+			      - coverage->conditions_suppressed, 2),
+		 coverage->conditions - coverage->conditions_suppressed,
+		 coverage->conditions_suppressed, coverage->conditions);
+      else
+	fnotice (stdout, "No conditions\n");
+    }
+
+  if (flag_prime_paths)
+    {
+      if (coverage->paths && coverage->paths_suppressed == 0)
+	fnotice (stdout, "Prime paths covered:%s of %d\n",
+		 format_gcov (coverage->paths_covered, coverage->paths, 2),
+			      coverage->paths);
+      else if (coverage->paths && coverage->paths_suppressed > 0)
+	fnotice (stdout, "Prime paths covered:%s of %d (%u of %u suppressed)\n",
+		 format_gcov (coverage->paths_covered, coverage->paths
+			      - coverage->paths_suppressed, 2),
+		 coverage->paths - coverage->paths_suppressed,
+		 coverage->paths_suppressed, coverage->paths);
+      else
+	fnotice (stdout, "No path information\n");
+    }
 }
 
 /* Output summary info for a file.  */
@@ -2772,7 +3479,8 @@ static void
 file_summary (const coverage_info *coverage)
 {
   fnotice (stdout, "%s '%s'\n", "File", coverage->name);
-  executed_summary (coverage->lines, coverage->lines_executed);
+  executed_summary (coverage->lines, coverage->lines_executed,
+		    coverage->lines_suppressed);
 
   if (flag_branches)
     {
@@ -2807,6 +3515,16 @@ file_summary (const coverage_info *coverage)
 		 coverage->conditions);
       else
 	fnotice (stdout, "No conditions\n");
+    }
+
+  if (flag_prime_paths)
+    {
+      if (coverage->paths)
+	fnotice (stdout, "Prime paths covered:%s of %d\n",
+		 format_gcov (coverage->paths_covered, coverage->paths, 2),
+			      coverage->paths);
+      else
+	fnotice (stdout, "No path information\n");
     }
 }
 
@@ -2972,7 +3690,9 @@ add_line_counts (coverage_info *coverage, function_info *fn)
 		    {
 		      if (!line->exists)
 			coverage->lines++;
-		      if (!line->count && block->count)
+		      if (line->suppressed)
+			coverage->lines_suppressed++;
+		      if (!line->count && block->count && !line->suppressed)
 			coverage->lines_executed++;
 		    }
 		  line->exists = 1;
@@ -2992,7 +3712,9 @@ add_line_counts (coverage_info *coverage, function_info *fn)
 		    {
 		      if (!line->exists)
 			coverage->lines++;
-		      if (!line->count && block->count)
+		      if (!line->exists && line->suppressed)
+			coverage->lines_suppressed++;
+		      if (!line->count && block->count && !line->suppressed)
 			coverage->lines_executed++;
 		    }
 		  line->exists = 1;
@@ -3079,7 +3801,9 @@ static void accumulate_line_info (line_info *line, source_info *src,
   if (line->exists && add_coverage)
     {
       src->coverage.lines++;
-      if (line->count)
+      if (line->suppressed)
+	src->coverage.lines_suppressed++;
+      if (line->count && !line->suppressed)
 	src->coverage.lines_executed++;
     }
 }
@@ -3132,7 +3856,9 @@ accumulate_line_counts (source_info *src)
 
 		if (!src_line->exists)
 		  src->coverage.lines++;
-		if (!src_line->count && fn_line->count)
+		if (!src_line->exists && src_line->suppressed)
+		  src->coverage.lines_suppressed++;
+		if (!src_line->count && fn_line->count && !src_line->suppressed)
 		  src->coverage.lines_executed++;
 
 		src_line->count += fn_line->count;
@@ -3158,6 +3884,8 @@ output_conditions (FILE *gcov_file, const block_info *binfo)
     const condition_info& info = binfo->conditions;
     if (info.n_terms == 0)
 	return;
+    if (binfo->suppressed)
+      return;
 
     const int expected = 2 * info.n_terms;
     const int got = info.popcount ();
@@ -3185,7 +3913,9 @@ output_conditions (FILE *gcov_file, const block_info *binfo)
 static int
 output_branch_count (FILE *gcov_file, int ix, const arc_info *arc)
 {
-  if (arc->is_call_non_return)
+  if (arc->suppressed)
+    return 0;
+  else if (arc->is_call_non_return)
     {
       if (arc->src->count)
 	{
@@ -3223,6 +3953,188 @@ output_branch_count (FILE *gcov_file, int ix, const arc_info *arc)
     }
   else
     return 0;
+  return 1;
+}
+
+static void
+print_source_line (FILE *f, const vector<const char *> &source_lines,
+		   unsigned line);
+
+
+/* Print a dense coverage report for PATH of FN to GCOV_FILE.  PATH should be
+   number PATHNO in the sorted set of paths.  This function prints a dense form
+   where only the line numbers, and optionally the source file the line comes
+   from, in the order they need to be executed to achieve coverage.  This
+   produces very long lines for large functions, but is a useful and greppable
+   output.
+
+   Returns 1 if the path was printed, 0 otherwise.  */
+static unsigned
+print_prime_path_lines (FILE *gcov_file, const function_info &fn,
+			const vector<unsigned> &path, unsigned pathno)
+{
+  const bool is_covered = fn.paths.covered_p (pathno);
+  if (is_covered && !flag_prime_paths_lines_covered)
+    return 0;
+  if (!is_covered && !flag_prime_paths_lines_uncovered)
+    return 0;
+
+  if (is_covered)
+    fprintf (gcov_file, "path %u covered: lines", pathno);
+  else
+    fprintf (gcov_file, "path %u not covered: lines", pathno);
+
+  for (size_t k = 0; k != path.size (); ++k)
+    {
+      const block_info &block = fn.blocks[path[k]];
+      const char *edge_kind = "";
+      if (k + 1 != path.size ())
+	{
+	  const arc_info *arc = find_arc (block, path[k+1]);
+	  if (!arc)
+	    edge_kind = "(suppress)";
+	  else if (arc->true_value)
+	    edge_kind = "(true)";
+	  else if (arc->false_value)
+	    edge_kind = "(false)";
+	  else if (arc->is_throw)
+	    edge_kind = "(throw)";
+	}
+
+      for (const block_location_info &loc : block.locations)
+	{
+	  /* loc.lines could be empty when a statement is not anchored to a
+	     source file -- see g++.dg/gcov/gcov-23.C.  Since there is no
+	     actual source line to list anyway we can skip this location.  */
+	  if (loc.lines.empty ())
+	    continue;
+	  if (loc.source_file_idx == fn.src)
+	    fprintf (gcov_file, " %u%s", loc.lines.back (), edge_kind);
+	  else
+	    fprintf (gcov_file, " %s:%u%s", sources[loc.source_file_idx].name,
+		     loc.lines.back (), edge_kind);
+	}
+    }
+
+  fprintf (gcov_file, "\n");
+  return 1;
+}
+
+static unsigned
+print_inlined_separator (FILE *gcov_file, unsigned current_index, const
+			 block_location_info &loc, const function_info &fn)
+{
+  if (loc.source_file_idx != current_index && loc.source_file_idx == fn.src)
+    fprintf (gcov_file, "------------------\n");
+  if (loc.source_file_idx != current_index && loc.source_file_idx != fn.src)
+    fprintf (gcov_file, "== inlined from %s ==\n",
+	     sources[loc.source_file_idx].name);
+  return loc.source_file_idx;
+}
+
+/* Print a coverage report for PATH of FN to GCOV_FILE.  PATH should be number
+   PATHNO in the sorted set of paths.  This function prints the lines that need
+   to be executed (and in what order) to cover it.
+
+   Returns 1 if the path was printed, 0 otherwise.  */
+static unsigned
+print_prime_path_source (FILE *gcov_file, const function_info &fn,
+			 const vector<unsigned> &path, unsigned pathno)
+{
+  const bool is_covered = fn.paths.covered_p (pathno);
+  if (is_covered && !flag_prime_paths_source_covered)
+    return 0;
+  if (!is_covered && !flag_prime_paths_source_uncovered)
+    return 0;
+
+  if (is_covered)
+    fprintf (gcov_file, "path %u covered:\n", pathno);
+  else
+    fprintf (gcov_file, "path %u not covered:\n", pathno);
+  unsigned current = fn.src;
+  for (size_t k = 0; k != path.size (); ++k)
+    {
+      const unsigned bb = path[k];
+      const block_info &block = fn.blocks[bb];
+      gcc_checking_assert (block.id == bb);
+
+      const char *edge_kind = "";
+      if (k + 1 != path.size ())
+	{
+	  const arc_info *arc = find_arc (block, path[k+1]);
+	  if (!arc)
+	    edge_kind = "(suppress)";
+	  else if (arc->true_value)
+	    edge_kind = "(true)";
+	  else if (arc->false_value)
+	    edge_kind = "(false)";
+	  else if (arc->is_throw)
+	    edge_kind = "(throw)";
+	}
+
+      for (const block_location_info &loc : block.locations)
+	{
+	  /* loc.lines could be empty when a statement is not anchored to a
+	     source file -- see g++.dg/gcov/gcov-24.C.  Since there is no
+	     actual source line to list anyway we can skip this location.  */
+	  if (loc.lines.empty ())
+	    continue;
+	  const source_info &src = sources[loc.source_file_idx];
+	  const vector<const char *> &lines = slurp (src, gcov_file, "");
+	  current = print_inlined_separator (gcov_file, current, loc, fn);
+	  for (unsigned i = 0; i != loc.lines.size () - 1; ++i)
+	    {
+	      const unsigned line = loc.lines[i];
+	      fprintf (gcov_file, "BB %2d: %-10s %3d", bb, "", line);
+	      print_source_line (gcov_file, lines, line);
+	    }
+
+	  const unsigned line = loc.lines.back ();
+	  fprintf (gcov_file, "BB %2d: %-10s %3d", bb, edge_kind, line);
+	  print_source_line (gcov_file, lines, line);
+	}
+    }
+
+  fputc ('\n', gcov_file);
+  return 1;
+}
+
+/* Print path coverage counts for FN to GCOV_FILE.  LINES is the vector of
+   source lines for FN.  Note that unlike statements, branch counts, and
+   conditions, this is not anchored to source lines but the function root.  */
+static int
+output_path_coverage (FILE *gcov_file, const function_info *fn)
+{
+  if (!flag_prime_paths)
+    return 0;
+
+  const path_info& paths = fn->paths;
+  if (fn->paths.get_paths ().empty ())
+    fnotice (gcov_file, "path coverage omitted\n");
+  else if (paths.suppressed_p ())
+    fnotice (gcov_file, "Prime paths covered %u of " HOST_SIZE_T_PRINT_UNSIGNED
+	     " (" HOST_SIZE_T_PRINT_UNSIGNED " of " HOST_SIZE_T_PRINT_UNSIGNED
+	     " suppressed)\n", fn->paths.covered_paths (),
+	     (fmt_size_t)fn->paths.path_count (),
+	     (fmt_size_t)fn->paths.suppressed_count (),
+	     (fmt_size_t)fn->paths.paths.size ());
+  else
+    fnotice (gcov_file, "paths covered %u of " HOST_SIZE_T_PRINT_UNSIGNED "\n",
+	     fn->paths.covered_paths (), (fmt_size_t)fn->paths.paths.size ());
+
+  if (flag_prime_paths_lines_uncovered || flag_prime_paths_lines_covered)
+    {
+      unsigned pathno = 0;
+      for (const vector<unsigned> &path : fn->paths.get_paths ())
+	print_prime_path_lines (gcov_file, *fn, path, pathno++);
+    }
+
+  if (flag_prime_paths_source_uncovered || flag_prime_paths_source_covered)
+    {
+      unsigned pathno = 0;
+      for (const vector<unsigned> &path : fn->paths.get_paths ())
+	print_prime_path_source (gcov_file, *fn, path, pathno++);
+    }
   return 1;
 }
 
@@ -3315,13 +4227,19 @@ pad_count_string (string &s)
 static void
 output_line_beginning (FILE *f, bool exists, bool unexceptional,
 		       bool has_unexecuted_block,
+		       bool suppressed,
 		       gcov_type count, unsigned line_num,
 		       const char *exceptional_string,
 		       const char *unexceptional_string,
 		       unsigned int maximum_count)
 {
   string s;
-  if (exists)
+  if (suppressed)
+    {
+      s = "#";
+      pad_count_string (s);
+    }
+  else if (exists)
     {
       if (count > 0)
 	{
@@ -3414,6 +4332,7 @@ output_line_details (FILE *f, const line_info *line, unsigned line_num)
 	    {
 	      output_line_beginning (f, line->exists,
 				     (*it)->exceptional, false,
+				     (*it)->suppressed,
 				     (*it)->count, line_num,
 				     "%%%%%", "$$$$$", 0);
 	      fprintf (f, "-block %d", (*it)->id);
@@ -3560,6 +4479,7 @@ output_lines (FILE *gcov_file, const source_info *src)
 	    {
 	      function_info *fn = (*fns)[0];
 	      output_function_details (gcov_file, fn);
+	      output_path_coverage (gcov_file, fn);
 
 	      /* If functions are filtered, only the matching functions will be in
 		 fns and there is no need for extra checking.  */
@@ -3570,14 +4490,15 @@ output_lines (FILE *gcov_file, const source_info *src)
 
       /* For lines which don't exist in the .bb file, print '-' before
 	 the source line.  For lines which exist but were never
-	 executed, print '#####' or '=====' before the source line.
-	 Otherwise, print the execution count before the source line.
-	 There are 16 spaces of indentation added before the source
-	 line so that tabs won't be messed up.  */
+	 executed, print '#####' or '=====' before the source line.  For lines
+	 that were suppressed, print '#'.  Otherwise, print the execution count
+	 before the source line.  There are 16 spaces of indentation added
+	 before the source line so that tabs won't be messed up.  */
       if (line_num <= filtered_line_end)
 	{
 	  output_line_beginning (gcov_file, line->exists, line->unexceptional,
-				 line->has_unexecuted_block, line->count,
+				 line->has_unexecuted_block, line->suppressed,
+				 line->count,
 				 line_num, "=====", "#####",
 				 src->maximum_count);
 
@@ -3605,6 +4526,7 @@ output_lines (FILE *gcov_file, const source_info *src)
 	      fprintf (gcov_file, "%s:\n", fn_name.c_str ());
 
 	      output_function_details (gcov_file, fn);
+	      output_path_coverage (gcov_file, fn);
 
 	      /* Print all lines covered by the function.  */
 	      for (unsigned i = 0; i < lines.size (); i++)
@@ -3615,13 +4537,14 @@ output_lines (FILE *gcov_file, const source_info *src)
 		  /* For lines which don't exist in the .bb file, print '-'
 		     before the source line.  For lines which exist but
 		     were never executed, print '#####' or '=====' before
-		     the source line.  Otherwise, print the execution count
-		     before the source line.
-		     There are 16 spaces of indentation added before the source
-		     line so that tabs won't be messed up.  */
+		     the source line.  For suppressed lines, print '#'.
+		     Otherwise, print the execution count before the source
+		     line.  There are 16 spaces of indentation added before the
+		     source line so that tabs won't be messed up.  */
 		  output_line_beginning (gcov_file, line->exists,
 					 line->unexceptional,
 					 line->has_unexecuted_block,
+					 line->suppressed,
 					 line->count,
 					 l, "=====", "#####",
 					 src->maximum_count);

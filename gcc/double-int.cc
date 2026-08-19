@@ -1,5 +1,5 @@
 /* Operations with long integers.
-   Copyright (C) 2006-2025 Free Software Foundation, Inc.
+   Copyright (C) 2006-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -1246,7 +1246,7 @@ double_int::lrotate (HOST_WIDE_INT count, unsigned int prec) const
   return t1 | t2;
 }
 
-/* Rotate A rigth by COUNT places keeping only PREC bits of result.
+/* Rotate A right by COUNT places keeping only PREC bits of result.
    Rotate right if COUNT is negative.  */
 
 double_int

@@ -1,5 +1,5 @@
 /* Interprocedural scalar replacement of aggregates
-   Copyright (C) 2019-2025 Free Software Foundation, Inc.
+   Copyright (C) 2019-2026 Free Software Foundation, Inc.
    Contributed by Martin Jambor <mjambor@suse.cz>
 
 This file is part of GCC.
@@ -411,7 +411,7 @@ public:
   /* Set when any of the call arguments are not byte-aligned.  */
   unsigned m_bit_aligned_arg : 1;
 
-  /* Set to true if the call happend before any (other) store to memory in the
+  /* Set to true if the call happened before any (other) store to memory in the
      caller.  */
   unsigned m_before_any_store : 1;
 };
@@ -1028,7 +1028,7 @@ isra_track_scalar_value_uses (function *fun, cgraph_node *node, tree name,
    statement.  If there are no such uses, return true and store the number of
    actual arguments that this parameter eventually feeds to (or zero if there
    is none) to DESC->call_uses and set DESC->remove_only_when_retval_removed if
-   there are any uses in return statemens.  For any such parameter, mark
+   there are any uses in return statements.  For any such parameter, mark
    PARM_NUM as one of its sources.
 
    This function is similar to ptr_parm_has_nonarg_uses but its results are
@@ -1848,6 +1848,12 @@ scan_expr_access (tree expr, gimple *stmt, isra_scan_context ctx,
   if (!desc || !desc->split_candidate)
     return;
 
+  if (storage_order_barrier_p (expr))
+    {
+      disqualify_split_candidate (desc, "Encountered a storage order barrier.");
+      return;
+    }
+
   if (!poffset.is_constant (&offset)
       || !psize.is_constant (&size)
       || !pmax_size.is_constant (&max_size))
@@ -2242,7 +2248,11 @@ isra_analyze_call (cgraph_edge *cs)
 	  BITMAP_FREE (analyzed);
 	}
     }
-  else
+  /* Don't set m_return_ignored for musttail calls.  The tailc/musttail passes
+     compare the returned value against the IPA-VRP return value range if
+     it is a singleton, but if the call is changed to something which doesn't
+     return anything, it will always fail.  */
+  else if (!gimple_call_must_tail_p (call_stmt))
     csum->m_return_ignored = true;
 }
 
@@ -2623,7 +2633,7 @@ process_scan_results (cgraph_node *node, struct function *fun,
 	      }
 
 	    /* Walk basic block and see if its execution can terminate earlier.
-	       Keep the info for later re-use to avoid quadratic behavoiur here.  */
+	       Keep the info for later re-use to avoid quadratic behaviour here.  */
 	    gimple_stmt_iterator gsi = gsi_for_stmt (call_stmt);
 	    bool safe = true;
 	    int n = 0;
@@ -3459,7 +3469,7 @@ flip_all_hints_pessimistic (isra_param_desc *desc)
 }
 
 /* Because we have not analyzed or otherwise problematic caller, go over all
-   parameter int flags of IFS describing a call graph node of a calllee and
+   parameter int flags of IFS describing a call graph node of a callee and
    turn them pessimistic.  Return true if any hints that need to potentially
    trigger further propagation have changed.  */
 
@@ -3478,7 +3488,7 @@ flip_all_param_hints_pessimistic (isra_func_summary *ifs)
   return ret;
 }
 
-/* Propagate hints accross edge CS which ultimately leads to a node described
+/* Propagate hints across edge CS which ultimately leads to a node described
    by TO_IFS.  Return true if any hints of the callee which should potentially
    trigger further propagation have changed.  */
 
@@ -4640,7 +4650,7 @@ ipa_sra_summarize_function (cgraph_node *node)
 {
   if (dump_file)
     fprintf (dump_file, "Creating summary for %s/%i:\n", node->name (),
-	     node->order);
+	     node->get_uid ());
   gcc_obstack_init (&gensum_obstack);
   loaded_decls = new hash_set<tree>;
 

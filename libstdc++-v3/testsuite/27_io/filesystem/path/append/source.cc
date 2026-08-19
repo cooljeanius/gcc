@@ -1,6 +1,6 @@
 // { dg-do run { target c++17 } }
 
-// Copyright (C) 2018-2025 Free Software Foundation, Inc.
+// Copyright (C) 2018-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -96,7 +96,7 @@ test03()
     {
       test(p, q.c_str());
       if constexpr (!std::is_same_v<path::value_type, char>)
-	test(p, q.string().c_str());
+	test(p, q.string().c_str()); // { dg-warning "deprecated" "" { target c++26 } }
     }
 }
 

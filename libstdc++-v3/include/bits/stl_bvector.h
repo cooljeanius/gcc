@@ -1,6 +1,6 @@
 // vector<bool> specialization -*- C++ -*-
 
-// Copyright (C) 2001-2025 Free Software Foundation, Inc.
+// Copyright (C) 2001-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -116,7 +116,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       return *this;
     }
 
-#if __cplusplus > 202002L
+#if __glibcxx_ranges_zip // >= C++23
     constexpr const _Bit_reference&
     operator=(bool __x) const noexcept
     {
@@ -149,6 +149,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     { *_M_p ^= _M_mask; }
 
 #if __cplusplus >= 201103L
+    // _GLIBCXX_RESOLVE_LIB_DEFECTS
+    // 3638. vector<bool>::swap(reference, reference) is useless
+
     _GLIBCXX20_CONSTEXPR
     friend void
     swap(_Bit_reference __x, _Bit_reference __y) noexcept
@@ -896,7 +899,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	}
 #endif
 
-#if __glibcxx_ranges_to_container // C++ >= 23
+#if __glibcxx_containers_ranges // C++ >= 23
       /**
        * @brief Construct a vector from a range.
        * @param __rg A range of values that are convertible to `value_type`.
@@ -1026,7 +1029,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       { _M_assign_aux(__l.begin(), __l.end(), random_access_iterator_tag()); }
 #endif
 
-#if __glibcxx_ranges_to_container // C++ >= 23
+#if __glibcxx_containers_ranges // C++ >= 23
       /**
        * @brief Assign a range to the vector.
        * @param __rg A range of values that are convertible to `value_type`.
@@ -1266,6 +1269,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       }
 
       // [23.2.5]/1, third-to-last entry in synopsis listing
+      _GLIBCXX26_DEPRECATED_SUGGEST("swap' invoked via ADL or 'std::ranges::swap")
       _GLIBCXX20_CONSTEXPR
       static void
       swap(reference __x, reference __y) _GLIBCXX_NOEXCEPT
@@ -1347,7 +1351,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
       { return this->insert(__p, __l.begin(), __l.end()); }
 #endif
 
-#if __glibcxx_ranges_to_container // C++ >= 23
+#if __glibcxx_containers_ranges // C++ >= 23
       /**
        * @brief Insert a range into the vector.
        * @param __rg A range of values that are convertible to `bool`.
@@ -1458,7 +1462,7 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
 	      insert(end(), __tmp.begin(), __tmp.end());
 	    }
 	}
-#endif // ranges_to_container
+#endif // containers_ranges
 
       _GLIBCXX20_CONSTEXPR
       void

@@ -1,14 +1,14 @@
 /* { dg-do compile } */
-/* { dg-options "-march=rv64gcv -mabi=lp64d -fno-schedule-insns -fno-schedule-insns2 -O3" } */
+/* { dg-options "-march=rv64gcv -mabi=lp64d -fno-schedule-insns -fno-schedule-insns2 -O3 -fno-unroll-loops" } */
 /* { dg-final { check-function-bodies "**" "" } } */
 
 #include "riscv_vector.h"
 
 /*
 ** foo:
-** addi\t[a-x0-9]+,\s*[a-x0-9]+,100
+** ...
 ** vsetvli\tzero,a2,e64,m2,t[au],m[au]
-** vlse64.v\tv[0-9]+,0\([a-x0-9]+\),zero
+** vmv\.v\.x\tv[0-9]+,\s*a[0-9]+
 ** vs2r.v\tv[0-9]+,0\([a-x0-9]+\)
 ** ret
 */
@@ -37,7 +37,7 @@ void foo2 (void *base, void *out, size_t vl)
 /*
 ** foo3:
 ** ...
-** vlse64.v\tv[0-9]+,0\([a-x0-9]+\),zero
+** vmv\.v\.x\tv[0-9]+,\s*a[0-9]+
 ** ...
 ** ret
 */

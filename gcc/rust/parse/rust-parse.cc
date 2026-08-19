@@ -42,8 +42,7 @@ extract_module_path (const AST::AttrVec &inner_attrs,
     {
       rust_error_at (
 	path_attr.get_locus (),
-	// Split the format string so that -Wformat-diag does not complain...
-	"path attributes must contain a filename: '%s'", "#![path = \"file\"]");
+	"path attributes must contain a filename: %<#[path = \"file\"]%>");
       return name;
     }
 
@@ -67,8 +66,7 @@ extract_module_path (const AST::AttrVec &inner_attrs,
     {
       rust_error_at (
 	path_attr.get_locus (),
-	// Split the format string so that -Wformat-diag does not complain...
-	"path attributes must contain a filename: '%s'", "#[path = \"file\"]");
+	"path attributes must contain a filename: %<#[path = \"file\"]%>");
       return name;
     }
 
@@ -79,6 +77,15 @@ extract_module_path (const AST::AttrVec &inner_attrs,
   // In order to do this, we can simply go through the string until we find
   // a character that is not an equal sign or whitespace
   auto filename_begin = path_value.find_first_not_of ("=\t ");
+
+  // If the path consists of only whitespace, then we have an error
+  if (filename_begin == std::string::npos)
+    {
+      rust_error_at (
+	path_attr.get_locus (),
+	"path attributes must contain a filename: %<#[path = \"file\"]%>");
+      return name;
+    }
 
   auto path = path_value.substr (filename_begin);
 
@@ -144,10 +151,9 @@ peculiar_fragment_match_compatible_fragment (
     = contains (fragment_follow_set[last_spec.get_kind ()], spec.get_kind ());
 
   if (!is_valid)
-    rust_error_at (
-      match_locus,
-      "fragment specifier %qs is not allowed after %qs fragments",
-      spec.as_string ().c_str (), last_spec.as_string ().c_str ());
+    rust_error_at (match_locus,
+		   "fragment specifier %qs is not allowed after %qs fragments",
+		   spec.as_string ().c_str (), last_spec.as_string ().c_str ());
 
   return is_valid;
 }
@@ -244,7 +250,8 @@ peculiar_fragment_match_compatible (const AST::MacroMatchFragment &last_match,
   // the error.
   switch (match.get_macro_match_type ())
     {
-      case AST::MacroMatch::Tok: {
+    case AST::MacroMatch::Tok:
+      {
 	auto tok = static_cast<const AST::Token *> (&match);
 	if (contains (allowed_toks, tok->get_id ()))
 	  return true;
@@ -254,7 +261,8 @@ peculiar_fragment_match_compatible (const AST::MacroMatchFragment &last_match,
 	break;
       }
       break;
-      case AST::MacroMatch::Repetition: {
+    case AST::MacroMatch::Repetition:
+      {
 	auto repetition
 	  = static_cast<const AST::MacroMatchRepetition *> (&match);
 	auto &matches = repetition->get_matches ();
@@ -263,7 +271,8 @@ peculiar_fragment_match_compatible (const AST::MacroMatchFragment &last_match,
 	  return peculiar_fragment_match_compatible (last_match, *first_frag);
 	break;
       }
-      case AST::MacroMatch::Matcher: {
+    case AST::MacroMatch::Matcher:
+      {
 	auto matcher = static_cast<const AST::MacroMatcher *> (&match);
 	auto first_token = matcher->get_delim_type ();
 	TokenId delim_id;
@@ -289,7 +298,8 @@ peculiar_fragment_match_compatible (const AST::MacroMatchFragment &last_match,
 	error_locus = matcher->get_match_locus ();
 	break;
       }
-      case AST::MacroMatch::Fragment: {
+    case AST::MacroMatch::Fragment:
+      {
 	auto last_spec = last_match.get_frag_spec ();
 	auto fragment = static_cast<const AST::MacroMatchFragment *> (&match);
 	if (last_spec.has_follow_set_fragment_restrictions ())
@@ -328,10 +338,11 @@ is_match_compatible (const AST::MacroMatch &last_match,
 
   switch (last_match.get_macro_match_type ())
     {
-      // This is our main stop condition: When we are finally looking at the
-      // last match (or its actual last component), and it is a fragment, it
-      // may contain some follow up restrictions.
-      case AST::MacroMatch::Fragment: {
+    // This is our main stop condition: When we are finally looking at the
+    // last match (or its actual last component), and it is a fragment, it
+    // may contain some follow up restrictions.
+    case AST::MacroMatch::Fragment:
+      {
 	auto fragment
 	  = static_cast<const AST::MacroMatchFragment *> (&last_match);
 	if (fragment->get_frag_spec ().has_follow_set_restrictions ())
@@ -339,7 +350,8 @@ is_match_compatible (const AST::MacroMatch &last_match,
 	else
 	  return true;
       }
-      case AST::MacroMatch::Repetition: {
+    case AST::MacroMatch::Repetition:
+      {
 	// A repetition on the left hand side means we want to make sure the
 	// last match of the repetition is compatible with the new match
 	auto repetition
@@ -362,4 +374,146 @@ is_match_compatible (const AST::MacroMatch &last_match,
   // FIXME: Does expansion depth/limit matter here?
   return is_match_compatible (*new_last, match);
 }
+
+namespace LiteralResolve {
+
+PrimitiveCoreType
+resolve_literal_suffix (const_TokenPtr token)
+{
+  const std::string &raw_str = token->get_str ();
+  uint16_t start = token->get_suffix_start ();
+
+  if (start >= raw_str.length ())
+    {
+      return token->is_pure_decimal () ? CORETYPE_PURE_DECIMAL
+				       : CORETYPE_UNKNOWN;
+    }
+
+  std::string suffix = raw_str.substr (start);
+
+  if (suffix == "f32" || suffix == "f64")
+    {
+      auto base = token->get_literal_base ();
+      if (base == IntegerLiteralBase::Hex || base == IntegerLiteralBase::Octal
+	  || base == IntegerLiteralBase::Binary)
+	{
+	  rust_error_at (token->get_locus (),
+			 "invalid type suffix %qs for integer (%s) literal",
+			 suffix.c_str (),
+			 base == IntegerLiteralBase::Hex
+			   ? "hex"
+			   : (base == IntegerLiteralBase::Octal
+				? "octal"
+				: (base == IntegerLiteralBase::Binary
+				     ? "binary"
+				     : "<insert unknown base>")));
+	  return CORETYPE_UNKNOWN;
+	}
+      return suffix == "f32" ? CORETYPE_F32 : CORETYPE_F64;
+    }
+  else if (suffix == "i8")
+    {
+      return CORETYPE_I8;
+    }
+  else if (suffix == "i16")
+    {
+      return CORETYPE_I16;
+    }
+  else if (suffix == "i32")
+    {
+      return CORETYPE_I32;
+    }
+  else if (suffix == "i64")
+    {
+      return CORETYPE_I64;
+    }
+  else if (suffix == "i128")
+    {
+      return CORETYPE_I128;
+    }
+  else if (suffix == "isize")
+    {
+      return CORETYPE_ISIZE;
+    }
+  else if (suffix == "u8")
+    {
+      return CORETYPE_U8;
+    }
+  else if (suffix == "u16")
+    {
+      return CORETYPE_U16;
+    }
+  else if (suffix == "u32")
+    {
+      return CORETYPE_U32;
+    }
+  else if (suffix == "u64")
+    {
+      return CORETYPE_U64;
+    }
+  else if (suffix == "u128")
+    {
+      return CORETYPE_U128;
+    }
+  else if (suffix == "usize")
+    {
+      return CORETYPE_USIZE;
+    }
+  else
+
+    rust_error_at (token->get_locus (), "invalid suffix %qs for number literal",
+		   suffix.c_str ());
+
+  return CORETYPE_UNKNOWN;
+}
+
+std::string
+evaluate_integer_literal (const_TokenPtr token)
+{
+  const std::string &raw_str = token->get_str ();
+  uint16_t suffix_start = token->get_suffix_start ();
+
+  std::string num_str = raw_str.substr (0, suffix_start);
+
+  num_str.erase (std::remove (num_str.begin (), num_str.end (), '_'),
+		 num_str.end ());
+
+  auto base = token->get_literal_base ();
+
+  if (base == IntegerLiteralBase::Decimal || base == IntegerLiteralBase::None)
+    return num_str;
+
+  num_str = num_str.substr (2);
+
+  int base_int = 10;
+  if (base == IntegerLiteralBase::Hex)
+    base_int = 16;
+  else if (base == IntegerLiteralBase::Octal)
+    base_int = 8;
+  else if (base == IntegerLiteralBase::Binary)
+    base_int = 2;
+
+  mpz_t dec_num;
+  mpz_init (dec_num);
+  mpz_set_str (dec_num, num_str.c_str (), base_int);
+  char *s = mpz_get_str (NULL, 10, dec_num);
+  std::string dec_str = s;
+  free (s);
+  mpz_clear (dec_num);
+
+  return dec_str;
+}
+
+std::string
+evaluate_float_literal (const_TokenPtr token)
+{
+  std::string raw_str
+    = token->get_str ().substr (0, token->get_suffix_start ());
+  raw_str.erase (std::remove (raw_str.begin (), raw_str.end (), '_'),
+		 raw_str.end ());
+
+  return raw_str;
+}
+
+} // namespace LiteralResolve
 } // namespace Rust

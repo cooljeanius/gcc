@@ -1,5 +1,5 @@
 /* Iterator routines for GIMPLE statements.
-   Copyright (C) 2007-2025 Free Software Foundation, Inc.
+   Copyright (C) 2007-2026 Free Software Foundation, Inc.
    Contributed by Aldy Hernandez  <aldy@quesejoda.com>
 
 This file is part of GCC.
@@ -34,6 +34,14 @@ along with GCC; see the file COPYING3.  If not see
 #include "value-prof.h"
 #include "gimplify.h"
 
+/* Return true if VAR has no uses at all, including no debug uses.  */
+
+static inline bool
+completely_unused (const_tree var)
+{
+  auto *head = &SSA_NAME_IMM_USE_NODE (var);
+  return head->next == head;
+}
 
 /* Mark the statement STMT as modified, and update it.  */
 
@@ -389,8 +397,8 @@ gsi_set_stmt (gimple_stmt_iterator *gsi, gimple *stmt)
 }
 
 
-/* Move all statements in the sequence before I to a new sequence.
-   Return this new sequence.  I is set to the head of the new list.  */
+/* Move all statements in the sequence starting at I to a new sequence.
+   Set *PNEW_SEQ to this sequence.  I is set to the head of the new list.  */
 
 void
 gsi_split_seq_before (gimple_stmt_iterator *i, gimple_seq *pnew_seq)
@@ -422,9 +430,12 @@ gsi_split_seq_before (gimple_stmt_iterator *i, gimple_seq *pnew_seq)
 
 /* Replace the statement pointed-to by GSI to STMT.  If UPDATE_EH_INFO
    is true, the exception handling information of the original
-   statement is moved to the new statement.  Assignments must only be
-   replaced with assignments to the same LHS.  Returns whether EH edge
-   cleanup is required.  */
+   statement is moved to the new statement.  Returns whether EH edge
+   cleanup is required.
+
+   If the two statements assign to different SSA names, the caller must
+   ensure that all uses of the old SSA name have been removed before
+   calling this function.  This includes removing all debug uses.  */
 
 bool
 gsi_replace (gimple_stmt_iterator *gsi, gimple *stmt, bool update_eh_info)
@@ -436,7 +447,8 @@ gsi_replace (gimple_stmt_iterator *gsi, gimple *stmt, bool update_eh_info)
     return false;
 
   gcc_assert (!gimple_has_lhs (orig_stmt) || !gimple_has_lhs (stmt)
-	      || gimple_get_lhs (orig_stmt) == gimple_get_lhs (stmt));
+	      || gimple_get_lhs (orig_stmt) == gimple_get_lhs (stmt)
+	      || completely_unused (gimple_get_lhs (orig_stmt)));
 
   gimple_set_location (stmt, gimple_location (orig_stmt));
   gimple_set_bb (stmt, gsi_bb (*gsi));
@@ -471,18 +483,16 @@ void
 gsi_replace_with_seq (gimple_stmt_iterator *gsi, gimple_seq seq,
 		      bool update_eh_info)
 {
-  gimple_stmt_iterator seqi;
-  gimple *last;
   if (gimple_seq_empty_p (seq))
     {
       gsi_remove (gsi, true);
       return;
     }
-  seqi = gsi_last (seq);
-  last = gsi_stmt (seqi);
-  gsi_remove (&seqi, false);
+  gimple_seq tail;
+  gimple_stmt_iterator lasti = gsi_last (seq);
+  gsi_split_seq_before (&lasti, &tail);
   gsi_insert_seq_before (gsi, seq, GSI_SAME_STMT);
-  gsi_replace (gsi, last, update_eh_info);
+  gsi_replace (gsi, gsi_stmt (lasti), update_eh_info);
 }
 
 

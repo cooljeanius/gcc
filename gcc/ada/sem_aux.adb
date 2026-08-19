@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2025, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -24,11 +24,8 @@
 ------------------------------------------------------------------------------
 
 with Atree;          use Atree;
-with Einfo;          use Einfo;
-with Einfo.Entities; use Einfo.Entities;
 with Einfo.Utils;    use Einfo.Utils;
 with Nlists;         use Nlists;
-with Sinfo;          use Sinfo;
 with Sinfo.Nodes;    use Sinfo.Nodes;
 with Sinfo.Utils;    use Sinfo.Utils;
 with Snames;         use Snames;
@@ -184,9 +181,6 @@ package body Sem_Aux is
       end if;
 
       --  Normal case, search enclosing scopes
-
-      --  Note: the test for Present (S) should not be required, it defends
-      --  against an ill-formed tree.
 
       S := Scope (Ent);
       loop
@@ -454,15 +448,27 @@ package body Sem_Aux is
       Id  : Entity_Id;
 
    begin
+      --  Call using access to subprogram with explicit dereference
+
       if Nkind (Nam) = N_Explicit_Dereference then
          Id := Etype (Nam);
          pragma Assert (Ekind (Id) = E_Subprogram_Type);
 
+      --  Case of call to simple entry, where the Name is a selected component
+      --  whose prefix is the task or protected record, and whose selector name
+      --  is the entry name.
+
       elsif Nkind (Nam) = N_Selected_Component then
          Id := Entity (Selector_Name (Nam));
 
+      --  Case of call to member of entry family, where Name is an indexed
+      --  component, with the prefix being a selected component giving the
+      --  task and entry family name, and the index being the entry index.
+
       elsif Nkind (Nam) = N_Indexed_Component then
          Id := Entity (Selector_Name (Prefix (Nam)));
+
+      --  Normal case
 
       else
          Id := Entity (Nam);
@@ -916,14 +922,12 @@ package body Sem_Aux is
 
    function Is_Definite_Subtype (T : Entity_Id) return Boolean is
       pragma Assert (Is_Type (T));
-      K : constant Entity_Kind := Ekind (T);
 
    begin
       if Is_Constrained (T) then
          return True;
 
-      elsif K in Array_Kind
-        or else K in Class_Wide_Kind
+      elsif Ekind (T) in Array_Kind | Class_Wide_Kind
         or else Has_Unknown_Discriminants (T)
       then
          return False;
@@ -948,6 +952,7 @@ package body Sem_Aux is
 
    begin
       if Is_Type (Ent)
+        and then Present (Etype (Ent))
         and then Base_Type (Ent) /= Root_Type (Ent)
         and then not Is_Class_Wide_Type (Ent)
 
@@ -1150,51 +1155,23 @@ package body Sem_Aux is
       Btype : constant Entity_Id := Available_View (Base_Type (Ent));
 
    begin
-      if Is_Limited_Record (Btype) then
+      if Is_Immutably_Limited_Type (Ent) then
          return True;
+      end if;
 
-      elsif Ekind (Btype) = E_Limited_Private_Type
-        and then Nkind (Parent (Btype)) = N_Formal_Type_Declaration
-      then
-         return not In_Package_Body (Scope ((Btype)));
-
-      elsif Is_Private_Type (Btype) then
-
-         --  AI05-0063: A type derived from a limited private formal type is
-         --  not immutably limited in a generic body.
-
-         if Is_Derived_Type (Btype)
-           and then Is_Generic_Type (Etype (Btype))
-         then
-            if not Is_Limited_Type (Etype (Btype)) then
+      if Is_Private_Type (Btype) then
+         declare
+            Utyp : constant Entity_Id := Underlying_Type (Btype);
+         begin
+            if No (Utyp) then
                return False;
-
-            --  A descendant of a limited formal type is not immutably limited
-            --  in the generic body, or in the body of a generic child.
-
-            elsif Ekind (Scope (Etype (Btype))) = E_Generic_Package then
-               return not In_Package_Body (Scope (Btype));
-
             else
-               return False;
+               return Is_Inherently_Limited_Type (Utyp);
             end if;
+         end;
+      end if;
 
-         else
-            declare
-               Utyp : constant Entity_Id := Underlying_Type (Btype);
-            begin
-               if No (Utyp) then
-                  return False;
-               else
-                  return Is_Inherently_Limited_Type (Utyp);
-               end if;
-            end;
-         end if;
-
-      elsif Is_Concurrent_Type (Btype) then
-         return True;
-
-      elsif Is_Record_Type (Btype) then
+      if Is_Record_Type (Btype) then
 
          --  Note that we return True for all limited interfaces, even though
          --  (unsynchronized) limited interfaces can have descendants that are
@@ -1235,10 +1212,9 @@ package body Sem_Aux is
 
       elsif Is_Array_Type (Btype) then
          return Is_Inherently_Limited_Type (Component_Type (Btype));
-
-      else
-         return False;
       end if;
+
+      return False;
    end Is_Inherently_Limited_Type;
 
    ----------------------
@@ -1545,6 +1521,81 @@ package body Sem_Aux is
 
       return E;
    end Ultimate_Alias;
+
+   ---------------------------
+   -- Unique_Component_Name --
+   ---------------------------
+
+   function Unique_Component_Name
+     (Component : Record_Field_Kind_Id) return Name_Id
+   is
+      Homographic_Component_Count : Pos := 1;
+      Hcc                         : Pos renames Homographic_Component_Count;
+      Enclosing_Type              : Entity_Id :=
+        Underlying_Type (Base_Type (Scope (Component)));
+   begin
+      if Ekind (Enclosing_Type) = E_Record_Type
+        and then Is_Tagged_Type (Enclosing_Type)
+        and then Has_Private_Ancestor (Enclosing_Type)
+      then
+         --  traverse ancestors to determine Hcc value
+         loop
+            declare
+               Type_Decl : constant Node_Id :=
+                 Parent (Underlying_Type (Base_Type (Enclosing_Type)));
+               Type_Def : constant Node_Id := Type_Definition (Type_Decl);
+            begin
+               exit when Nkind (Type_Def) /= N_Derived_Type_Definition;
+               Enclosing_Type :=
+                 Underlying_Type (Base_Type (Etype (Enclosing_Type)));
+
+               declare
+                  Ancestor_Comp : Opt_Record_Field_Kind_Id :=
+                    First_Component_Or_Discriminant (Enclosing_Type);
+               begin
+                  while Present (Ancestor_Comp) loop
+                     if Chars (Ancestor_Comp) = Chars (Component) then
+                        Hcc := Hcc + 1;
+                        exit; -- exit not required, but might as well
+                     end if;
+                     Next_Component_Or_Discriminant (Ancestor_Comp);
+                  end loop;
+               end;
+            end;
+         end loop;
+      end if;
+
+      if Hcc = 1 then
+         --  the usual case
+         return Chars (Component);
+      else
+         declare
+            Buff : Bounded_String;
+         begin
+            Append (Buff, Chars (Component));
+
+            Append (Buff, "__");
+            --  A double underscore in an identifier is legal in C, not in Ada.
+            --  Returning a result that is not a legal Ada identifier
+            --  ensures that we won't have problems with collisions.
+            --  If we have a component named Foo and we just append a
+            --  number (without any underscores), that new name might match
+            --  the name of another component (which would be bad).
+            --  The result of this function is intended for use as an
+            --  identifier in generated C code, so it needs to be a
+            --  legal C identifer.
+
+            Append (Buff, Hcc);
+            --  Should we instead append Hcc - 1 here? This is a human
+            --  readability question. If parent type and extension each
+            --  have a Foo component, do we want the name returned for the
+            --  second Foo to be "foo__2" or "foo__1" ? Does it matter?
+            --  Either way, the name returned for the first Foo will be "foo".
+
+            return Name_Find (Buff);
+         end;
+      end if;
+   end Unique_Component_Name;
 
    --------------------------
    -- Unit_Declaration_Node --

@@ -1,5 +1,5 @@
 /* Calculate branch probabilities, and basic block execution counts.
-   Copyright (C) 1990-2025 Free Software Foundation, Inc.
+   Copyright (C) 1990-2026 Free Software Foundation, Inc.
    Contributed by James E. Wilson, UC Berkeley/Cygnus Support;
    based on some ideas from Dain Samples of UC Berkeley.
    Further mangling by Bob Manson, Cygnus Support.
@@ -66,8 +66,11 @@ along with GCC; see the file COPYING3.  If not see
 #include "cfgloop.h"
 #include "sreal.h"
 #include "file-prefix-map.h"
+#include "stringpool.h"
+#include "attribs.h"
 
 #include "profile.h"
+#include "auto-profile.h"
 
 struct condcov;
 struct condcov *find_conditions (struct function*);
@@ -97,7 +100,7 @@ struct bb_profile_info {
 
 /* Counter summary from the last set of coverage counts read.  */
 
-gcov_summary *profile_info;
+gcov_summary *profile_info, *gcov_profile_info;
 
 /* Collect statistics on the performance of this pass for the entire source
    file.  */
@@ -112,6 +115,27 @@ static int total_num_times_called;
 static int total_hist_br_prob[20];
 static int total_num_branches;
 static int total_num_conds;
+
+/* Map between auto-fdo and fdo counts used to compare quality
+   of the profiles.  */
+struct afdo_fdo_record
+{
+  cgraph_node *node;
+  struct bb_record
+  {
+    /* Index of the  basic block.  */
+    int index;
+    profile_count afdo;
+    profile_count fdo;
+
+    /* Successors and predecessors in CFG.  */
+    vec <int> preds;
+    vec <int> succs;
+  };
+  vec <bb_record> bbs;
+};
+
+static vec <afdo_fdo_record> afdo_fdo_records;
 
 /* Forward declarations.  */
 static void find_spanning_tree (struct edge_list *);
@@ -472,6 +496,22 @@ compute_branch_probabilities (unsigned cfg_checksum, unsigned lineno_checksum)
   BB_INFO (EXIT_BLOCK_PTR_FOR_FN (cfun))->succ_count = 2;
   BB_INFO (ENTRY_BLOCK_PTR_FOR_FN (cfun))->pred_count = 2;
 
+  afdo_fdo_record record = {cgraph_node::get (current_function_decl), vNULL};;
+  if (dump_file && flag_auto_profile)
+    {
+      FOR_ALL_BB_FN (bb, cfun)
+	{
+	  record.bbs.safe_push ({bb->index, bb->count.ipa (),
+				profile_count::uninitialized (), vNULL, vNULL});
+	  record.bbs.last ().preds.reserve (EDGE_COUNT (bb->preds));
+	  for (auto &e : bb->preds)
+	    record.bbs.last ().preds.safe_push (e->src->index);
+	  record.bbs.last ().succs.reserve (EDGE_COUNT (bb->succs));
+	  for (auto &e : bb->succs)
+	    record.bbs.last ().succs.safe_push (e->dest->index);
+	}
+    }
+
   num_edges = read_profile_edge_counts (exec_counts);
 
   if (dump_file)
@@ -811,6 +851,18 @@ compute_branch_probabilities (unsigned cfg_checksum, unsigned lineno_checksum)
   bb_gcov_counts.release ();
   delete edge_gcov_counts;
   edge_gcov_counts = NULL;
+
+  if (dump_file && flag_auto_profile)
+    {
+      int i = 0;
+      FOR_ALL_BB_FN (bb, cfun)
+	{
+	  gcc_checking_assert (record.bbs[i].index == bb->index);
+	  record.bbs[i].fdo = bb->count.ipa ();
+	  i++;
+	}
+      afdo_fdo_records.safe_push (record);
+    }
 
   update_max_bb_count ();
 
@@ -1155,6 +1207,134 @@ read_thunk_profile (struct cgraph_node *node)
   return;
 }
 
+/* Disable coverage for BB.  This is used for #pragma GCC suppress_coverage.  */
+void
+suppress_coverage (basic_block bb)
+{
+  bb->flags |= BB_COVERAGE_SUPPRESSED;
+}
+
+/* Unset the flag set by suppress_coverage.  This is only useful when merging
+   blocks.  */
+void
+suppress_coverage_unset (basic_block bb)
+{
+  bb->flags &= ~BB_COVERAGE_SUPPRESSED;
+}
+
+/* Check if BB has coverage disabled by #pragma GCC suppress_coverage.  */
+bool
+coverage_suppressed_p (basic_block bb)
+{
+  return bb->flags & BB_COVERAGE_SUPPRESSED;
+}
+
+/* Check if any blocks are disabled by #pragma suppress_coverage in the current
+   function.  */
+static bool
+any_block_coverage_suppressed_p ()
+{
+  basic_block bb;
+  FOR_EACH_BB_FN (bb, cfun)
+    if (coverage_suppressed_p (bb))
+      return true;
+  return false;
+}
+
+/* The source locations of #pragma GCC suppress_coverage begin/end.  For each
+   entry, the source_range m_finish/m_end should be the (expanded) source
+   location of the begin/end.  If there is no end, m_finish will be
+   UNKNOWN_LOCATION.  */
+static vec<source_range> suppress_coverage_ranges;
+
+/* Try to add LOC as the beginning of a new range.  If a range was started
+   already, this is a no-op.  Returns true if a new range was created.  */
+bool
+suppress_coverage_begin (location_t loc)
+{
+  if (!suppress_coverage_ranges.is_empty ()
+      && suppress_coverage_ranges.last ().m_finish == UNKNOWN_LOCATION)
+    return false;
+
+  loc = get_pure_location (expansion_point_location (loc));
+  source_range range = source_range::from_locations (loc, UNKNOWN_LOCATION);
+  suppress_coverage_ranges.safe_push (range);
+  return true;
+}
+
+/* Try to close the last range created by suppress_coverage_begin at LOC.  If
+   the range has been closed already (or not opened), this is a no-op.  Returns
+   true if a range was closed.  */
+bool
+suppress_coverage_end (location_t loc)
+{
+  if (suppress_coverage_ranges.is_empty ()
+      || suppress_coverage_ranges.last ().m_finish != UNKNOWN_LOCATION)
+      return false;
+  loc = get_pure_location (expansion_point_location (loc));
+  suppress_coverage_ranges.last ().m_finish = loc;
+  return true;
+}
+
+/* Check if STMT is anchored to a line of code in a range disabled by #pragma
+   GCC suppress_coverage begin/end.  This function always returns false if
+   coverage is disabled as it is the faster check, and nothing should be
+   suppressed anyway.
+
+   If STMT is at an UNKNOWN_LOCATION or ADHOC_LOC, this function returns PREV.
+   This is probably a compiler-generated statement that should inherit the
+   disabled state of the previous statement since it is really tied to it, and
+   there is no opportunity for a #pragma in-between.  */
+bool
+in_pragma_suppress_coverage_p (gimple* stmt, bool prev)
+{
+  if (!coverage_instrumentation_p ())
+    return false;
+
+  location_t loc = expansion_point_location (gimple_location (stmt));
+  if (loc == UNKNOWN_LOCATION || IS_ADHOC_LOC (loc))
+    return prev;
+
+  return location_in_pragma_suppress_coverage_p (loc);
+}
+
+/* Check if LOC is within a #pragma GCC suppress_coverage block.  */
+bool
+location_in_pragma_suppress_coverage_p (location_t loc)
+{
+  loc = get_pure_location (expansion_point_location (loc));
+  for (const source_range& dl : suppress_coverage_ranges)
+    if (linemap_location_before_p (line_table, dl.m_start, loc)
+	&& (linemap_location_before_p (line_table, loc, dl.m_finish)
+	    || dl.m_finish == UNKNOWN_LOCATION))
+      return true;
+  return false;
+}
+
+/* Check if FN is fully between #pragma GCC suppress_coverage begin/end.  In
+   that case we can disable the whole function rather than every block, and
+   omit MC/DC (-fcondition-coverage) and prime path coverage (-fpath-coverage)
+   instrumentation.  */
+static bool
+fn_in_pragma_suppress_coverage_p (function *fn)
+{
+  if (!coverage_instrumentation_p ())
+    return false;
+
+  if (lookup_attribute ("gnu", "suppress_coverage",
+			DECL_ATTRIBUTES (fn->decl)))
+    return true;
+
+  const location_t start = fn->function_start_locus;
+  const location_t end = fn->function_end_locus;
+
+  for (const source_range& dl : suppress_coverage_ranges)
+    if (linemap_location_before_p (line_table, dl.m_start, start)
+	&& (linemap_location_before_p (line_table, end, dl.m_finish)
+	    || dl.m_finish == UNKNOWN_LOCATION))
+      return true;
+  return false;
+}
 
 /* Instrument and/or analyze program behavior based on program the CFG.
 
@@ -1340,6 +1520,20 @@ branch_prob (bool thunk)
 	  EDGE_INFO (e)->ignore = 1;
 	  ignored_edges++;
 	}
+      /* Ignore edges after musttail calls.  */
+      if (cfun->has_musttail
+	  && e->src != ENTRY_BLOCK_PTR_FOR_FN (cfun))
+	{
+	  gimple_stmt_iterator gsi = gsi_last_nondebug_bb (e->src);
+	  gimple *stmt = gsi_stmt (gsi);
+	  if (stmt
+	      && is_gimple_call (stmt)
+	      && gimple_call_must_tail_p (as_a <const gcall *> (stmt)))
+	    {
+	      EDGE_INFO (e)->ignore = 1;
+	      ignored_edges++;
+	    }
+	}
     }
 
   /* Create spanning tree from basic block graph, mark each edge that is
@@ -1414,6 +1608,8 @@ branch_prob (bool thunk)
       lineno_checksum = coverage_compute_lineno_checksum ();
     }
 
+  const bool fn_coverage_suppressed_p = fn_in_pragma_suppress_coverage_p (cfun);
+
   /* Write the data from which gcov can reconstruct the basic block
      graph and function line numbers (the gcno file).  */
   output_to_file = false;
@@ -1474,6 +1670,27 @@ branch_prob (bool thunk)
 	  gcov_write_length (offset);
 	}
 
+      /* Disabled blocks or function.  Lines, arcs, path segments through
+	 ignored blocks should not count towards coverage.  Ignoring coverage
+	 is a matter of interpretation and does not change the instrumentation;
+	 gcov sorts it out.  If the whole function is disabled (by the
+	 attribute on the function, not the statements), the entry block is
+	 recorded as ignored.  */
+	if (fn_coverage_suppressed_p)
+	  {
+	    offset = gcov_write_tag (GCOV_TAG_SUPPRESS);
+	    gcov_write_unsigned (ENTRY_BLOCK);
+	    gcov_write_length (offset);
+	  }
+	else if (any_block_coverage_suppressed_p ())
+	  {
+	    offset = gcov_write_tag (GCOV_TAG_SUPPRESS);
+	    FOR_EACH_BB_FN (bb, cfun)
+	      if (coverage_suppressed_p (bb))
+		gcov_write_unsigned (bb->index);
+	    gcov_write_length (offset);
+	  }
+
       /* Line numbers.  */
       /* Initialize the output.  */
       output_location (&streamed_locations, NULL, 0, NULL, NULL);
@@ -1490,7 +1707,7 @@ branch_prob (bool thunk)
 	      location_t loc = DECL_SOURCE_LOCATION (current_function_decl);
 	      if (!RESERVED_LOCATION_P (loc))
 		{
-		  seen_locations.add (loc);
+		  seen_locations.add (get_pure_location (loc));
 		  expanded_location curr_location = expand_location (loc);
 		  output_location (&streamed_locations, curr_location.file,
 				   MAX (1, curr_location.line), &offset, bb);
@@ -1503,7 +1720,7 @@ branch_prob (bool thunk)
 	      location_t loc = gimple_location (stmt);
 	      if (!RESERVED_LOCATION_P (loc))
 		{
-		  seen_locations.add (loc);
+		  seen_locations.add (get_pure_location (loc));
 		  output_location (&streamed_locations, gimple_filename (stmt),
 				   MAX (1, gimple_lineno (stmt)), &offset, bb);
 		}
@@ -1516,7 +1733,7 @@ branch_prob (bool thunk)
 	  if (single_succ_p (bb)
 	      && (loc = single_succ_edge (bb)->goto_locus)
 	      && !RESERVED_LOCATION_P (loc)
-	      && !seen_locations.contains (loc))
+	      && !seen_locations.contains (get_pure_location (loc)))
 	    {
 	      expanded_location curr_location = expand_location (loc);
 	      output_location (&streamed_locations, curr_location.file,
@@ -1545,10 +1762,10 @@ branch_prob (bool thunk)
 
   remove_fake_edges ();
 
-  if (condition_coverage_flag || profile_arc_flag)
+  if (condition_coverage_flag || path_coverage_flag || profile_arc_flag)
       gimple_init_gcov_profiler ();
 
-  if (condition_coverage_flag)
+  if (condition_coverage_flag && !fn_coverage_suppressed_p)
     {
       struct condcov *cov = find_conditions (cfun);
       gcc_assert (cov);
@@ -1595,6 +1812,18 @@ branch_prob (bool thunk)
 
       if (flag_profile_values)
 	instrument_values (values);
+    }
+
+  unsigned instrument_prime_paths (struct function*);
+  if (path_coverage_flag && !fn_coverage_suppressed_p)
+    {
+      const unsigned npaths = instrument_prime_paths (cfun);
+      if (output_to_file)
+	{
+	  gcov_position_t offset = gcov_write_tag (GCOV_TAG_PATHS);
+	  gcov_write_unsigned (npaths);
+	  gcov_write_length (offset);
+	}
     }
 
   free_aux_for_edges ();
@@ -1778,5 +2007,71 @@ end_branch_prob (void)
 	}
       fprintf (dump_file, "Total number of conditions: %d\n",
 	       total_num_conds);
+      if (afdo_fdo_records.length ())
+	{
+	  profile_count fdo_sum = profile_count::zero ();
+	  profile_count afdo_sum = profile_count::zero ();
+	  for (const auto &r : afdo_fdo_records)
+	    for (const auto &b : r.bbs)
+	      if (b.fdo.initialized_p () && b.afdo.initialized_p ())
+		{
+		  fdo_sum += b.fdo;
+		  afdo_sum += b.afdo;
+		}
+	  for (auto &r : afdo_fdo_records)
+	    {
+	      for (auto &b : r.bbs)
+		if (b.fdo.initialized_p () && b.afdo.initialized_p ())
+		  {
+		    fprintf (dump_file, "%s bb %i fdo %" PRIu64 " (%s) afdo ",
+			     r.node->dump_name (), b.index,
+			     (int64_t)b.fdo.to_gcov_type (),
+			     maybe_hot_count_p
+				     (NULL, b.fdo.apply_scale (1, 1000))
+			     ? "very hot"
+			     : maybe_hot_count_p (NULL, b.fdo)
+			     ?  "hot" : "cold");
+		    b.afdo.dump (dump_file);
+		    fprintf (dump_file, " (%s) ",
+			     maybe_hot_afdo_count_p
+				     (b.afdo.apply_scale (1, 1000))
+			     ? "very hot"
+			     : maybe_hot_afdo_count_p (b.afdo)
+			     ?  "hot" : "cold");
+		    if (afdo_sum.nonzero_p ())
+		      {
+			profile_count scaled
+			       	= b.afdo.apply_scale (fdo_sum, afdo_sum);
+			fprintf (dump_file, "scaled %" PRIu64,
+				 scaled.to_gcov_type ());
+			if (b.fdo.to_gcov_type ())
+			  fprintf (dump_file, " diff %" PRId64 ", %+2.2f%%",
+				   scaled.to_gcov_type ()
+				   - b.fdo.to_gcov_type (),
+				   (scaled.to_gcov_type ()
+				    - b.fdo.to_gcov_type ()) * 100.0
+				   / b.fdo.to_gcov_type ());
+		      }
+		    fprintf (dump_file, "\n preds");
+		    for (int val : b.preds)
+		      fprintf (dump_file, " %i", val);
+		    b.preds.release ();
+		    fprintf (dump_file, "\n succs");
+		    for (int val : b.succs)
+		      fprintf (dump_file, " %i", val);
+		    b.succs.release ();
+		    fprintf (dump_file, "\n");
+		  }
+	       r.bbs.release ();
+	     }
+	}
+      afdo_fdo_records.release ();
     }
+}
+
+/* Return true if any cfg coverage/profiling is enabled; -fprofile-arcs
+   -fcondition-coverage -fpath-coverage.  */
+bool coverage_instrumentation_p ()
+{
+  return profile_arc_flag || condition_coverage_flag || path_coverage_flag;
 }

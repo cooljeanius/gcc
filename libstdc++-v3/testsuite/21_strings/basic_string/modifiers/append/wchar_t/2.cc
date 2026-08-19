@@ -1,6 +1,6 @@
 // 2004-25-10  Paolo Carlini  <pcarlini@suse.de>
 
-// Copyright (C) 2004-2025 Free Software Foundation, Inc.
+// Copyright (C) 2004-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -19,11 +19,13 @@
 
 // 21.3.5 string modifiers
 
+#include <stdexcept>
 #include <string>
 #include <testsuite_hooks.h>
 
 // append(const _CharT* __s, size_type __n)
 // append(const _CharT* __s)
+// append(const _CharT* __s, size_type __pos, size_type __n)
 void
 test02()
 {
@@ -55,6 +57,20 @@ test02()
 
   two.append(two.c_str(), 3);
   VERIFY( two == L"Written in your eyeseyesWri" );
+
+  two.append(two.c_str(), 8, 2);
+  VERIFY( two == L"Written in your eyeseyesWriin" );
+
+  try {
+    two.append(L"a\0b", 2, 1);
+    VERIFY( false );
+  }
+  catch(std::out_of_range& fail) {
+    VERIFY( true );
+  }
+  catch(...) {
+    VERIFY( false );
+  }
 }
 
 int main()

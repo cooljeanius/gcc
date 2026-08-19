@@ -1,5 +1,5 @@
 /* Linux-specific atomic operations for PA Linux.
-   Copyright (C) 2008-2025 Free Software Foundation, Inc.
+   Copyright (C) 2008-2026 Free Software Foundation, Inc.
    Based on code contributed by CodeSourcery for ARM EABI Linux.
    Modifications for PA Linux by Helge Deller <deller@gmx.de>
 
@@ -40,7 +40,7 @@ typedef long long unsigned int u64;
 #endif
 
 /* PA-RISC 2.0 supports out-of-order execution for loads and stores.
-   Thus, we need to synchonize memory accesses.  For more info, see:
+   Thus, we need to synchronize memory accesses.  For more info, see:
    "Advanced Performance Features of the 64-bit PA-8000" by Doug Hunt.
 
    We implement byte, short and int versions of each atomic operation

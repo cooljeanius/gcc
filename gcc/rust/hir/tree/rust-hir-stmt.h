@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2025 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -43,7 +43,12 @@ public:
 
   virtual ~Stmt () {}
 
-  virtual std::string as_string () const = 0;
+  virtual std::string to_string () const = 0;
+
+  std::string to_debug_string () const
+  {
+    return to_string () + mappings.as_string ();
+  }
 
   virtual void accept_vis (HIRStmtVisitor &vis) = 0;
 
@@ -70,7 +75,7 @@ class EmptyStmt : public Stmt
   location_t locus;
 
 public:
-  std::string as_string () const override { return std::string (1, ';'); }
+  std::string to_string () const override { return ";"; }
 
   EmptyStmt (Analysis::NodeMapping mappings, location_t locus)
     : Stmt (std::move (mappings)), locus (locus)
@@ -101,6 +106,7 @@ class LetStmt : public Stmt
   tl::optional<std::unique_ptr<Type>> type;
 
   tl::optional<std::unique_ptr<Expr>> init_expr;
+  tl::optional<std::unique_ptr<Expr>> else_expr;
 
   location_t locus;
 
@@ -113,12 +119,15 @@ public:
 
   // Returns whether let statement has an initialisation expression.
   bool has_init_expr () const { return init_expr.has_value (); }
+  // Returns whether let statement has a diverging else expression.
+  bool has_else_expr () const { return else_expr.has_value (); }
 
-  std::string as_string () const override;
+  std::string to_string () const override;
 
   LetStmt (Analysis::NodeMapping mappings,
 	   std::unique_ptr<Pattern> variables_pattern,
 	   tl::optional<std::unique_ptr<Expr>> init_expr,
+	   tl::optional<std::unique_ptr<Expr>> else_expr,
 	   tl::optional<std::unique_ptr<Type>> type, AST::AttrVec outer_attrs,
 	   location_t locus);
 
@@ -167,6 +176,18 @@ public:
     return *init_expr.value ();
   }
 
+  HIR::Expr &get_else_expr ()
+  {
+    rust_assert (*else_expr);
+    return *else_expr.value ();
+  }
+
+  const HIR::Expr &get_else_expr () const
+  {
+    rust_assert (*else_expr);
+    return *else_expr.value ();
+  }
+
   HIR::Pattern &get_pattern () { return *variables_pattern; }
 
   bool is_item () const override final { return false; }
@@ -191,7 +212,7 @@ public:
   ExprStmt (Analysis::NodeMapping mappings, std::unique_ptr<Expr> expr,
 	    location_t locus);
 
-  std::string as_string () const override;
+  std::string to_string () const override;
 
   location_t get_locus () const override final { return locus; }
 

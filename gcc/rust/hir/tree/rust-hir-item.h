@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2025 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -65,7 +65,7 @@ public:
 
   BaseKind get_hir_kind () override { return Node::BaseKind::ITEM; }
 
-  std::string as_string () const override;
+  std::string to_string () const override;
 
   /* Adds crate names to the vector passed by reference, if it can
    * (polymorphism). */
@@ -95,17 +95,11 @@ protected:
 class TypeParam : public GenericParam
 {
   AST::AttrVec outer_attrs;
-
   Identifier type_representation;
-
-  // bool has_type_param_bounds;
-  // TypeParamBounds type_param_bounds;
-  std::vector<std::unique_ptr<TypeParamBound>>
-    type_param_bounds; // inlined form
-
+  std::vector<std::unique_ptr<TypeParamBound>> type_param_bounds;
   tl::optional<std::unique_ptr<Type>> type;
-
   location_t locus;
+  bool was_impl_trait;
 
 public:
   // Returns whether the type of the type param has been specified.
@@ -121,9 +115,9 @@ public:
   TypeParam (Analysis::NodeMapping mappings, Identifier type_representation,
 	     location_t locus = UNDEF_LOCATION,
 	     std::vector<std::unique_ptr<TypeParamBound>> type_param_bounds
-	     = std::vector<std::unique_ptr<TypeParamBound>> (),
+	     = {},
 	     tl::optional<std::unique_ptr<Type>> type = tl::nullopt,
-	     AST::AttrVec outer_attrs = std::vector<AST::Attribute> ());
+	     AST::AttrVec outer_attrs = {}, bool was_impl_trait = false);
 
   // Copy constructor uses clone
   TypeParam (TypeParam const &other);
@@ -136,7 +130,9 @@ public:
 
   TypeParam &operator= (TypeParam &&other) = default;
 
-  std::string as_string () const override;
+  std::string to_debug_string () const override;
+
+  std::string to_string () const override;
 
   location_t get_locus () const override final { return locus; }
 
@@ -153,6 +149,8 @@ public:
   Analysis::NodeMapping get_type_mappings () const;
 
   std::vector<std::unique_ptr<TypeParamBound>> &get_type_param_bounds ();
+
+  bool from_impl_trait () const { return was_impl_trait; }
 
 protected:
   // Clone function implementation as (not pure) virtual method
@@ -181,7 +179,7 @@ public:
     return std::unique_ptr<WhereClauseItem> (clone_where_clause_item_impl ());
   }
 
-  virtual std::string as_string () const = 0;
+  virtual std::string to_string () const = 0;
 
   virtual void accept_vis (HIRFullVisitor &vis) = 0;
 
@@ -211,7 +209,9 @@ public:
       mappings (std::move (mappings))
   {}
 
-  std::string as_string () const override;
+  std::string to_string () const override;
+
+  location_t get_locus () const { return locus; }
 
   void accept_vis (HIRFullVisitor &vis) override;
 
@@ -272,7 +272,7 @@ public:
 
   location_t get_locus () const { return locus; }
 
-  std::string as_string () const override;
+  std::string to_string () const override;
 
   void accept_vis (HIRFullVisitor &vis) override;
 
@@ -344,7 +344,7 @@ public:
   // Returns whether the WhereClause has no items.
   bool is_empty () const { return where_clause_items.empty (); }
 
-  std::string as_string () const;
+  std::string to_string () const;
 
   std::vector<std::unique_ptr<WhereClauseItem>> &get_items ()
   {
@@ -371,13 +371,13 @@ public:
 
 private:
   ImplicitSelfKind self_kind;
-  Lifetime lifetime;
+  tl::optional<Lifetime> lifetime;
   std::unique_ptr<Type> type;
   location_t locus;
   Analysis::NodeMapping mappings;
 
   SelfParam (Analysis::NodeMapping mappings, ImplicitSelfKind self_kind,
-	     Lifetime lifetime, Type *type);
+	     tl::optional<Lifetime> lifetime, Type *type);
 
 public:
   // Type-based self parameter (not ref, no lifetime)
@@ -385,8 +385,8 @@ public:
 	     bool is_mut, location_t locus);
 
   // Lifetime-based self parameter (is ref, no type)
-  SelfParam (Analysis::NodeMapping mappings, Lifetime lifetime, bool is_mut,
-	     location_t locus);
+  SelfParam (Analysis::NodeMapping mappings, tl::optional<Lifetime> lifetime,
+	     bool is_mut, location_t locus);
 
   // Copy constructor requires clone
   SelfParam (SelfParam const &other);
@@ -398,24 +398,17 @@ public:
   SelfParam (SelfParam &&other) = default;
   SelfParam &operator= (SelfParam &&other) = default;
 
-  static SelfParam error ()
-  {
-    return SelfParam (Analysis::NodeMapping::get_error (),
-		      ImplicitSelfKind::NONE, Lifetime::error (), nullptr);
-  }
-
   // Returns whether the self-param has a type field.
   bool has_type () const { return type != nullptr; }
 
   // Returns whether the self-param has a valid lifetime.
-  bool has_lifetime () const { return !lifetime.is_error (); }
+  bool has_lifetime () const { return lifetime.has_value (); }
 
-  const Lifetime &get_lifetime () const { return lifetime; }
+  const Lifetime &get_lifetime () const { return lifetime.value (); }
 
-  // Returns whether the self-param is in an error state.
-  bool is_error () const { return self_kind == ImplicitSelfKind::NONE; }
+  Lifetime &get_lifetime () { return lifetime.value (); }
 
-  std::string as_string () const;
+  std::string to_string () const;
 
   location_t get_locus () const { return locus; }
 
@@ -453,7 +446,7 @@ public:
       unsafety (unsafety), has_extern (has_extern), abi (abi)
   {}
 
-  std::string as_string () const;
+  std::string to_string () const;
 
   Const get_const_status () const { return const_status; }
 
@@ -461,6 +454,7 @@ public:
   bool is_unsafe () const { return unsafety == Unsafety::Unsafe; }
   bool is_async () const { return async_status == Async::Yes; }
 
+  Unsafety get_unsafety () const { return unsafety; }
   ABI get_abi () const { return abi; }
 };
 
@@ -487,7 +481,7 @@ public:
   FunctionParam (FunctionParam &&other) = default;
   FunctionParam &operator= (FunctionParam &&other) = default;
 
-  std::string as_string () const;
+  std::string to_string () const;
 
   location_t get_locus () const { return locus; }
 
@@ -539,7 +533,7 @@ public:
   Visibility &get_visibility () { return visibility; }
   const Visibility &get_visibility () const { return visibility; }
 
-  std::string as_string () const override;
+  std::string to_string () const override;
 };
 
 // Rust module item - abstract base class
@@ -551,7 +545,7 @@ class Module : public VisItem, public WithInnerAttrs
   std::vector<std::unique_ptr<Item>> items;
 
 public:
-  std::string as_string () const override;
+  std::string to_string () const override;
 
   // Returns whether the module has items in its body.
   bool has_items () const { return !items.empty (); }
@@ -617,7 +611,7 @@ class ExternCrate : public VisItem
       "extern crate foo"
       "extern crate std as cool_std"  */
 public:
-  std::string as_string () const override;
+  std::string to_string () const override;
 
   // Returns whether extern crate declaration has an as clause.
   bool has_as_clause () const { return !as_clause_name.empty (); }
@@ -681,7 +675,7 @@ public:
     return std::unique_ptr<UseTree> (clone_use_tree_impl ());
   }
 
-  virtual std::string as_string () const = 0;
+  virtual std::string to_string () const = 0;
 
   location_t get_locus () const { return locus; }
 
@@ -728,7 +722,7 @@ public:
   PathType get_glob_type () { return glob_type; }
   AST::SimplePath get_path () { return path; };
 
-  std::string as_string () const override;
+  std::string to_string () const override;
 
   void accept_vis (HIRFullVisitor &vis) override;
 
@@ -809,7 +803,7 @@ public:
   // Returns whether has inner tree elements.
   bool has_trees () const { return !trees.empty (); }
 
-  std::string as_string () const override;
+  std::string to_string () const override;
 
   void accept_vis (HIRFullVisitor &vis) override;
 
@@ -864,7 +858,7 @@ public:
   // Returns whether has identifier (or, rather, is allowed to).
   bool has_identifier () const { return bind_type == IDENTIFIER; }
 
-  std::string as_string () const override;
+  std::string to_string () const override;
 
   void accept_vis (HIRFullVisitor &vis) override;
 
@@ -888,7 +882,7 @@ class UseDeclaration : public VisItem
   location_t locus;
 
 public:
-  std::string as_string () const override;
+  std::string to_string () const override;
 
   UseDeclaration (Analysis::NodeMapping mappings,
 		  std::unique_ptr<UseTree> use_tree, Visibility visibility,
@@ -945,6 +939,12 @@ protected:
 
 class LetStmt;
 
+enum class Defaultness
+{
+  Default,
+  Final,
+};
+
 // Rust function declaration HIR node
 class Function : public VisItem, public ImplItem
 {
@@ -955,11 +955,16 @@ class Function : public VisItem, public ImplItem
   std::unique_ptr<Type> return_type;
   WhereClause where_clause;
   std::unique_ptr<BlockExpr> function_body;
-  SelfParam self;
+  tl::optional<SelfParam> self;
   location_t locus;
 
+  // NOTE: This should be moved to the trait item base class once we start
+  // implementing specialization for real, instead of just stubbing out the
+  // feature
+  Defaultness defaultness;
+
 public:
-  std::string as_string () const override;
+  std::string to_string () const override;
 
   // Returns whether function has generic parameters.
   bool has_generics () const { return !generic_params.empty (); }
@@ -972,6 +977,9 @@ public:
 
   // Returns whether function has a where clause.
   bool has_where_clause () const { return !where_clause.is_empty (); }
+
+  // Returns whether function has a default qualifier
+  bool is_default () const { return defaultness == Defaultness::Default; }
 
   ImplItemType get_impl_item_type () const override final
   {
@@ -987,7 +995,8 @@ public:
 	    std::vector<FunctionParam> function_params,
 	    std::unique_ptr<Type> return_type, WhereClause where_clause,
 	    std::unique_ptr<BlockExpr> function_body, Visibility vis,
-	    AST::AttrVec outer_attrs, SelfParam self, location_t locus);
+	    AST::AttrVec outer_attrs, tl::optional<SelfParam> self,
+	    Defaultness defaultness, location_t locus);
 
   // Copy constructor with clone
   Function (Function const &other);
@@ -1041,9 +1050,13 @@ public:
   // TODO: is this better? Or is a "vis_block" better?
   Type &get_return_type () { return *return_type; }
 
-  bool is_method () const { return !self.is_error (); }
+  bool is_method () const { return self.has_value (); }
 
-  SelfParam &get_self_param () { return self; }
+  tl::optional<SelfParam> &get_self_param () { return self; }
+  const tl::optional<SelfParam> &get_self_param () const { return self; }
+
+  SelfParam &get_self_param_unchecked () { return self.value (); }
+  const SelfParam &get_self_param_unchecked () const { return self.value (); }
 
   std::string get_impl_item_name () const override final
   {
@@ -1080,7 +1093,7 @@ class TypeAlias : public VisItem, public ImplItem
   location_t locus;
 
 public:
-  std::string as_string () const override;
+  std::string to_string () const override;
 
   // Returns whether type alias has generic parameters.
   bool has_generics () const { return !generic_params.empty (); }
@@ -1164,7 +1177,7 @@ protected:
 class Struct : public VisItem
 {
 protected:
-  // protected to enable access by derived classes - allows better as_string
+  // protected to enable access by derived classes - allows better to_string
   Identifier struct_name;
 
   // bool has_generics;
@@ -1276,7 +1289,7 @@ public:
   StructField (StructField &&other) = default;
   StructField &operator= (StructField &&other) = default;
 
-  std::string as_string () const;
+  std::string to_string () const;
 
   Identifier get_field_name () const { return field_name; }
 
@@ -1296,7 +1309,7 @@ public:
   std::vector<StructField> fields;
   bool is_unit;
 
-  std::string as_string () const override;
+  std::string to_string () const override;
 
   // Mega-constructor with all possible fields
   StructStruct (Analysis::NodeMapping mappings, std::vector<StructField> fields,
@@ -1392,7 +1405,7 @@ public:
   // Returns whether tuple field is in an error state.
   bool is_error () const { return field_type == nullptr; }
 
-  std::string as_string () const;
+  std::string to_string () const;
 
   Analysis::NodeMapping get_mappings () const { return mappings; }
 
@@ -1410,7 +1423,7 @@ class TupleStruct : public Struct
   std::vector<TupleField> fields;
 
 public:
-  std::string as_string () const override;
+  std::string to_string () const override;
 
   // Mega-constructor with all possible fields
   TupleStruct (Analysis::NodeMapping mappings, std::vector<TupleField> fields,
@@ -1470,7 +1483,7 @@ public:
     return std::unique_ptr<EnumItem> (clone_item_impl ());
   }
 
-  virtual std::string as_string () const override;
+  virtual std::string to_string () const override;
   virtual EnumItemKind get_enum_item_kind () const { return Named; };
 
   // not pure virtual as not abstract
@@ -1507,7 +1520,7 @@ public:
 		 std::vector<TupleField> tuple_fields, AST::AttrVec outer_attrs,
 		 location_t locus);
 
-  std::string as_string () const override;
+  std::string to_string () const override;
 
   void accept_vis (HIRFullVisitor &vis) override;
   void accept_vis (HIRStmtVisitor &vis) override;
@@ -1541,7 +1554,7 @@ public:
 		  std::vector<StructField> struct_fields,
 		  AST::AttrVec outer_attrs, location_t locus);
 
-  std::string as_string () const override;
+  std::string to_string () const override;
 
   void accept_vis (HIRFullVisitor &vis) override;
   void accept_vis (HIRStmtVisitor &vis) override;
@@ -1581,7 +1594,7 @@ public:
     return EnumItemKind::Discriminant;
   }
 
-  std::string as_string () const override;
+  std::string to_string () const override;
 
   void accept_vis (HIRFullVisitor &vis) override;
   void accept_vis (HIRStmtVisitor &vis) override;
@@ -1618,7 +1631,7 @@ class Enum : public VisItem
   location_t locus;
 
 public:
-  std::string as_string () const override;
+  std::string to_string () const override;
 
   // Returns whether "enum" has generic parameters.
   bool has_generics () const { return !generic_params.empty (); }
@@ -1699,7 +1712,7 @@ class Union : public VisItem
   location_t locus;
 
 public:
-  std::string as_string () const override;
+  std::string to_string () const override;
 
   // Returns whether union has generic params.
   bool has_generics () const { return !generic_params.empty (); }
@@ -1755,7 +1768,7 @@ class ConstantItem : public VisItem, public ImplItem
   location_t locus;
 
 public:
-  std::string as_string () const override;
+  std::string to_string () const override;
 
   ConstantItem (Analysis::NodeMapping mappings, Identifier ident,
 		Visibility vis, std::unique_ptr<Type> type,
@@ -1790,6 +1803,8 @@ public:
     rust_assert (type);
     return *type;
   }
+
+  bool has_expr () const { return const_expr != nullptr; }
 
   Expr &get_expr () { return *const_expr; }
 
@@ -1839,7 +1854,7 @@ class StaticItem : public VisItem
   location_t locus;
 
 public:
-  std::string as_string () const override;
+  std::string to_string () const override;
 
   StaticItem (Analysis::NodeMapping mappings, Identifier name, Mutability mut,
 	      std::unique_ptr<Type> type, std::unique_ptr<Expr> expr,
@@ -1898,13 +1913,14 @@ private:
   std::vector<FunctionParam> function_params;
   std::unique_ptr<Type> return_type;
   WhereClause where_clause;
-  SelfParam self;
+  tl::optional<SelfParam> self;
 
 public:
   // Mega-constructor
   TraitFunctionDecl (Identifier function_name, FunctionQualifiers qualifiers,
 		     std::vector<std::unique_ptr<GenericParam>> generic_params,
-		     SelfParam self, std::vector<FunctionParam> function_params,
+		     tl::optional<SelfParam> self,
+		     std::vector<FunctionParam> function_params,
 		     std::unique_ptr<Type> return_type,
 		     WhereClause where_clause);
 
@@ -1920,7 +1936,7 @@ public:
   TraitFunctionDecl (TraitFunctionDecl &&other) = default;
   TraitFunctionDecl &operator= (TraitFunctionDecl &&other) = default;
 
-  std::string as_string () const;
+  std::string to_string () const;
 
   // Returns whether function decl has generic parameters.
   bool has_generics () const { return !generic_params.empty (); }
@@ -1936,9 +1952,13 @@ public:
 
   WhereClause &get_where_clause () { return where_clause; }
 
-  bool is_method () const { return !self.is_error (); }
+  bool is_method () const { return self.has_value (); }
 
-  SelfParam &get_self () { return self; }
+  SelfParam &get_self_unchecked () { return self.value (); }
+  const SelfParam &get_self_unchecked () const { return self.value (); }
+
+  tl::optional<SelfParam> &get_self () { return self; }
+  const tl::optional<SelfParam> &get_self () const { return self; }
 
   Identifier get_function_name () const { return function_name; }
 
@@ -1980,7 +2000,7 @@ public:
   TraitItemFunc (TraitItemFunc &&other) = default;
   TraitItemFunc &operator= (TraitItemFunc &&other) = default;
 
-  std::string as_string () const override;
+  std::string to_string () const override;
 
   location_t get_locus () const { return locus; }
 
@@ -2046,7 +2066,7 @@ public:
   TraitItemConst (TraitItemConst &&other) = default;
   TraitItemConst &operator= (TraitItemConst &&other) = default;
 
-  std::string as_string () const override;
+  std::string to_string () const override;
 
   location_t get_locus () const { return locus; }
 
@@ -2054,6 +2074,8 @@ public:
   void accept_vis (HIRTraitItemVisitor &vis) override;
 
   Identifier get_name () const { return name; }
+
+  bool has_type () const { return expr != nullptr; }
 
   bool has_expr () const { return expr != nullptr; }
 
@@ -2101,15 +2123,20 @@ class TraitItemType : public TraitItem
   AST::AttrVec outer_attrs;
 
   Identifier name;
+  // Generic parameters for GATs (Generic Associated Types)
+  std::vector<std::unique_ptr<GenericParam>> generic_params;
   std::vector<std::unique_ptr<TypeParamBound>>
     type_param_bounds; // inlined form
   location_t locus;
 
 public:
+  bool has_generics () const { return !generic_params.empty (); }
+
   // Returns whether trait item type has type param bounds.
   bool has_type_param_bounds () const { return !type_param_bounds.empty (); }
 
   TraitItemType (Analysis::NodeMapping mappings, Identifier name,
+		 std::vector<std::unique_ptr<GenericParam>> generic_params,
 		 std::vector<std::unique_ptr<TypeParamBound>> type_param_bounds,
 		 AST::AttrVec outer_attrs, location_t locus);
 
@@ -2123,7 +2150,7 @@ public:
   TraitItemType (TraitItemType &&other) = default;
   TraitItemType &operator= (TraitItemType &&other) = default;
 
-  std::string as_string () const override;
+  std::string to_string () const override;
 
   location_t get_locus () const { return locus; }
 
@@ -2131,6 +2158,15 @@ public:
   void accept_vis (HIRTraitItemVisitor &vis) override;
 
   Identifier get_name () const { return name; }
+
+  std::vector<std::unique_ptr<GenericParam>> &get_generic_params ()
+  {
+    return generic_params;
+  }
+  const std::vector<std::unique_ptr<GenericParam>> &get_generic_params () const
+  {
+    return generic_params;
+  }
 
   std::vector<std::unique_ptr<TypeParamBound>> &get_type_param_bounds ()
   {
@@ -2175,7 +2211,7 @@ class Trait : public VisItem
   location_t locus;
 
 public:
-  std::string as_string () const override;
+  std::string to_string () const override;
 
   // Returns whether trait has generic parameters.
   bool has_generics () const { return !generic_params.empty (); }
@@ -2279,7 +2315,7 @@ public:
   ImplBlock (ImplBlock &&other) = default;
   ImplBlock &operator= (ImplBlock &&other) = default;
 
-  std::string as_string () const override;
+  std::string to_string () const override;
 
   // Returns whether inherent impl block has inherent impl items.
   bool has_impl_items () const { return !impl_items.empty (); }
@@ -2371,7 +2407,12 @@ public:
     return std::unique_ptr<ExternalItem> (clone_external_item_impl ());
   }
 
-  virtual std::string as_string () const;
+  virtual std::string to_string () const;
+
+  std::string to_debug_string () const
+  {
+    return to_string () + mappings.as_string ();
+  }
 
   location_t get_locus () const { return locus; }
 
@@ -2425,7 +2466,7 @@ public:
   ExternalStaticItem (ExternalStaticItem &&other) = default;
   ExternalStaticItem &operator= (ExternalStaticItem &&other) = default;
 
-  std::string as_string () const override;
+  std::string to_string () const override;
 
   void accept_vis (HIRFullVisitor &vis) override;
   void accept_vis (HIRExternalItemVisitor &vis) override;
@@ -2473,7 +2514,7 @@ public:
   NamedFunctionParam (NamedFunctionParam &&other) = default;
   NamedFunctionParam &operator= (NamedFunctionParam &&other) = default;
 
-  std::string as_string () const;
+  std::string to_string () const;
 
   Identifier get_param_name () const { return name; }
 
@@ -2535,7 +2576,7 @@ public:
   ExternalFunctionItem (ExternalFunctionItem &&other) = default;
   ExternalFunctionItem &operator= (ExternalFunctionItem &&other) = default;
 
-  std::string as_string () const override;
+  std::string to_string () const override;
 
   void accept_vis (HIRFullVisitor &vis) override;
   void accept_vis (HIRExternalItemVisitor &vis) override;
@@ -2577,7 +2618,7 @@ public:
   ExternalTypeItem &operator= (ExternalTypeItem &&other) = default;
   ExternalTypeItem &operator= (ExternalTypeItem const &other) = default;
 
-  std::string as_string () const override;
+  std::string to_string () const override;
 
   void accept_vis (HIRFullVisitor &vis) override;
   void accept_vis (HIRExternalItemVisitor &vis) override;
@@ -2597,18 +2638,22 @@ protected:
 class ExternBlock : public VisItem, public WithInnerAttrs
 {
   ABI abi;
+  bool explicit_abi;
   std::vector<std::unique_ptr<ExternalItem>> extern_items;
   location_t locus;
 
 public:
-  std::string as_string () const override;
+  std::string to_string () const override;
 
   // Returns whether extern block has extern items.
   bool has_extern_items () const { return !extern_items.empty (); }
 
+  // Returns whether the extern block was given an explicit ABI string.
+  bool has_abi () const { return explicit_abi; }
+
   ABI get_abi () const { return abi; }
 
-  ExternBlock (Analysis::NodeMapping mappings, ABI abi,
+  ExternBlock (Analysis::NodeMapping mappings, ABI abi, bool explicit_abi,
 	       std::vector<std::unique_ptr<ExternalItem>> extern_items,
 	       Visibility vis, AST::AttrVec inner_attrs,
 	       AST::AttrVec outer_attrs, location_t locus);

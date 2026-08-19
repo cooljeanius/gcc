@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 S p e c                                  --
 --                                                                          --
---           Copyright (C) 2020-2025, Free Software Foundation, Inc.        --
+--           Copyright (C) 2020-2026, Free Software Foundation, Inc.        --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -161,6 +161,15 @@ package Einfo.Utils is
    function First_Formal (Id : E) return Entity_Id;
    function First_Formal_With_Extras (Id : E) return Entity_Id;
 
+   function Base_Type_If_Set (Id : E) return Opt_N_Entity_Id;
+   function Implementation_Base_Type_If_Set (Id : E) return Opt_N_Entity_Id;
+   function Root_Type_If_Set (Id : E) return Opt_N_Entity_Id;
+   --  Base_Type_If_Set is a more permissive version of Base_Type, which
+   --  returns the same value, except it returns Empty in cases where Base_Type
+   --  would crash because relevant fields are not yet set. Likewise for the
+   --  other two. These are used in Treepr, to allow it to print half-baked
+   --  nodes without crashing.
+
    function Float_Rep
      (N : Entity_Id) return F with Inline, Pre =>
       N in E_Void_Id
@@ -177,11 +186,13 @@ package Einfo.Utils is
    function Has_Interrupt_Handler (Id : E) return B;
    function Has_Invariants (Id : E) return B;
    function Has_Limited_View (Id : E) return B;
+   function Has_Modular_Operations (Id : E) return B with Inline;
    function Has_Non_Limited_View (Id : E) return B with Inline;
    function Has_Non_Null_Abstract_State (Id : E) return B;
    function Has_Non_Null_Visible_Refinement (Id : E) return B;
    function Has_Null_Abstract_State (Id : E) return B;
    function Has_Null_Visible_Refinement (Id : E) return B;
+   function Has_Overflow_Operations (Id : E) return B with Inline;
    function Implementation_Base_Type (Id : E) return E;
    function Is_Boolean_Type (Id : E) return B with Inline;
    function Is_Constant_Object (Id : E) return B with Inline;
@@ -238,7 +249,7 @@ package Einfo.Utils is
    function Stream_Size_Clause (Id : E) return N with Inline;
    function Type_High_Bound (Id : E) return N with Inline;
    function Type_Low_Bound (Id : E) return N with Inline;
-   function Underlying_Type (Id : E) return Entity_Id;
+   function Underlying_Type (Id : E) return Opt_N_Entity_Id;
 
    function Scope_Depth (Id : Scope_Kind_Id) return U with Inline;
    function Scope_Depth_Set (Id : Scope_Kind_Id) return B with Inline;
@@ -453,9 +464,11 @@ package Einfo.Utils is
    --    Initial_Condition
    --    Initializes
    --    Interrupt_Handler
+   --    Modifies
    --    No_Caching
    --    Part_Of
    --    Precondition
+   --    Program_Exit
    --    Postcondition
    --    Refined_Depends
    --    Refined_Global
@@ -539,6 +552,9 @@ package Einfo.Utils is
    --  Call [Set_]Is_Volatile_Type/Is_Volatile_Object as appropriate for the
    --  Ekind of Id.
 
+   function Can_Have_Formals (Id : Entity_Id) return Boolean;
+   --  A utility function to see whether the entity can have formals.
+
    function Convention
      (N : Entity_Id) return Convention_Id renames Basic_Convention;
    procedure Set_Convention (E : Entity_Id; Val : Convention_Id);
@@ -547,6 +563,12 @@ package Einfo.Utils is
    --  foreign convention, then we set Can_Use_Internal_Rep to False on E.
    --  Also, if the Etype of E is set and is an anonymous access type with
    --  no convention set, this anonymous type inherits the convention of E.
+
+   function Scope
+     (N : N_Entity_Id) return Node_Id  renames Scope_Raw;
+   procedure Set_Scope (N : N_Entity_Id; Val : Node_Id);
+   --  Same as Set_Scope_Raw, but set Declared_In_Package_Body if Val is a
+   --  package currently being analyzed
 
    ----------------------------------
    -- Debugging Output Subprograms --

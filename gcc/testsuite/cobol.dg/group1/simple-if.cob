@@ -19,9 +19,9 @@
 *> { dg-output {CORRECTLY_TRUE: A_4 NOT  = B_4(\n|\r\n|\r)} }
 *> { dg-output {CORRECTLY_ELSE: A_4 NOT  > B_4(\n|\r\n|\r)} }
 *> { dg-output { } }
-* Not strictly Reference Format
+        >>SOURCE FREE
         IDENTIFICATION DIVISION.
-        PROGRAM-ID. test.
+        PROGRAM-ID. prog.
         DATA DIVISION.
         WORKING-STORAGE SECTION.
         01 A_4 PIC 9999 VALUE 5.

@@ -1,5 +1,5 @@
 /* Definitions of target machine for Visium.
-   Copyright (C) 2002-2025 Free Software Foundation, Inc.
+   Copyright (C) 2002-2026 Free Software Foundation, Inc.
    Contributed by C.Nettleton, J.P.Parkes and P.Garbett.
 
    This file is part of GCC.
@@ -329,17 +329,6 @@
    quarter of a word.  (If this would be less than one storage unit,
    it is rounded up to one unit.) */
 #define CHAR_TYPE_SIZE  8
-
-/* `WIDEST_HARDWARE_FP_SIZE'
-
-   A C expression for the size in bits of the widest floating-point
-   format supported by the hardware.  If you define this macro, you
-   must specify a value less than or equal to mode precision of the
-   mode used for C type long double (from hook
-   targetm.c.mode_for_floating_type with tree_index
-   TI_LONG_DOUBLE_TYPE).  If you do not define this macro, mode
-   precision of the mode used for C type long double is the
-   default.  */
 
 /* `DEFAULT_SIGNED_CHAR'
 
@@ -1411,7 +1400,7 @@ do									\
    If this macro is not defined, nothing special is output at the end
    of a jump table.
 
-   Here we output a word of zero so that jump-tables can be seperated
+   Here we output a word of zero so that jump-tables can be separated
    in reverse assembly. */
 #define ASM_OUTPUT_CASE_END(STREAM, NUM, TABLE) \
   asm_fprintf (STREAM, "\t.long   0\n")
@@ -1501,14 +1490,14 @@ do									\
 #undef CASE_VECTOR_PC_RELATIVE
 
 /* This says how to output assembler code to declare an
-   unitialised external linkage data object. */
+   uninitialised external linkage data object. */
 #define ASM_OUTPUT_COMMON(STREAM, NAME, SIZE, ROUNDED)      \
 ( fputs ("\n\t.comm  ", (STREAM)),                        \
   assemble_name ((STREAM), (NAME)),                         \
   fprintf ((STREAM), "," HOST_WIDE_INT_PRINT_UNSIGNED"\n", ROUNDED))
 
 /* This says how to output assembler code to declare an
-   unitialised internal linkage data object. */
+   uninitialised internal linkage data object. */
 #define ASM_OUTPUT_LOCAL(STREAM, NAME, SIZE, ROUNDED)     \
 ( fputs ("\n\t.lcomm ", (STREAM)),                      \
   assemble_name ((STREAM), (NAME)),                     \

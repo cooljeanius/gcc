@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2025 Symas Corporation
+ * Copyright (c) 2021-2026 Symas Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -8,6 +8,7 @@
  * * Redistributions of source code must retain the above copyright
  *   notice, this list of conditions and the following disclaimer.
  * * Redistributions in binary form must reproduce the above
+ *   copyright notice, this list of conditions and the following disclaimer
  *   copyright notice, this list of conditions and the following disclaimer
  *   in the documentation and/or other materials provided with the
  *   distribution.
@@ -28,11 +29,13 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 %code requires {
+  #include "config.h"
   #include <fstream>  // Before cobol-system because it uses poisoned functions
   #include "cobol-system.h"
   #include "coretypes.h"
   #include "../../libgcobol/io.h"
   #include "../../libgcobol/ec.h"
+  #include "tree.h"
 
 #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 
@@ -43,23 +46,72 @@
   };
 
   enum accept_func_t {
+    accept_e,
     accept_done_e,
     accept_command_line_e,
     accept_envar_e,
   };
 
+  class ast_op_t;
+
+  struct coll_alphanat_t {
+    const char *alpha, *national; 
+  };
+
+  struct label_pair_t {
+    cbl_label_t *from, *to;
+  };
+
+  struct linage_t {
+      cbl_refer_t *footing, *top, *bottom;
+  };
+  struct linage_value_t {
+      int token;
+      cbl_refer_t *value;
+  };
+  
+class locale_tgt_t {
+  char user_system_default;
+  std::vector<int> categories;
+ public:
+  locale_tgt_t() : user_system_default('\0') {}
+  locale_tgt_t( int category )
+    : user_system_default('\0')
+    , categories(1, category)
+    {}
+  locale_tgt_t operator=( int ch ) {
+    assert(categories.empty());
+    switch(ch) {
+    case 'S': case 'U':
+      user_system_default = ch;
+      return *this;
+    }
+    gcc_unreachable();
+  }
+  locale_tgt_t push_back( int token ) {
+    categories.push_back(token);
+    return *this;
+  }
+  
+  bool is_default() const { return 0 < user_system_default; }
+  char default_of() const {
+    assert(categories.empty());
+    return user_system_default;
+  }
+  const std::vector<int>& lc_categories() const { return categories; }
+};
+
   class literal_t {
     size_t isym;
   public:
+    cbl_encoding_t encoding;
     char prefix[3];
     size_t len;
     char *data;
 
     bool empty() const { return data == NULL; }
     size_t isymbol() const { return isym; }
-    const char * symbol_name() const {
-      return isym? cbl_field_of(symbol_at(isym))->name : "";
-    }
+    const char * symbol_name() const;
 
     literal_t&
     set( size_t len, char *data, const char prefix[] ) {
@@ -68,17 +120,8 @@
       return *this;
     }
 
-    literal_t&
-    set( const cbl_field_t * field ) {
-      assert(field->has_attr(constant_e));
-      assert(is_literal(field));
+    literal_t& set( const cbl_field_t * field );
 
-      set_prefix( "", 0 );
-      set_data( field->data.capacity,
-                const_cast<char*>(field->data.initial),
-                field_index(field) );
-      return *this;
-    }
     literal_t&
     set_data( size_t len, char *data, size_t isym = 0 ) {
       this->isym = isym;
@@ -91,19 +134,31 @@
       }
       return *this;
     }
-    literal_t&
-    set_prefix( const char *input, size_t len ) {
-      assert(len < sizeof(prefix));
-      std::fill(prefix, prefix + sizeof(prefix), '\0');
-      std::transform(input, input + len, prefix, toupper);
-      return *this;
-    }
+    literal_t& set_prefix( const char *input, size_t len );
+
     bool
     compatible_prefix( const literal_t& that ) const {
       if( prefix[0] != that.prefix[0] ) {
         return prefix[0] != 'N' && that.prefix[0] != 'N';
       }
       return true;
+    }
+    cbl_encoding_t encode_as() const {
+      switch(prefix[0]) {
+      case '\0':
+      case 'X': 
+      case 'Z': 
+        return current_encoding('A');
+      case 'N': 
+        return current_encoding('N');
+      default:
+        dbgmsg("no such prefix '%s'", prefix);
+        if( prefix[0] != ftoupper(prefix[0]) ) {
+          gcc_unreachable();
+        }
+        break;
+      }
+      gcc_unreachable();
     }
   };
 
@@ -186,14 +241,14 @@
     data_category_t category;
     category_map_t replacement;
 
-    init_statement_t( category_map_t replacement )
+    explicit init_statement_t( const category_map_t& replacement )
       : to_value(false)
       , category(data_category_none)
       , replacement(replacement)
 
     {}
 
-    init_statement_t( bool to_value = false )
+    explicit init_statement_t( bool to_value = false )
       : to_value(to_value)
       , category(data_category_none)
       , replacement(category_map_t())
@@ -211,7 +266,7 @@
 
   struct cbl_field_t;
   static inline cbl_field_t *
-  new_literal( const char initial[], enum radix_t radix );
+  new_literal( const cbl_loc_t loc, const char initial[], enum radix_t radix );
 #pragma GCC diagnostic pop
 
   enum select_clause_t {
@@ -240,7 +295,7 @@
   struct Elem_list_t {
     std::list<E> elems;
     Elem_list_t() {}
-    Elem_list_t( E elem ) {
+    explicit Elem_list_t( E elem ) {
       elems.push_back(elem);
     }
     Elem_list_t * push_back( E elem ) {
@@ -259,6 +314,7 @@
   struct file_list_t;
   struct cbl_label_t;
   typedef struct Elem_list_t<cbl_label_t*> Label_list_t;
+  typedef struct Elem_list_t<int> token_list_t;
 
   struct cbl_file_key_t;
   typedef struct Elem_list_t<cbl_file_key_t*> key_list_t;
@@ -270,18 +326,30 @@
 
   struct rel_part_t;
 
-  bool set_debug(bool);
+  bool set_debug(bool = true);
 
 #include "../../libgcobol/ec.h"
 #include "../../libgcobol/common-defs.h"
 #include "inspect.h"
 }
 
+%define api.location.type {cbl_loc_t}
+
 %{
+// yyssa never freed: 
+// https://lists.nongnu.org/archive/html/help-bison/2021-01/msg00021.html
+#pragma GCC diagnostic ignored "-Wfree-nonheap-object"
+
+#include "config.h"
 #include <fstream>  // Before cobol-system because it uses poisoned functions
 #include "cobol-system.h"
 #include "coretypes.h"
 #include "tree.h"
+#include "tree-iterator.h"
+#include "stringpool.h"
+#include "diagnostic-core.h"
+#include "target.h"
+#include "tm.h"
 #undef cobol_dialect
 #undef cobol_exceptions
 #undef yy_flex_debug
@@ -290,12 +358,16 @@
 #include "../../libgcobol/common-defs.h"
 #include "util.h"
 #include "cbldiag.h"
+/* allow relocate stack - verifying assert in cbldiag.h */
+#define YYLTYPE_IS_TRIVIAL 1
 #include "symbols.h"
 #include "inspect.h"
 #include "../../libgcobol/io.h"
 #include "genapi.h"
 #include "../../libgcobol/exceptl.h"
 #include "exceptg.h"
+#include "../../libgcobol/cobol-endian.h"
+#include "../../libgcobol/charmaps.h"
 #include "parse_ante.h"
 %}
 
@@ -329,24 +401,24 @@
 			NUMED     "NUMERIC-EDITED picture"
 			NUMED_CR  "NUMERIC-EDITED CR picture"
 			NUMED_DB  "NUMERIC-EDITED DB picture"
-%token  <number>        NINEDOT NINES NINEV PIC_P
-%token  <string>        SPACES
+%token  <number>        NINEDOT NINES NINEV PIC_P "PICTURE P symbol" ONES
+%token  <string>        SPACES EQ "EQUAL"
 %token  <literal>       LITERAL
 %token  <number>        END EOP
 %token  <string>        FILENAME
 %token  <number>        INVALID
 %token  <number>        NUMBER NEGATIVE
 %token  <numstr>        NUMSTR    "numeric literal"
-%token  <number>        OVERFLOW
-%token  <computational> COMPUTATIONAL
+%token  <number>        OVERFLOW_kw "OVERFLOW"
+%token  <computational> BINARY_INTEGER COMPUTATIONAL
 
 %token  <boolean>       PERFORM BACKWARD
 %token  <number>        POSITIVE
 %token  <field_attr>	POINTER
-%token  <string>        SECTION
+%token  <string>        PROCESS SECTION
 %token  <number>        STANDARD_ALPHABET "STANDARD ALPHABET"
 %token  <string>        SWITCH
-%token  <string>        UPSI
+%token  <string>        UPSI 
 %token  <number>        ZERO
 
                          /* environment names */
@@ -360,6 +432,7 @@
 %token  <number>        MIGHT_BE "IS or IS NOT"
 			FUNCTION_UDF   "UDF name"
 			FUNCTION_UDF_0 "UDF"
+                        DEFAULT
 
 %token  <string>        DATE_FMT "date format"
 			TIME_FMT "time format"
@@ -372,9 +445,9 @@
 			LSUB "("
 			PARAMETER_kw "PARAMETER"
 			OVERRIDE READY RESET
-			RSUB ")"
+			RSUB")"
 			SERVICE_RELOAD "SERVICE RELOAD" STAR_CBL "*CBL"
-			SUBSCRIPT SUPPRESS TITLE TRACE USE
+			SUBSCRIPT SUPPRESS TRACE USE
 
 			COBOL_WORDS ">>COBOL-WORDS" EQUATE UNDEFINE
 			CDF_DEFINE ">>DEFINE" CDF_DISPLAY ">>DISPLAY"
@@ -382,7 +455,10 @@
 			CDF_EVALUATE ">>EVALUATE"
 			CDF_WHEN ">>WHEN"
 			CDF_END_EVALUATE ">>END-EVALUATE"
+                        CALL_CONVENTION ">>CALL-CONVENTION"
 			CALL_COBOL "CALL" CALL_VERBATIM "CALL (as C)"
+                        CDF_PUSH ">>PUSH" CDF_POP ">>POP"
+                        SOURCE_FORMAT ">>SOURCE FORMAT"
 
 			IF THEN ELSE
 			SENTENCE
@@ -396,7 +472,10 @@
 			STRING_kw "STRING" STOP SUBTRACT START
 			UNSTRING WRITE WHEN
 
-			   ABS ACCESS ACOS ACTUAL ADVANCING AFTER ALL
+			ARGUMENT_NUMBER  ARGUMENT_VALUE
+			ENVIRONMENT_NAME ENVIRONMENT_VALUE
+
+			ABS ACCESS ACOS ACTUAL ADVANCING AFTER ALL
 			ALLOCATE
 			ALPHABET ALPHABETIC ALPHABETIC_LOWER "ALPHABETIC-LOWER"
 			ALPHABETIC_UPPER "ALPHABETIC-UPPER"
@@ -416,7 +495,7 @@
 			CF CH
 			CHANGED CHAR CHAR_NATIONAL "CHAR-NATIONAL"
 			CHARACTER CHARACTERS CHECKING CLASS
-			COBOL CODE CODESET COLLATING
+			COBOL CODE CODESET "CODE-SET" COLLATING
 			COLUMN COMBINED_DATETIME "COMBINED-DATETIME"
 			COMMA COMMAND_LINE "COMMAND-LINE"
 			COMMAND_LINE_COUNT "COMMAND-LINE-COUNT"
@@ -435,14 +514,14 @@
 			DAY_OF_WEEK "DAY-OF-WEEK"
 			DAY_TO_YYYYDDD "DAY-TO-YYYYDDD"
 			DBCS DE DEBUGGING DECIMAL_POINT
-			DECLARATIVES DEFAULT DELIMITED DELIMITER DEPENDING
+			DECLARATIVES DELIMITED DELIMITER DEPENDING
 			DESCENDING DETAIL DIRECT
 			DIRECT_ACCESS "DIRECT-ACCESS"
 			DOWN DUPLICATES
 			DYNAMIC
 
-			E EBCDIC EC EGCS ENTRY ENVIRONMENT EQUAL EVERY
-			EXAMINE EXHIBIT EXP EXP10 EXTEND EXTERNAL
+			E EBCDIC EC EGCS ENCODING ENTRY ENVIRONMENT 
+			EVERY EXAMINE EXHIBIT EXP EXP10 EXTEND EXTERNAL
 
 			EXCEPTION_FILE	     "EXCEPTION-FILE"
 			EXCEPTION_FILE_N     "EXCEPTION-FILE-N"
@@ -484,7 +563,7 @@
 			INTEGER_OF_DAY "INTEGER-OF-DAY"
 			INTEGER_OF_FORMATTED_DATE "INTEGER-OF-FORMATTED-DATE"
 			INTEGER_PART "INTEGER-PART"
-			INTO INTRINSIC INVOKE IO IO_CONTROL "IO-CONTROL"
+			INTO INTRINSIC INVOKE IO "I-O" IO_CONTROL "I-O-CONTROL"
 			IS ISNT "IS NOT"
 
 			KANJI KEY
@@ -503,14 +582,14 @@
 			LOWER_CASE "LOWER-CASE"
 			LOW_VALUES "LOW-VALUES"
 			LOWEST_ALGEBRAIC "LOWEST-ALGEBRAIC"
-			LPAREN " )"
+			LPAREN " ("
 
 			MANUAL MAXX "Max" MEAN MEDIAN MIDRANGE
 			MINN "Min" MULTIPLE MOD MODE
 			MODULE_NAME  "MODULE-NAME "
 
-			NAMED NAT NATIONAL
-			NATIONAL_EDITED "NATIONAL-EDITED"
+			NAMED NAMESPACE NAMESPACE_PREFIX "NAMESPACE-PREFIX"
+                        NAT NATIONAL NATIONAL_EDITED "NATIONAL-EDITED"
 			NATIONAL_OF "NATIONAL-OF"
 			NATIVE NESTED NEXT
 			NO NOTE
@@ -529,7 +608,7 @@
 			PAGE_COUNTER "PAGE-COUNTER"
 			PF PH PI PIC PICTURE
 			PLUS PRESENT_VALUE PRINT_SWITCH
-			PROCEDURE PROCEDURES PROCEED PROCESS
+			PROCEDURE PROCEDURES PROCEED PROCESSING
 			PROGRAM_ID "PROGRAM-ID"
 			PROGRAM_kw "Program" PROPERTY PROTOTYPE PSEUDOTEXT
 
@@ -539,7 +618,7 @@
 			RD RECORD RECORDING RECORDS RECURSIVE
 			REDEFINES REEL REFERENCE RELATIVE REM REMAINDER REMARKS
 			REMOVAL RENAMES	 REPLACE REPLACING REPORT REPORTING REPORTS
-			REPOSITORY RERUN RESERVE RESTRICTED RESUME
+			REPOSITORY RERUN RESERVE RESTRICTED RESUME RETRY
 			REVERSE REVERSED REWIND RF RH RIGHT ROUNDED RUN
 
 			SAME SCREEN SD
@@ -560,7 +639,7 @@
 			STATUS STRONG
 			SUBSTITUTE SUM SYMBOL SYMBOLIC SYNCHRONIZED
 
-			TALLY TALLYING TAN TERMINATE TEST
+			TALLYING TAN TERMINATE TEST
 			TEST_DATE_YYYYMMDD "TEST-DATE-YYYYMMDD"
 			TEST_DAY_YYYYDDD "TEST-DAY-YYYYDDD"
 			TEST_FORMATTED_DATETIME "TEST-FORMATTED-DATETIME"
@@ -570,17 +649,16 @@
 			THAN TIME TIMES
 			TO TOP
 			TOP_LEVEL
-			TRACKS TRACK_AREA TRAILING TRANSFORM TRIM TRUE_kw "True" TRY
-			TURN TYPE TYPEDEF
+			TRACKS TRACK_AREA TRAILING TRANSFORM TRIM TRUE_kw "True"
+			TRY TURN TYPE TYPEDEF
 
-			ULENGTH UNBOUNDED UNIT UNITS UNIT_RECORD UNTIL UP UPON
-			UPOS UPPER_CASE USAGE USING USUBSTR USUPPLEMENTARY
-			UTILITY UUID4 UVALID UWIDTH
+			ULENGTH UNBOUNDED UNIT UNITS UNIT_RECORD UNTIL
+			UP UPON UPOS UPPER_CASE USAGE USING 
+			USUBSTR USUPPLEMENTARY UTILITY UUID4 UVALID UWIDTH
 
-			VALUE VARIANCE VARYING VOLATILE
+			VALIDATING VALUE VARIANCE VARYING VOLATILE
 
 			WHEN_COMPILED WITH WORKING_STORAGE
-			XML XMLGENERATE XMLPARSE
 			YEAR_TO_YYYY YYYYDDD YYYYMMDD
 
 			/* unused Context Words */
@@ -624,6 +702,9 @@
 			UNDERLINE UNSIGNED_kw
 			UTF_16 "UTF-16"
 			UTF_8 "UTF-8"
+                        XML_DECLARATION "XML-DECLARATION"
+                        XMLGENERATE "XML GENERATE"
+                        XMLPARSE "XML PARSE"
 
 			ADDRESS
 			END_ACCEPT "END-ACCEPT"
@@ -645,6 +726,7 @@
 			END_SUBTRACT "END-SUBTRACT"
 			END_UNSTRING "END-UNSTRING"
 			END_WRITE "END-WRITE"
+			END_XML "END-XML"
 			END_IF "END-IF"
 			/* end tokens without semantic value */
 
@@ -652,31 +734,32 @@
     // https://savannah.gnu.org/forum/forum.php?forum_id=9735
 %token  YYEOF 0 "end of file"
 
-%type   <number>        sentence statements statement
+%type   <number>        statements statement
 %type   <number>        star_cbl_opt close_how
 
-%type   <number>        test_before usage_clause1 might_be
-%type   <boolean>       all optional sign_leading on_off initialized strong
+%type   <number>        test_before usage_clause1 might_be alphanational
+%type   <boolean>       all filler initialized is_signed
+                        on_off optional sign_leading strong 
 %type   <number>        count data_clauses data_clause
 %type   <number>        nine nines nps relop spaces_etc reserved_value signed
-%type   <number>        variable_type
+%type   <number>        variable_type binary_type
 %type   <number>        true_false posneg eval_posneg
 %type   <number>        open_io alphabet_etc
 %type   <special_type>  device_name
-%type   <string>        numed  collating_sequence context_word ctx_name locale_spec
+%type   <string>        numed  context_word ctx_name locale_spec
+%type   <char_class_locales> char_class_locales coll_alphanats 
+%type   <collating_name> coll_alphanat 
 %type   <literal>       namestr alphabet_lit program_as repo_as
 %type   <field>         perform_cond kind_of_name
 %type   <refer>         alloc_ret
 
 %type	<field>		log_term rel_expr rel_abbr eval_abbr
-%type   <refer>		num_value num_term value factor
-%type   <refer>         simple_cond bool_expr
+%type   <refer>         simple_cond bool_expr until_expr
 %type	<log_expr_t>	log_expr rel_abbrs eval_abbrs
 %type   <rel_term_t>	rel_term rel_term1
 
-%type   <field_data>    value78
 %type   <field>         literal name nume typename
-%type   <field>         num_literal signed_literal
+%type   <field>         num_constant num_literal signed_literal
 
 %type	<number>	perform_start
 %type   <refer>         perform_times
@@ -684,12 +767,13 @@
 			perform_inline perform_except
 
 %type   <refer>         eval_subject1
-%type   <vargs>         vargs disp_vargs;
-%type   <field>         level_name
-%type   <string>        fd_name picture_sym name66 paragraph_name
+%type   <vargs>         vargs disp_vargs trim_expr
+%type   <field>         level_name level_constant
+%type   <number>        fd_name
+%type   <string>        picture_sym name66 paragraph_name
 %type   <literal>       literalism
-%type   <number>        bound advance_when org_clause1 read_next
-%type   <number>        access_mode multiple lock_how lock_mode
+%type   <number>        bound advance_when org_clause1 read_next top_bot
+%type   <number>        access_mode multiple lock_how lock_mode org_is
 %type   <select_clauses> select_clauses
 %type   <select_clause> select_clause  access_clause alt_key_clause
                         assign_clause collate_clause status_clause
@@ -697,21 +781,31 @@
                         record_delim_clause record_key_clause
                         relative_key_clause reserve_clause sharing_clause
 
+%type   <linage>        with_linage with_footings
+%type   <linage_value>  with_footing
 %type   <file>          filename read_body write_body delete_body
+%type   <label>         delete_file_body
+%type   <error>         delete_error delete_except delete_excepts
+                                                
+%type   <file>		start_impl start_cond start_body
 %type   <rewrite_t>     rewrite_body
 %type   <min_max>       record_vary rec_contains from_to record_desc
 %type   <file_op>       read_file rewrite1 write_file
 %type   <field>         data_descr data_descr1 write_what file_record
-%type   <field>         name88
+%type   <field>         name88 selected_name 
 %type   <refer>         advancing  advance_by
-%type   <refer>         alphaval alpha_val numeref scalar scalar88
+%type   <refer>         alphaval alpha_val numeref scalar scalar88 scalar_any
 %type   <refer>         tableref tableish
-%type   <refer>         varg varg1 varg1a
-%type   <refer>         expr expr_term compute_expr free_tgt by_value_arg
-%type   <refer>         move_tgt selected_name read_key read_into vary_by
-%type   <refer>         accept_refer num_operand envar search_expr any_arg
+%type   <refer>         varg varg1 varg1a start_after start_pos
+%type   <refer>         cexpr free_tgt by_value_arg
+%type   <refer>         move_tgt read_key read_into vary_by
+%type   <refer>         num_operand num_value envar search_expr any_arg
+
+%type   <ast_op>        expr expr_term num_term value factor
+                        compute_expr
+
 %type   <accept_func>	accept_body
-%type   <refers>        expr_list subscripts arg_list free_tgts
+%type   <refers>        subscript_exprs subscripts arg_list free_tgts 
 %type   <targets>       move_tgts set_tgts
 %type   <field>         search_varying
 %type   <field>         search_term search_terms
@@ -728,7 +822,7 @@
 
 %type   <refer>         inspected
 %type   <insp_qual>     insp_qual
-%type   <insp_match>    insp_quals insp_mtquals tally_match
+%type   <insp_match>    insp_quals insp_mtqual tally_match
 %type   <insp_replace>  x_by_y
 %type   <insp_oper>     replace_oper x_by_ys
 %type   <insp_oper>     tally_forth tally_matches
@@ -741,15 +835,15 @@
 %type   <arith>         add_cond subtract_cond multiply_cond divide_cond
 %type   <arith>         divide_into divide_by
 
-%type   <refer>         intrinsic_call
+%type   <refer>         function_call
 %type   <field>         intrinsic intrinsic_locale
 
 %type   <field>         intrinsic0
 %type   <number>        intrinsic_v intrinsic_I intrinsic_N intrinsic_X
 %type   <number>        intrinsic_I2 intrinsic_N2 intrinsic_X2
-%type   <number>        lopper_case
-%type   <number>        return_body return_file
-%type   <field>         trim_trailing function_udf
+%type   <number>        lopper_case 
+%type   <number>        return_body return_file trim_trailing 
+%type   <field>         function_udf
 
 %type   <refer>         str_input str_size
 %type   <refer2>        str_into
@@ -771,6 +865,7 @@
 %type   <error>         on_overflow on_overflows
 %type   <error>         arith_err arith_errs
 %type   <error>         accept_except accept_excepts call_except call_excepts
+
 %type   <compute_body_t> compute_body
 
 %type   <refer>         ffi_name set_operand set_tgt scalar_arg unstring_src
@@ -782,22 +877,33 @@
 %type   <ffi_impl>      call_body call_impl
 
 %type   <ffi_arg>       procedure_use
-%type   <ffi_args>      procedure_uses
+%type   <ffi_args>      procedure_uses procedure_args
 
 %type   <comminit>      comminit comminits program_attrs
 
 %type   <error_clauses> io_invalids read_eofs write_eops
 %type   <boolean>       io_invalid  read_eof  write_eop
                         global is_global anycase backward
+                        end_display
+                        exh_changed exh_named last
+                        override
 %type   <number>        mistake globally first_last
-%type   <io_mode>   io_mode
+%type   <io_mode>       io_mode
+
+%type   <label_pair>    xmlprocs
+%type   <error>         xmlexcept xmlexcepts
+%type   <field>         xmlencoding xmlvalidating
+%type   <field>         xmlgen_count
+%type   <number>        xmlreturning
+%type   <label>         xmlparse_body
+%type   <xml_decl_attr> xmlgen_decl
 
 %type   <labels>        labels
 %type   <label>         label_1 section_name
 
 %type   <switches>      upsi_entry
 
-%type   <special>       acceptable disp_target
+%type   <special>       acceptable disp_upon
 %type   <display>       disp_body
 
 %type   <false_domain>  domains domain
@@ -809,7 +915,7 @@
 %type   <replacement>   init_by
 %type   <replacements>  init_bys init_replace
 %type   <refer>         init_data exit_with stop_status
-%type   <float128>      cce_expr cce_factor const_value
+%type   <cce_type>      cce_expr cce_factor const_value
 %type   <prog_end>      end_program1
 %type   <substitution>  subst_input
 %type   <substitutions> subst_inputs
@@ -823,24 +929,41 @@
 %type	<opt_init_sects>	opt_init_sects
 %type	<opt_init_sect>	        opt_init_sect
 %type	<number>        opt_init_value
+%type	<number>        locale_current loc_category user_default
+%type   <string>        locale_name
+%type   <token_list>    loc_categories locale_tgt
 %type	<opt_round>	rounded round_between rounded_type rounded_mode
 %type	<opt_arith>	opt_arith_type
 %type	<module_type>	module_type
+
+%type   <nameloc>       repo_func_name                        
+%type   <namelocs>      repo_func_names
+%type   <tokens>        repo_intrinsics
+%type   <number>        repo_intrinsic
+%type   <codeset>       codeset_name
+%type   <locale_phrase> locale_phrase
+%type   <number>        convert_hex convert_nat convert_alpha // convert_fmt
 
 %union {
     bool boolean;
     int number;
     char *string;
-    REAL_VALUE_TYPE float128;
+    struct { REAL_VALUE_TYPE r; char *s; } cce_type;
     literal_t literal;
     cbl_field_attr_t field_attr;
     ec_type_t ec_type;
     ec_list_t* ec_list;
+    cbl_nameloc_t  *nameloc;
+    cbl_namelocs_t *namelocs;
            declarative_list_t* dcl_list_t;
            isym_list_t* isym_list;
-    struct { radix_t radix; char *string; } numstr;
-    struct { int token; literal_t name; } prog_end;
+    struct { bool is_float; radix_t radix; char *string; } numstr;
+    struct { cbl_loc_base_t loc; int token; literal_t name; } prog_end;
     struct { int token; special_name_t id; } special_type;
+    struct { char locale_type; const char * name; } locale_phrase;
+             coll_alphanat_t char_class_locales;
+    struct collating_name_t { int token; const char *name; } collating_name;
+    struct { size_t isym; cbl_encoding_t encoding; } codeset;
     struct { cbl_field_type_t type;
              uint32_t capacity; bool signable; } computational;
     struct cbl_special_name_t *special;
@@ -852,18 +975,19 @@
     struct { cbl_file_t *file; file_status_t handled; } file_op;
     struct cbl_label_t *label;
     struct { cbl_label_t *label; int token; } exception;
-    struct cbl_field_data_t *field_data;
+    struct { cbl_encoding_t encoding; cbl_field_data_t *data; } field_data;
     struct cbl_field_t *field;
     struct { bool tf; cbl_field_t *field; } bool_field;
     struct { int token; cbl_field_t *cond; } cond_field;
     struct cbl_refer_t *refer;
-
+           ast_op_t *ast_op;
     struct rel_term_type { bool invert; cbl_refer_t *term; } rel_term_t;
     struct log_expr_t *log_expr_t;
     struct vargs_t* vargs;
     struct perform_t *perf;
     struct cbl_perform_tgt_t *tgt;
            Label_list_t *labels;
+           token_list_t *tokens;
            key_list_t *file_keys;
            cbl_file_mode_t io_mode;
     struct cbl_file_key_t *file_key;
@@ -873,12 +997,13 @@
     struct sort_key_t *sort_key;
     struct sort_keys_t *sort_keys;
     struct file_sort_io_t *sort_io;
+           linage_t linage;
+           linage_value_t linage_value;
     struct arith_t *arith;
-    struct { size_t ntgt; cbl_num_result_t *tgts;
-             cbl_refer_t *expr; } compute_body_t;
-    struct ast_inspect_t *insp_one;
-    struct ast_inspect_list_t *insp_all;
-    struct ast_inspect_oper_t *insp_oper;
+    struct { size_t ntgt; cbl_num_result_t *tgts; ast_op_t *ast_op; } compute_body_t;
+    struct cbl_inspect_t *insp_one;
+           cbl_inspect_opers_t *insp_all;
+    struct cbl_inspect_oper_t *insp_oper;
     struct { bool before; cbl_inspect_qual_t *qual; } insp_qual;
            cbl_inspect_t *inspect;
            cbl_inspect_match_t *insp_match;
@@ -888,12 +1013,14 @@
     struct { cbl_refer_t *input, *delimiter; } delimited_1;
     struct { cbl_refer_t *from, *len; } refmod_parts;
     struct refer_collection_t *delimiteds;
+
     struct { cbl_label_t *on_error, *not_error; } error;
+           label_pair_t label_pair;
     struct { unsigned int nclause; bool tf; } error_clauses;
     struct refer_pair_t { cbl_refer_t *first, *second; } refer2;
     struct { refer_collection_t *inputs; refer_pair_t into; } str_body;
 
-    struct { accept_func_t func; cbl_refer_t *into, *from; } accept_func;
+    struct { accept_func_t func; cbl_refer_t *into, *from; special_name_t special;} accept_func;
     struct unstring_into_t *uns_into;
     struct unstring_tgt_list_t *uns_tgts;
     struct unstring_tgt_t *uns_tgt;
@@ -902,14 +1029,14 @@
 
     struct cbl_ffi_arg_t *ffi_arg;
     struct ffi_args_t *ffi_args;
-    struct { YYLTYPE loc; cbl_refer_t *ffi_name, *ffi_returning;
+    struct { cbl_loc_base_t loc; cbl_refer_t *ffi_name, *ffi_returning;
              ffi_args_t *using_params; } ffi_impl;
 
     struct { bool common, initial, recursive; } comminit;
     struct { enum select_clause_t clause; cbl_file_t *file; } select_clause;
     struct { size_t clauses; cbl_file_t *file; } select_clauses;
-    struct { YYLTYPE loc; char *on, *off; } switches;
-    struct cbl_domain_t *false_domain;
+    struct { cbl_loc_base_t loc; char *on, *off; } switches;
+    struct { cbl_encoding_t encoding; cbl_domain_t *domain; } false_domain;
     struct { size_t also; unsigned char *low, *high; } colseq;
     struct { cbl_field_attr_t attr; int nbyte; } pic_part;
 
@@ -921,6 +1048,9 @@
            substitution_t substitution;
            substitutions_t  *substitutions;
     struct { bool is_locale; cbl_refer_t *arg2; } numval_locale_t;
+           locale_tgt_t *token_list;
+
+    struct xml_decl_attr_t { bool with_decl, with_attr; } xml_decl_attr;
 
     cbl_options_t::arith_t opt_arith;
     cbl_round_t opt_round;
@@ -929,37 +1059,55 @@
     module_type_t module_type;
 }
 
-%printer { fprintf(yyo, "clauses: 0x%04x", $$); } data_clauses
-%printer { fprintf(yyo, "%s %s", refer_type_str($$), $$? $$->name() : "<none>"); } <refer>
 %printer { fprintf(yyo, "%s", $$->field? name_of($$->field) : "[omitted]"); } alloc_ret
-%printer { fprintf(yyo, "%s %s '%s' (%s)",
+%printer { fprintf(yyo, "clauses: 0x%04x", $$); } data_clauses
+                        
+%printer { fprintf(yyo, "%s{%u/%u} %c%s '%s' (%s)",
+                        refer_type_str($$),
+                        $$ && $$->field? $$->field->char_capacity() : 0,
+                        $$ && $$->field? $$->field->data.capacity() : 0,
+                        $$ && $$->addr_of? '^' : ' ', 
+                        $$? $$->name() : "<none>",
+                        $$ && $$->field? $$->field->data.original()?
+                                         $$->field->data.original() : "<nil>" : "",
+                        $$ && $$->field? $$->field->value_str() : "" ); } <refer>
+
+%printer { fprintf(yyo, "%s{%u/%u} %s '%s' (%s)",
                         $$? cbl_field_type_str($$->type) : "<%empty>",
+                        $$? $$->char_capacity() : 0,
+                        $$? $$->data.capacity() : 0, 
                         $$? name_of($$) : "",
-                        $$? $$->data.initial? $$->data.initial : "<nil>" : "",
+                        $$? $$->data.original()?
+                            $$->data.original() : "<nil>" : "",
                         $$? $$->value_str() : "" ); } <field>
 
 %printer { fprintf(yyo, "%c %s",
                         $$.invert? '!' : ' ',
 		        $$.term? name_of($$.term->field) : "<none>"); } <rel_term_t>
+%printer { fprintf(yyo, "%s", $$->dbgstr()); } <log_expr_t>
+
+%printer { fprintf(yyo, "%lu args\n", (unsigned long)$$->args.size()); $$->dump(); } <vargs>
 
 %printer { fprintf(yyo, "%s (token %d)", keyword_str($$), $$ ); } relop
 %printer { fprintf(yyo, "'%s'", $$? $$ : "" ); } NAME <string>
-%printer { fprintf(yyo, "%s'%.*s'{%zu} %s", $$.prefix, int($$.len), $$.data, $$.len,
+%printer { fprintf(yyo, "%s'%.*s'{" HOST_SIZE_T_PRINT_UNSIGNED "} %s",
+                        $$.prefix, int($$.len), $$.data, (fmt_size_t)$$.len,
                         $$.symbol_name()); } <literal>
-%printer { fprintf(yyo, "%s (1st of %zu)",
+%printer { fprintf(yyo,"%s (1st of " HOST_SIZE_T_PRINT_UNSIGNED")",
                         $$->targets.empty()? "" : $$->targets.front().refer.field->name,
-                        $$->targets.size() ); } <targets>
-%printer { fprintf(yyo, "#%zu: %s",
-                        is_temporary($$)? 0 : field_index($$),
+                        (fmt_size_t)$$->targets.size() ); } <targets>
+%printer { fprintf(yyo, "#" HOST_SIZE_T_PRINT_UNSIGNED ": %s",
+                        is_temporary($$)? 0 : (fmt_size_t)field_index($$),
                         $$? name_of($$) : "<nil>" ); } name
-%printer { fprintf(yyo, "{%zu-%zu}", $$.min, $$.max ); } <min_max>
+%printer { fprintf(yyo, "{" HOST_SIZE_T_PRINT_UNSIGNED "-" HOST_SIZE_T_PRINT_UNSIGNED "}",
+                        (fmt_size_t)$$.min, (fmt_size_t)$$.max ); } <min_max>
 %printer { fprintf(yyo, "{%s}", $$? "+/-" : "" ); } signed
-%printer { fprintf(yyo, "{%s of %zu}",
-		         teed_up_names().front(), teed_up_names().size() ); } qname
+%printer { fprintf(yyo, "{%s of " HOST_SIZE_T_PRINT_UNSIGNED "}",
+		         teed_up_names().front(), (fmt_size_t) teed_up_names().size() ); } qname
 %printer { fprintf(yyo, "{%d}", $$ ); } <number>
 %printer { fprintf(yyo, "'%s'", $$.string ); } <numstr>
-%printer { const char *s = string_of($$);
-           fprintf(yyo, "{%s}", s? s : "??" ); } <float128>
+%printer { const char *s = string_of($$.r);
+           fprintf(yyo, "{%s}", s? s : "??" ); } <cce_type>
 %printer { fprintf(yyo, "{%s %c%u}", cbl_field_type_str($$.type),
                                      $$.signable? '+' : ' ',
                                      $$.capacity ); } <computational>
@@ -967,11 +1115,21 @@
                         $$.low?  (const char*) $$.low : "",
                         $$.high? (const char*) $$.high : "",
                         $$.also? "+" : "" ); } <colseq>
-%printer { fprintf(yyo, "{%s, %zu parameters}",
+%printer { fprintf(yyo, "{%s, " HOST_SIZE_T_PRINT_UNSIGNED " parameters}",
                         name_of($$.ffi_name->field), !$$.using_params? 0 :
-                        $$.using_params->elems.size()); } call_body
+                        (fmt_size_t)$$.using_params->elems.size()); } call_body
 %printer { fprintf(yyo, "%s <- %s", data_category_str($$.category),
                                     name_of($$.replacement->field)); } init_by
+
+%printer { fprintf(yyo, "(%s)", mode_syntax_only()?
+                        "syntax-only mode" : "compiling" ); } IDENTIFICATION_DIV
+%printer { fprintf(yyo, "(%s)", mode_syntax_only()?
+                        "syntax-only mode" : "compiling" ); } ENVIRONMENT_DIV
+%printer { fprintf(yyo, "(%s)", mode_syntax_only()?
+                        "syntax-only mode" : "compiling" ); } DATA_DIV
+%printer { fprintf(yyo, "(%s)", mode_syntax_only()?
+                        "syntax-only mode" : "compiling" ); } PROCEDURE_DIV
+
 
                         /* CDF (COPY and >> defined here but used in cdf.y) */
 %left                   BASIS CBL CONSTANT COPY
@@ -979,7 +1137,7 @@
                         LIST LSUB MAP NOLIST NOMAP NOSOURCE
                         PARAMETER_kw OVERRIDE READY RESET RSUB
                         SERVICE_RELOAD STAR_CBL
-                        SUBSCRIPT SUPPRESS TITLE TRACE USE
+                        SUBSCRIPT SUPPRESS TRACE USE
 
 			COBOL_WORDS EQUATE UNDEFINE
 
@@ -993,14 +1151,17 @@
 %right                  IF THEN ELSE
                         SENTENCE
                         ACCEPT ADD ALTER CALL CANCEL CLOSE COMPUTE CONTINUE
-                        DELETE DISPLAY DIVIDE EVALUATE END EOP EXIT FILLER_kw
+                        DELETE DISPLAY DIVIDE
+                        EVALUATE END EOP EXIT
+                        FILLER_kw
                         GOBACK GOTO
                         INITIALIZE INSPECT
-                        MERGE MOVE MULTIPLY OPEN OVERFLOW PARAGRAPH PERFORM
+                        MERGE MOVE MULTIPLY OPEN OVERFLOW_kw PARAGRAPH PERFORM
                         READ RELEASE RETURN REWRITE
                         SEARCH SET SELECT SORT SORT_MERGE
                         STRING_kw STOP SUBTRACT START
                         UNSTRING WRITE WHEN INVALID
+                        XMLGENERATE XMLPARSE
 
 %left                   ABS ACCESS ACOS ACTUAL ADVANCING AFP_5A AFTER ALL
                         ALLOCATE
@@ -1009,7 +1170,7 @@
 			ALPHANUMERIC
 			ALPHANUMERIC_EDITED
                         ALPHED ALSO ALTERNATE ANNUITY ANUM ANY ANYCASE APPLY ARE
-                        AREA AREAS AS
+                        AREA AREAS AS ATTRIBUTES
                         ASCENDING ACTIVATING ASIN ASSIGN AT ATAN
 
                         BACKWARD BASED BASECONVERT
@@ -1050,7 +1211,8 @@
 			DOWN DUPLICATES
                         DYNAMIC
 
-                        E EBCDIC EC EGCS ENTRY ENVIRONMENT EQUAL ERROR EVERY
+                        E EBCDIC EC EGCS ELEMENT
+                        ENTRY ENVIRONMENT ERROR EVERY
                         EXAMINE EXCEPTION EXHIBIT EXP EXP10 EXTEND EXTERNAL
 
                         EXCEPTION_FILE
@@ -1121,12 +1283,13 @@
                         MIGHT_BE MINN MULTIPLE MOD MODE
 			MODULE_NAME
 
-                        NAMED NAT NATIONAL
+                        NAMED NAMESPACE NAMESPACE_PREFIX
+                        NAT NATIONAL
 			NATIONAL_EDITED
 			NATIONAL_OF
                         NATIVE NEGATIVE NESTED NEXT
 			NINEDOT NINES NINEV NO NOTE NO_CONDITION
-			NULLS NULLPTR NUMBER
+			NONNUMERIC NULLS NULLPTR NUMBER
                         NUME NUMED NUMED_CR NUMED_DB NUMERIC
                         NUMERIC_EDITED NUMSTR NUMVAL
 			NUMVAL_C
@@ -1141,7 +1304,7 @@
 			PAGE_COUNTER
                         PF PH PI PIC PICTURE PIC_P
                         PLUS POINTER POSITIVE PRESENT_VALUE PRINT_SWITCH
-                        PROCEDURE PROCEDURES PROCEED PROCESS
+                        PROCEDURE PROCEDURES PROCEED 
                         PROGRAM_ID
 			PROGRAM_kw PROPERTY PROTOTYPE PSEUDOTEXT
 
@@ -1174,7 +1337,7 @@
                         LITERAL SUBSTITUTE SUM SWITCH SYMBOL SYMBOLIC SYNCHRONIZED
                         SYSIN SYSIPT SYSLST SYSOUT SYSPCH SYSPUNCH
 
-                        TALLY TALLYING TAN TERMINATE TEST
+                        TALLYING TAN TERMINATE TEST
 			TEST_DATE_YYYYMMDD
                         TEST_DAY_YYYYDDD
 			TEST_FORMATTED_DATETIME
@@ -1194,7 +1357,7 @@
                         VALUE VARIANCE VARYING VOLATILE
 
                         WHEN_COMPILED WITH WORKING_STORAGE
-                        XML XMLGENERATE XMLPARSE
+                        XML_DECLARATION
                         YEAR_TO_YYYY YYYYDDD YYYYMMDD
                         ZERO
 
@@ -1247,7 +1410,7 @@
 			END_EVALUATE END_MULTIPLY END_PERFORM
 			END_READ END_RETURN END_REWRITE
 			END_SEARCH END_START END_STRING END_SUBTRACT
-			END_UNSTRING END_WRITE
+			END_UNSTRING END_WRITE END_XML
                         error
 			END_IF
 
@@ -1255,7 +1418,7 @@
 %left  OR
 %left  AND
 %right  NOT
-%left '<' '>' '=' NE LE GE
+%left '<' '>' EQ NE LE GE
 %left '-' '+'
 %left '*' '/'
 %right POW
@@ -1314,7 +1477,7 @@
     return ok;
   }
 
-  static void initialize_allocated( cbl_refer_t input );
+  static void initialize_allocated( const cbl_refer_t& input );
   static void
   initialize_statement( std::list<cbl_num_result_t>& tgts,
                         bool with_filler,
@@ -1333,23 +1496,80 @@
       return strlen(lit.data) == lit.len? lit.data : NULL;
   }
 
+  static inline void strip_trailing_zeroes(char * const psz)
+    {
+    if( yydebug) return;
+    // The idea here is to take the output of real_to_decimal and make it
+    // more integer friendly.  Any integer value that can be expressed in 1
+    // to MAX_FIXED_POINT_DIGITS digits is converted to a string without a
+    // decimal point and no exponent.
+
+    char *pdot = strchr(psz, '.');
+    gcc_assert(pdot);
+    char *pe = strchr(psz, 'e');
+    if( !pe )
+      {
+      // The most likely cause of this is a "0.0" result.
+      strcpy(psz, "0");
+      return;
+      }
+    char *pnz = pe-1;
+    while(*pnz == '0')
+      {
+      pnz--;
+      }
+    // pdot points to the decimal point.
+    // pe points to the 'e'.
+    // pnz points to the rightmost non-zero significand digit.
+
+    // Put the exponent on top of the trailing zeroes:
+    memmove(pnz+1, pe, strlen(pe)+1);
+    pe = pnz+1;
+    int exp = atoi(pe+1);
+    // Compute the number digits to the right of the decimal point:
+    int non_zero_digits = pe - (pdot+1);
+    if( exp >= 1 && exp <= MAX_FIXED_POINT_DIGITS && non_zero_digits <= exp)
+      {
+      // Further simplification is possible, because the value does not actually
+      // need a decimal point.  That's because we are dealing with something
+      // like 1.e+0, or 1.23e2 or 1.23e3
+
+      // Terminate the value where the 'e' is now:
+      *pe = '\0';
+      // Figure out where the extra zeroes will go:
+      pe -= 1;
+      // Get rid of the decimal place:
+      memmove(pdot, pdot+1, strlen(pdot)+1);
+      // Tack on the additional zeroes:
+      for(int i=0; i<exp - non_zero_digits; i++)
+        {
+        *pe++ = '0';
+        }
+      *pe++ = '\0';
+      }
+    }
+
   static inline char * string_of( const REAL_VALUE_TYPE &cce ) {
       char output[64];
       real_to_decimal( output, &cce, sizeof(output), 32, 0 );
-
+      strip_trailing_zeroes(output);
       char decimal = symbol_decimal_point();
       std::replace(output, output + strlen(output), '.', decimal);
       return xstrdup(output);
   }
 
-  static inline char * string_of( tree cce ) {
-      return string_of (TREE_REAL_CST (cce));
+  static inline const char * string_of( tree cce ) {
+    tree_node *node = TREE_TYPE(cce);
+    if( INTEGRAL_TYPE_P(node) ) {
+                        return "integer";
+    } 
+    return string_of (TREE_REAL_CST (cce));
   }
 
   cbl_field_t *
-  new_literal( const literal_t& lit, enum cbl_field_attr_t attr );
+  new_literal( const cbl_loc_t loc, const literal_t& lit, enum cbl_field_attr_t attr );
 
-  static YYLTYPE first_line_of( YYLTYPE loc );
+  static cbl_loc_t first_line_of( cbl_loc_t loc );
 %}
 
 %locations
@@ -1364,16 +1584,35 @@ top:            programs
                   if( ! goodnight_gracie() ) {
                     YYABORT;
                   }
-                  if( nparse_error > 0 ) YYABORT;
+                  if( ! successful_parse() ) YYABORT;
                 }
         |       programs end_program
                 {
-                  if( nparse_error > 0 ) YYABORT;
+                  if( ! successful_parse() ) YYABORT;
                 }
                 ;
 programs:       program
         |       programs end_program program
                 ;
+                /*
+                 * 10.6.2 Syntax rules 
+                 * 4) The following restrictions apply to program prototypes,
+                 *    function prototypes, and method prototypes:
+                 *    a) The identification division shall not contain an
+                 *       ARITHMETIC clause.
+                 *    b) The environment division shall not contain an
+                 *       object-computer paragraph.
+                 *    c) The only clauses that may be specified in the
+                 *       SPECIAL-NAMES paragraph are the ALPHABET clause, the
+                 *       CURRENCY clause, the DECIMAL-POINT clause, the LOCALE
+                 *       clause, and the SYMBOLIC-CHARACTERS clause.
+                 *    d) The environment division shall not contain an
+                 *       input-output section.
+                 *    e) The data division may contain only a linkage section.
+                 *    f) The procedure division shall contain only a procedure
+                 *       division header.
+                 */
+
 program:	id_div options_para env_div data_div
                 {
                   if( ! data_division_ready() ) {
@@ -1387,9 +1626,11 @@ program:	id_div options_para env_div data_div
                 }
                 ;
 
-id_div:         cdf_words IDENTIFICATION_DIV '.' program_id
-        |	cdf_words                        program_id
-        |       cdf_words IDENTIFICATION_DIV '.' function_id
+id_div:         cdf_words id_division  program_id
+        |       cdf_words id_division function_id
+                ;
+id_division:    %empty
+        |       IDENTIFICATION_DIV '.'
                 ;
 
 cdf_words:	%empty
@@ -1399,76 +1640,100 @@ cobol_words:	cobol_words1
 	|	cobol_words cobol_words1
 		;
 cobol_words1:	COBOL_WORDS EQUATE NAME[keyword] WITH NAME[name] {
-		  if( ! tokens.equate(@keyword, $keyword, $name) ) { YYERROR; }
+		  if( ! cdf_tokens.equate(@keyword, $keyword, $name) ) { YYERROR; }
 		}
 	|	COBOL_WORDS UNDEFINE NAME[keyword] {
-		  if( ! tokens.undefine(@keyword, $keyword) ) { YYERROR; }
+		  if( ! cdf_tokens.undefine(@keyword, $keyword) ) { YYERROR; }
 		}
 	|	COBOL_WORDS SUBSTITUTE NAME[keyword] BY NAME[name] {
-		  if( ! tokens.substitute(@keyword, $keyword, $name) ) { YYERROR; }
+		  if( ! cdf_tokens.substitute(@keyword, $keyword, $name) ) { YYERROR; }
 		}
 	|	COBOL_WORDS RESERVE NAME[name] {
-		  if( ! tokens.reserve(@name, $name) ) { YYERROR; }
+		  if( ! cdf_tokens.reserve(@name, $name) ) { YYERROR; }
 		}
+        |       PROCESS {
+                  cbl_message(@1, IbmCdf, "CDF directive ignored: %qs", $1);
+                }
 		;
 
 program_id:     PROGRAM_ID dot namestr[name] program_as program_attrs[attr] dot
                 {
+                  const char *name = string_of($name);
                   internal_ebcdic_lock();
                   current_division = identification_div_e;
-                  parser_division( identification_div_e, NULL, 0, NULL );
                   location_set(@1);
-                  int main_error=0;
-                  const char *name = string_of($name);
-                  parser_enter_program( name, false, &main_error );
-                  if( main_error ) {
-                    error_msg(@name, "PROGRAM-ID 'main' is invalid with -main option");
-                    YYERROR;
-                  }
 
                   if( symbols_begin() == symbols_end() ) {
                     symbol_table_init();
                   }
                   if( !current.new_program(@name, LblProgram, name,
 		                           $program_as.data,
-                                           $attr.common, $attr.initial) ) {
+                                           $attr.common,
+                                           $attr.initial,
+                                           $attr.recursive) ) {
                     auto L = symbol_program(current_program_index(), name);
                     assert(L);
                     error_msg(@name, "PROGRAM-ID %s already defined on line %d",
                              name, L->line);
                     YYERROR;
                   }
-                  if( nparse_error > 0 ) YYABORT;
+                  if( ! successful_parse() ) YYABORT;
+
+                  parser_division( identification_div_e, NULL, 0, NULL );
+                  int main_error=0;
+                  parser_enter_program( name, false, &main_error );
+                  if( main_error ) {
+                    error_msg(@name, "PROGRAM-ID 'main' is invalid with %<-main%> option");
+                    YYERROR;
+                  }
+                }
+        |       PROGRAM_ID dot namestr[name] program_as is PROTOTYPE '.'
+                {
+                  current_division = identification_div_e;
+                  location_set(@1);
+                  const char *name = string_of($name);
+                  if( symbols_begin() == symbols_end() ) {
+                    symbol_table_init();
+                  }
+                  if( !current.new_program(@name, LblProgram, name,
+		                           $program_as.data,
+                                           false, false, false, true) ){
+                    auto L = symbol_program(current_program_index(), name);
+                    assert(L);
+                    dbgmsg("PROGRAM-ID %s defined on line %d", name, L->line);
+                  }
                 }
                 ;
 dot:            %empty
         |       '.'
                 ;
 program_as:     %empty     { static const literal_t empty {}; $$ = empty; }
-        |       AS LITERAL { $$ = $2; }
+        |       AS LITERAL
+                { // program-id not yet parsed, so top-level is 0
+                  if( 0 != current.program_level() ) {
+                    error_msg(@$, "AS %qs valid only for top-level programs",
+                              $LITERAL.data);
+                  }
+                  $$ = $2;
+                }
                 ;
 
-function_id:    FUNCTION '.' NAME program_as program_attrs[attr] '.'
+function_id:    FUNCTION dot  NAME program_as program_attrs[attr] '.'
                 {
                   internal_ebcdic_lock();
                   current_division = identification_div_e;
-                  parser_division( identification_div_e, NULL, 0, NULL );
                   location_set(@1);
 
-                  int main_error = 0;
-                  parser_enter_program( $NAME, true, &main_error );
-                  if( main_error ) {
-                    error_msg(@NAME, "FUNCTION-ID 'main' is invalid with -main option");
-                    YYERROR;
-                  }
                   if( symbols_begin() == symbols_end() ) {
                     symbol_table_init();
                   }
                   if( !current.new_program(@NAME, LblFunction, $NAME,
-		                      $program_as.data,
-                                      $attr.common, $attr.initial) ) {
-                    auto L = symbol_program(current_program_index(), $NAME);
-                    assert(L);
+                                           $program_as.data,
+                                           $attr.common,
+                                           $attr.initial,
+                                           $attr.recursive) ) {
+                    auto e = symbol_function(current_program_index(), $NAME);
+                    auto L = cbl_label_of(e);
                     error_msg(@NAME, "FUNCTION %s already defined on line %d",
                               $NAME, L->line);
                     YYERROR;
@@ -1478,12 +1743,35 @@ function_id:    FUNCTION '.' NAME program_as program_attrs[attr] '.'
 			      $NAME);
                     YYERROR;
                   }
-                  current.udf_add(current_program_index());
-                  if( nparse_error > 0 ) YYABORT;
+                  current.udf_add(current_program_index(), false);
+                  if( ! successful_parse() ) YYABORT;
+
+                  parser_division( identification_div_e, NULL, 0, NULL );
+                  int main_error = 0;
+                  parser_enter_program( $NAME, true, &main_error );
+                  if( main_error ) {
+                    error_msg(@NAME, "FUNCTION-ID %<main%> is invalid "
+                              "with %<-main%> option");
+                    YYERROR;
+                  }
                 }
-        |       FUNCTION '.' NAME program_as is PROTOTYPE '.'
+        |       FUNCTION dot NAME[name] program_as is PROTOTYPE '.'
                 {
-                  cbl_unimplemented("FUNCTION PROTOTYPE");
+                  current_division = identification_div_e;
+                  location_set(@1);
+
+                  if( symbols_begin() == symbols_end() ) {
+                    symbol_table_init();
+                  }
+                  if( !current.new_program(@name, LblFunction, $name,
+		                           $program_as.data,
+                                           false, false, false, true) ) {
+                    auto L = symbol_program(current_program_index(), $name);
+                    assert(L);
+                    dbgmsg("FUNCTION-ID %s defined on line %d", $name, L->line);
+                  }
+
+                  current.udf_add(current_program_index(), true);
                 }
                 ;
 
@@ -1495,15 +1783,17 @@ options_para:   %empty
 opt_clauses:    opt_clause
         |       opt_clauses opt_clause
                 ;
-opt_clause:     opt_arith
-        |       opt_round
-        |       opt_entry
-        |       opt_binary
+opt_clause:     opt_arith   { prototype_ok(@1, dspc_arithmetic_clause_e); }
+        |       opt_round   { prototype_ok(@1, dspc_default_rounded_clause_e); }
+        |       opt_entry   { prototype_ok(@1, dspc_entry_convention_clause_e); }
+        |       opt_binary  { prototype_ok(@1, dspc_float_binary_clause_e); }
         |       opt_decimal {
-		  cbl_unimplementedw("type FLOAT-DECIMAL was ignored");
+		  cbl_unimplemented("type FLOAT-DECIMAL");
 		}
-        |       opt_intermediate
-        |       opt_init
+        |       opt_intermediate {
+                  prototype_ok(@1, dspc_intermediate_rounding_clause_e);
+                }
+        |       opt_init    { prototype_ok(@1, dspc_initialize_clause_e); }
                 ;
 
 opt_arith:      ARITHMETIC is opt_arith_type {
@@ -1522,21 +1812,25 @@ opt_round:      DEFAULT ROUNDED mode is rounded_type[type] {
                 }
                 ;
 opt_entry:      ENTRY_CONVENTION is COBOL {
-		  yywarn("ENTRY-CONVENTION IS COBOL, check");
+                 cbl_message(ParInfoI, "ENTRY-CONVENTION IS COBOL");
 		}
                 ;
 opt_binary:     FLOAT_BINARY default_kw is HIGH_ORDER_LEFT
 		{
-		  cbl_unimplementedw("HIGH-ORDER-LEFT was ignored");
+                  cbl_unimplementedw(SynHighOrderBit,
+                                     "HIGH-ORDER-LEFT was ignored");
 		  if( ! current.option_binary(cbl_options_t::high_order_left_e) ) {
-		    error_msg(@3, "unable to set HIGH_ORDER_LEFT");
+                      cbl_message(@3, SynHighOrderBit,
+                                  "unable to set %<HIGH_ORDER_LEFT%>");
 		  }
 		}
         |       FLOAT_BINARY default_kw is HIGH_ORDER_RIGHT[opt]
 		{
-		  cbl_unimplementedw("HIGH-ORDER-RIGHT was ignored");
+                    cbl_unimplementedw(SynHighOrderBit,
+                                       "HIGH-ORDER-RIGHT was ignored");
 		  if( ! current.option_binary(cbl_options_t::high_order_right_e) ) {
-		    error_msg(@opt, "unable to set HIGH-ORDER-RIGHT");
+                      cbl_message(@opt, SynHighOrderBit,
+                                  "unable to set HIGH-ORDER-RIGHT");
 		  }
 		}
                 ;
@@ -1545,30 +1839,38 @@ default_kw:     %empty
                 ;
 opt_decimal:    FLOAT_DECIMAL default_kw is HIGH_ORDER_LEFT[opt]
 		{
-		  cbl_unimplementedw("HIGH-ORDER-LEFT was ignored");
+		  cbl_unimplementedw(SynHighOrderBit,
+                                  "HIGH-ORDER-LEFT was ignored");
 		  if( ! current.option_decimal(cbl_options_t::high_order_left_e) ) {
-		    error_msg(@opt, "unable to set HIGH-ORDER-LEFT");
+		    cbl_message(@opt, SynHighOrderBit,
+                                "unable to set HIGH-ORDER-LEFT");
 		  }
 		}
         |       FLOAT_DECIMAL default_kw is HIGH_ORDER_RIGHT[opt]
 		{
-		  cbl_unimplementedw("HIGH-ORDER-RIGHT was ignored");
+		  cbl_unimplementedw(SynHighOrderBit,
+                                     "HIGH-ORDER-RIGHT was ignored");
 		  if( ! current.option_decimal(cbl_options_t::high_order_right_e) ) {
-		    error_msg(@opt, "unable to set HIGH-ORDER-RIGHT");
+		    cbl_message(@opt, SynHighOrderBit,
+                                  "unable to set HIGH-ORDER-RIGHT");
 		  }
 		}
         |       FLOAT_DECIMAL default_kw is BINARY_ENCODING[opt]
 		{
-		  cbl_unimplementedw("BINARY-ENCODING was ignored");
+		  cbl_unimplementedw(SynHighOrderBit,
+                                  "BINARY-ENCODING was ignored");
 		  if( ! current.option(cbl_options_t::binary_encoding_e) ) {
-		    error_msg(@opt, "unable to set BINARY-ENCODING option");
+		    cbl_message(@opt, SynHighOrderBit,
+                                  "unable to set BINARY-ENCODING option");
 		  }
 		}
         |       FLOAT_DECIMAL default_kw is DECIMAL_ENCODING[opt]
 		{
-		  cbl_unimplementedw("DECIMAL-ENCODING was ignored");
+		  cbl_unimplementedw(SynHighOrderBit,
+                                  "DECIMAL-ENCODING was ignored");
 		  if( ! current.option(cbl_options_t::decimal_encoding_e) ) {
-		    error_msg(@opt, "unable to set DECIMAL-ENCODING option");
+		    cbl_message(@opt, SynHighOrderBit,
+                                  "unable to set DECIMAL-ENCODING option");
 		  }
 		}
                 ;
@@ -1633,10 +1935,10 @@ opt_init_value: BINARY ZERO { $$ = constant_index(NULLS); }
 		  if( $1.len != 1 ) {
 		    error_msg(@1, "1-byte hexadecimal literal required");
 		  }
-      char ach[16];
-      sprintf(ach, "%d", (int)($1.data[0]));
+                  char ach[16];
+                  sprintf(ach, "%d", (int)($1.data[0]));
 		  //auto f = new_literal($1.data);
-		  auto f = new_literal(ach);
+		  auto f = new_literal(@1, ach);
 		  f = field_add(@1, f);
 		  $$ = field_index(f);
 		}
@@ -1653,13 +1955,15 @@ namestr:        ctx_name {
                 }
         |       LITERAL {
                   if( $$.prefix[0] != '\0' ) {
-                    error_msg(@1, "literal cannot use %s prefix in this context",
-                              $$.prefix);
-                    YYERROR;
+                    if( $$.prefix[0] != 'N' ) {
+                      error_msg(@1, "literal cannot use %s prefix in this context",
+                                $$.prefix);
+                      YYERROR;
+                    }
                   }
-                  if( !is_cobol_word($$.data) ) {
+		  if( !is_cobol_charset($$.data) ) {
 		    error_msg(@1, "literal '%s' must be a COBOL or C identifier",
-                              $$.data);
+			      $$.data);
                   }
                 }
                 ;
@@ -1709,10 +2013,17 @@ comminit:       COMMON     {
                 ;
 
 
-env_div:        %empty              { current_division = environment_div_e; }
-        |       ENVIRONMENT_DIV '.' { current_division = environment_div_e; }
+env_div:        %empty {
+                  current_division = environment_div_e;
+                  parser_division( environment_div_e, NULL, 0, NULL );
+                }
         |       ENVIRONMENT_DIV '.' {
                   current_division = environment_div_e;
+                  parser_division( environment_div_e, NULL, 0, NULL );
+                }
+        |       ENVIRONMENT_DIV '.' {
+                  current_division = environment_div_e;
+                  parser_division( environment_div_e, NULL, 0, NULL );
                 } env_sections
                 ;
 
@@ -1720,9 +2031,15 @@ env_sections:   env_section
         |       env_sections env_section
                 ;
 
-env_section:    INPUT_OUTPUT_SECT '.'
-        |       INPUT_OUTPUT_SECT '.' io_sections
-        |       INPUT_OUTPUT_SECT '.' selects { /* IBM requires FILE CONTROL.  */ }
+env_section:    INPUT_OUTPUT_SECT '.' {
+                  prototype_ok(@1, dspc_i_o_section_e); 
+                }
+        |       INPUT_OUTPUT_SECT '.' io_sections {
+                  prototype_ok(@1, dspc_i_o_section_e); 
+                }
+        |       INPUT_OUTPUT_SECT '.' selects {
+                  prototype_ok(@1, dspc_i_o_section_e); 
+                } /* IBM requires FILE CONTROL.  */ 
         |       CONFIGURATION_SECT '.'
         |       CONFIGURATION_SECT '.' config_paragraphs
         |       cdf
@@ -1752,7 +2069,8 @@ io_control_clause:
                 }
         |       APPLY COMMIT on field_list
                 {
-                  cbl_unimplementedw("I-O-CONTROL APPLY COMMIT");
+                  cbl_unimplementedw(SynApplyCommit,
+                                     "I-O-CONTROL APPLY COMMIT ignored");
                 }
                 ;
 area:           %empty
@@ -1772,7 +2090,7 @@ select:         SELECT optional NAME[name] select_clauses[clauses] '.'
                   cbl_file_t *file = $clauses.file;
 
                   file->optional = $optional;
-                  file->line = yylineno;
+                  file->line = @name.first_line;
                   if( !namcpy(@clauses, file->name, $name) ) YYERROR;
 
                   if( ! ($clauses.clauses & assign_clause_e) ) {
@@ -1845,13 +2163,18 @@ select:         SELECT optional NAME[name] select_clauses[clauses] '.'
                   cbl_file_t file = protofile;
 
                   file.optional = $optional;
-                  file.line = yylineno;
+                  file.line = @name.first_line;
                   if( !namcpy(@name, file.name, $name) ) YYERROR;
 
                   if( file_add(@name, &file) == NULL ) YYERROR;
                 }
                 ;
-selected_name:  external scalar { $$ = $2; }
+selected_name:  external NAME {
+                  enum { parent = 0 };
+                  auto e = symbol_field_forward_add(PROGRAM, parent,
+                                                    $NAME, @NAME.first_line);
+                  $$ = cbl_field_of(e); // might become a data item
+                }
         |       external LITERAL[name]
                 {
                   const char *name = string_of($name);
@@ -1860,16 +2183,31 @@ selected_name:  external scalar { $$ = $2; }
                     YYERROR;
                   }
                   uint32_t len = $name.len;
-                  cbl_field_t field {
-                               0, FldLiteralA, FldInvalid, quoted_e | constant_e,
-                               0, 0, 0, nonarray, 0, "", 0, cbl_field_t::linkage_t(),
-				 {len,len,0,0, $name.data}, NULL };
+                  // Pretend hex-encoded because that means use verbatim.
+                  cbl_field_t field { FldLiteralA,
+                                      hex_encoded_e | quoted_e | constant_e,
+				      {len,len,0,0, $name.data} };
                   field.attr |= literal_attr($name.prefix);
-                  $$ = new cbl_refer_t( field_add(@name, &field) );
+                  field.codeset.set();
+                  $$ = field_add(@name, &field);
+                }
+        |       external OTHER
+                {
+                  if( !dialect_ibm() ) {
+                    error_msg(@2, "ASSIGN OTHER requires %<-dialect ibm%>");
+                    YYERROR;
+                  }
+
+                  enum { parent = 0 };
+                  auto e = symbol_field_forward_add(PROGRAM, parent,
+                                                    "OTHER", @$.first_line);
+                  $$ = cbl_field_of(e);
                 }
                 ;
 external:       %empty /* GnuCOBOL uses EXTERNAL to control name resolution.  */
-        |       EXTERNAL
+        |       EXTERNAL {
+                  dialect_ok(@1, MfAssignExternal, "EXTERNAL");
+                }
                 ;
 
 select_clauses: select_clause { $$.clauses = $1.clause; $$.file = $1.file; }
@@ -1889,7 +2227,7 @@ select_clauses: select_clause { $$.clauses = $1.clause; $$.file = $1.file; }
                     if( $$.file->nkey++ == 0 ) {
                       // If no key yet exists, create room for it and the
                       // present alternate.
-                      assert($$.file->keys == &cbl_file_t::no_key);
+                      assert($$.file->keys == nullptr);
                       $$.file->keys = new cbl_file_key_t[++$$.file->nkey];
                     }
                     {
@@ -1901,8 +2239,7 @@ select_clauses: select_clause { $$.clauses = $1.clause; $$.file = $1.file; }
                       // Assign the alternate key to the last element,
                       // and update the pointer.
                       *alt = $part.file->keys[0];
-                      delete[] $$.file->keys;
-                      $$.file->keys = keys;
+                      $$.file->keys_update(keys);
                     }
                     break;
                   case assign_clause_e:
@@ -1971,11 +2308,11 @@ select_clauses: select_clause { $$.clauses = $1.clause; $$.file = $1.file; }
                       YYERROR;
                     }
                     if( $$.file->nkey == 0 ) {
+                      assert( 1 == $part.file->nkey );
                       $$.file->nkey = $part.file->nkey;
-                      $$.file->keys = $part.file->keys;
-                    } else {
-                      $$.file->keys[0] = $part.file->keys[0];
-                    }
+                      $$.file->keys = new cbl_file_key_t[1];
+                    } 
+                    $$.file->keys[0] = $part.file->keys[0];
                     break;
                   /* case password_clause_e: */
                   case file_status_clause_e:
@@ -2054,20 +2391,57 @@ unique_key:     %empty          { $$ = true; }
         |       with DUPLICATES { $$ = false; }
                 ;
 
+                /*
+                 * IBM:  SELECT fd-name ASSIGN to filename
+                 * ISO:  SELECT fd-name ASSIGN to device USING data-item 
+                 * both: SELECT fd-name ASSIGN to literal
+                 * 
+                 * For ISO, device is implementation-defined. We use
+                 * cbl_special_name_t, and whatever file is defined for it. The
+                 * interpretation of data-item is likewise implemetation
+                 * defined.  If both device and data-item are present, it seems
+                 * logical to assign the device to the file described by the
+                 * value of data-item.
+                 * 
+                 * For IBM, we interpret filename as a potential runtime
+                 * environment variable. If libgcobol finds filename as an
+                 * environment variable, the value of that variable is used as
+                 * the filename, else filename itself is used verbatim.
+                 * 
+                 * If the argument to ASSIGN to is a literal, that exact name
+                 * will be opened.  ASSIGN to literal cannot be used with USING.
+                 */
+
 assign_clause:  ASSIGN to selected_name[selected]  {
                   $$.clause = assign_clause_e;
                   $$.file = new cbl_file_t(protofile);
-                  $$.file->filename = field_index($selected->field);
+                  $$.file->filename = field_index($selected);
+
+                  if( ! is_quoted($selected) ) {
+                    dialect_ok(@selected, IsoAssignFile, $selected->name);
+                  }
                 }
-        |       ASSIGN to device_name USING name {
+        |       ASSIGN to device_name[dev] USING name {
                   $$.clause = assign_clause_e;
-		  cbl_unimplemented("ASSIGN TO DEVICE");
-		  YYERROR;
+                  $$.file = new cbl_file_t(protofile);
+                  $$.file->device = $dev.id;
+                  $$.file->filename = field_index($name);
+                  cbl_unimplemented_at(@$, "ISO ASSIGN TO %s USING", "...");
                 }
-        |       ASSIGN to device_name {
+        |       ASSIGN to device_name[dev] { // ISO syntax
                   $$.clause = assign_clause_e;
-		  cbl_unimplemented("ASSIGN TO DEVICE");
-		  YYERROR;
+                  $$.file = new cbl_file_t(protofile);
+                  auto special = symbol_special($dev.id);
+                  uint32_t len = strlen(special->os_filename);
+                  cbl_field_t field { FldLiteralA,
+                                      hex_encoded_e | quoted_e | constant_e,
+				      {len,len,0,0, special->os_filename} };
+                  field.codeset.set();
+                  auto f = field_add(@dev, &field);
+                  $$.file->filename = field_index(f);
+                  if( $$.file->org == file_disorganized_e ) {
+                    $$.file->org = file_sequential_e;
+                  } 
                 }
         |       ASSIGN USING name {
                   $$.clause = assign_clause_e;
@@ -2133,14 +2507,28 @@ org_clause:     org_clause1[org]
                   $$.file->org = static_cast<cbl_file_org_t>($org);
                 }
                 ;
-org_is:         %empty
-        |       ORGANIZATION is
+org_is:         %empty                 { $$ = 0; }
+        |       ORGANIZATION is        { $$ = 0; }
+        |       ORGANIZATION is RECORD { $$ = RECORD; }
+        |                       RECORD { $$ = RECORD; }
                 ;
                 // file_sequential is the proper default
-org_clause1:    org_is      SEQUENTIAL { $$ = file_sequential_e; }
-        |       org_is LINE SEQUENTIAL { $$ = file_line_sequential_e; }
-        |       org_is      RELATIVE   { $$ = file_relative_e; }
-        |       org_is      INDEXED    { $$ = file_indexed_e; }
+org_clause1:    org_is      SEQUENTIAL {
+                  $$ = $1 == RECORD? file_line_sequential_e : file_sequential_e;
+                }
+        |       org_is LINE SEQUENTIAL
+                {
+                  if( $1 ) error_msg(@2, "syntax error: invalid %<RECORD%>");
+                  $$ = file_line_sequential_e;
+                }
+        |       org_is      RELATIVE {
+                  if( $1 ) error_msg(@2, "syntax error: invalid %<RECORD%>");
+                  $$ = file_relative_e;
+                }
+        |       org_is      INDEXED    { 
+                  if( $1 ) error_msg(@2, "syntax error: invalid %<RECORD%>");
+                  $$ = file_indexed_e;
+                }
                 ;
 
                 /*
@@ -2225,20 +2613,31 @@ config_paragraphs: config_paragraph
 
 config_paragraph:
                 SPECIAL_NAMES '.'
-        |       SPECIAL_NAMES '.' specials '.'
-        |       SOURCE_COMPUTER  '.' NAME with_debug '.'
-        |       OBJECT_COMPUTER  '.' NAME collating_sequence[name] '.'
+        |       SPECIAL_NAMES '.' special_names '.'
                 {
-                  if( $name ) {
-                    if( !current.collating_sequence($name) ) {
-                      error_msg(@name, "collating sequence already defined as '%s'",
-                                current.collating_sequence());
-                      YYERROR;
+                  std::reverse_iterator<symbol_elem_t *>
+                                        p(symbols_end()),
+                                     pend(symbols_begin(PROGRAM));
+                  for( ++p; p != pend; p++ ) {
+                    if( p->type == SymAlphabet ) {
+                      const auto& alphabet = *cbl_alphabet_of(&*p);
+                      if( alphabet.encoding == no_encoding_e ) {
+                        assert(alphabet.locale != 0 );
+                        const auto& missing = *cbl_locale_of(symbol_at(alphabet.locale));
+                        error_msg(alphabet.loc,
+                          "ALPHABET %qs references LOCALE %qs, which is not defined",
+                                  alphabet.name, missing.name);
+                      }
                     }
                   }
                 }
-        |       REPOSITORY '.'
-        |       REPOSITORY '.' repo_members '.'
+        |       SOURCE_COMPUTER  '.' 
+        |       SOURCE_COMPUTER  '.' NAME '.'
+        |       SOURCE_COMPUTER  '.' NAME with_debug '.'
+        |       OBJECT_COMPUTER  '.' 
+        |       OBJECT_COMPUTER  '.' NAME[computer] object_computer '.'
+        |       REPOSITORY dot
+        |       REPOSITORY dot repo_members '.'
                 ;
 
 repo_members:   repo_member
@@ -2266,37 +2665,188 @@ repo_expands:   %empty
 repo_interface: INTERFACE NAME repo_as repo_expands
                 ;
 
-repo_func:      FUNCTION repo_func_names INTRINSIC
-                {
-		  auto namelocs( name_queue.pop() );
-                  for( const auto& nameloc : namelocs ) {
-                      current.repository_add(nameloc.name);
+repo_func:      FUNCTION repo_func_names[namelocs] INTRINSIC {
+                  for( const auto& nameloc : *$namelocs ) {
+                    if( 0 == intrinsic_token_of(nameloc.name) ) {
+                      error_msg(nameloc.loc,
+                                "no such intrinsic function: %qs",
+                                nameloc.name);
+                      continue;
+                    }
+                    current.repository_add(nameloc.name);
                   }
                 }
         |       FUNCTION ALL INTRINSIC
                 {
                   current.repository_add_all();
                 }
-        |       FUNCTION repo_func_names
-                ;
-repo_func_names:
-                repo_func_name
-        |       repo_func_names repo_func_name
-                ;
-repo_func_name: NAME {
-                  if( ! current.repository_add($NAME) ) { // add intrinsic by name
-                    auto token = current.udf_in($NAME);
-                    if( !token ) {
-                      error_msg(@NAME, "%s is not defined here as a user-defined function",
-                                $NAME);
-                      current.udf_dump();
-                      YYERROR;
+        |       FUNCTION repo_intrinsics INTRINSIC
+                {
+                  for( int token : $repo_intrinsics->elems ) {
+                    if( token != 0 ) {
+                      current.repository_add(keyword_str(token));
                     }
-                    auto e = symbol_function(0, $NAME);
+                  }
+                }
+        |       FUNCTION repo_intrinsics error {
+                  const char *func = $repo_intrinsics->elems.empty() ?
+                    "" : keyword_str($repo_intrinsics->elems.front());
+                  error_msg(@repo_intrinsics,
+                          "intrinsic function %qs requires INTRINSIC", func);
+                }
+        |       FUNCTION repo_func_names[namelocs] {
+                  for( const auto& nameloc : *$namelocs ) {
+                    if( 0 != intrinsic_token_of(nameloc.name) ) {
+                      error_msg(nameloc.loc,
+                                "intrinsic function %qs requires INTRINSIC",
+                                nameloc.name);
+                      continue;
+                    }
+                    auto token = current.udf_in(nameloc.name);
+                    if( !token ) {
+                      error_msg(nameloc.loc, 
+                                "%s is not defined here as a user-defined function",
+                                nameloc.name);
+                      continue;
+                    }
+                    auto e = symbol_function(0, nameloc.name);
                     assert(e);
                     current.repository_add(symbol_index(e)); // add UDF to repository
                   }
                 }
+                ;
+repo_func_names:
+                repo_func_name[name] {
+                  $$ = new cbl_namelocs_t(1, *$name);
+                  delete $name;
+                }
+        |       repo_func_names repo_func_name[name] {
+                  $$ = $1;
+                  $$->push_back(*$name);
+                  delete $name;
+                }
+                ;
+repo_func_name: NAME repo_as {
+                  if( ! $repo_as.empty() ) {
+                    cbl_unimplemented_at(@repo_as, "%qs", $repo_as.data);
+                  }
+                  $$ = new cbl_nameloc_t(@NAME, $NAME);
+                }
+                ;
+
+repo_intrinsics:
+                repo_intrinsic { $$ = new token_list_t($1); }
+        |       repo_intrinsics repo_intrinsic {
+                  $$ = $1;
+                  $$->elems.push_back($repo_intrinsic);
+                }
+                ;
+ 
+repo_intrinsic: ABS { $$ = ABS; }
+        |       ACOS { $$ = ACOS; }
+        |       ANNUITY { $$ = ANNUITY; }
+        |       ASIN { $$ = ASIN; }
+        |       ATAN { $$ = ATAN; }
+        |       BASECONVERT { $$ = BASECONVERT; }
+        |       BIT_OF { $$ = BIT_OF; }
+        |       BIT_TO_CHAR { $$ = BIT_TO_CHAR; }
+        |       BOOLEAN_OF_INTEGER { $$ = BOOLEAN_OF_INTEGER; }
+        |       BYTE_LENGTH { $$ = BYTE_LENGTH; }
+        |       CHAR { $$ = CHAR; }
+        |       CHAR_NATIONAL { $$ = CHAR_NATIONAL; }
+        |       COMBINED_DATETIME { $$ = COMBINED_DATETIME; }
+        |       CONCAT { $$ = CONCAT; }
+        |       CONVERT { $$ = CONVERT; }
+        |       COS { $$ = COS; }
+        |       CURRENT_DATE { $$ = CURRENT_DATE; }
+        |       DATE_OF_INTEGER { $$ = DATE_OF_INTEGER; }
+        |       DATE_TO_YYYYMMDD { $$ = DATE_TO_YYYYMMDD; }
+        |       DAY_OF_INTEGER { $$ = DAY_OF_INTEGER; }
+        |       DAY_TO_YYYYDDD { $$ = DAY_TO_YYYYDDD; }
+        |       DISPLAY_OF { $$ = DISPLAY_OF; }
+        |       E { $$ = E; }
+        |       EXCEPTION_FILE { $$ = EXCEPTION_FILE; }
+        |       EXCEPTION_FILE_N { $$ = EXCEPTION_FILE_N; }
+        |       EXCEPTION_LOCATION { $$ = EXCEPTION_LOCATION; }
+        |       EXCEPTION_LOCATION_N { $$ = EXCEPTION_LOCATION_N; }
+        |       EXCEPTION_STATEMENT { $$ = EXCEPTION_STATEMENT; }
+        |       EXCEPTION_STATUS { $$ = EXCEPTION_STATUS; }
+        |       EXP { $$ = EXP; }
+        |       EXP10 { $$ = EXP10; }
+        |       FACTORIAL { $$ = FACTORIAL; }
+        |       FIND_STRING { $$ = FIND_STRING; }
+        |       FORMATTED_CURRENT_DATE { $$ = FORMATTED_CURRENT_DATE; }
+        |       FORMATTED_DATE { $$ = FORMATTED_DATE; }
+        |       FORMATTED_DATETIME { $$ = FORMATTED_DATETIME; }
+        |       FORMATTED_TIME { $$ = FORMATTED_TIME; }
+        |       FRACTION_PART { $$ = FRACTION_PART; }
+        |       HEX_OF { $$ = HEX_OF; }
+        |       HEX_TO_CHAR { $$ = HEX_TO_CHAR; }
+        |       HIGHEST_ALGEBRAIC { $$ = HIGHEST_ALGEBRAIC; }
+        |       INTEGER { $$ = INTEGER; }
+        |       INTEGER_OF_BOOLEAN { $$ = INTEGER_OF_BOOLEAN; }
+        |       INTEGER_OF_DATE { $$ = INTEGER_OF_DATE; }
+        |       INTEGER_OF_DAY { $$ = INTEGER_OF_DAY; }
+        |       INTEGER_OF_FORMATTED_DATE { $$ = INTEGER_OF_FORMATTED_DATE; }
+        |       INTEGER_PART { $$ = INTEGER_PART; }
+        |       LENGTH { $$ = LENGTH; }
+        |       LOCALE_COMPARE { $$ = LOCALE_COMPARE; }
+        |       LOCALE_DATE { $$ = LOCALE_DATE; }
+        |       LOCALE_TIME { $$ = LOCALE_TIME; }
+        |       LOCALE_TIME_FROM_SECONDS { $$ = LOCALE_TIME_FROM_SECONDS; }
+        |       LOG { $$ = LOG; }
+        |       LOG10 { $$ = LOG10; }
+        |       LOWER_CASE { $$ = LOWER_CASE; }
+        |       LOWEST_ALGEBRAIC { $$ = LOWEST_ALGEBRAIC; }
+        |       MAXX { $$ = MAXX; }
+        |       MEAN { $$ = MEAN; }
+        |       MEDIAN { $$ = MEDIAN; }
+        |       MIDRANGE { $$ = MIDRANGE; }
+        |       MINN { $$ = MINN; }
+        |       MOD { $$ = MOD; }
+        |       MODULE_NAME { $$ = MODULE_NAME; }
+        |       NATIONAL_OF { $$ = NATIONAL_OF; }
+        |       NUMVAL { $$ = NUMVAL; }
+        |       NUMVAL_C { $$ = NUMVAL_C; }
+        |       NUMVAL_F { $$ = NUMVAL_F; }
+        |       ORD { $$ = ORD; }
+        |       ORD_MAX { $$ = ORD_MAX; }
+        |       ORD_MIN { $$ = ORD_MIN; }
+        |       PI { $$ = PI; }
+        |       PRESENT_VALUE { $$ = PRESENT_VALUE; }
+        |       RANDOM { $$ = RANDOM; }
+        |       RANGE { $$ = RANGE; }
+        |       REM { $$ = REM; }
+        |       REVERSE { $$ = REVERSE; }
+        |       SECONDS_FROM_FORMATTED_TIME { $$ = SECONDS_FROM_FORMATTED_TIME; }
+        |       SECONDS_PAST_MIDNIGHT { $$ = SECONDS_PAST_MIDNIGHT; }
+        |       SIGN { $$ = SIGN; }
+        |       SIN { $$ = SIN; }
+        |       SMALLEST_ALGEBRAIC { $$ = SMALLEST_ALGEBRAIC; }
+        |       SQRT { $$ = SQRT; }
+        |       STANDARD_COMPARE { $$ = STANDARD_COMPARE; }
+        |       STANDARD_DEVIATION { $$ = STANDARD_DEVIATION; }
+        |       SUBSTITUTE { $$ = SUBSTITUTE; }
+        |       SUM { $$ = SUM; }
+        |       TAN { $$ = TAN; }
+        |       TEST_DATE_YYYYMMDD { $$ = TEST_DATE_YYYYMMDD; }
+        |       TEST_DAY_YYYYDDD { $$ = TEST_DAY_YYYYDDD; }
+        |       TEST_FORMATTED_DATETIME { $$ = TEST_FORMATTED_DATETIME; }
+        |       TEST_NUMVAL { $$ = TEST_NUMVAL; }
+        |       TEST_NUMVAL_C { $$ = TEST_NUMVAL_C; }
+        |       TEST_NUMVAL_F { $$ = TEST_NUMVAL_F; }
+        |       TRIM { $$ = TRIM; }
+        |       ULENGTH { $$ = ULENGTH; }
+        |       UPOS { $$ = UPOS; }
+        |       UPPER_CASE { $$ = UPPER_CASE; }
+        |       USUBSTR { $$ = USUBSTR; }
+        |       USUPPLEMENTARY { $$ = USUPPLEMENTARY; }
+        |       UUID4 { $$ = UUID4; }
+        |       UVALID { $$ = UVALID; }
+        |       UWIDTH { $$ = UWIDTH; }
+        |       VARIANCE { $$ = VARIANCE; }
+        |       WHEN_COMPILED { $$ = WHEN_COMPILED; }
+        |       YEAR_TO_YYYY { $$ = YEAR_TO_YYYY; }
                 ;
 
 repo_program:   PROGRAM_kw NAME repo_as
@@ -2329,7 +2879,7 @@ repo_program:   PROGRAM_kw NAME repo_as
                     assert(program);
                     prog.data.initial = program->name;
                   }
-                  auto e = symbol_field_add(PROGRAM, &prog);
+                  const auto e = symbol_field_add(PROGRAM, &prog);
                   symbol_field_location(symbol_index(e), @NAME);
                 }
                 ;
@@ -2337,51 +2887,164 @@ repo_program:   PROGRAM_kw NAME repo_as
 repo_property:  PROPERTY NAME repo_as
                 ;
 
-with_debug:     %empty
-        |       with DEBUGGING MODE {
-                  if( ! set_debug(true) ) {
+with_debug:     with DEBUGGING MODE {
+                  if( ! set_debug() ) {
+                    // always true because format not checked in parser
                     error_msg(@2, "DEBUGGING MODE valid only in fixed format");
                   }
                 }
                 ;
 
-collating_sequence: %empty { $$ = NULL; }
-        |       PROGRAM_kw COLLATING SEQUENCE is NAME[name] { $$ = $name; }
-        |       PROGRAM_kw           SEQUENCE is NAME[name] { $$ = $name; }
-        |                  COLLATING SEQUENCE is NAME[name] { $$ = $name; }
-        |                            SEQUENCE is NAME[name] { $$ = $name; }
+object_computer: %empty
+        |       char_classification
+        |       collating_sequence
+        |       char_classification collating_sequence
+        |       collating_sequence char_classification
+                ;
+char_classification:
+                character CLASSIFICATION char_class_locales[seq]
+                {
+                  if( $seq.alpha ) {
+                    auto e = symbol_locale(PROGRAM, $seq.alpha);
+                    if( !e ) {
+                      error_msg(@seq, "no LOCALE defined as %qs", $seq.alpha);
+                    } else {
+                      auto& encoding = cbl_locale_of(e)->encoding;
+                      current.alpha_encoding(symbol_index(e), encoding);
+                    }
+                  }
+                  if( $seq.national ) {
+                    auto e = symbol_locale(PROGRAM, $seq.national);
+                    if( !e ) {
+                      error_msg(@seq, "no LOCALE defined as %qs", $seq.national);
+                    } else {
+                      auto& encoding = cbl_locale_of(e)->encoding;
+                      current.national_encoding(symbol_index(e), encoding);
+                    }
+                  }
+                }
+                ;
+collating_sequence:
+                program_kw collating SEQUENCE char_class_locales[seq]
+                {
+                  if( !current.collating_sequence($seq.alpha) ) {
+                    error_msg(@seq, "collating sequence already defined as '%s'",
+                              current.collating_sequence());
+                    YYERROR;
+                  }
+                }
                 ;
 
-specials:       special_names
+char_class_locales:
+                is NAME[name] {
+                  $$.alpha = $name;
+                  $$.national = nullptr;
+                }
+        |       coll_alphanats { $$ = $1; }
                 ;
+coll_alphanats: coll_alphanat[encoding] {
+                  $$ = coll_alphanat_t();
+                  const char **pname =
+                    $encoding.token == ALPHANUMERIC? &$$.alpha : &$$.national;
+                  *pname = $encoding.name;
+                }
+        |       coll_alphanats coll_alphanat[encoding]
+                {
+                  const char **pname =
+                    $encoding.token == ALPHANUMERIC? &$$.alpha : &$$.national;
+                  if( *pname ) {
+                    error_msg(@encoding,
+                              "%qs is repeated", keyword_str($encoding.token));
+                  }
+                  *pname = $encoding.name;
+                }
+                ;
+coll_alphanat:  for alphanational is locale_phrase[locale] {
+                  $$.token = $alphanational;
+                  $$.name = $locale.name;
+                  if( ! $locale.name ) {
+                    const char *locale_name = "???";
+                    switch($locale.locale_type) {
+                      case 'L': locale_name = "LOCALE"; break;
+                      case 'D': locale_name = "DEFAULT"; break;
+                      case 'S': locale_name = "SYSTEM-DEFAULT"; break;
+                      case 'U': locale_name = "USER-DEFAULT"; break;
+                    }
+                    cbl_unimplemented("FOR %s IS %s",
+                                      keyword_str($$.token),
+                                      locale_name);
+                  }
+                }
+                ;             
+
+locale_phrase:  NAME    { $$.name = $1;      $$.locale_type = '\0'; }
+        |       LOCALE  { $$.name = nullptr; $$.locale_type = 'L'; }
+        |       DEFAULT { $$.name = nullptr; $$.locale_type = $1; }
+        ;
+
 special_names:  special_name
         |       special_names special_name
                 ;
 
-special_name:   dev_mnemonic
+special_name:   dev_mnemonic {
+                  prototype_ok(@1, dspc_device_clause_e); 
+                }
         |       ALPHABET NAME[name] is alphabet_name[abc]
                 {
+                  prototype_ok(@1, dspc_alphabet_name_clause_e);                     
                   if( !$abc ) YYERROR;
                   assert($abc); // already in symbol table
                   if( !namcpy(@name, $abc->name, $name) ) YYERROR;
                   if( yydebug ) $abc->dump();
                 }
+        |       ALPHABET NAME[name] for alphanational is alphabet_name[abc]
+                {
+                  prototype_ok(@1, dspc_alphabet_name_clause_e);                     
+                  if( !$abc ) YYERROR;
+                  assert($abc); // already in symbol table
+                  if( !namcpy(@name, $abc->name, $name) ) YYERROR;
+                  if( yydebug ) $abc->dump();
+                  const size_t isym = symbol_index(symbol_elem_of($abc));
+                  switch($alphanational) {
+                  case ALPHANUMERIC:
+                    current.alpha_encoding(isym, $abc->encoding);
+                    break;
+                  case NATIONAL:
+                    current.national_encoding(isym, $abc->encoding);
+                    break;
+                  default: gcc_unreachable();
+                  }
+                }
         |       CLASS NAME is domains
                 {
-                  struct cbl_field_t field = { 0,
-                    FldClass, FldInvalid, 0, 0, 0, 0, nonarray, yylineno, "",
-                    0, cbl_field_t::linkage_t(),
-		    {}, NULL };
+                  prototype_ok(@1, dspc_class_clause_e);                     
+                  struct cbl_field_t field = { FldClass, 0, {}, 0, $NAME };
                   if( !namcpy(@NAME, field.name, $2) ) YYERROR;
+
+                  assert( ! domains.empty() );
+                  auto encoding = domains.front().encoding;
 
                   struct cbl_domain_t *domain =
                     new cbl_domain_t[ domains.size() + 1 ] ;
-
+                  auto p = std::find_if( domains.begin(), domains.end(),
+                                         [enc = encoding]
+                                         ( const auto& dom ) {
+                                           return ! dom.encoding_ok(enc);
+                                         } );
+                  if( p != domains.end() ) {
+                    error_msg( @domains, "%qs has encoding %qs "
+                               "but value %qs has encoding %qs",
+                               $NAME, 
+                               current_t::cbl_encoding_str(domains.front().encoding),
+                               p->first.name(), 
+                               current_t::cbl_encoding_str(p->encoding) );
+                  }
                   std::copy(domains.begin(), domains.end(), domain);
-
-                  field.data.false_value_as($domains);
-                  field.data.domain_as(domain);
                   domains.clear();
+
+                  field.data.false_value_as($domains.domain);
+                  field.data.domain_as(domain);
+                  field.codeset.set(encoding);
 
                   if( field_add(@2, &field) == NULL ) {
                     dbgmsg("failed class");
@@ -2395,6 +3058,7 @@ special_name:   dev_mnemonic
                 // symbol_currency_add (symbol, sign-string). 'symbol' is the
                 // character in the PICTURE string, and 'sign' is the substitution
                 // that gets made in memory.
+                  prototype_ok(@1, dspc_currency_sign_clause_e);                     
                   if( ! string_of($lit) ) {
                     error_msg(@lit, "'%s' has embedded NUL", $lit.data);
                     YYERROR;
@@ -2403,21 +3067,38 @@ special_name:   dev_mnemonic
                 }
         |       DECIMAL_POINT is COMMA
                 {
+                  prototype_ok(@1, dspc_decimal_point_is_comma_clause_e); 
                   symbol_decimal_point_set(',');
                 }
-        |       LOCALE NAME is locale_spec
+        |       LOCALE NAME is locale_spec[spec]
                 {
-                  current.locale($NAME, $locale_spec);
-                  cbl_unimplemented("LOCALE syntax");
+                  prototype_ok(@1, dspc_locale_clause_e); 
+                  cbl_locale_t locale($NAME, $spec);
+                  if( locale.encoding == no_encoding_e ) {
+                    error_msg(@NAME, "invalid iconv LOCALE name %qs", $spec);
+                    YYERROR;
+                  }
+                  if( locale.encoding == UTF8_e ) {
+                    cbl_unimplemented("UTF-8");
+                    YYERROR; 
+                  }
+                  if( ! current.locale_add(locale) ) {
+                    error_msg(@NAME, "%qs already defined as LOCALE name", $NAME);
+                  }
                 }
                 ;
-        |       upsi
+        |       upsi {
+                  prototype_ok(@1, dspc_switch_clause_e); 
+                }
         |       SYMBOLIC characters symbolic is_alphabet
                 {
+                  prototype_ok(@1, dspc_symbolic_characters_clause_e); 
                   cbl_unimplemented("SYMBOLIC syntax");
                 }
                 ;
 locale_spec:    NAME    { $$ = $1; }
+        |       UTF_8   { static char s[] ="UTF-8";  $$ = s; }
+        |       UTF_16  { static char s[] ="UTF-16"; $$ = s; }
         |       LITERAL { $$ = string_of($1); }
 
                 ;
@@ -2433,47 +3114,18 @@ dev_mnemonic:	device_name is NAME
                   cbl_special_name_t special = { $1.token, $1.id };
                   if( !namcpy(@NAME, special.name, $NAME) ) YYERROR;
 
-                  const char *filename;
-
-                  switch( special.id ) {
-                  case STDIN_e: case SYSIN_e: case SYSIPT_e:
-                    filename = "/dev/stdin";
-                    break;
-                  case STDOUT_e: case SYSOUT_e:
-                  case SYSLIST_e: case SYSLST_e: case CONSOLE_e:
-                    filename ="/dev/stdout";
-                    break;
-                  case STDERR_e: case SYSPUNCH_e: case SYSPCH_e: case SYSERR_e:
-                    filename ="/dev/stderr";
-                    break;
-                  default:
-                    filename ="/dev/null";
-                    break;
-                  }
-
-                  special.filename = symbol_index(symbol_literalA(0, filename));
-
                   symbol_special_add(PROGRAM, &special);
                 }
 	|	NAME[device] is NAME[name]
 		{
-		  static const std::map< std::string, special_name_t > fujitsus
-		  { // Fujitsu calls these "function names", not device names
-		    { "ARGUMENT-NUMBER", ARG_NUM_e },
-		    { "ARGUMENT-VALUE", ARG_VALUE_e } ,
-		    { "ENVIRONMENT-NAME", ENV_NAME_e },
-		    { "ENVIRONMENT-VALUE", ENV_VALUE_e },
-		  };
-		  std::string device($device);
-		  std::transform($device, $device + strlen($device),
-		                 device.begin(), toupper);
-		  auto p = fujitsus.find(device.c_str());
-		  if( p == fujitsus.end() ) {
-		    error_msg(@device, "%s is not a device name");
+		  auto p = cmd_or_env_special_of($device);
+		  if( !p ) {
+		    error_msg(@device, "%s is not a device name", $device);
+		    YYERROR;
 		  }
 
-                  cbl_special_name_t special = { 0, p->second };
-                  if( !namcpy(@name, special.name, $name) ) YYERROR;
+                  cbl_special_name_t special = { 0, *p };
+                  namcpy(@name, special.name, $name);
 
                   symbol_special_add(PROGRAM, &special);
 		}
@@ -2509,13 +3161,29 @@ device_name:	SYSIN           { $$.token = SYSIN; $$.id = SYSIN_e; }
         |       STDIN           { $$.token = STDIN; $$.id = STDIN_e; }
         |       STDOUT          { $$.token = STDOUT; $$.id = STDOUT_e; }
         |       STDERR          { $$.token = STDERR; $$.id = STDERR_e; }
+                /* These cannot be both ctx_name and here. *
+        /*      ARGUMENT_NUMBER   { $$.token=0; $$.id = ARG_NUM_e; } */
+        /*      ENVIRONMENT_NAME  { $$.token=0; $$.id = ENV_NAME_e; } */
+        /*      ENVIRONMENT_VALUE { $$.token=0; $$.id = ENV_VALUE_e; } */
                 ;
 
-alphabet_name:  STANDARD_ALPHABET  { $$ = alphabet_add(@1, ASCII_e); }
+alphabet_name:  STANDARD_ALPHABET  { $$ = alphabet_add(@1, CP1252_e); }
         |       NATIVE             { $$ = alphabet_add(@1, EBCDIC_e); }
         |       EBCDIC             { $$ = alphabet_add(@1, EBCDIC_e); }
+        |       LOCALE locale_name[name]
+                {
+                  auto e = symbol_locale(PROGRAM, $name);                  
+                  if( !e ) {
+                    dbgmsg("no such LOCALE yet %s", $name);
+                    cbl_locale_t locale($name); // locale is named but not defined 
+                    e = symbol_locale_add(PROGRAM, &locale); 
+                  } 
+                  cbl_alphabet_t alphabet( @name, symbol_index(e), $name);
+                  $$ = alphabet_add(alphabet);
+                }
         |       alphabet_seqs
                 {
+                  $1->reencode(@1);
                   $$ = cbl_alphabet_of(symbol_alphabet_add(PROGRAM, $1));
                 }
         |       error
@@ -2540,7 +3208,8 @@ alphabet_seqs:  alphabet_seq[seq]
                     YYERROR;
                   }
                   $$->add_sequence(@seq, $seq.low);
-                  size_t len = $seq.low == nul_string()? 1 : strlen((const char*)$seq.low);
+                  size_t len = $seq.low == nul_string()?
+                    1 : strlen((const char*)$seq.low);
                   assert(len > 0);
                   $$->add_interval(@seq, $seq.low[--len], $seq.high[0]);
                   $$->add_sequence(@seq, $seq.high);
@@ -2593,17 +3262,19 @@ alphabet_seq:   alphabet_lit[low]
 alphabet_etc:   alphabet_lit
                 {
                   if( $1.len > 1 ) {
-                    error_msg(@1, "'%c' can be only a single letter", $1.data);
+                    error_msg(@1, "%qs can be only a single letter", $1.data);
                     YYERROR;
                   }
                   $$ = (unsigned char)$1.data[0];
                 }
         |       spaces_etc {
-                  // For figurative constants, pass the synmbol table index,
+                  // For figurative constants, pass the symbol table index,
                   // marked with the high bit.
                   static const auto bits = sizeof($$) * 8 - 1;
-                  $$ = 1;
-                  $$ = $$ << bits;
+                  unsigned int high_bit = 1L << bits;
+                  static_assert(sizeof($$) == sizeof(high_bit),
+                                "adjust high_bit to match size of nonterminal target");
+                  memcpy(&$$, &high_bit, sizeof($$));
                   $$ |= constant_index($1);
                 }
                 ;
@@ -2707,88 +3378,83 @@ picture_sym:    %empty                { $$ = NULL; }
                  * "CLASS NAME is domains".
                  */
 domains:        domain
-        |       domains domain { $$ = $1? $1 : $2; }
+        |       domains domain { $$ = $1.domain? $1 : $2; }
                 ;
 
 domain:         all LITERAL[a]
                 {
-                  if( ! string_of($a) ) {
-		    gcc_location_set(@a);
-                    yywarn("'%s' has embedded NUL", $a.data);
-                  }
-                  $$ = NULL;
-                  cbl_domain_t domain(@a, $all, $a.len, $a.data);
-                  domains.push_back(domain);
+                  $$.domain = nullptr;
+                  cbl_domain_t domain($all, $a.len, $a.data);
+                  domains.push_back( domain_t($a.encode_as(), domain) );
                 }
         |       all[a_all] LITERAL[a] THRU all[z_all] LITERAL[z]
                 {
-                  if( ! string_of($a) ) {
-                    yywarn("'%s' has embedded NUL", $a.data);
+                  $$.domain = nullptr;
+                  cbl_domain_elem_t first($a_all, $a.len, $a.data),
+                                     last($z_all, $z.len, $z.data);
+                  if( $a.encode_as() == $z.encode_as() ) {
+                    domains.push_back( domain_t($a.encode_as(),
+                                                cbl_domain_t(first, last)) );
+                  } else {
+                    error_msg(@z, "encooding of %qs differs from that of %qs",
+                              $a.data, $z.data);
                   }
-                  if( ! string_of($z) ) {
-                    yywarn("'%s' has embedded NUL", $z.data);
-                  }
-                  $$ = NULL;
-                  cbl_domain_elem_t first(@a, $a_all, $a.len, $a.data),
-                                     last(@z, $z_all, $z.len, $z.data);
-                  domains.push_back(cbl_domain_t(first, last));
                 }
         |       all NUMSTR[n]
                 {
-                  $$ = NULL;
-                  cbl_domain_t dom(@n, $all, strlen($n.string), $n.string, true);
-                  domains.push_back(dom);
+                  $$.domain = nullptr;
+                  cbl_domain_t dom($all, strlen($n.string), $n.string, true);
+                  domains.push_back( domain_t(dom) );
                 }
         |       all[n_all] NUMSTR[n] THRU all[m_all] NUMSTR[m]
                 {
-                  $$ = NULL;
-                  cbl_domain_elem_t first(@n, $n_all, strlen($n.string), $n.string, true),
-		                     last(@m, $m_all, strlen($m.string), $m.string, true);
-                  domains.push_back(cbl_domain_t(first, last));
+                  $$.domain = nullptr;
+                  cbl_domain_elem_t first($n_all, strlen($n.string), $n.string, true),
+		                     last($m_all, strlen($m.string), $m.string, true);
+                  domains.push_back( domain_t(cbl_domain_t(first, last)) );
                 }
         |       all reserved_value {
-                  $$ = NULL;
+                  $$.domain = nullptr;
                   if( $2 == NULLS ) YYERROR;
                   auto value = constant_of(constant_index($2))->data.initial;
-                  struct cbl_domain_t domain( @2, $all, strlen(value), value );
-                  domains.push_back(domain);
+                  struct cbl_domain_t domain( $all, strlen(value), value );
+                  domains.push_back(domain_t(domain));
                 }
         |       all[a_all] reserved_value[a] THRU all[z_all] LITERAL[z] {
-                  if( ! string_of($z) ) {
-                    yywarn("'%s' has embedded NUL", $z.data);
-                  }
-                  $$ = NULL;
+                  $$.domain = nullptr;
                   if( $a == NULLS ) YYERROR;
                   auto value = constant_of(constant_index($a))->data.initial;
-                  cbl_domain_elem_t first(@a, $a_all, strlen(value), value),
-                                     last(@z, $z_all, $z.len, $z.data);
-                  domains.push_back(cbl_domain_t(first, last));
+                  cbl_domain_elem_t first($a_all, strlen(value), value),
+                                     last($z_all, $z.len, $z.data);
+                  domains.push_back( domain_t($z.encode_as(),
+                                              cbl_domain_t(first, last)) );
                 }
         |       all[a_all] reserved_value[a] THRU all[z_all] NUMSTR[z] {
-                  $$ = NULL;
+                  $$.domain = nullptr;
                   if( $a == NULLS ) YYERROR;
                   auto value = constant_of(constant_index($a))->data.initial;
-                  cbl_domain_elem_t first(@a, $a_all, strlen(value), value, true),
-                                     last(@z, $z_all, strlen($z.string), $z.string, true);
-                  domains.push_back(cbl_domain_t(first, last));
+                  cbl_domain_elem_t first($a_all, strlen(value), value, true),
+                                     last($z_all, strlen($z.string), $z.string, true);
+                  domains.push_back( domain_t(cbl_domain_t(first, last)) );
                 }
         |       when_set_to FALSE_kw is LITERAL[value]
                 {
-                  if( ! string_of($value) ) {
-                    yywarn("'%s' has embedded NUL", $value.data);
-                  }
-                  char *dom = $value.data;
-                  $$ = new cbl_domain_t(@value, false, $value.len, dom);
+                  const char *dom = $value.data;
+                  $$.domain = new cbl_domain_t(false, $value.len, dom);
+                  $$.encoding = $value.encode_as();
                 }
         |       when_set_to FALSE_kw is reserved_value
                 {
                   if( $4 == NULLS ) YYERROR;
                   auto value = constant_of(constant_index($4))->data.initial;
-                  $$ = new cbl_domain_t(@4, false, strlen(value), value );
+                  $$.domain = new cbl_domain_t(false, strlen(value), value );
+                  $$.encoding = no_encoding_e;
                 }
         |       when_set_to FALSE_kw is NUMSTR[n]
                 {
-		  $$ = new cbl_domain_t(@n, false, strlen($n.string), $n.string, true);
+		  $$.domain = new cbl_domain_t(false,
+                                               strlen($n.string), $n.string, true);
+                  $$.encoding = current_encoding('A');
                 }
                 ;
 when_set_to:    %empty
@@ -2801,12 +3467,14 @@ when_set_to:    %empty
         |       WHEN SET TO
         ;
 
-data_div:       %empty
-        |       DATA_DIV
-        |       DATA_DIV { current_division = data_div_e; } data_sections
-                {
+data_div:       %empty   { parser_division( data_div_e, NULL, 0, NULL ); }
+        |       DATA_DIV { parser_division( data_div_e, NULL, 0, NULL ); }
+        |       DATA_DIV {
+                  current_division = data_div_e;
+                  parser_division( data_div_e, NULL, 0, NULL ); 
+                }
+                data_sections {
                   current_data_section = not_data_datasect_e;
-                  parser_division( data_div_e, NULL, 0, NULL );
                 }
                 ;
 
@@ -2816,18 +3484,23 @@ data_sections:  data_section
 
 data_section:   FILE_SECT '.'
         |       FILE_SECT '.' {
+                  prototype_ok(@1, dspc_file_section_e); 
                   current_data_section_set(@1, file_datasect_e);
                 } file_descrs
         |       WORKING_STORAGE_SECT '.' {
+                  prototype_ok(@1, dspc_working_storage_section_e); 
                   current_data_section_set(@1, working_storage_datasect_e);
                 } fields_maybe
         |       LOCAL_STORAGE_SECT '.' {
+                  prototype_ok(@1, dspc_local_storage_section_e); 
                   current_data_section_set(@1, local_storage_datasect_e);
                 } fields_maybe
         |       LINKAGE_SECT '.' {
+                  prototype_ok(@1, dspc_linkage_section_e);
                   current_data_section_set(@1, linkage_datasect_e);
                 } fields_maybe
 	|	SCREEN SECTION '.' {
+                  prototype_ok(@1, dspc_screen_section_e); 
 		  cbl_unimplemented("SCREEN SECTION");
 		}
                 ;
@@ -2839,8 +3512,8 @@ file_descr:     fd_name            '.' { field_done(); } fields
         |       fd_name fd_clauses '.' { field_done(); } fields
                 ;
 
-fd_name:        FD NAME { $$ = $2; file_section_fd_set(fd_e, $2, @2); }
-	|       SD NAME { $$ = $2; file_section_fd_set(sd_e, $2, @2); }
+fd_name:        FD NAME { $$ = file_section_fd_set(fd_e, $2, @2); }
+	|       SD NAME { $$ = file_section_fd_set(sd_e, $2, @2); }
         ;
 
 fd_clauses:     fd_clause
@@ -2851,13 +3524,14 @@ fd_clause:      record_desc
                   auto f = cbl_file_of(symbol_at(file_section_fd));
                   f->varying_size.min = $1.min;
                   f->varying_size.max = $1.max;
-                  auto& cap = cbl_field_of(symbol_at(f->default_record))->data.capacity;
-                  cap = std::max(cap, uint32_t(f->varying_size.max));
+                  auto& data = cbl_field_of(symbol_at(f->default_record))->data;
+                  data.capacity( std::max(data.capacity(),
+                                          uint32_t(f->varying_size.max)) );
                   // If min != max now, we know varying is explicitly defined.
                   f->varying_size.explicitly = f->varies();
                   if( f->varying_size.max != 0 ) {
                     if( !(f->varying_size.min <= f->varying_size.max) ) {
-                      error_msg(@1, "%zu must be <= %zu",
+                      error_msg(@1, "%zu must be less than or equal to %zu",
                                 f->varying_size.min, f->varying_size.max);
                       YYERROR;
                     }
@@ -2878,10 +3552,42 @@ fd_clause:      record_desc
                     error_msg(@NAME, "invalid RECORDING MODE '%s'", $NAME);
                     YYERROR;
                   }
-                  cbl_unimplementedw("RECORDING MODE was ignored, not defined by ISO 2023");
+                  cbl_unimplementedw(SynRecordingMode,
+                                     "RECORDING MODE ignored");
                 }
         |       VALUE OF fd_values
-        |       CODESET is NAME
+        |       CODESET is codeset_name[codeset] {
+                  auto f = cbl_file_of(symbol_at(file_section_fd));
+                  f->codeset = cbl_file_t::codeset_t($codeset.encoding,
+                                                     $codeset.isym);
+                  cbl_unimplementedw(SynFileCodeSet,
+                                     "sorry, unimplemented CODE-SET");
+                }
+        |       CODESET for alphanational is codeset_name[codeset]
+                {
+                  auto f = cbl_file_of(symbol_at(file_section_fd));
+                  f->codeset = cbl_file_t::codeset_t($codeset.encoding,
+                                                     $codeset.isym);
+                  if( $codeset.isym == 0 ) {
+                    switch( $alphanational) {
+                    case ALPHANUMERIC:
+                      if( $codeset.encoding != ASCII_e ) {
+                        error_msg(@alphanational,
+                                  "FOR ALPHANUMERIC: invalid codeset");
+                      }
+                      break;
+                    case NATIONAL:
+                      if( $codeset.encoding != EBCDIC_e ) {
+                        error_msg(@alphanational,
+                                  "FOR ALPHANUMERIC: invalid codeset");
+                      }
+                      break;
+                    default:
+                      gcc_unreachable();
+                    }
+                  }
+                  cbl_unimplemented("CODE-SET");
+                }
         |       is GLOBAL
                 {
                   auto f = cbl_file_of(symbol_at(file_section_fd));
@@ -2896,12 +3602,38 @@ fd_clause:      record_desc
                 {
                   auto f = cbl_file_of(symbol_at(file_section_fd));
                   f->attr |= external_e;
-                  cbl_unimplemented("AS LITERAL ");
+                  cbl_unimplemented("AS LITERAL");
+                }
+        |       is error
+                {
+                  error_msg(@1, "invalid FD phrase");
                 }
         |       fd_linage
+                {
+                  cbl_unimplemented("LINAGE");
+                  
+                }
         |       fd_report {
                   cbl_unimplemented("REPORT WRITER");
                   YYERROR;
+                }
+                ;
+
+alphanational:  ALPHANUMERIC { $$ = ALPHANUMERIC; }
+        |       NATIONAL     { $$ = NATIONAL; }
+                ;
+codeset_name:   STANDARD_ALPHABET { $$.isym = 0; $$.encoding = ASCII_e; }
+        |       NATIVE            { $$.isym = 0; $$.encoding = EBCDIC_e; }
+        |       EBCDIC            { $$.isym = 0; $$.encoding = EBCDIC_e; }
+        |       NAME
+                {
+                  auto e = symbol_alphabet(PROGRAM, $NAME);
+                  if( !e ) {
+                    error_msg(@NAME, "invalid CODE-SET: %qs", $NAME);
+                    YYERROR;
+                  }
+                  $$.isym = symbol_index(e);
+                  $$.encoding = custom_encoding_e;
                 }
                 ;
 
@@ -2933,7 +3665,7 @@ rec_contains:   NUMSTR[min] {
                   }
                   $$.max = n;
                   if( !($$.min < $$.max) ) {
-                    error_msg(@max, "FROM (%xz) must be less than TO (%zu)",
+                    error_msg(@max, "FROM (%zu) must be less than TO (%zu)",
                               $$.min, $$.max);
                     YYERROR;
                   }
@@ -3066,7 +3798,7 @@ depending:      %empty
                     assert(e->type == SymField);
                     odo = symbol_index(e);
                   } else {
-		    e = symbol_field_forward_add(PROGRAM, 0, $NAME, yylineno);
+		    e = symbol_field_forward_add(PROGRAM, 0, $NAME, @NAME.first_line);
                     if( !e ) YYERROR;
 		    symbol_field_location( symbol_index(e), @NAME );
                     odo = field_index(cbl_field_of(e));
@@ -3077,17 +3809,81 @@ depending:      %empty
                 }
                 ;
 
-fd_linage:      LINAGE is num_value with_footings
-        |       LINAGE is num_value lines
+		/*
+                 * All integers must be unsigned. All data-names must be
+                 * described as unsigned integer data items. 
+                 * 
+                 * data-name-5 , integer-8 The number of lines that can be
+                 * written or spaced on this logical page. The area of the page
+                 * that these lines represent is called the page body. The
+                 * value must be greater than zero.
+                 * 
+                 * WITH FOOTING AT integer-9 or the value of the data item in
+                 * data-name-6 specifies the first line number of the footing
+                 * area within the page body. The footing line number must be
+                 * greater than zero, and not greater than the last line of the
+                 * page body. The footing area extends between those two lines.
+                 *
+                 * LINES AT TOP integer-10 or the value of the data item in
+                 * data-name-7 specifies the number of lines in the top margin
+                 * of the logical page. The value can be zero.
+                 *
+                 * LINES AT BOTTOM integer-11 or the value of the data item in
+                 * data-name-8 specifies the number of lines in the bottom
+                 * margin of the logical page. The value can be zero.
+                 */
+
+fd_linage:      LINAGE is num_value lines with_linage[with]
+                {
+                  assert(file_section_fd > 0);
+                  symbol_elem_t *e = symbol_at(file_section_fd);
+                  auto file = cbl_file_of(e);
+                  auto& linage = file->linage;
+                  linage.nline = $num_value;
+                  linage.footing = $with.footing;
+                  linage.top     = $with.top;
+                  linage.bottom  = $with.bottom;
+                } 
         ;
-with_footings:  with_footing
-        |       with_footings with_footing
+with_linage:    %empty { $$ = linage_t(); }
+        |       with_footings
                 ;
-with_footing:   lines with FOOTING at num_value
-        |       lines at top_bot num_value
+with_footings:  with_footing[with]
+                {
+                  $$ = linage_t();
+                  switch($with.token) {
+                    case FOOTING:
+                      $$.footing = $with.value;
+                      break;
+                    case TOP:
+                      $$.top = $with.value;
+                      break;
+                    case BOTTOM:
+                      $$.bottom = $with.value;
+                      break;
+                  }
+                }
+        |       with_footings with_footing[with]
+                {
+                  $$ = $1;
+                  switch($with.token) {
+                    case FOOTING:
+                      $$.footing = $with.value;
+                      break;
+                    case TOP:
+                      $$.top = $with.value;
+                      break;
+                    case BOTTOM:
+                      $$.bottom = $with.value;
+                      break;
+                  }
+                }
                 ;
-top_bot:        TOP
-        |       BOTTOM
+with_footing:   with FOOTING at num_value { $$.token = FOOTING;  $$.value = $num_value; }
+        |       at top_bot num_value      { $$.token = $top_bot; $$.value = $num_value; }
+                ;
+top_bot:        TOP     { $$ = TOP; }
+        |       BOTTOM  { $$ = BOTTOM; }
                 ;
 
 fd_report:      REPORT
@@ -3110,43 +3906,6 @@ field:          cdf
                     }
                   }
                   field_done();
-
-                  const auto& field(*$data_descr);
-
-                  // Format data.initial per picture
-                  if( 0 == pristine_values.count(field.data.initial) ) {
-                    if( field.data.digits > 0 && !field.is_zero() ) {
-                      char *initial;
-                      int rdigits = field.data.rdigits < 0?
-                                    1 : field.data.rdigits + 1;
-
-                      if( field.has_attr(scaled_e) ) {
-                        if( field.data.rdigits > 0 ) {
-                          rdigits = field.data.digits + field.data.rdigits;
-                        } else {
-                          rdigits = 0;
-                        }
-                      }
-                      initial = string_of(field.data.value_of());
-                      if( !initial ) {
-                        error_msg(@1, xstrerror(errno));
-                        YYERROR;
-                      }
-                      char decimal = symbol_decimal_point();
-                      std::replace(initial, initial + strlen(initial), '.', decimal);
-                      free(const_cast<char*>($data_descr->data.initial));
-                      $data_descr->data.initial = initial;
-                      if( yydebug ) {
-                        const char *value_str = string_of(field.data.value_of());
-                        dbgmsg("%s::data.initial is (%%%d.%d) %s ==> '%s'",
-			       field.name,
-			       field.data.digits,
-			       rdigits,
-			       value_str? value_str : "",
-			       field.data.initial);
-                      }
-                    }
-                  }
                 }
                 ;
 
@@ -3235,11 +3994,11 @@ index_field1:   ctx_name[name]
 		  field.data = data;
                   if( !namcpy(@name, field.name, $name) ) YYERROR;
 
-                  auto symbol = symbol_field(PROGRAM, 0, $name);
+                  auto symbol = symbol_field(PROGRAM, field.parent, $name);
                   if( symbol ) {
-                    auto field( cbl_field_of(symbol) );
+                    auto f( cbl_field_of(symbol) );
                     error_msg(@name,  "'%s' already defined on line %d",
-                              field->name, field->line );
+                              f->name, f->line );
                     YYERROR;
                   }
 
@@ -3259,16 +4018,15 @@ level_name:     LEVEL ctx_name
                   case 77:
                   case 88:
                     break;
+                  case 78:
+                      break;
                   default:
 		    if( 1 <= $LEVEL && $LEVEL <= 49 ) break;
                     error_msg(@LEVEL, "LEVEL %d not supported", $LEVEL);
                     YYERROR;
                   }
-                  struct cbl_field_t field = { 0,
-                    FldInvalid, FldInvalid, 0, 0, 0, capacity_cast($1),
-		    nonarray, yylineno, "",
-                    0, cbl_field_t::linkage_t(),
-		    {}, NULL };
+                  cbl_field_t field = { FldInvalid, capacity_cast($LEVEL),
+                                         @ctx_name.first_line };
                   if( !namcpy(@ctx_name, field.name, $2) ) YYERROR;
 
                   $$ = field_add(@$, &field);
@@ -3277,24 +4035,31 @@ level_name:     LEVEL ctx_name
                   }
                   current_field($$); // make available for data_clauses
                 }
-        |       LEVEL
+        |       LEVEL filler
                 {
                   switch($LEVEL) {
                   case 66:
                   case 77:
                   case 88:
                     break;
+                  case 78:
+                      dialect_ok(@LEVEL, MfLevel78, "LEVEL 78");
+                      break;
                   default:
 		    if( 1 <= $LEVEL && $LEVEL <= 49 ) break;
                     error_msg(@LEVEL, "LEVEL %d not supported", $LEVEL);
                     YYERROR;
                   }
-                  struct cbl_field_t field = { 0,
-                    FldInvalid, FldInvalid, 0, 0, 0, capacity_cast($1),
-		    nonarray, yylineno, "",
-                    0, {}, {}, NULL };
-
-                  $$ = field_add(@1, &field);
+                  struct cbl_field_t field = { FldInvalid, 
+		                               capacity_cast($LEVEL),
+		                               @LEVEL.first_line };
+                  cbl_loc_t loc(@LEVEL);
+                  if( $filler ) {
+                    loc.last_column += 7;
+                    field.set_attr(filler_e);
+                    strcpy(field.name, "FILLER");
+                  }
+                  $$ = field_add(loc, &field);
                   if( !$$ ) {
                     YYERROR;
                   }
@@ -3302,43 +4067,51 @@ level_name:     LEVEL ctx_name
                 }
                 ;
 
+level_constant: level_name CONSTANT is_global as {
+                  cbl_field_t& field = *$1;
+                  if( field.level != 1 ) {
+                    error_msg(@1, "%s must be an 01-level data item", field.name);
+                    YYERROR;
+                  }
+                  field.attr |= constant_e;
+                  if( $is_global ) field.attr |= global_e;
+                  $$ = $1;
+                }
+        |       LEVEL78[level] NAME[name] VALUE is {
+                  dialect_ok(@level, MfLevel78, "LEVEL 78");
+                  struct cbl_field_t field = { FldInvalid, 
+		                               uint32_t($level),
+		                               @level.first_line };
+                  namcpy(@name, field.name, $name);
+                  field.attr |= constant_e;
+                  $$ = field_add(@1, &field);
+                  current_field($$); // make available for data_clauses
+                }
+                ;
+
 data_descr:     data_descr1
                 {
                   $$ = current_field($1); // make available for occurs, etc.
-                  char *env = getenv("symbols_update");
-                  if( env && env[0] == 'P' ) {
-                    dbgmsg("parse.y:%d: %-15s %s (%s)", __LINE__,
-                          cbl_field_type_str($$->type) + 3,
-                          field_str($$),
-                          cbl_field_type_str($$->usage) + 3);
-                  }
                 }
         |       error { static cbl_field_t none = {}; $$ = &none; }
                 ;
 
 const_value:    cce_expr
-        |       BYTE_LENGTH of name { $name->data.set_real_from_capacity(&$$); }
-        |       LENGTH      of name { $name->data.set_real_from_capacity(&$$); }
-        |       LENGTH_OF   of name { $name->data.set_real_from_capacity(&$$); }
-                ;
-
-value78:        literalism
-                {
-                  cbl_field_data_t data = {};
-		    data.capacity = capacity_cast(strlen($1.data));
-		    data.initial = $1.data;
-                  $$ = new cbl_field_data_t(data);
+        |       BYTE_LENGTH of name {
+                  $$.s = nullptr;
+                  set_real_from_capacity(@name, $name, &$$.r);
                 }
-        |       const_value
-                {
-                  cbl_field_data_t data = {};
-		  data = build_real (float128_type_node, $1);
-                  $$ = new cbl_field_data_t(data);
+        |       LENGTH      of name { 
+                  $$.s = nullptr;
+                  set_real_from_capacity(@name, $name, &$$.r);
                 }
-        |       true_false
-                {
-                  cbl_unimplemented("Boolean constant");
-                  YYERROR;
+        |       LENGTH_OF   of name { 
+                  $$.s = nullptr;
+                  set_real_from_capacity(@name, $name, &$$.r);
+                }
+        |       LENGTH_OF   of binary_type[type] {
+                  $$.s = nullptr;
+                  real_from_integer(&$$.r, VOIDmode, $type, SIGNED);
                 }
                 ;
 
@@ -3350,101 +4123,85 @@ data_descr1:    level_name
                   }
                 }
 
-        |       level_name CONSTANT is_global as const_value
+        |       level_constant const_value[cce]
                 {
                   cbl_field_t& field = *$1;
-                  if( field.level != 1 ) {
-                    error_msg(@1, "%s must be an 01-level data item", field.name);
-                    YYERROR;
-                  }
-
-                  field.attr |= constant_e;
-                  if( $is_global ) field.attr |= global_e;
                   field.type = FldLiteralN;
-		  field.data = build_real (float128_type_node, $const_value);
-                  field.data.initial = string_of($const_value);
+		  field.data = build_real (float128_type_node, $cce.r);
+                  const char *s = $cce.s? $cce.s : string_of($cce.r);
+                  field.data.original( s );
+                  field.codeset.set();
+                  field.set_initial(@cce);
 
-                  if( !cdf_value(field.name, cdfval_t($const_value)) ) {
-                    error_msg(@1, "%s was defined by CDF", field.name);
+                  if( cdf_value(field.name) ) {
+                    cbl_message(@1, Par78CdfDefinedW,
+                                "%s was defined by CDF", field.name);
                   }
                 }
-        |       level_name CONSTANT is_global as literalism[lit]
+
+        |       level_constant reserved_value[value]
                 {
                   cbl_field_t& field = *$1;
-                  field.attr |= constant_e;
-                  if( $is_global ) field.attr |= global_e;
                   field.type = FldLiteralA;
-                  field.data.capacity = $lit.len;
-                  field.data.initial  = $lit.data;
+		  auto fig = constant_of(constant_index($value));
+                  field.data = fig->data;
+                  field.codeset.set();
+                  field.set_initial(@value);
+                }
+
+        |       level_constant literalism[lit]
+                {
+                  cbl_field_t& field = *$1;
+                  field.type = FldLiteralA;
                   field.attr |= literal_attr($lit.prefix);
-                  if( field.level != 1 ) {
-                    error_msg(@lit, "%s must be an 01-level data item", field.name);
-                    YYERROR;
+
+                  if( ! field.codeset.set($lit.encode_as()) ) {
+                    error_msg(@lit, "CONSTANT inconsistent with encoding %s",
+                              cbl_alphabet_t::encoding_str(field.codeset.encoding));
                   }
-                  if( !cdf_value(field.name, $lit.data) ) {
-                    error_msg(@1, "%s was defined by CDF", field.name);
+                  field.data.original( $lit.data );
+                  field.set_initial(@lit);
+
+                  if( cdf_value(field.name) ) {
+                    cbl_message(@1, Par78CdfDefinedW,
+                                "%s was defined by CDF", field.name);
                   }
-                  value_encoding_check(@lit, $1);
                 }
         |       level_name CONSTANT is_global FROM NAME
                 {
                   assert($1 == current_field());
+                  cbl_field_t& field(*$1);
+                  if( cdf_value(field.name) ) {
+                    cbl_message(@1, Par78CdfDefinedW,
+                                "%s was defined by CDF", field.name);
+                  }
                   const cdfval_t *cdfval = cdf_value($NAME);
                   if( !cdfval ) {
-                    error_msg(@1, "%s was defined by CDF", $NAME);
+                    error_msg(@NAME, "%s was not defined by CDF", $NAME);
                     YYERROR;
                   }
-                  cbl_field_t& field = *$1;
                   field.attr |= ($is_global | constant_e);
-                  field.data.capacity = cdfval->string ? strlen(cdfval->string)
-                                                  : sizeof(field.data.value_of());
-                  field.data.initial  = cdfval->string;
-                  field.data = cdfval->number;
-                  if( !cdf_value(field.name, *cdfval) ) {
-                    error_msg(@1, "%s was defined by CDF", field.name);
-                  }
-                }
-
-        |       LEVEL78 NAME[name] VALUE is value78[data]
-                {
-                  if( ! dialect_mf() ) {
-                    dialect_error(@1, "level 78", "mf");
-                    YYERROR;
-                  }
-                  struct cbl_field_t field = { 0, FldLiteralA, FldInvalid,
-                                               constant_e, 0, 0, 78, nonarray,
-                                               yylineno, "", 0, {}, *$data, NULL };
-                  if( !namcpy(@name, field.name, $name) ) YYERROR;
-                  if( field.data.initial ) {
-                    field.attr |= quoted_e;
-                    if( !cdf_value(field.name, field.data.initial) ) {
-                      yywarn("%s was defined by CDF", field.name);
-                    }
+                  field.codeset.set();
+                // Does a const field want an initial string for a numeric value? --jkl
+                  if( cdfval->string ) {
+                    field.data.original( cdfval->string );
+                    field.set_initial(@NAME);
                   } else {
-                    field.type = FldLiteralN;
-                    field.data.initial = string_of(field.data.value_of());
-                    if( !cdf_value(field.name, field.as_integer()) ) {
-                      yywarn("%s was defined by CDF", field.name);
-                    }
-                  }
-                  if( ($$ = field_add(@name, &field)) == NULL ) {
-                    error_msg(@name, "failed level 78");
-                    YYERROR;
+                    field.data.capacity(sizeof(field.data.value_of()));
+                    field.data = cdfval->number;
                   }
                 }
 
         |       LEVEL88 NAME /* VALUE */ NULLPTR
                 {
-                  struct cbl_field_t field = { 0,
-                    FldClass, FldInvalid, 0, 0, 0, 88, nonarray, yylineno, "",
-                    0, cbl_field_t::linkage_t(),
-		    {}, NULL };
+                  struct cbl_field_t field = {FldClass, 0, {},
+                                              88, $NAME, @NAME.first_line};
                   if( !namcpy(@NAME, field.name, $2) ) YYERROR;
 
                   auto fig = constant_of(constant_index(NULLS))->data.initial;
                   struct cbl_domain_t *domain = new cbl_domain_t[2];
 
-                  domain[0] = cbl_domain_t(@NAME, false, strlen(fig), fig);
+                  domain[0] = cbl_domain_t(false, strlen(fig), fig);
 
                   field.data.domain_as(domain);
 
@@ -3461,25 +4218,44 @@ data_descr1:    level_name
                 }
         |       LEVEL88 NAME VALUE domains
                 {
-                  struct cbl_field_t field = { 0,
-                    FldClass, FldInvalid, 0, 0, 0, 88, nonarray, yylineno, "",
-                    0, cbl_field_t::linkage_t(),
-		    {}, NULL };
-                  if( !namcpy(@NAME, field.name, $2) ) YYERROR;
-
-                  struct cbl_domain_t *domain =
+                  cbl_field_t field = { 
+                    FldClass, 0, {}, 88, $NAME, @NAME.first_line};
+                  cbl_domain_t *domain =
                     new cbl_domain_t[ domains.size() + 1];
 
+                  auto enc = domains.front().encoding;
+                  auto p = std::find_if( domains.begin(), domains.end(),
+                                         [enc]( const auto& dom ) {
+                                           return !dom.encoding_ok(enc);
+                                         } );
+                  if( p != domains.end() ) {
+                    error_msg( @domains, "%qs has encoding %qs "
+                               "but value %qs has encoding %qs",
+                               $NAME, 
+                               current_t::cbl_encoding_str(domains.front().encoding),
+                               p->first.name(), 
+                               current_t::cbl_encoding_str(p->encoding) );
+                  }
                   std::copy(domains.begin(), domains.end(), domain);
+                  domains.clear();
 
                   field.data.domain_as(domain);
-                  field.data.false_value_as($domains);
-                  domains.clear();
+                  field.data.false_value_as($domains.domain);
+                  field.codeset.set();
 
                   if( ($$ = field_add(@2, &field)) == NULL ) {
                     error_msg(@NAME, "failed level 88");
                     YYERROR;
                   }
+                  cbl_field_t *parent = parent_of($$);
+                  if( parent->codeset.valid() &&
+                      enc != parent->codeset.encoding ) {
+                    error_msg( @NAME, "%qs has encoding %qs "
+                               "but values have encoding %qs",
+                               $NAME, 
+                               current_t::cbl_encoding_str(parent->codeset.encoding),
+                               current_t::cbl_encoding_str(enc) );
+                  } 
                 }
 
         |       name66[alias] RENAMES name[orig]
@@ -3567,7 +4343,7 @@ data_descr1:    level_name
                   }
                   if( field_index($thru) <= field_index($orig) ) {
                     error_msg(@orig, "cannot RENAME %s %s THRU %s %s "
-                             "because they're in the wrong order",
+                             "because they are in the wrong order",
 			      $orig->level_str(), name_of($orig),
 			      $thru->level_str(), name_of($thru));
                     YYERROR;
@@ -3581,14 +4357,20 @@ data_descr1:    level_name
         |       level_name[field] data_clauses
                 {
                   gcc_assert($field == current_field());
+                  //// cbl_field_t& F(*$field);
+
                   if( $data_clauses == value_clause_e ) { // only VALUE, no PIC
                     // Error unless VALUE is a figurative constant or (quoted) string.
-                    if( $field->type != FldPointer &&
-                        ! $field->has_attr(quoted_e) &&
-                        normal_value_e == cbl_figconst_of($field->data.initial) )
-                    {
-                      error_msg(@field, "%s numeric VALUE %s requires PICTURE",
-                               $field->name, $field->data.initial);
+                    if( $field->type != FldPointer && ! $field->has_attr(quoted_e) ) {
+                      switch( cbl_figconst_of($field->data.initial) ) {
+                      case normal_value_e:
+                      case zero_value_e:
+                        break;
+                      default:
+                        error_msg(@field, "%qs numeric VALUE %qs requires PICTURE",
+                                  $field->name, $field->data.original());
+                        YYERROR; // do not attempt to set capacity
+                      }
                     }
                     if( null_value_e == cbl_figconst_of($field->data.initial) ) {
                       // don't change the type
@@ -3598,7 +4380,7 @@ data_descr1:    level_name
                       assert(FldPointer != $field->type);
                       $field->type = FldAlphanumeric;
                       if( $field->data.initial ) {
-                        $field->data.capacity = strlen($field->data.initial);
+                        $field->set_capacity(strlen($field->data.initial));
                       }
                     }
                   }
@@ -3607,9 +4389,10 @@ data_descr1:    level_name
                   if( $field->has_attr(blank_zero_e) ) {
                     switch($field->type) {
                     case FldNumericEdited:
-                      if( $field->has_attr(signable_e) ) {
-                        error_msg(@2,  "%s has 'S' in PICTURE, cannot be BLANK WHEN ZERO",
-                                  $field->name, cbl_field_type_str($field->type) );
+                      // Test appears to be invalid.
+                      if( false && $field->has_attr(signable_e) ) {
+                        error_msg(@2,  "%s has signed PICTURE, cannot be BLANK WHEN ZERO",
+                                  $field->name );
                       }
                       break;
                     default:
@@ -3622,12 +4405,12 @@ data_descr1:    level_name
 
                   // SIGN clause valid only with "S" in picture
                   if( $field->type == FldNumericDisplay && !is_signable($field) ) {
-                    static const size_t sign_attrs = leading_e | separate_e;
+                    static const uint64_t sign_attrs = leading_e | separate_e;
                     static_assert(sizeof(sign_attrs) == sizeof($field->attr),
                                   "size matters");
 
                     // remove inapplicable inherited sign attributes
-                    size_t group_sign = group_attr($field) & sign_attrs;
+                    uint64_t group_sign = group_attr($field) & sign_attrs;
                     $field->attr &= ~group_sign;
 
                     if( $field->attr & sign_attrs ) {
@@ -3640,56 +4423,104 @@ data_descr1:    level_name
 
                   // Increase numeric display capacity by 1 for SIGN SEPARATE.
                   if( $field->type == FldNumericDisplay &&
-                      is_signable($field) &&
-                      $field->has_attr(separate_e) ){
-                    $field->data.capacity++;
+                      $field->has_attr(separate_e) ) {
+                    gcc_assert(is_signable($field));
+                    $field->add_capacity(1);
+                    $field->blank_initial($field->char_capacity());
                   }
 
                   // Set Packed-Decimal capacity
                   if( $field->type == FldPacked ) {
-                    $field->data.capacity = type_capacity($field->type,
-                                                          $field->data.digits);
-                  if( $field->attr & separate_e )
-                    {
-                    // This is a gentle kludge required by the the belated
-                    // introduction of COMP-6, which is like COMP-3 but with no
-                    // sign nybble.  The code in type_capacity assumes a sign
-                    // nybble.
-                    $field->data.capacity = ($field->data.digits+1)/2;
-                    }
+                    // COMP-6 is like COMP-3 but with no sign nybble.  The
+                    // code in type_capacity assumes a sign nybble.
+                    auto one_less = $field->has_attr(separate_e) ? 1 : 0;
+
+                    $field->set_capacity(type_capacity($field->type,
+                                                       $field->data.digits - one_less));
                   }
 
                   // Check COMP-5 capacity
 		  // No capacity means no PICTURE, valid only for a (potential) group
-                  if( $field->type == FldNumericBin5 && $field->data.capacity == 0 ) {
-                    if(  has_clause ($data_clauses, usage_clause_e) &&
-                        !has_clause ($data_clauses, picture_clause_e) ) {
-			// invalidate until a child is born
-		      $field->type = FldInvalid;
+                  if( is_among( $field->type, {FldNumericBinary, FldNumericBin5} ) ) {
+                    if( $field->data.capacity() == 0 ) {
+                      if(  has_clause ($data_clauses, usage_clause_e) &&
+                          !has_clause ($data_clauses, picture_clause_e) ) {
+		          // invalidate until a child is born
+		        $field->type = FldInvalid;
+                      }
+                    } else {
+                      if( ($field->data.initial) ) {
+                        if( strlen($field->data.initial) < $field->data.capacity() ) {
+                          $field->blank_initial( $field->data.capacity() );
+                        }
+                      }
                     }
                   }
 
                   // Ensure signed initial VALUE is for signed numeric type
-                  if( is_numeric($field) &&
-		      $field->data.initial &&
-		      $field->type != FldFloat )
-		  {
-                    switch( $field->data.initial[0] ) {
-                    case '-':
-                      if( !$field->has_attr(signable_e) ) {
-                        error_msg(@field, "%s is unsigned but has signed VALUE '%s'",
-                                 $field->name, $field->data.initial);
+                  if( is_numeric($field) ) {
+                    auto original = $field->data.original();
+                    if( original && $field->type != FldFloat ) {
+                      switch( original[0] ) {
+                      case '-':
+                        if( !$field->has_attr(signable_e) ) {
+                          error_msg(@field, "%s is unsigned but has signed VALUE '%s'",
+                                    $field->name, original);
+                        }
                       }
                     }
                   }
 
                   // Verify VALUE
-                  $field->report_invalid_initial_value(@data_clauses);
+                  bool bad_value = $field->report_invalid_initial_value(@data_clauses);
 
                   // verify REDEFINES
-                  auto parent = parent_of($field);
+                  const auto parent = parent_of($field);
                   if( parent && $field->level == parent->level ) {
                     valid_redefine(@field, $field, parent); // calls yyerror
+                  }
+                  
+                  // verify VALUE for Numeric Edited
+                  if( $field->type == FldNumericEdited ) {
+                    if( !validate_numeric_edited ($field) ) {
+                      error_msg(@data_clauses, "%s: PICTURE and VALUE are incompatible",
+                                $field->name);
+                    }
+                  }
+
+                  // verify VALUE for numeric
+                  if ($data_clauses & value_clause_e) {
+                    bool good_value =
+                        ($field->data.etc_ok() || $field->data.original()) && ! bad_value;
+                    if( good_value ) { // ensure VALUE had a value
+                      if( is_numeric($field) || $field->type == FldNumericEdited ) {
+                        if( zero_value_e == cbl_figconst_of($field->data.original()) ) {
+                          $field->blank_initial($field->char_capacity());
+                        }
+                        $field->encode_numeric($field->data.original(), 
+                                               data_clause_locations[value_clause_e]);
+                      }
+                    }
+                  } else { // no VALUE clause
+                    if( false && $field->data.initial ) {
+                      free(const_cast<char*>($field->data.initial));
+                      $field->data.initial = nullptr;
+                    }                      
+                  }
+
+                  // Any field may become a group, so may have VALUE with no PICTURE
+                  const auto stooges3 = (picture_clause_e |
+                                         value_clause_e |
+                                         type_clause_e |
+                                         usage_clause_e);
+                  auto clauses($data_clauses);
+                  if( (clauses & stooges3) == value_clause_e ) { // only
+                    $field->type = FldInvalid;
+                    auto fig = cbl_figconst_of($field->data.original());
+                    if( null_value_e != fig ) {
+                      $field->set_initial( $field->data.capacity(),
+                                           data_clause_locations[value_clause_e]);
+                    }
                   }
                 }
                 ;
@@ -3708,8 +4539,9 @@ literalism:     LITERAL { $$ = $1; }
 
                   if( $second.prefix[0] ) { strcpy(output.prefix, $second.prefix); }
                   if( ! $first.compatible_prefix($second) ) {
-                    yywarn("dissimilar literals, '%s' prevails",
-                          output.prefix);
+                    cbl_message(@$, ParLiteral2W,
+                                "dissimilar literals, '%s' prevails",
+                                output.prefix);
                   }
                 }
                 ;
@@ -3741,8 +4573,10 @@ data_clauses:   data_clause
                       YYERROR;
                     }
                   }
+                data_clause_t clause = data_clause_t($1);
+                proto_field.add_clause(clause);
                 }
-        |       data_clauses data_clause {
+        |       data_clauses[clauses] data_clause {
                   const char *clause = "data";
                   switch($2) {
                   case occurs_clause_e:     clause = "OCCURS";    break;
@@ -3767,10 +4601,12 @@ data_clauses:   data_clause
                     YYERROR;
                   }
 
-                  if( $data_clause == redefines_clause_e ) {
-                    error_msg(@2, "REDEFINES must appear "
-                             "immediately after LEVEL and NAME");
-                    YYERROR;
+                  data_clause_locations[data_clause_t($2)] = @data_clause;
+
+                  if( $clauses && $data_clause == redefines_clause_e ) {
+                      dialect_ok(@2, MfRedefinesFirst,
+                                 "-REDEFINES must appear "
+                                 "immediately after LEVEL and NAME");
                   }
                   cbl_field_t *field = current_field();
                   const int globex = (global_e | external_e);
@@ -3780,10 +4616,11 @@ data_clauses:   data_clause
                   }
 
                   $$ |= $2;
+                  proto_field.add_clause(data_clause_t($$));
 
                   // If any implied TYPE bits are on in addition to
                   // type_clause_e, they're in conflict.
-                  static const size_t type_implies =
+                  static const uint64_t type_implies =
                     // ALIGNED clause not implemented
                     blank_zero_clause_e | justified_clause_e | picture_clause_e
                     | sign_clause_e | synched_clause_e | usage_clause_e;
@@ -3816,15 +4653,14 @@ data_clauses:   data_clause
                   }
 
                   if( gcobol_feature_embiggen() ) {
-                    if( field->is_binary_integer() && field->data.capacity == 4) {
+                    if( field->is_binary_integer() && field->data.capacity() == 4) {
                       auto redefined = symbol_redefines(field);
                       if( redefined && redefined->type == FldPointer ) {
-                        if( yydebug ) {
-                          yywarn("expanding %s size from %u bytes to %zu "
-                                "because it redefines %s with USAGE POINTER",
-                                field->name, field->size(), sizeof(void*),
-                                redefined->name);
-                        }
+                        dbgmsg("expanding %s size from %u bytes to %lu "
+			       "because it redefines %s with USAGE POINTER",
+                               field->name, field->size(),
+                               (unsigned long)int_size_in_bytes(ptr_type_node),
+                               redefined->name);
                         field->embiggen();
                       }
                     }
@@ -3858,7 +4694,7 @@ data_clause:    any_length        { $$ = any_length_e; }
                   cbl_field_t *field = current_field();
                   switch( field->level ) {
                   case 1:
-		    if( dialect_mf() ) break;
+		    if( dialect_ok(@$, MfLevel_1_Occurs, "LEVEL 01 for OCCURS") ) break;
 		    __attribute__((fallthrough));
                   case 77:
                   case 88:
@@ -3880,168 +4716,223 @@ data_clause:    any_length        { $$ = any_length_e; }
         |       value_clause      { $$ = value_clause_e;
                   cbl_field_t *field = current_field();
 
-                  if( field->type != FldAlphanumeric &&
-                      field->data.initial && field->data.initial[0] )
-                  {
-                    // Embedded NULs are valid only in FldAlphanumeric, and are
-                    // already handled.
-                    if( strlen(field->data.initial) < field->data.capacity ) {
-                      auto p = blank_pad_initial( field->data.initial,
-                                                  strlen(field->data.initial),
-                                                  field->data.capacity );
-                      if( !p ) YYERROR;
-                      field->data.initial = p;
-                    }
-                  }
 		  const cbl_field_t *parent;
+		  if( (parent = parent_has_picture(field)) != NULL ) {
+		    error_msg(@1, "VALUE invalid because group %s (%s) has PICTURE clause",
+		              parent->name, 3 + cbl_field_type_str(parent->type));
+		  }
 		  if( (parent = parent_has_value(field)) != NULL ) {
-		    error_msg(@1, "VALUE invalid because group %s has VALUE clause",
-		              parent->name);
+		    error_msg(@1, "VALUE invalid because group %s (%s) has VALUE clause",
+		              parent->name, 3 + cbl_field_type_str(parent->type));
 		  }
                 }
         |       volatile_clause      { $$ = volatile_clause_e; }
                 ;
 
-picture_clause: PIC signed nps[fore] nines nps[aft]
+picture_clause: PIC signed PIC_P[fore] nines
                 {
                   cbl_field_t *field = current_field();
+                  if( ! field->codeset.set() ) {
+                    error_msg(@nines, "PICTURE inconsistent with encoding %s",
+                              cbl_alphabet_t::encoding_str(field->codeset.encoding));
+                  }
                   if( !field_type_update(field, FldNumericDisplay, @$) ) {
                     YYERROR;
                   }
                   ERROR_IF_CAPACITY(@PIC, field);
-                  field->attr |= $signed;
-                  field->data.capacity = type_capacity(field->type, $4);
-                  field->data.digits = $4;
-                  if( long(field->data.digits) != $4 ) {
-                    error_msg(@2, "indicated size would be %ld bytes, "
-                             "maximum data item size is %u",
-                             $4, UINT32_MAX);
+                  // If signable_e is inherited from the group, it is effective
+                  // regardless of an 'S' in PICTURE.
+                  if( field->has_attr(signable_e) && ! $signed ) {
+                    dbgmsg("%s PICTURE must be signed for SIGN IS", field->name);
                   }
+                  if( field->type == FldNumericEdited && $signed ) {
+                    gcc_assert(field->has_attr(blank_zero_e));
+                    error_msg(@signed, "%<S%> in PICTURE invalid with BLANK WHEN ZERO");
+                  }
+                  field->attr |= $signed;
+                  field->data.digits = $nines;
+                  auto nchar = type_capacity(field->type, $nines);
+                  field->set_capacity(nchar);
+                  field->blank_initial(nchar);
+                  assert($fore);
+                  field->attr |= scaled_e;
+                  field->data.rdigits = $fore;
+                  
+                  if( ! field->reasonable_capacity() ) {
+                    error_msg(@2, "%s limited to capacity of %d (would need %u)",
+			     field->name, MAX_FIXED_POINT_DIGITS, field->char_capacity());
+                  }
+                }
 
-                  if( $fore && $aft ) { // leading and trailing P's
-                    error_msg(@2, "PIC cannot have both leading and trailing P");
+        |       PIC signed nines nps[aft]
+                {
+                  cbl_field_t *field = current_field();
+                  if( ! field->codeset.set() ) {
+                    error_msg(@nines, "PICTURE inconsistent with encoding %s",
+                              cbl_alphabet_t::encoding_str(field->codeset.encoding));
+                  }
+                  if( !field_type_update(field, FldNumericDisplay, @$) ) {
                     YYERROR;
                   }
-                  if( $fore || $aft ) {
+                  ERROR_IF_CAPACITY(@PIC, field);
+                  // If signable_e is inherited from the group, it is effective
+                  // regardless of an 'S' in PICTURE.
+                  if( field->has_attr(signable_e) && ! $signed ) {
+                    dbgmsg("%s PICTURE must be signed for SIGN IS", field->name);
+                  }
+                  if( field->type == FldNumericEdited && $signed ) {
+                    gcc_assert(field->has_attr(blank_zero_e));
+                    error_msg(@signed, "%<S%> in PICTURE invalid with BLANK WHEN ZERO");
+                  }
+                  field->attr |= $signed;
+                  field->data.digits = $nines;
+                  auto nchar = type_capacity(field->type, $nines);
+                  field->set_capacity(nchar);
+                  field->blank_initial(nchar);
+                  if( $aft ) {
                     field->attr |= scaled_e;
-                    field->data.rdigits = $fore? $fore : -$aft;
+                    field->data.rdigits = -$aft;
                   }
                   if( ! field->reasonable_capacity() ) {
                     error_msg(@2, "%s limited to capacity of %d (would need %u)",
-			     field->name, MAX_FIXED_POINT_DIGITS, field->data.capacity);
+			     field->name, MAX_FIXED_POINT_DIGITS, field->char_capacity());
                   }
                 }
 
         |       PIC signed NINEV[left] nine[rdigits]
                 {
                   cbl_field_t *field = current_field();
+                  if( ! field->codeset.set() ) {
+                    error_msg(@$, "PICTURE inconsistent with encoding %s",
+                              cbl_alphabet_t::encoding_str(field->codeset.encoding));
+                  }
                   field->data.digits = $left + $rdigits;
+                  field->attr |= $signed;
+                  if( field->type == FldNumericEdited && $signed ) {
+                    gcc_assert(field->has_attr(blank_zero_e));
+                    error_msg(@signed, "%<S%> in PICTURE invalid with BLANK WHEN ZERO");
+                  }
 
                   if( field->is_binary_integer() ) {
-                    field->data.capacity = type_capacity(field->type,
-                                                         field->data.digits);
+                    field->set_capacity(type_capacity(field->type,
+                                                      field->data.digits));
+                    field->data.rdigits = $rdigits;
                   } else {
                     if( !field_type_update(field, FldNumericDisplay, @$) ) {
                       YYERROR;
                     }
                     ERROR_IF_CAPACITY(@PIC, field);
-                    field->attr |= $signed;
-                    field->data.capacity = field->data.digits;
+                    field->set_capacity(field->data.digits);
                     field->data.rdigits = $rdigits;
                   }
+                  // data.initial has blanks for character-encoded data
+		  // data.capacity may reflect the binary size, if any. 
+                  field->blank_initial(field->data.digits);
+
                   if( ! field->reasonable_capacity() ) {
                     error_msg(@2, "%s limited to capacity of %d (would need %u)",
-			     field->name, MAX_FIXED_POINT_DIGITS, field->data.capacity);
+			     field->name, MAX_FIXED_POINT_DIGITS, field->char_capacity());
                   }
                 }
         |       PIC signed NINEDOT[left] nine[rdigits]
                 {
+                  cbl_field_t *field = current_field();
+                  if( ! field->codeset.set() ) {
+                    error_msg(@$, "PICTURE inconsistent with encoding %s",
+                              cbl_alphabet_t::encoding_str(field->codeset.encoding));
+                  }
+
                   uint32_t size = $left + $rdigits;
 
-                  cbl_field_t *field = current_field();
                   if( !field_type_update(field, FldNumericEdited, @$) ) {
                     YYERROR;
                   }
                   ERROR_IF_CAPACITY(@PIC, field);
                   field->attr |= $signed;
+                  if( $signed ) {
+                    gcc_assert(field->has_attr(blank_zero_e));
+                    error_msg(@signed, "%<S%> in PICTURE invalid with BLANK WHEN ZERO");
+                  }
                   field->data.digits = size;
-                  field->data.capacity = ++size;
+                  field->set_capacity(++size);
                   field->data.rdigits = $rdigits;
+                  field->blank_initial(size);
 
                   if( ! field->reasonable_capacity() ) {
                     error_msg(@2, "%s limited to capacity of %d (would need %u)",
-			     field->name, MAX_FIXED_POINT_DIGITS, field->data.capacity);
+			     field->name, MAX_FIXED_POINT_DIGITS, field->char_capacity());
                   }
-                }
+                } 
 
-        |       PIC alphanum_pic[size]
+        |       PIC alphanum_pic[nchar]
                 {
                   cbl_field_t *field = current_field();
-
+                  if( ! field->codeset.valid() ) { // set by the picture
+                    dbgmsg("%s:%d: %s has invalid encoding",
+                           __FILE__, __LINE__, field->name);
+                  }
 		  if( field->type == FldNumericBin5 &&
-		      field->data.capacity == 0  &&
-		      dialect_mf() )
+		      field->data.capacity() == 0xFF  &&
+		      dialect_ok(@2, MfCompX, "alphanumeric PICTURE with numeric USAGE") )
 		  { // PIC X COMP-X or COMP-9
 		    if( ! field->has_attr(all_x_e) ) {
-		      error_msg(@2, "COMP PICTURE requires all X's or all 9's");
+		      error_msg(@2, "COMP PICTURE requires all X%'s or all 9%'s");
                       YYERROR;
 		    }
 		  } else {
                     if( !field_type_update(field, FldAlphanumeric, @$) ) {
+		      dbgmsg("alnum_pic: %s", field_str(field));
                       YYERROR;
                     }
 		  }
-                  assert(0 < $size);
-                  if( field->data.initial != NULL ) {
-                    if( 0 < field->data.capacity &&
-                            field->data.capacity < uint32_t($size) ) {
-                      auto p = blank_pad_initial( field->data.initial,
-                                                  field->data.capacity, $size );
-                      if( !p ) YYERROR;
-                      field->data.initial = p;
-                    }
+                  assert(0 < $nchar);
+                  field->data.picture = nullptr;
+                  auto nchar = std::min(size_t($nchar), MAXIMUM_ALPHA_LENGTH);
+                  if( nchar < size_t($nchar) ) {
+                    error_msg(@2, "alphanumeric data-item size (%d) "
+                                   "exceeds maximum of %lu bytes",
+                              $nchar, (unsigned long)MAXIMUM_ALPHA_LENGTH);
                   }
-
-                  field->data.capacity = $size;
-                  field->data.picture = NULL;
-
-                  if( false ) dbgmsg("PIC alphanum_pic[size]:%d: %s",
-                                      field->line, field_str(field));
+                  field->set_initial(nchar, @nchar);
                 }
 
         |       PIC numed[picture]
                 {
                   cbl_field_t *field = current_field();
+                  if( ! field->codeset.set() ) {
+                    error_msg(@picture, "PICTURE inconsistent with encoding %s",
+                              cbl_alphabet_t::encoding_str(field->codeset.encoding));
+                  }
                   if( !field_type_update(field, FldNumericEdited, @$) ) {
                     YYERROR;
                   }
                   ERROR_IF_CAPACITY(@PIC, field);
                   if( !is_numeric_edited($picture) ) {
-                    error_msg(@picture, numed_message);
+                    error_msg(@picture, "%s", numed_message);
                     YYERROR;
                   }
                   field->data.picture = $picture;
-                  field->data.capacity =  length_of_picture($picture);
                   field->data.digits   =  digits_of_picture($picture, false);
                   field->data.rdigits  = rdigits_of_picture($picture);
                   if( is_picture_scaled($picture) ) field->attr |= scaled_e;
+                  field->set_signable();
+                  auto nchar = length_of_picture($picture);
+                  field->set_capacity(nchar);
+                  field->blank_initial(nchar);
                 }
 
         |       PIC ALPHED[picture]
                 {
-                  bool is_alpha_edited( const char picture[] );
-
                   cbl_field_t *field = current_field();
                   ERROR_IF_CAPACITY(@PIC, field);
-                  field->data.capacity = length_of_picture($picture);
-                  field->data.picture = $picture;
-
                   // In case the lexer guesses wrong.
                   cbl_field_type_t type = is_numeric_edited($picture)?
                                           FldNumericEdited : FldAlphaEdited;
                   if( !field_type_update(field, type, @$) ) {
                     YYERROR;
                   }
+                  field->data.picture = $picture;
+                  field->data.capacity(length_of_picture($picture));
 
                   switch( type ) {
                   case FldNumericEdited:
@@ -4050,7 +4941,7 @@ picture_clause: PIC signed nps[fore] nines nps[aft]
                     if( is_picture_scaled($picture) ) field->attr |= scaled_e;
                     break;
                   case FldAlphaEdited:
-                    if( !is_alpha_edited(field->data.picture) ) {
+                    if( ! field->data.is_alpha_edited() ) {
                       error_msg(@picture, "invalid picture for Alphanumeric-edited");
                       YYERROR;
                     }
@@ -4058,8 +4949,19 @@ picture_clause: PIC signed nps[fore] nines nps[aft]
                   default:
                     gcc_unreachable();
                   }
+                  if( ! field->codeset.set() ) {
+                    error_msg(@picture, "PICTURE inconsistent with encoding %s",
+                              cbl_alphabet_t::encoding_str(field->codeset.encoding));
+                  }
+                  field->set_initial(@picture);
                 }
+	|	PIC ones
                 ;
+ones:		ONES
+		{
+		  cbl_unimplemented("Boolean type not implemented");
+		}
+		;
 
 alphanum_pic:   alphanum_part {
                   current_field()->set_attr($1.attr);
@@ -4082,15 +4984,24 @@ alphanum_pic:   alphanum_part {
                 ;
 alphanum_part:  ALNUM[picture] count
                 {
+		  auto field = current_field();
+                  if( ! field->codeset.set($picture) ) {
+                    error_msg(@picture, "PICTURE inconsistent with encoding %s",
+                              cbl_alphabet_t::encoding_str(field->codeset.encoding));
+                  }
                   $$.attr = uniform_picture($picture);
                   $$.nbyte = strlen($picture);
 		  auto count($count);
+		  if( false && count == 0 ) { // zero count has no effect
+		    error_msg(@2, "PICTURE count %<(%d)%> is zero", count );
+		    YYERROR;
+		  }
                   if( count > 0 ) {
                     --count;
                     $$.nbyte += count; // AX9(3) has count 5
                   }
 		  if( count < 0 ) {
-		    error_msg(@2, "PICTURE count '(%d)' is negative", count );
+		    error_msg(@2, "PICTURE count %<(%d)%> is negative", count );
 		    YYERROR;
 		  }
                 }
@@ -4109,7 +5020,7 @@ nine:           %empty           { $$ = 0; }
                 {
                   $$ = $1;
 		  if( $$ == 0 ) {
-		    error_msg(@1, "'(0)' invalid in PICTURE (ISO 2023 13.18.40.3)");
+		    error_msg(@1, "%<(0)%> invalid in PICTURE (ISO 2023 13.18.40.3)");
 		  }
                 }
                 ;
@@ -4123,34 +5034,44 @@ count:          %empty           { $$ = 0; }
                   REAL_VALUE_TYPE rn = numstr2i($NUMSTR.string, $NUMSTR.radix);
                   $$ = real_to_integer (&rn);
 		  if( $$ == 0 ) {
-		    error_msg(@2, "'(0)' invalid in PICTURE (ISO 2023 13.18.40.3)");
+		    error_msg(@2, "%<0%> invalid in PICTURE (ISO 2023 13.18.40.3)");
 		  }
                 }
 	|	'(' NAME ')'
                 {
+                  int64_t output = 1;
 		  auto value = cdf_value($NAME);
-		  if( ! (value && value->is_numeric()) ) {
-		    error_msg(@NAME, "PICTURE '(%s)' requires a CONSTANT value", $NAME );
-		    YYERROR;
-		  }
-		  int nmsg = 0;
-		  auto e = symbol_field(PROGRAM, 0, $NAME);
-		  if( e ) { // verify not floating point with nonzero fraction
-		    auto field = cbl_field_of(e);
-		    assert(is_literal(field));
-		    REAL_VALUE_TYPE vi;
-		    real_from_integer (&vi, VOIDmode, field->as_integer(), SIGNED);
-		    if( !real_identical (TREE_REAL_CST_PTR (field->data.value_of()),
-				         &vi) ) {
-		      nmsg++;
-		      error_msg(@NAME, "invalid PICTURE count '(%s)'",
-				field->data.initial );
-		    }
-		  }
-		  $$ = value->as_number();
-		  if( $$ <= 0 && !nmsg) {
-		    error_msg(@NAME, "invalid PICTURE count '(%s)'", $NAME );
-		  }
+		  if( value && ! value->is_numeric() ) {
+		    error_msg(@NAME,
+                              "PICTURE %qs requires a CONSTANT NUMERIC value",
+                              $NAME );
+                    output = value->as_number();
+		  } else {
+		    auto e = symbol_field(PROGRAM, 0, $NAME);
+		    if( ! e ) {
+		      error_msg(@NAME, "%qs not defined", $NAME );
+                    } else { // verify it's integer-like
+		      auto field = cbl_field_of(e);
+                      if( ! field->has_attr(constant_e) ) {
+                        error_msg(@NAME, "count %qs must be CONSTANT", $NAME);
+                      }
+                      if( ! is_numeric(field) ) {
+                        auto s = field->data.original();
+                        error_msg(@NAME, "%qs invalid as PICTURE count %<(%s)%>",
+                                  $NAME, s? s : "" );
+                      } else {
+                        auto ok = field->data.int64_of();
+                        if( ! ok.second ) {
+                          error_msg(@NAME, "%qs invalid as PICTURE count %<(%ld)%>",
+                                    $NAME, long(ok.first) );
+                        } else {
+                          output = ok.first;
+                        }
+		      }
+                    }
+                  }
+                  $$ = output;
+                  dbgmsg("%s:%d: count: (%s) is %ld", __FILE__, __LINE__, $NAME, long($$));
                 }
                 ;
 
@@ -4168,107 +5089,76 @@ usage_clause:   usage_clause1[type]
                   }
                 }
                 ;
-usage_clause1:  usage COMPUTATIONAL[comp]   native
+usage_clause1:  usage BIT
+		{
+		  cbl_unimplemented("Boolean type not implemented");
+		}
+        |       usage BINARY_INTEGER [comp] is_signed
                 {
-                  bool infer = true;
-                  cbl_field_t *field = current_field();
-
-                  // Some binary types have defined capacity;
-                  switch($comp.type) {
-                  // COMPUTATIONAL and COMP-5 rely on PICTURE.
-                  case FldNumericBinary:
-                    field->attr |= big_endian_e;
-                    __attribute__((fallthrough));
-                  case FldNumericBin5:
-		    // If no capacity yet, then no picture, infer $comp.capacity.
-		    // If field has capacity, ensure USAGE is compatible.
-		    if( field->data.capacity > 0 ) { // PICTURE before USAGE
-		      infer = false;
-		      switch( field->type ) {
-		      case FldAlphanumeric:   // PIC X COMP-5 or COMP-X
-			assert( field->data.digits == 0 );
-			assert( field->data.rdigits == 0 );
-		        if( dialect_mf() ) {
-                          field->type = $comp.type;
-			  field->clear_attr(signable_e);
-		        } else {
-			  error_msg(@comp, "numeric USAGE invalid "
-				   "with Alpnanumeric PICTURE");
-			  YYERROR;
-		        }
-                        break;
-		      case FldNumericDisplay: // PIC 9 COMP-5 or COMP-X
-		        if( $comp.capacity == 0xFF ) { // comp-x is a bit like comp-5
-			  assert( field->data.digits == field->data.capacity );
-		          if( ! dialect_mf() ) {
-				  dialect_error(@1, "COMP-X", "mf");
-		          }
-			}
-                        field->type = $comp.type;
-                        field->data.capacity = type_capacity(field->type,
-                                                             field->data.digits);
-		        break;
-		      default: break;
-                      }
-		    }
-                    break;
-		  case FldPacked: // comp-6 is unsigned comp-3
-		    assert(! $comp.signable);  // else PACKED_DECIMAL from scanner
-		    field->attr |= separate_e;
-		    if( ! dialect_mf() ) {
-		      dialect_error(@1, "COMP-6", "mf");
-		    }
-                    if( field->type == FldNumericDisplay ) {// PICTURE before USAGE
-                      infer = false;
-                      assert(field->data.capacity > 0);
-                      field->type = $comp.type;
-                      field->data.capacity = type_capacity(field->type,
-                                                           field->data.digits);
-                    }
-		    break;
-                  default:
-                    break;
+                  bool signable = $is_signed? $comp.signable : false;
+                  if( proto_field.has_clause(picture_clause_e) ) {
+                    error_msg(@comp, "USAGE is incompatible with PICTURE" );
                   }
-
-                  if( infer ) {
-                    if( $comp.capacity > 0 ) {
-                      if( field->data.capacity > 0 ) {
-                        error_msg(@comp, "%s is BINARY type, incompatible with PICTURE",
-                               field->name);
-                        YYERROR;
-                      }
-                      field->data.capacity = $comp.capacity;
-                      field->type = $comp.type;
-                      if( $comp.signable ) {
-                        field->attr = (field->attr | signable_e);
-                      }
-                    }
-                  }
-                  $$ = $comp.type;
+                  $$ = field_binary_usage( @comp, current_field(), 
+                                           $comp.type, $comp.capacity,
+                                           signable );
                 }
-        |       usage DISPLAY         native { $$ = FldDisplay; }
-        |       usage PACKED_DECIMAL  native { $$ = FldPacked; }
+
+	|	usage COMPUTATIONAL[comp] native
+                {
+                  auto field = current_field();
+                  if( proto_field.has_clause(picture_clause_e) && field->type == FldFloat ) {
+                    error_msg(@comp, "USAGE is incompatible with PICTURE" );
+                  }
+                  $$ = field_binary_usage( @comp, field, 
+                                           $comp.type, $comp.capacity,
+                                           $comp.signable );
+                } 
+        |       usage DISPLAY         native {
+                  auto field = current_field();
+                  if( ! field->codeset.set() ) {
+                    error_msg(@2, "USAGE DISPLAY conflicts with PICTURE");
+                  }
+                  $$ = FldDisplay;
+                }
+        |       usage PACKED_DECIMAL  native {
+                  cbl_field_t *field = current_field();
+		  if( field->data.capacity() > 0 &&
+		      field->type != FldNumericDisplay) {
+		    error_msg(@2, "USAGE PACKED DECIMAL conflicts with PICTURE");
+		    YYERROR;
+		  }
+                  $$ = FldPacked;
+                }
         |       usage PACKED_DECIMAL  with NO SIGN
 		{
                   cbl_field_t *field = current_field();
-		  if( field->data.capacity > 0 &&
+		  if( field->data.capacity() > 0 &&
 		      field->type != FldNumericDisplay) {
-		    error_msg(@2, "%s PICTURE is incompatible with USAGE PACKED DECIMAL",
-			     field->name);
+		    error_msg(@2, "USAGE PACKED DECIMAL conflicts with PICTURE");
 		    YYERROR;
 		  }
-		  field->clear_attr(separate_e);
-		  field->clear_attr(signable_e);
-                  if( field->type == FldNumericDisplay ) {// PICTURE before USAGE
-                    assert(field->data.capacity > 0);
-                    field->data.capacity = type_capacity(FldPacked,
-                                                         field->data.digits);
+		  if( field->has_attr(signable_e) ) {
+                    error_msg(@$, "signed PICTURE conflicts with NO SIGN");
                   }
+		  if( field->has_attr(separate_e) ) {
+                    error_msg(@$, "SIGN clause conflicts with NO SIGN");
+                  }
+		  field->set_attr(separate_e);
+		  field->clear_attr(signable_e);
 		  $$ = field->type = FldPacked;
 		}
         |       usage INDEX                  {
                   $$ = symbol_field_index_set( current_field() )->type;
                 }
+        |       usage NATIONAL {
+                  auto field = current_field();
+                  auto encoding = current_encoding('N');
+                  if( ! field->codeset.set(encoding) ) {
+                    error_msg(@2, "USAGE NATIONAL conflicts with PICTURE");
+                  }
+                  $$ = FldDisplay;
+                } 
                 // We should enforce data/code pointers with a different type.
         |       usage POINTER
                 {
@@ -4281,11 +5171,12 @@ usage_clause1:  usage COMPUTATIONAL[comp]   native
 		  }
                   if( gcobol_feature_embiggen() && redefined &&
                       is_numeric(redefined->type) && redefined->size() == 4) {
-                    // For now, we allow POINTER to expand a 32-bit item to 64 bits.
-                    field->data.capacity = sizeof(void *);
-                    dbgmsg("%s: expanding #%zu %s capacity %u => %u", __func__,
-                          field_index(redefined), redefined->name,
-                          redefined->data.capacity, field->data.capacity);
+                    // Allow POINTER to expand a 32-bit item to 64 bits.
+                    field->data.capacity(int_size_in_bytes(ptr_type_node));
+                    dbgmsg("%s: expanding #" HOST_SIZE_T_PRINT_UNSIGNED
+                          " %s capacity %u => %u", __func__,
+                          (fmt_size_t)field_index(redefined), redefined->name,
+                          redefined->data.capacity(), field->data.capacity());
 
                     redefined->embiggen();
 
@@ -4305,67 +5196,91 @@ usage_clause1:  usage COMPUTATIONAL[comp]   native
 
 value_clause:   VALUE all LITERAL[lit] {
                   cbl_field_t *field = current_field();
-                  field->data.initial  = $lit.data;
+
+                  if( $lit.prefix[0] ) { // not the default encoding
+                    if( ! field->codeset.set($lit.encoding) ) {
+                      error_msg(@lit, "VALUE inconsistent with encoding %s",
+                                cbl_alphabet_t::encoding_str(field->codeset.encoding));
+                    }
+                  } else {
+                    field->codeset.set();
+                  }
+
+                  if( field->codeset.encoding != $lit.encoding ) {
+                    error_msg(@lit, "PICTURE inconsistent with VALUE %s'%s'",
+                              $lit.prefix, $lit.data);
+                  }
+
                   field->attr |= literal_attr($lit.prefix);
-                  // The __gg__initialize_data routine needs to know that VALUE is a
-                  // quoted literal. This is critical for NumericEdited variables
                   field->attr |= quoted_e;
 
-                  if( field->data.capacity == 0 ) {
-                    field->data.capacity = $lit.len;
-                  } else {
-                    if( $all ) {
-                      field_value_all(field);
-                    } else {
-                      if( $lit.len < field->data.capacity ) {
-                        auto p = blank_pad_initial( $lit.data, $lit.len,
-                                                    field->data.capacity );
-                        if( !p ) YYERROR;
-                        field->data.initial = p;
-                      }
+                  auto capacity = field->data.capacity();
+                  field->data.original($lit.data, $all); // oops, sets capacity to strlen
+
+                  if( capacity ) { // via PICTURE or USAGE
+                    field->data.capacity(capacity); // restore it (unnecessary)
+                    if (field->data.initial) { // PICTURE created blank initial
+                      field->encode($lit.len, @lit);
                     }
                   }
-                  value_encoding_check(@lit, field);
                 }
-        |       VALUE all cce_expr[value] {
+        |       VALUE all const_value[cce] {
+		  /*
+                   * cce has two parts: 
+		   * cce.r) Host binary value
+		   * cce.s) string value, if supplied as numeric literal 
+                   */
                   cbl_field_t *field = current_field();
-                  auto orig_str = original_number();
-		  REAL_VALUE_TYPE orig_val;
-		  real_from_string3 (&orig_val, orig_str,
-				     TYPE_MODE (float128_type_node));
-                  char *initial = NULL;
-
-                  if( real_identical (&orig_val, &$value) ) {
-                    initial = orig_str;
-                    pristine_values.insert(initial);
+                  if( $cce.s ) {
+                    field->data.original($cce.s, $all);
                   } else {
-                    initial = string_of($value);
-                    gcc_assert(initial);
+                    field->data.original($cce.r);
                   }
-
-                  char decimal = symbol_decimal_point();
-                  std::replace(initial, initial + strlen(initial), '.', decimal);
-
-                  field->data.initial = initial;
-                  field->data = build_real (float128_type_node, $value);
-
-                  if( $all ) field_value_all(field);
                 }
         |       VALUE all reserved_value[value]
                 {
-                  if( $value != NULLS ) {
-                    auto fig = constant_of(constant_index($value));
-                    current_field()->data.initial = fig->data.initial;
+                  cbl_field_t *field = current_field();
+                  field->codeset.set();
+                  assert( $value != NULLS );
+                  auto fig = constant_of(constant_index($value));
+                  auto orig_str = fig->data.initial;
+                  auto capacity = field->data.capacity();
+                  field->data.original(orig_str, $all);
+
+                  if( capacity ) { // via PICTURE or USAGE
+                    field->data.capacity(capacity); // restore it
+                    if (field->data.initial) { // PICTURE created blank initial
+                      field->encode( strlen(orig_str), @value );
+                    }
+                  }
+                  if(  $value != ZERO ) {
+                    if( ($value != SPACES && field->type == FldNumericEdited)
+                      || is_numeric(field) )
+                    {
+                      error_msg(@value,
+                                "unexpected initial value for %s",
+                                cbl_field_type_name(field->type));
+                    }
                   }
                 }
         |       /* VALUE is */ NULLPTR
                 {
-                    auto fig = constant_of(constant_index(NULLS));
-                    current_field()->data.initial = fig->data.initial;
+                  auto fig = constant_of(constant_index(NULLS));
+                  cbl_field_t *field = current_field();
+                  auto capacity = field->data.capacity();
+                  field->data.original(fig->data.initial);
+                  if( capacity ) { // via PICTURE or USAGE
+                    field->data.capacity(capacity); // restore it
+                    // do not encode
+                  }
                 }
         |       VALUE error
                 {
-                  error_msg(@2, "no valid VALUE supplied");
+                  if( 0 < yychar ) {
+                    error_msg(@2, "invalid VALUE at %qs", keyword_str(yychar));
+                  } else {
+                    error_msg(@2, "invalid VALUE");
+                  }
                 }
                 ;
 
@@ -4391,7 +5306,7 @@ justified_clause: is JUSTIFIED
 
 redefines_clause: REDEFINES NAME[orig]
                 {
-                  struct symbol_elem_t *e = field_of($orig);
+                  struct symbol_elem_t *e = symbol_field(PROGRAM, 0, $orig);
                   if( !e ) {
                     error_msg(@2, "REDEFINES target not defined");
                     YYERROR;
@@ -4402,21 +5317,21 @@ redefines_clause: REDEFINES NAME[orig]
                     error_msg(@2, "%s may not REDEFINE %s",
                             field->name, orig->name);
 		  }
-                  cbl_field_t *super = symbol_redefines(orig);
-                  if( super ) {
-                    error_msg(@2, "%s may not REDEFINE %s, "
-                            "which redefines %s",
-                            field->name, orig->name, super->name);
-                  }
-                  if( field->level != orig->level ) {
+                  // Resolve chained REDEFINES:
+                  //   treat "C REDEFINES B"
+                  //   with  "B REDEFINES A"
+                  // as "C" redefining the same storage as "A".
+
+                  cbl_field_t *root = symbol_redefines_root(orig);
+                  if( field->level != root->level ) {
                     error_msg(@2, "cannot redefine %s %s as %s %s "
                              "because they have different levels",
-			    orig->level_str(), name_of(orig),
+			    root->level_str(), name_of(root),
 			    field->level_str(), name_of(field));
                   }
 		  // ISO 13.18.44.3
-		  auto parent( symbol_index(e) );
-		  auto p = std::find_if( symbol_elem_of(orig) + 1,
+		  auto parent( symbol_index(symbol_elem_of(root)) );
+		  auto p = std::find_if( symbol_elem_of(root) + 1,
 					 symbol_elem_of(field),
 					 [parent, level = field->level]( const auto& elem ) {
 					   if( elem.type == SymField ) {
@@ -4431,17 +5346,17 @@ redefines_clause: REDEFINES NAME[orig]
 		    auto mid( cbl_field_of(p) );
                     error_msg(@2, "cannot redefine %s %s as %s %s "
 			    "because %s %s intervenes",
-			    orig->level_str(), name_of(orig),
+			    root->level_str(), name_of(root),
 			    field->level_str(), name_of(field),
 			    mid->level_str(), name_of(mid));
                   }
 
-                  if( valid_redefine(@2, field, orig) ) {
+                  if( valid_redefine(@2, field, root) ) {
                     /*
                      * Defer "inheriting" the parent's description until the
                      * redefine is complete.
                      */
-                    current_field()->parent = symbol_index(e);
+                    current_field()->parent = symbol_index(symbol_elem_of(root));
                   }
                 }
                 ;
@@ -4451,13 +5366,17 @@ any_length:     ANY LENGTH
                   if( field->attr & any_length_e ) {
                     error_msg(@1, "ANY LENGTH already set");
                   }
-                  if( ! (field->level == 1 &&
-                         current_data_section == linkage_datasect_e &&
-                         (1 < current.program_level() ||
-			      current.program()->is_function())) ) {
-                    error_msg(@1, "ANY LENGTH valid only for 01 "
-                            "in LINKAGE SECTION of a function or contained program");
-                    YYERROR;
+                  const char *prog_name = current.program()->name;
+                  bool is_compat = 0 < compat_programs.count(prog_name);
+                  if( field->level != 1 || current_data_section != linkage_datasect_e ) {
+                    error_msg(@1, "ANY LENGTH valid only for 01 data-item "
+                                  "in LINKAGE SECTION");
+                  }
+                  if( ! current.program()->is_function() ) {
+                    if( 1 == current.program_level() && ! is_compat) {
+                        cbl_message(@$, MfAnyLength,
+                                    "ANY LENGTH not valid in outermost program");
+                    }
                   }
                   field->attr |= any_length_e;
                 }
@@ -4472,18 +5391,23 @@ based_clause:   BASED
                 }
                 ;
 
-blank_zero_clause: blank_when_zero
-                { cbl_field_t *field = current_field();
-                  // the BLANK WHEN ZERO clause defines the item as numeric-edited.
+blank_zero_clause: BLANK when ZERO
+                { // BLANK WHEN ZERO defines the item as numeric-edited.
+                  cbl_field_t *field = current_field();
+                  auto attr = blank_zero_e;
                   if( !field_type_update(field, FldNumericEdited, @1) ) {
-                    YYERROR;
+                    attr = none_e;
+                    if( field->type == FldNumericDisplay ) {
+                      assert(field->has_attr(signable_e));
+                      error_msg(@$, "signed NUMERIC DISPLAY type "
+                                    "cannot have BLANK WHEN ZERO");
+                    } else {
+                      assert(is_numeric(field));
+                      error_msg(@$, "NUMERIC type cannot have BLANK WHEN ZERO");
+                    }                      
                   }
-                  field->attr |= blank_zero_e;
+                  field->set_attr(attr);
                 }
-                ;
-blank_when_zero:
-                BLANK WHEN ZERO
-        |       BLANK      ZERO
                 ;
 
 synched_clause: SYNCHRONIZED
@@ -4527,7 +5451,7 @@ same_clause:    SAME AS name
                     YYERROR;
                   }
 
-                  auto e = symbol_field_same_as( field, other );
+                  const auto e = symbol_field_same_as( field, other );
                   symbol_field_location( symbol_index(e), @name );
                 }
                 ;
@@ -4535,13 +5459,18 @@ same_clause:    SAME AS name
 sign_clause:    sign_is sign_leading sign_separate
                 {
                   cbl_field_t *field = current_field();
-                  if( $sign_leading ) {
-                    field->attr |= leading_e;
-                  } else {
-                    field->attr &= ~size_t(leading_e); // turn off in case inherited
-                    field->attr |= signable_e;
+                  if( 0 < field->data.capacity() ) { // PICTURE set size
+                    if( ! field->has_attr(signable_e) ) {
+                      error_msg(@1, "%qs must be signed for SIGN IS", field->name);
+                    }
                   }
-                  if( $sign_separate ) field->attr |= separate_e;
+                  field->set_attr(signable_e);
+                  if( $sign_leading ) {
+                    field->set_attr(leading_e);
+                  } else {
+                    field->clear_attr(leading_e); // turn off in case inherited
+                  }
+                  if( $sign_separate ) field->set_attr(separate_e);
                 }
                 ;
 sign_is:        %empty
@@ -4575,22 +5504,17 @@ sign_separate:  %empty              { $$ = false; }
 type_clause: TYPE to typename
                 {
                   cbl_field_t *field = current_field();
-                  if( $typename ) {
-                    auto e = symbol_field_same_as(field, $typename);
-		    symbol_field_location( symbol_index(e), @typename );
-                  }
+                  assert( $typename );
+                  const auto e = symbol_field_same_as(field, $typename);
+                  symbol_field_location( symbol_index(e), @typename );
                 }
         |       USAGE is typename
                 {
-                  if( ! dialect_mf() ) {
-                    dialect_error(@typename, "USAGE TYPENAME", "mf");
-                    YYERROR;
-                  }
+                  dialect_ok(@typename, MfUsageTypename, "USAGE TYPENAME");
                   cbl_field_t *field = current_field();
-                  if( $typename ) {
-                    auto e = symbol_field_same_as(field, $typename);
-		    symbol_field_location( symbol_index(e), @typename );
-                  }
+                  assert( $typename );
+                  const auto e = symbol_field_same_as(field, $typename);
+                  symbol_field_location( symbol_index(e), @typename );
                 }
                 ;
 
@@ -4603,6 +5527,7 @@ typedef_clause: is TYPEDEF strong
                     error_msg(@2, "%s %s IS TYPEDEF must be level 01",
 			    field->level_str(), field->name);
                   }
+                  field->codeset.set();
                   field->attr |= typedef_e;
                   if( $strong ) field->attr |= strongdef_e;
                   if( ! current.typedef_add(field) ) {
@@ -4619,10 +5544,8 @@ typedef_clause: is TYPEDEF strong
 volatile_clause:
                 VOLATILE
                 {
-                  if( dialect_ibm() ) {
-                    yywarn("VOLATILE has no effect");
-                  } else {
-                    dialect_error(@1, "VOLATILE", "ibm");
+                  if( dialect_ok(@1, IbmVolatileE, "VOLATILE") ) {
+                    cbl_message(@1, IbmVolatileW, "VOLATILE has no effect");
                   }
                 }
                 ;
@@ -4630,16 +5553,44 @@ volatile_clause:
 procedure_div:  %empty {
 		  if( !procedure_division_ready(@$, NULL, NULL) ) YYABORT;
                 }
-        |       PROCEDURE_DIV '.' {
-                  if( !procedure_division_ready(@$, NULL, NULL) ) YYABORT;
-                } declaratives sentences
-        |       PROCEDURE_DIV procedure_args '.' declaratives sentences
-        |       PROCEDURE_DIV procedure_args '.'
+        |       PROCEDURE_DIV procedure_args[args] '.'
+                {
+                  static const std::list<cbl_ffi_arg_t> empty;
+                  prototype_ok(@1, dspc_procedure_header_e); // of course it is
+                  prototype_add( @2, $args? $args->elems : empty );
+                  // if there is a prior incarnation, check, against that
+                  auto L = cbl_label_of(symbol_at(PROGRAM));
+                  auto p = prototype_args(L->name, PROGRAM);
+                  if( p.second ) { // no body: this is a prototype
+                    const auto& args = $args? $args->elems : empty;
+                    std::vector<cbl_ffi_arg_t> argv( args.begin(), args.end() );
+                    verify_args(@2, L->name, argv.size(), argv.data() );
+                  }
+                }
+        |       PROCEDURE_DIV procedure_args[args] '.'  {
+                  static const std::list<cbl_ffi_arg_t> empty;
+                  prototype_ok(@1, dspc_procedure_body_e); 
+                  prototype_add( @2, $args? $args->elems : empty );
+                  // if there is a prior incarnation, check, against that
+                  auto L = cbl_label_of(symbol_at(PROGRAM));
+                  auto p = prototype_args(L->name, PROGRAM);
+                  if( p.second ) {
+                    const auto& args = $args? $args->elems : empty;
+                    std::vector<cbl_ffi_arg_t> argv( args.begin(), args.end() );
+                    verify_args(@2, L->name, argv.size(), argv.data() );
+                  }
+                } // body: this is a definition
+                declaratives sentences
                 ;
 
-procedure_args: USING procedure_uses[args]
+procedure_args: %empty {
+                  if( !procedure_division_ready(@$, NULL, NULL) ) YYABORT;
+                  $$ = nullptr;
+                }
+        |       USING procedure_uses[args]
                 {
                   if( !procedure_division_ready(@args, NULL, $args) ) YYABORT;
+                  $$ = $args;
                 }
         |       USING procedure_uses[args] RETURNING name[ret]
                 {
@@ -4648,6 +5599,7 @@ procedure_args: USING procedure_uses[args]
                     error_msg(@ret, "RETURNING %s is not defined in LINKAGE SECTION",
 			      $ret->name);
                   }
+                  $$ = $args;
                 }
         |                                  RETURNING name[ret]
                 {
@@ -4656,6 +5608,7 @@ procedure_args: USING procedure_uses[args]
                     error_msg(@ret, "RETURNING %s is not defined in LINKAGE SECTION",
 			      $ret->name);
                   }
+                  $$ = nullptr;
                 }
                 ;
 procedure_uses: procedure_use { $$ = new ffi_args_t($1); }
@@ -4681,7 +5634,7 @@ procedure_use:  optional scalar {
                 }
                 ;
 by_value_arg:   scalar
-        |       LITERAL  { $$ = new_reference(new_literal($1, quoted_e)); }
+        |       LITERAL  { $$ = new_reference(new_literal(@1, $1, quoted_e)); }
         |       reserved_value
                 {
                   $$ = new_reference(constant_of(constant_index($1)));
@@ -4691,6 +5644,7 @@ by_value_arg:   scalar
 declaratives:   %empty
         |       DECLARATIVES '.'
                 <label>{
+		  cbl_enabled_exceptions_t& enabled_exceptions( cdf_enabled_exceptions() );
                   current.enabled_exception_cache = enabled_exceptions;
                   enabled_exceptions.clear();
                   current.doing_declaratives(true);
@@ -4709,10 +5663,13 @@ declaratives:   %empty
                    * forward reference, because we haven't yet begun to parse
                    * nondeclarative procedures.
                    */
+		  cbl_enabled_exceptions_t& enabled_exceptions( cdf_enabled_exceptions() );
                   parser_label_label($label);
                   enabled_exceptions = current.enabled_exception_cache;
                   current.enabled_exception_cache.clear();
-		  ast_enter_section(implicit_section());
+                  cbl_loc_t loc(@4); // the dot
+                  loc.first_line++;
+		  ast_enter_section(loc, implicit_section());
                 }
                 ;
 
@@ -4724,11 +5681,12 @@ sentences:      sentence {
         |       paragraph_name[para] '.'
                 {
                   location_set(@para);
-                  cbl_label_t *label = label_add(@para, LblParagraph, $para);
-                  if( !label ) {
-                    YYERROR;
-                  }
-                  ast_enter_paragraph(label);
+                  cbl_label_t
+                    *label = label_instantiate(@para, PROGRAM, LblParagraph,
+                                               current.program_section(),
+                                               $para);
+                  assert(label);
+                  ast_enter_paragraph(@para, label);
                   current.new_paragraph(label);
                   apply_declaratives();
                 }
@@ -4741,11 +5699,12 @@ sentences:      sentence {
         |       sentences paragraph_name[para] '.'
                 {
                   location_set(@para);
-                  cbl_label_t *label = label_add(@para, LblParagraph, $para);
-                  if( !label ) {
-                    YYERROR;
-                  }
-                  ast_enter_paragraph(label);
+                  cbl_label_t
+                    *label = label_instantiate(@para, PROGRAM, LblParagraph,
+                                               current.program_section(),
+                                               $para);
+                  assert(label);
+                  ast_enter_paragraph(@para, label);
                   current.new_paragraph(label);
                   apply_declaratives();
                 }
@@ -4754,14 +5713,19 @@ paragraph_name: NAME
         |       NUMSTR { $$ = $1.string; }
 		;
 
-sentence:       statements  '.'
+sentence:       '.'
+        |       statements  '.'
         |       statements  YYEOF
                 {
                   if( ! goodnight_gracie() ) {
                     YYABORT;
                   }
-                  if( nparse_error > 0 ) YYABORT;
+                  if( ! successful_parse() ) YYABORT;
                   YYACCEPT;
+                }
+        |       statements end_program1 {
+                  error_msg(@1, "missing %qs before END PROGRAM", ".");
+                  YYERROR;
                 }
         |       program END_SUBPROGRAM namestr[name] '.'
                 { // a contained program (no prior END PROGRAM) is a "sentence"
@@ -4777,17 +5741,16 @@ sentence:       statements  '.'
                   std::set<std::string> externals = current.end_program();
                   if( !externals.empty() ) {
                     for( const auto& name : externals ) {
-                      yywarn("%s calls external symbol '%s'",
+                      dbgmsg("%s calls external symbol '%s'",
                              prog->name, name.c_str());
                     }
-                    YYERROR;
                   }
                   // pointer still valid because name is in symbol table
                   ast_end_program(prog->name);
                 }
         |       program YYEOF
                 { // a contained program (no prior END PROGRAM) is a "sentence"
-                  if( nparse_error > 0 ) YYABORT;
+                  if( ! successful_parse() ) YYABORT;
                   do {
 		    if( ! goodnight_gracie() ) YYABORT; // no recovery
                   } while( current.program_level() > 0 );
@@ -4795,18 +5758,23 @@ sentence:       statements  '.'
                 }
                 ;
 
-statements:                statement { $$ = $1; }
-        |       statements statement { $$ = $2; }
+statements:     statement {
+                  $$ = $1;
+                  parser_statement_end( symbol_temporary_alphanumerics() );
+                }
+        |       statements statement {
+                  $$ = $2;
+                  parser_statement_end( symbol_temporary_alphanumerics() );
+                }
                 ;
 
 statement:      error {
                   if( current.declarative_section_name() ) {
-		    error_msg(@1, "missing END DECLARATIVES or SECTION name",
-			      nparse_error);
+		    error_msg(@1, "missing END DECLARATIVES or SECTION name");
                     YYABORT;
                   }
                   if( max_errors_exceeded(nparse_error) ) {
-                    error_msg(@1, "max errors %d reached", nparse_error);
+                    error_msg(@1, "max errors %zu reached", nparse_error);
                     YYABORT;
                   }
                 }
@@ -4824,6 +5792,7 @@ statement:      error {
         |       divide          { $$ =  DIVIDE; }
         |       entry           { $$ =  ENTRY; }
         |       evaluate        { $$ =  EVALUATE; }
+        |       exhibit_stmt    { $$ =  EXHIBIT; }
         |       exit            { $$ =  EXIT; }
         |       free            { $$ =  FREE; }
         |       go_to           { $$ =  GOTO; }
@@ -4850,13 +5819,14 @@ statement:      error {
         |       subtract        { $$ =  SUBTRACT; }
         |       unstring        { $$ =  UNSTRING; }
         |       write           { $$ =  WRITE; }
-                ;
+        |       xmlgenerate     { $$ =  XMLGENERATE; }
+        |       xmlparse        { $$ =  XMLPARSE; } 
+               ;
 
 		/*
 		 * ISO defines ON EXCEPTION only for Format 3 (screen). We
-		 * implement extensions defined by MF and Fujitsu (and us) to
-		 * use ACCEPT to interact with the command line and the
-		 * environment.
+		 * implement extensions defined by MF and Fujitsu to use ACCEPT
+		 * to interact with the command line and the environment.
 		 *
 		 * ISO ACCEPT and some others are implemented in accept_body,
 		 * before the parser sees any ON EXCEPTION.  In those cases
@@ -4870,6 +5840,9 @@ accept:         accept_body end_accept {
 		  cbl_field_t *argi = register_find("_ARGI");
 		  switch( $accept_body.func ) {
 		  case accept_done_e:
+		    break;
+		  case accept_e:
+                    parser_accept(*$1.into, $1.special, nullptr, nullptr);
 		    break;
 		  case accept_command_line_e:
 		    if( $1.from->field == NULL ) { // take next command-line arg
@@ -4892,7 +5865,10 @@ accept:         accept_body end_accept {
 		  switch( $accept_body.func ) {
 		  case accept_done_e:
 		    error_msg(@ec, "ON EXCEPTION valid only "
-			    "with ENVIRONMENT or COMAMND-LINE(n)");
+			    "with ENVIRONMENT or COMMAND-LINE(n)");
+		    break;
+		  case accept_e:
+                    parser_accept(*$1.into, $1.special, $ec.on_error, $ec.not_error);
 		    break;
 		  case accept_command_line_e:
 		    if( $1.from->field == NULL ) { // take next command-line arg
@@ -4904,7 +5880,7 @@ accept:         accept_body end_accept {
 		      parser_move(*$1.into, *$1.from);
 		      if( $ec.on_error || $ec.not_error ) {
 			error_msg(@ec, "ON EXCEPTION valid only "
-				"with ENVIRONMENT or COMAMND-LINE(n)");
+				"with ENVIRONMENT or COMMAND-LINE(n)");
 		      }
 		    } else {
 		      parser_accept_command_line(*$1.into, *$1.from,
@@ -4922,111 +5898,92 @@ end_accept:     %empty %prec ACCEPT
         |       END_ACCEPT
                 ;
 
-accept_body:    accept_refer
+accept_body:    ACCEPT scalar[r]
                 {
+                  statement_begin(@1, ACCEPT);
 		  $$.func = accept_done_e;
-                  parser_accept(*$1, CONSOLE_e);
+                  parser_accept(*$r, CONSOLE_e, nullptr, nullptr);
                 }
-        |       accept_refer FROM DATE
+        |       ACCEPT scalar[r] FROM DATE
                 {
+                  statement_begin(@1, ACCEPT);
 		  $$.func = accept_done_e;
-                  if( $1->is_reference() ) {
-                    error_msg(@1, "subscripts are unsupported here");
-                    YYERROR;
-                  }
-                  parser_accept_date_yymmdd($1->field);
+                  parser_accept_date_yymmdd(*$r);
                 }
-        |       accept_refer FROM DATE YYYYMMDD
+        |       ACCEPT scalar[r] FROM DATE YYYYMMDD
                 {
+                  statement_begin(@1, ACCEPT);
 		  $$.func = accept_done_e;
-                  if( $1->is_reference() ) {
-                    error_msg(@1, "subscripts are unsupported here");
-                    YYERROR;
-                  }
-                  parser_accept_date_yyyymmdd($1->field);
+                  parser_accept_date_yyyymmdd(*$r);
                 }
-        |       accept_refer FROM DAY
+        |       ACCEPT scalar[r] FROM DAY
                 {
+                  statement_begin(@1, ACCEPT);
 		  $$.func = accept_done_e;
-                  if( $1->is_reference() ) {
-                    error_msg(@1, "subscripts are unsupported here");
-                    YYERROR;
-                  }
-                  parser_accept_date_yyddd($1->field);
+                  parser_accept_date_yyddd(*$r);
                 }
-        |       accept_refer FROM DAY YYYYDDD
+        |       ACCEPT scalar[r] FROM DAY YYYYDDD
                 {
+                  statement_begin(@1, ACCEPT);
 		  $$.func = accept_done_e;
-                  if( $1->is_reference() ) {
-                    error_msg(@1, "subscripts are unsupported here");
-                    YYERROR;
-                  }
-                  parser_accept_date_yyyyddd($1->field);
+                  parser_accept_date_yyyyddd(*$r);
                 }
-        |       accept_refer FROM DAY_OF_WEEK
+        |       ACCEPT scalar[r] FROM DAY_OF_WEEK
                 {
+                  statement_begin(@1, ACCEPT);
 		  $$.func = accept_done_e;
-                  if( $1->is_reference() ) {
-                    error_msg(@1, "subscripts are unsupported here");
-                    YYERROR;
-                  }
-                  parser_accept_date_dow($1->field);
+                  parser_accept_date_dow(*$r);
                 }
 
-        |       accept_refer FROM TIME
+        |       ACCEPT scalar[r] FROM TIME
                 {
+                  statement_begin(@1, ACCEPT);
 		  $$.func = accept_done_e;
-                  if( $1->is_reference() ) {
-                    error_msg(@1, "subscripts are unsupported here");
-                    YYERROR;
-                  }
-                  parser_accept_date_hhmmssff($1->field);
+                  parser_accept_date_hhmmssff(*$r);
                 }
-        |       accept_refer FROM acceptable
+        |       ACCEPT scalar[r] FROM acceptable
                 {
-		  cbl_field_t *argc = register_find("_ARGI");
-		  switch( $acceptable->id ) {
-		  case ARG_NUM_e:
-		    $$.func = accept_command_line_e;
-		    $$.into = $1;
-		    $$.from = new_reference(argc);
-		    break;
-		  case ARG_VALUE_e:
-		    $$.func = accept_command_line_e;
-		    $$.into = $1;
-		    $$.from = cbl_refer_t::empty();
-		    break;
-		  default:
-		    $$.func = accept_done_e;
-		    parser_accept( *$1, $acceptable->id );
-		  }
+                  statement_begin(@1, ACCEPT);
+		  $$.func = accept_e;
+                  $$.into = $r;
+                  $$.special = $acceptable->id;
                 }
-        |       accept_refer FROM ENVIRONMENT envar
+        |       ACCEPT scalar[r] FROM ENVIRONMENT envar
                 {
+                  statement_begin(@1, ACCEPT);
 		  $$.func = accept_envar_e;
-		  $$.into = $1;
+		  $$.into = $r;
 		  $$.from = $envar;
-                  ////  parser_accept_envar( *$1, *$envar );
                 }
-        |       accept_refer FROM COMMAND_LINE
+        |       ACCEPT scalar[r] FROM COMMAND_LINE
                 {
+                  statement_begin(@1, ACCEPT);
 		  $$.func = accept_done_e;
-                  parser_accept_command_line(*$1, NULL, NULL, NULL );
+                  parser_accept_command_line(*$r, NULL, NULL, NULL );
                 }
-        |       accept_refer FROM COMMAND_LINE '(' expr ')'
+        |       ACCEPT scalar[r] FROM COMMAND_LINE '(' cexpr ')'
                 {
+                  statement_begin(@1, ACCEPT);
 		  $$.func = accept_command_line_e;
-		  $$.into = $1;
-		  $$.from = $expr;
-                  //// parser_accept_command_line(*$1, $expr->field );
+		  $$.into = $r;
+		  $$.from = $cexpr;
                 }
-        |       accept_refer FROM COMMAND_LINE_COUNT {
+        |       ACCEPT scalar[r] FROM COMMAND_LINE_COUNT
+                {
+                  statement_begin(@1, ACCEPT);
 		  $$.func = accept_done_e;
-                  parser_accept_command_line_count(*$1);
+                  parser_accept_command_line_count(*$r);
                 }
-                ;
-
-accept_refer:   ACCEPT scalar { statement_begin(@1, ACCEPT); $$ = $2; }
+        |       ACCEPT OMITTED
+                {
+                  static const cbl_refer_t nothing(literally_zero);
+                  statement_begin(@1, ACCEPT);
+		  $$.func = accept_done_e;
+                  // Pass the literal as a destination.  This is odd, but
+                  // __gg__accept() knows it's coming, and will just wait for
+                  // a newline and ignore the refer.
+                  parser_accept(nothing, CONSOLE_e, nullptr, nullptr);
+                }
                 ;
 
 accept_excepts:	accept_excepts[a] accept_except[b] statements %prec ACCEPT
@@ -5071,7 +6028,7 @@ accept_except:	EXCEPTION
                 {
                   $$.not_error = NULL;
                   $$.on_error = label_add(LblArith,
-                                          uniq_label("accept"), yylineno);
+                                          uniq_label("accept"), @1.first_line);
                   if( !$$.on_error ) YYERROR;
                   parser_accept_exception( $$.on_error );
 
@@ -5084,7 +6041,7 @@ accept_except:	EXCEPTION
 
 envar:          scalar { $$ = $1; $$->field->attr |= envar_e; }
         |       LITERAL {
-                  $$ = new_reference(new_literal($1, quoted_e));
+                  $$ = new_reference(new_literal(@1, $1, quoted_e));
                   $$->field->attr |= envar_e;
                 }
                 ;
@@ -5101,9 +6058,58 @@ acceptable:     device_name
                 {
                   $$ = special_of($1);
                   if( !$$ ) {
-                    error_msg(@NAME, "no such environment mnemonic name: %s", $NAME);
-                    YYERROR;
-                  }
+		    const special_name_t *special_type = cmd_or_env_special_of($NAME);
+		    if( !special_type ) {
+                      error_msg(@NAME, "no such special name '%s'", $NAME);
+                      YYERROR;
+		    }
+                    if( ENV_NAME_e == *special_type ) { 
+                      error_msg(@NAME, "cannot ACCEPT FROM %qs", $NAME);
+                      YYERROR;
+                    }
+		    // Add the name now, as a convenience. 
+                    int token = 0;
+                    switch(*special_type) {
+                    case ARG_NUM_e:    token = ARGUMENT_NUMBER; break;
+                    case ARG_VALUE_e:  token = ARGUMENT_VALUE; break;
+                    case ENV_VALUE_e:  token = ENVIRONMENT_VALUE; break;
+
+                    case ENV_NAME_e:
+                    default:
+                      error_msg(@NAME, "cannot ACCEPT FROM %qs", $NAME);
+                      YYERROR;
+                      break;
+                    }
+		    cbl_special_name_t special = { token, *special_type };
+		    namcpy(@NAME, special.name, $NAME);
+
+		    symbol_elem_t *e = symbol_special_add(PROGRAM, &special);
+		    $$ = cbl_special_name_of(e);
+                    cbl_special_name_t& unused(*$$);
+                    assert(unused.id);
+		  }
+		  assert($$);
+                }
+        |       ENVIRONMENT_VALUE {
+		    // Add the name now, as a convenience. 
+		    cbl_special_name_t special =
+                      { ENVIRONMENT_VALUE, ENV_VALUE_e, "ENVIRONMENT-VALUE" };
+		    symbol_elem_t *e = symbol_special_add(PROGRAM, &special);
+		    $$ = cbl_special_name_of(e);
+                }
+        |       ARGUMENT_NUMBER {
+		    // Add the name now, as a convenience. 
+		    cbl_special_name_t special =
+                      { ARGUMENT_NUMBER, ARG_NUM_e, "ARGUMENT-NUMBER" };
+		    symbol_elem_t *e = symbol_special_add(PROGRAM, &special);
+		    $$ = cbl_special_name_of(e);
+                }
+        |       ARGUMENT_VALUE {
+		    // Add the name now, as a convenience. 
+		    cbl_special_name_t special =
+                      { ARGUMENT_VALUE, ARG_VALUE_e, "ARGUMENT-VALUE" };
+		    symbol_elem_t *e = symbol_special_add(PROGRAM, &special);
+		    $$ = cbl_special_name_of(e);
                 }
                 ;
 
@@ -5156,9 +6162,10 @@ add_body:       sum TO rnames
                     corresponding_arith_fields( $sum->refers.front().field,
                                                 rhs.front().refer.field );
                     if( pairs.empty() ) {
-                      yywarn( "%s and %s have no corresponding fields",
-                                $sum->refers.front().field->name,
-                                rhs.front().refer.field->name );
+                      cbl_message( @$, ParNoCorrespondingW,
+                                   "%s and %s have no corresponding fields",
+                                   $sum->refers.front().field->name,
+                                   rhs.front().refer.field->name );
                     }
                   // First src/tgt elements are templates.
                   // Their subscripts apply to the correspondents.
@@ -5207,7 +6214,7 @@ name88:		NAME88 {
                   name_queue.qualify(@1, $1);
 		  auto namelocs( name_queue.pop() );
 		  auto names( name_queue.namelist_of(namelocs) );
-                  if( ($$ = field_find(names)) == NULL ) {
+                  if( ($$ = field_find(@1, names)) == NULL ) {
                     if( procedure_div_e == current_division  ) {
 		      error_msg(namelocs.back().loc,
 				"DATA-ITEM '%s' not found", names.back() );
@@ -5220,16 +6227,13 @@ name88:		NAME88 {
 
 scalar88:	name88 subscripts[subs] refmod[ref]
                 {
-                  size_t n = $subs->size();
-                  auto subscripts = new cbl_refer_t[n];
-                  $subs->use_list(subscripts);
                   if( $ref.from->is_reference() || $ref.len->is_reference() ) {
                     error_msg(@subs, "subscripts on start:len refmod "
                             "parameters are unsupported");
                     YYERROR;
                   }
                   cbl_span_t span( $ref.from, $ref.len );
-                  $$ = new cbl_refer_t($1, n, subscripts, span);
+                  $$ = new cbl_refer_t($1, $subs->vectorize(), span);
                 }
         |       name88 refmod[ref]
                 {
@@ -5254,12 +6258,12 @@ scalar88:	name88 subscripts[subs] refmod[ref]
                 }
                 ;
 
-allocate:       ALLOCATE expr[size] CHARACTERS initialized RETURNING scalar[returning]
+allocate:       ALLOCATE cexpr[size] CHARACTERS initialized RETURNING scalar[returning]
                 {
                   statement_begin(@1, ALLOCATE);
                   if( $size->field->type == FldLiteralN ) {
-		    auto size = TREE_REAL_CST_PTR ($size->field->data.value_of());
-                    if( real_isneg(size) || real_iszero(size) ) { 
+		    const auto size = TREE_REAL_CST_PTR ($size->field->data.value_of());
+                    if( real_isneg(size) || real_iszero(size) ) {
                       error_msg(@size, "size must be greater than 0");
                       YYERROR;
                     }
@@ -5292,22 +6296,33 @@ alloc_ret:      %empty { static cbl_refer_t empty; $$ = &empty; }
         |       RETURNING scalar[name]           { $$ = $name; }
                 ;
 
-compute:        compute_impl end_compute { current.compute_end(); }
-        |       compute_cond end_compute { current.compute_end(); }
+compute:        compute_impl end_compute
+        |       compute_cond end_compute
                 ;
 compute_impl:   COMPUTE compute_body[body]
                 {
-                  parser_assign( $body.ntgt, $body.tgts, *$body.expr,
-                                 NULL, NULL, current.compute_label() );
-                  current.declaratives_evaluate(ec_none_e);
+                  std::vector<cbl_num_result_t> results($body.tgts,
+                                                        $body.tgts + $body.ntgt);
+                  $body.ast_op->show(results); // always a good idea to show results
+                  $body.ast_op->rpn_sanity_check();
+                  parser_compute( results, $body.ast_op->as_deque(), 
+                                  nullptr, nullptr, 
+                                  current.compute_label() );
+                  $body.ast_op->reset();
+                  current.declaratives_evaluate();
+                  current.compute_end();
                 }
                 ;
 compute_cond:   COMPUTE compute_body[body] arith_errs[err]
                 {
-                  parser_assign( $body.ntgt, $body.tgts, *$body.expr,
-                                 $err.on_error, $err.not_error,
-                                 current.compute_label() );
-                  current.declaratives_evaluate(ec_size_e);
+                  std::vector<cbl_num_result_t> results($body.tgts,
+                                                        $body.tgts + $body.ntgt);
+                  parser_compute( results, $body.ast_op->as_deque(), 
+                                  $err.on_error, $err.not_error,
+                                  current.compute_label() );
+                  $body.ast_op->reset();
+                  current.declaratives_evaluate();
+                  current.compute_end();
                 }
                 ;
 end_compute:    %empty %prec COMPUTE
@@ -5318,72 +6333,38 @@ compute_body:   rnames { statement_begin(@$, COMPUTE); } compute_expr[expr] {
                   $$.ntgt = rhs.size();
                   auto C = new cbl_num_result_t[$$.ntgt];
                   $$.tgts = use_any(rhs, C);
-                  $$.expr = $expr;
+                  $$.ast_op = $expr;
                 }
                 ;
-compute_expr:   '=' {
+compute_expr:   EQ expr {
+                  if( $1[0] == 'E' ) { // lexer found EQUALS keyword
+                    dialect_ok(@1, IbmEqualAssignE,
+                               "EQUAL as assignment operator" );
+                  }
                   current.compute_begin();
-                } expr {
-                  $$ = $expr;
-                }
-                ;
-	|	EQUAL {
-		  if( ! dialect_ibm() ) {
-		    dialect_error(@1, "EQUAL invalid as assignment operator", "ibm");
-		  }
-		  current.compute_begin();
-                } expr {
                   $$ = $expr;
                 }
                 ;
 
-display:        disp_body end_display
+display:        disp_body end_display[advance]
                 {
-		  std::vector <cbl_refer_t> args($1.vargs->args.size());
-		  std::copy( $1.vargs->args.begin(), $1.vargs->args.end(), args.begin() );
-		  if( $1.special && $1.special->id == ARG_NUM_e ) {
-		    if( $1.vargs->args.size() != 1 ) {
-		      error_msg(@1, "ARGUMENT-NUMBER can be set to only one value");
-		    }
-		    cbl_refer_t& src( $1.vargs->args.front() );
-		    cbl_field_t *dst = register_find("_ARGI");
-		    parser_move( dst, src );
-		  } else {
-		    parser_display($1.special,
-				   args.empty()? NULL : args.data(), args.size(),
-				   DISPLAY_ADVANCE);
-		  }
-		  current.declaratives_evaluate(ec_none_e);
-                }
-        |       disp_body NO ADVANCING end_display
-                {
-                  std::vector <cbl_refer_t> args($1.vargs->args.size());
-		  std::copy( $1.vargs->args.begin(), $1.vargs->args.end(), args.begin() );
-
-		  if( $1.special && $1.special->id == ARG_NUM_e ) {
-		    if( $1.vargs->args.size() != 1 ) {
-		      error_msg(@1, "ARGUMENT-NUMBER can be set to only one value");
-		    }
-		    cbl_refer_t& src( $1.vargs->args.front() );
-		    cbl_field_t *dst = register_find("_ARGI");
-		    parser_move( dst, src );
-		  } else {
-		    parser_display($1.special,
-				   args.empty()? NULL : args.data(), args.size(), 
-				   DISPLAY_NO_ADVANCE);
-		  }
-		  current.declaratives_evaluate(ec_none_e);
+		  std::vector <cbl_refer_t> args($1.vargs->args.begin(),
+                                                 $1.vargs->args.end());
+                  parser_display($1.special, args, $advance);
+		  current.declaratives_evaluate();
                 }
                 ;
-end_display:    %empty
-        |       END_DISPLAY
+end_display:    %empty				{ $$ = DISPLAY_ADVANCE; }
+        |                    END_DISPLAY	{ $$ = DISPLAY_ADVANCE; }
+        |       NO ADVANCING			{ $$ = DISPLAY_NO_ADVANCE; }
+        |       NO ADVANCING END_DISPLAY	{ $$ = DISPLAY_NO_ADVANCE; }
                 ;
 disp_body:      disp_vargs[vargs]
                 {
                   $$.special = NULL;
                   $$.vargs = $vargs;
                 }
-        |       disp_vargs[vargs] UPON disp_target[special]
+        |       disp_vargs[vargs] UPON disp_upon[special]
                 {
                   $$.special = $special;
                   $$.vargs = $vargs;
@@ -5395,18 +6376,74 @@ disp_vargs:     DISPLAY vargs {
                 }
                 ;
 
-disp_target:    device_name {
+disp_upon:    	device_name {
                   $$ = symbol_special($1.id);
                 }
         |       NAME
                 {
-                  symbol_elem_t *e = symbol_special(PROGRAM, $1);
+                  symbol_elem_t *e = symbol_special(PROGRAM, $NAME);
                   if( !e ) {
-                    error_msg(@NAME, "no such special name '%s'", $NAME);
-                    YYERROR;
-                  }
-                  $$ = cbl_special_name_of(e);
+		    const special_name_t *special_type = cmd_or_env_special_of($NAME);
+		    if( !special_type ) {
+                      error_msg(@NAME, "no such special name '%s'", $NAME);
+                      YYERROR;
+		    }
+		    // Add the name now, as a convenience.
+                    // These may come through as a NAME, depending on how scanned. 
+                    int token = 0;
+                    switch(*special_type) {
+                    case ARG_NUM_e:    token = ARGUMENT_NUMBER; break;
+                    case ENV_NAME_e:   token = ENVIRONMENT_NAME; break;
+                    case ENV_VALUE_e:  token = ENVIRONMENT_VALUE; break;
+
+                    case ARG_VALUE_e:
+                    default:
+                      error_msg(@NAME, "cannot DISPLAY UPON %qs", $NAME);
+                      YYERROR;
+                      break;
+                    }
+		    cbl_special_name_t special = { token, *special_type };
+		    namcpy(@NAME, special.name, $NAME);
+
+                    e = symbol_special_add(PROGRAM, &special);
+		  }
+		  $$ = cbl_special_name_of(e);
                 }
+        |       ARGUMENT_NUMBER {
+		    // Add the name now, as a convenience. 
+		    cbl_special_name_t special =
+                      { ARGUMENT_NUMBER, ARG_NUM_e, "ARGUMENT-NUMBER" };
+		    symbol_elem_t *e = symbol_special_add(PROGRAM, &special);
+		    $$ = cbl_special_name_of(e);
+                }
+        |       ENVIRONMENT_NAME {
+		    // Add the name now, as a convenience. 
+		    cbl_special_name_t special =
+                      { ENVIRONMENT_NAME, ENV_NAME_e, "ENVIRONMENT-NAME" };
+		    symbol_elem_t *e = symbol_special_add(PROGRAM, &special);
+		    $$ = cbl_special_name_of(e);
+                }
+        |       ENVIRONMENT_VALUE {
+		    // Add the name now, as a convenience. 
+		    cbl_special_name_t special =
+                      { ENVIRONMENT_VALUE, ENV_VALUE_e, "ENVIRONMENT-VALUE" };
+		    symbol_elem_t *e = symbol_special_add(PROGRAM, &special);
+		    $$ = cbl_special_name_of(e);
+                }
+                ;
+
+exhibit_stmt:   EXHIBIT exh_changed exh_named vargs {
+                  statement_begin(@1, EXHIBIT);
+                  std::vector<cbl_refer_t> args( $vargs->args.begin(),
+                                                 $vargs->args.end() );
+                  parser_exhibit( $exh_changed, $exh_named, args );
+                }
+                ;
+exh_changed:    %empty  { $$ = false; }
+        |       CHANGED { $$ = true; }
+                ;
+exh_named:      %empty  { $$ = false; }
+        |       NAMED   { $$ = true; }
                 ;
 
 divide:         divide_impl end_divide { ast_divide($1); }
@@ -5504,28 +6541,29 @@ end_program:    end_program1[end] '.'
                     gcc_unreachable();
                   }
                   if( !matches ) {
-                    error_msg(@end, "END %s %s' does not match IDENTIFICATION DIVISION '%s'",
+                    error_msg($end.loc, "END %s %s does not match "
+                                    "%<IDENTIFICATION DIVISION %s%>",
                               token_name, name, prog->name);
                     YYERROR;
                   }
 
                   if( 0 != strcasecmp(prog->name, name) ) {
-                    error_msg(@end, "END PROGRAM '%s' does not match PROGRAM-ID '%s'",
+                    error_msg($end.loc, "END PROGRAM '%s' does not match PROGRAM-ID '%s'",
                               name, prog->name);
                     YYERROR;
                   }
                   std::set<std::string> externals = current.end_program();
                   if( !externals.empty() ) {
-		    for( auto name : externals ) {
-		      yywarn("%s calls external symbol '%s'", prog->name, name.c_str());
+		    for( const auto& name : externals ) {
+		      dbgmsg("%s calls external symbol '%s'", prog->name, name.c_str());
 		    }
-                    YYERROR;
                   }
                   // pointer still valid because name is in symbol table
                   ast_end_program(prog->name);
                 }
 	|	end_program1[end] error
 		{
+                  resume_parsing(); // start normal parsing for next program
 		  const char *token_name = "???";
                   switch($end.token) {
                   case END_PROGRAM:
@@ -5535,28 +6573,32 @@ end_program:    end_program1[end] '.'
 		    token_name = "FUNCTION";
                     break;
                   default:
-                    cbl_internal_error( "END token invalid");
+                    cbl_internal_error( "%<END%> token invalid");
                   }
-		  error_msg(@end, "END %s requires NAME before '.'", token_name);
+		  error_msg(@end, "%<END%> %s requires %<NAME%> before %<.%>", token_name);
 		  YYERROR;
 		}
                 ;
 end_program1:   END_PROGRAM  namestr[name]
                 {
+                  $$.loc = @name;
                   $$.token = END_PROGRAM;
                   $$.name = $name;
                 }
         |       END_FUNCTION namestr[name]
                 {
+                  $$.loc = @name;
                   $$.token = END_FUNCTION;
                   $$.name = $name;
                 }
 	|	END_PROGRAM  '.' // error
                 {
+                  $$.loc = @1;
                   $$.token = END_PROGRAM;
                 }
         |       END_FUNCTION '.' // error
                 {
+                  $$.loc = @1;
                   $$.token = END_FUNCTION;
                 }
                 ;
@@ -5565,9 +6607,9 @@ continue_stmt:  CONTINUE {
                   statement_begin(@1, CONTINUE);
                   parser_sleep(*cbl_refer_t::empty());
                 }
-        |	CONTINUE AFTER expr SECONDS {
+        |	CONTINUE AFTER cexpr SECONDS {
                   statement_begin(@1, CONTINUE);
-                  parser_sleep(*$expr);
+                  parser_sleep(*$cexpr);
                 }
                 ;
 
@@ -5606,12 +6648,7 @@ exit_with:      %empty
 		   *  as specified in the rules."
 		   */
                   $$ = cbl_refer_t::empty();
-		  if( dialect_ibm() ) {
-		    static auto rt = cbl_field_of(symbol_at(return_code_register()));
-		    static cbl_refer_t status(rt);
-		    $$ = &status;
-		  }
-		  auto prog = cbl_label_of(symbol_at(current_program_index()));
+		  const auto prog = cbl_label_of(symbol_at(current_program_index()));
 		  if( prog->returning ) {
 		    $$ = new cbl_refer_t( cbl_field_of(symbol_at(prog->returning)) );
 		  }
@@ -5626,9 +6663,7 @@ exit_with:      %empty
                 }
 	|	RETURNING stop_status
                 {
-		  if( ! dialect_mf() ) {
-                    dialect_error(@2, "RETURNING <number>", "mf");
-		  }
+                  dialect_ok(@$, MfReturningNum, "RETURNING <number>");
                   $$ = $stop_status? $stop_status : new_reference(literally_one);
                 }
                 ;
@@ -5701,41 +6736,47 @@ simple_cond:    kind_of_name
                                bit_on_op : bit_off_op;
                    parser_bitop($$->cond(), parent, op, value );
                 }
-        |       expr is CLASS_NAME[domain]
+        |       cexpr is CLASS_NAME[domain]
                 {
                   $$ = new_reference(new_temporary(FldConditional));
                   // symbol_find does not find FldClass symbols
                   struct symbol_elem_t *e = symbol_field(PROGRAM, 0, $domain);
                   parser_setop($$->cond(), $1->field, is_op, cbl_field_of(e));
                 }
-        |       expr NOT CLASS_NAME[domain] {
+        |       cexpr NOT CLASS_NAME[domain] {
                   $$ = new_reference(new_temporary(FldConditional));
                   // symbol_find does not find FldClass symbols
                   struct symbol_elem_t *e = symbol_field(PROGRAM, 0, $domain);
                   parser_setop($$->cond(), $1->field, is_op, cbl_field_of(e));
                   parser_logop($$->cond(), NULL, not_op, $$->cond());
                 }
-        |       expr is OMITTED
+        |       cexpr is OMITTED
                 {
-                  auto lhs = cbl_refer_t($expr->field);
+                  auto lhs = cbl_refer_t($cexpr->field);
                   lhs.addr_of = true;
                   auto rhs = cbl_field_of(symbol_field(0,0, "NULLS"));
                   $$ = new_reference(new_temporary(FldConditional));
-                  parser_relop($$->field, lhs, eq_op, rhs);
+                  ast_relop(@$, $$->field, lhs, eq_op, rhs);
                 }
-        |       expr NOT OMITTED
-                {
-                  auto lhs = cbl_refer_t($expr->field);
+        |       cexpr /* IS */ NOT OMITTED
+	        { // IS captured by lexer
+                  auto lhs = cbl_refer_t($cexpr->field);
                   lhs.addr_of = true;
                   auto rhs = cbl_field_of(symbol_field(0,0, "NULLS"));
                   $$ = new_reference(new_temporary(FldConditional));
-                  parser_relop($$->field, lhs, ne_op, rhs);
+                  ast_relop(@$, $$->field, lhs, ne_op, rhs);
                 }
-        |       expr posneg[op] {
+        |       cexpr /* IS */ posneg[op] {
                   $$ = new_reference(new_temporary(FldConditional));
                   relop_t op = static_cast<relop_t>($op);
                   cbl_field_t *zero = constant_of(constant_index(ZERO));
-                  parser_relop($$->cond(), *$1, op, zero);
+                  if( $1->field->type == FldPointer ) {
+                    error_msg(@cexpr, "cannot compare %qs (%s) to zero",
+                              nice_name_of($1->field),
+                              cbl_field_type_name($1->field->type));
+                    YYERROR;
+                  }
+                  ast_relop(@$, $$->cond(), *$1, op, zero);
                 }
         |       scalar88 {
                   // copy the subscripts and set the parent field
@@ -5751,7 +6792,7 @@ simple_cond:    kind_of_name
                 }
                 ;
 
-kind_of_name:   expr might_be variable_type
+kind_of_name:   cexpr might_be variable_type
                 {
                   $$ = new_temporary(FldConditional);
                   enum classify_t type = classify_of($3);
@@ -5761,6 +6802,13 @@ kind_of_name:   expr might_be variable_type
                   if( $2 == NOT ) {
                     parser_logop($$, NULL, not_op, $$);
                   }
+                }
+                ;
+
+until_expr:     bool_expr
+        |       EXIT {
+                  auto e = symbol_at(very_false_register());
+                  $$ = new_reference(cbl_field_of(e));
                 }
                 ;
 
@@ -5825,8 +6873,12 @@ rel_expr:	rel_lhs rel_term[rhs]
 		    op = relop_invert(op);
 		    ante.invert = false;
 		  }
+                  if( ! valid_pointer_relop(@1, @1, @2,
+                                            ante.operand, op, $rhs.term) ){
+                    YYERROR;
+                  }
 		  auto cond = new_temporary(FldConditional);
-		  parser_relop( cond, *ante.operand, op, *$rhs.term );
+		  ast_relop( @$, cond, *ante.operand, op, *$rhs.term );
 		  $$ = cond;
                 }
 	|	rel_lhs[lhs] '(' rel_abbrs ')' {
@@ -5878,7 +6930,11 @@ rel_abbr:	rel_term {
 		  assert(ante.has_relop);
 		  if( $rel_term.invert ) ante.relop = relop_invert(ante.relop);
 		  auto cond = new_temporary(FldConditional);
-		  parser_relop(cond, *ante.operand, ante.relop, *$rel_term.term);
+                  if( ! valid_pointer_relop(@1, @1, @1,
+                                            ante.operand, ante.relop, $rel_term.term) ){
+                    YYERROR;
+                  }
+		  ast_relop(@$, cond, *ante.operand, ante.relop, *$rel_term.term);
 		  $$ = cond;
 		}
 	|	relop rel_term {
@@ -5896,8 +6952,12 @@ rel_abbr:	rel_term {
 				name_of($rel_term.term->field) );
 		    YYERROR;
 		  }
+                  if( ! valid_pointer_relop(@1, @1, @2,
+                                            ante.operand, op, $rel_term.term) ){
+                    YYERROR;
+                  }
 		  auto cond = new_temporary(FldConditional);
-		  parser_relop(cond, *ante.operand, ante.relop, *$rel_term.term);
+		  ast_relop(@$, cond, *ante.operand, ante.relop, *$rel_term.term);
 		  $$ = cond;
 		}
 		;
@@ -5908,7 +6968,7 @@ rel_term:	rel_term1
 rel_term1:	all LITERAL
                 {
 		  $$.invert = false;
-                  $$.term = new_reference(new_literal($2, quoted_e));
+                  $$.term = new_reference(new_literal(@2, $2, quoted_e));
                   $$.term->all = $all;
                 }
         |       all spaces_etc[value]
@@ -5929,7 +6989,7 @@ rel_term1:	all LITERAL
                   $$.term = new_reference(constant_of(constant_index(ZERO)));
                   $$.term->all = true;
                 }
-        |       expr {
+        |       cexpr {
 		  $$.invert = false;
 		  $$.term = $1;
 		}
@@ -5939,41 +6999,54 @@ rel_term1:	all LITERAL
 		}
                 ;
 
+cexpr:          expr {
+                  $$ = $expr->compute($expr);
+                }
+                ;
 expr:           expr_term
                 ;
 expr_term:      expr_term '+' num_term
                 {
-                  if( ($$ = ast_op($1, '+', $3)) == NULL  ) YYERROR;
+                  if( ! ast_op_t::op_ok(@$, '+', $3) ) YYERROR;
+                  $$ = &$1->push_op('+', *$3);
                 }
         |       expr_term '-' num_term
                 {
-                  if( ($$ = ast_op($1, '-', $3)) == NULL  ) YYERROR;
+                  if( ! ast_op_t::op_ok(@$, '-', $3) ) YYERROR;
+                  $$ = &$1->push_op('-', *$3);
                 }
         |       num_term
                 ;
 
 num_term:       num_term '*' value
                 {
-                  if( ($$ = ast_op($1, '*', $3)) == NULL  ) YYERROR;
+                  if( ! ast_op_t::op_ok(@$, '*', $3) ) YYERROR;
+                  $$ = &$1->push_op('*', *$3);
                 }
         |       num_term '/' value
                 {
-                  if( ($$ = ast_op($1, '/', $3)) == NULL  ) YYERROR;
+                  if( ! ast_op_t::op_ok(@$, '/', $3) ) YYERROR;
+                  $$ = &$1->push_op('/', *$3);
                 }
         |       value
         ;
 
 value:          value POW factor
                 {
-                  if( ($$ = ast_op($1, '^', $3)) == NULL  ) YYERROR;
+                  if( ! ast_op_t::op_ok(@$, '^', $3) ) YYERROR;
+                  $$ = &$1->push_op('^', *$3);
                 }
-        |       '-' value       %prec NEG { $$ = negate( $2 );}
-        |       '+' factor %prec NEG { $$ = $2;}
-        |       factor[rhs]
+        |       '-' value[operand]  %prec NEG { $$ = &$operand->push_op('!'); }
+        |       '+' factor          %prec NEG { $$ = $2;}
+        |       factor
                 ;
 
 factor:         '(' expr ')' { $$ = $2; }
-        |       num_value { $$ = $num_value; }
+        |       num_value
+                {
+                  $$ = new ast_op_t;
+                  $$->expr($num_value);
+                }
                 ;
 
 if_stmt:        if_impl end_if
@@ -5997,20 +7070,21 @@ if_test:        bool_expr then
                 }
                 ;
 
-if_body:        next_statements
+if_body:        if_statements
                 {
                   parser_else();
                 }
-        |       next_statements ELSE {
+        |       if_statements ELSE {
                   location_set(@2);
                   parser_else();
-                } next_statements
+                } if_statements
                 ;
 
-next_statements: statements   %prec ADD
+if_statements:  %empty        %prec ADD
+        |       statements    %prec ADD
         |       NEXT SENTENCE %prec ADD
                 {
-                  next_sentence = label_add(LblNone, "next_sentence", 0);
+                  next_sentence = label_add_once(LblNone, "next_sentence");
                   parser_label_goto(next_sentence);
                 }
                 ;
@@ -6041,7 +7115,7 @@ eval_subject:   eval_subject1 {
 		}
                 ;
 eval_subject1:  bool_expr
-	|	expr
+	|	cexpr
         |       true_false
                 {
                   static cbl_field_t *zero = constant_of(constant_index(ZERO));
@@ -6072,7 +7146,7 @@ eval_case:      eval_objects statements %prec ADD {
                 {
 		  auto& ev( eval_stack.current() );
 		  ev.write_when_label();
-                  next_sentence = label_add(LblNone, "next_sentence", 0);
+                  next_sentence = label_add_once(LblNone, "next_sentence");
                   parser_label_goto(next_sentence);
                 }
                 ;
@@ -6195,17 +7269,17 @@ eval_abbrs:	rel_term[a] {
 		  auto& ev( eval_stack.current() );
 		  auto subj( ev.subject() );
 		  if( !subj ) {
-		    error_msg(@1, "WHEN %s phrase exceeds "
+		    error_msg(@1, "WHEN %qs phrase exceeds "
 			     "subject set count of %zu",
-			     $a.term->name(), ev.subject_count());
+                              nice_name_of($a.term->field), ev.subject_count());
 		    YYERROR;
 		  }
 		  if( ! ev.compatible($a.term->field) ) {
 		    auto obj($a.term->field);
 		    error_msg(@1, "subject %s, type %s, "
-			     "cannot be compared %s, type %s",
-			     subj->name, 3 + cbl_field_type_str(subj->type),
-			     obj->name,	 3 + cbl_field_type_str(obj->type) );
+                              "cannot be compared %s, type %s",
+                              subj->name, 3 + cbl_field_type_str(subj->type),
+			      obj->name,  3 + cbl_field_type_str(obj->type) );
 		  }
 		  auto result = ev.compare(*$a.term);
 		  if( ! result ) YYERROR;
@@ -6240,7 +7314,10 @@ eval_abbrs:	rel_term[a] {
 			      relop_str(relop_of($relop)),
 			     obj->name,	 3 + cbl_field_type_str(obj->type) );
 		  }
-		  auto result = ev.compare(relop, *$a.term);
+                  cbl_refer_t lhs( ev.subject() );
+                  // on pointer error, emit message and continue parsing 
+                  valid_pointer_relop(@1, @1, @2, &lhs, relop_of($relop), $a.term);
+		  auto result = ev.compare(@$, relop, *$a.term);
 		  if( ! result ) YYERROR;
 		  if( $a.invert ) {
 		    parser_logop(result, nullptr, not_op, result);
@@ -6274,7 +7351,10 @@ eval_abbr:	rel_term[a] {
 		  relop_t relop(ev.object_relop());
 		  auto subj( ev.subject() );
 		  assert( subj );
-		  $$ = ev.compare(relop, *$a.term);
+                  cbl_refer_t lhs(subj);
+                  // on pointer error, emit message and continue parsing 
+                  valid_pointer_relop(@1, @1, @1, &lhs, relop, $a.term);
+		  $$ = ev.compare(@$, relop, *$a.term);
 		  if( $a.invert ) {
 		    parser_logop($$, nullptr, not_op, $$);
 		  }
@@ -6283,7 +7363,11 @@ eval_abbr:	rel_term[a] {
 		  auto& ev( eval_stack.current() );
 		  relop_t relop(relop_of($relop));
 		  ev.object_relop(relop);
-		  $$ = ev.compare(relop, *$a.term);
+
+                  cbl_refer_t lhs( ev.subject() );
+                  // on pointer error, emit message and continue parsing 
+                  valid_pointer_relop(@1, @1, @2, &lhs, relop_of($relop), $a.term);
+		  $$ = ev.compare(@$, relop, *$a.term);
 		  if( $a.invert ) {
 		    parser_logop($$, nullptr, not_op, $$);
 		  }
@@ -6298,9 +7382,19 @@ true_false:     TRUE_kw  { $$ = TRUE_kw; }
         |       FALSE_kw { $$ = FALSE_kw; }
                 ;
 
-scalar:         tableref {
+scalar:         scalar_any {
+                  if( was_fd_name($1->field) ) {
+                    if( dialect_ok(@1, IbmCallFd, "CALL USING FD unimplemented") ) {
+                      // No other COBOL compiler interprets the FD as a buffer.  This feature
+                      // requires further development.
+                      warn_msg(@1, "CALL USING FD passes file buffer, not handle");
+                    }
+                  }
+                }
+                ;
+scalar_any:     tableref {
 		  // Check for missing subscript; others already checked.
-                  if( $1->nsubscript == 0 && 0 < dimensions($1->field) ) {
+                  if( $1->nsubscript() == 0 && 0 < dimensions($1->field) ) {
                     subscript_dimension_error(@1, 0, $$);
                   }
 		}
@@ -6311,8 +7405,8 @@ tableref:	tableish {
 		  $$ = $1;
 		  $$->loc = @1;
 		  if( $$->is_table_reference() ) {
-                    if( $$->nsubscript != dimensions($$->field) ) {
-                      subscript_dimension_error(@1, $$->nsubscript, $$);
+                    if( $$->nsubscript() != dimensions($$->field) ) {
+                      subscript_dimension_error(@1, $$->nsubscript(), $$);
 		      YYERROR;
 		    }
 		  }
@@ -6346,16 +7440,16 @@ tableish:	name subscripts[subs] refmod[ref]  %prec NAME
 		}
                 ;
 
-refmod:         LPAREN expr[from] ':' expr[len] ')' %prec NAME
+refmod:         LPAREN cexpr[from] ':' cexpr[len] ')' %prec NAME
                 {
-		  if( ! require_numeric(@from, *$from) ) YYERROR;
-		  if( ! require_numeric(@len, *$len) ) YYERROR;
+		  if( ! require_integer(@from, *$from) ) YYERROR;
+		  if( ! require_integer(@len, *$len) ) YYERROR;
                   $$.from = $from;
                   $$.len = $len;
                 }
-        |       LPAREN expr[from] ':'           ')' %prec NAME
+        |       LPAREN cexpr[from] ':'           ')' %prec NAME
                 {
-		  if( ! require_numeric(@from, *$from) ) YYERROR;
+		  if( ! require_integer(@from, *$from) ) YYERROR;
                   $$.from = $from;
                   $$.len = nullptr;
                 }
@@ -6365,7 +7459,7 @@ typename:       NAME
                 {
                   auto e = symbol_typedef(PROGRAM, $NAME);
                   if( ! e ) {
-		    error_msg(@1, "DATA-ITEM '%s' not found", $NAME );
+		    error_msg(@1, "TYPE %qs not found", $NAME );
                     YYERROR;
                   }
                   $$ = cbl_field_of(e);
@@ -6375,13 +7469,13 @@ typename:       NAME
 name:           qname
                 {
                   build_symbol_map();
-		  auto namelocs( name_queue.pop() );
-		  auto names( name_queue.namelist_of(namelocs) );
-		  auto inner = namelocs.back();
-                  if( ($$ = field_find(names)) == NULL ) {
+                  auto namelocs( name_queue.pop() );
+                  auto names( name_queue.namelist_of(namelocs) );
+                  auto inner = namelocs.back();
+                  if( ($$ = field_find(@1, names)) == NULL ) {
                     if( procedure_div_e == current_division  ) {
-		      error_msg(inner.loc,
-				"DATA-ITEM '%s' not found", inner.name );
+                      error_msg(inner.loc,
+                                "DATA-ITEM %qs not found", inner.name );
                       YYERROR;
                     }
                     /*
@@ -6392,9 +7486,9 @@ name:           qname
                       auto name = names.front();
                       names.pop_front();
                       auto e = symbol_field_forward_add(PROGRAM, parent,
-                                                        name, yylineno);
+                                                        name, @1.first_line);
                       if( !e ) YYERROR;
-		      symbol_field_location( symbol_index(e), @qname );
+                      symbol_field_location( symbol_index(e), @qname );
                       parent = symbol_index(e);
                       $$ = cbl_field_of(e);
                     }
@@ -6422,10 +7516,16 @@ ctx_name:       NAME
 
 context_word:   APPLY                   { static char s[] ="APPLY";
                                          $$ = s; } // screen description entry
+        |       ARGUMENT_NUMBER         { static char s[] ="ARGUMENT-NUMBER";
+                                         $$ = s; } // Display Upon / Accept From
+        |       ARGUMENT_VALUE         { static char s[] ="ARGUMENT-VALUE";
+                                         $$ = s; } // Accept From
         |       ARITHMETIC             { static char s[] ="ARITHMETIC";
                                          $$ = s; } // OPTIONS paragraph
         |       ATTRIBUTE              { static char s[] ="ATTRIBUTE";
                                          $$ = s; } // SET statement
+        |       ATTRIBUTES             { static char s[] ="ATTRIBUTES";
+                                         $$ = s; } // XML GENERATE
         |       AUTO                   { static char s[] ="AUTO";
                                          $$ = s; } // screen description entry
         |       AUTOMATIC              { static char s[] ="AUTOMATIC";
@@ -6440,6 +7540,8 @@ context_word:   APPLY                   { static char s[] ="APPLY";
                                          $$ = s; } // USAGE clause and FLOAT-DECIMAL clause
         |       BLINK                  { static char s[] ="BLINK";
                                          $$ = s; } // screen description entry and SET attribute statement
+        |       BYTE                   { static char s[] ="BYTE";
+                                         $$ = s; } // CONVERT intrinsic function
         |       BYTE_LENGTH            { static char s[] ="BYTE-LENGTH";
                                          $$ = s; } // constant entry
         |       CAPACITY               { static char s[] ="CAPACITY";
@@ -6458,6 +7560,10 @@ context_word:   APPLY                   { static char s[] ="APPLY";
                                          $$ = s; } // ERASE clause in a screen description entry
         |       ENTRY_CONVENTION       { static char s[] ="ENTRY-CONVENTION";
                                          $$ = s; } // OPTIONS paragraph
+	|       ENVIRONMENT_NAME         { static char s[] ="ENVIRONMENT-NAME";
+                                         $$ = s; } // Display Upon
+        |       ENVIRONMENT_VALUE         { static char s[] ="ENVIRONMENT-VALUE";
+                                         $$ = s; } // Display Upon / Accept From
         |       ERASE                  { static char s[] ="ERASE";
                                          $$ = s; } // screen description entry
         |       EXPANDS                { static char s[] ="EXPANDS";
@@ -6510,6 +7616,8 @@ context_word:   APPLY                   { static char s[] ="APPLY";
                                          $$ = s; } // LOCK MODE clause
         |       MULTIPLE               { static char s[] ="MULTIPLE";
                                          $$ = s; } // LOCK ON phrase
+        |       NAT                    { static char s[] ="NAT";
+                                         $$ = s; } // CONVERT function
         |       NEAREST_AWAY_FROM_ZERO { static char s[] ="NEAREST-AWAY-FROM-ZERO";
                                          $$ = s; } // INTERMEDIATE ROUNDING clause and ROUNDED phrase
         |       NEAREST_EVEN           { static char s[] ="NEAREST-EVEN";
@@ -6588,16 +7696,16 @@ move:           MOVE scalar TO move_tgts[tgts]
                 {
                   statement_begin(@1, MOVE);
                   if( $scalar->field->type == FldIndex ) {
-                    error_msg(@1, "'%s' cannot be MOVEd because it's an INDEX",
-			     name_of($scalar->field) );
-                    YYERROR;
+                    cbl_message(@1, MfMoveIndex,
+                                "cannot MOVE %qs because it is an %<INDEX%>",
+                                name_of($scalar->field) );
                   }
                   if( !parser_move2($tgts, *$scalar) ) { YYERROR; }
                 }
         |       MOVE all literalism[input] TO move_tgts[tgts]
                 {
                   statement_begin(@1, MOVE);
-                  struct cbl_refer_t *src = new_reference(new_literal($input,
+                  struct cbl_refer_t *src = new_reference(new_literal(@input, $input,
                                                                       quoted_e));
                   src->all = $all;
                   if( !parser_move2($tgts, *src) ) { YYERROR; }
@@ -6605,18 +7713,17 @@ move:           MOVE scalar TO move_tgts[tgts]
         |       MOVE all spaces_etc[src] TO move_tgts[tgts]
                 {
                   statement_begin(@1, MOVE);
-                  cbl_field_t *field;
                   auto p = std::find_if( $tgts->targets.begin(),
                                          $tgts->targets.end(),
-                                         [&field]( const auto& num_result ) {
+                                         []( const auto& num_result ) {
                                              const cbl_refer_t& tgt = num_result.refer;
-                                             field = tgt.field;
-                                             return is_numeric(tgt.field);
+                                             return is_numeric(tgt);
                                             } );
 
                   if( p != $tgts->targets.end() ) {
-                    error_msg(@src, "cannot MOVE %s "
-			            "to numeric receiving field %s",
+                    cbl_field_t *field = p->refer.field;
+                    error_msg(@src, "cannot MOVE %qs "
+			            "to numeric receiving field %qs",
 			      constant_of(constant_index($src))->name,
 			      field->name );
                     YYERROR;
@@ -6632,7 +7739,7 @@ move:           MOVE scalar TO move_tgts[tgts]
                   if( !parser_move2($tgts, src) ) { YYERROR; }
                 }
 
-        |       MOVE intrinsic_call TO move_tgts[tgts]
+        |       MOVE function_call TO move_tgts[tgts]
                 {
                   statement_begin(@1, MOVE);
                   if( !parser_move2($tgts, *$2) ) { YYERROR; }
@@ -6651,8 +7758,9 @@ move:           MOVE scalar TO move_tgts[tgts]
                   }
 
                   if( !move_corresponding(*$to, *$from) ) {
-                    yywarn( "%s and %s have no corresponding fields",
-                            $from->field->name, $to->field->name );
+                    cbl_message( @$, ParNoCorrespondingW,
+                                 "%s and %s have no corresponding fields",
+                                 $from->field->name, $to->field->name );
                   }
                 }
                 ;
@@ -6691,7 +7799,7 @@ move_tgt:	scalar[tgt] {
 		  }
 		  auto litcon = field.name[0] == '_'? "literal" : "constant";
 		  error_msg(@literal, "%s is a %s", value_str, litcon);
-		  $$ = NULL;
+		  $$ = nullptr;
 		}
         |       error
                 {
@@ -6700,7 +7808,7 @@ move_tgt:	scalar[tgt] {
 		    error_at = yytext;
 		    error_msg(first_line_of(@1), "invalid receiving operand");
 		  }
-		  $$ = NULL;
+		  $$ = nullptr;
                 }
                 ;
 
@@ -6806,9 +7914,9 @@ arith_err:      SIZE_ERROR
                     *ptgt = $1 == NOT?
                       current.compute_not_error() : current.compute_on_error();
                   } else {
-                    *ptgt = label_add(LblArith, uniq_label("arith"), yylineno);
+                    *ptgt = label_add(LblArith, uniq_label("arith"), @1.first_line);
                   }
-		  (*ptgt)->lain = yylineno;
+		  (*ptgt)->lain = @1.first_line;
                   parser_arith_error( *ptgt );
                 }
                 ;
@@ -6829,7 +7937,7 @@ arith_err:      SIZE_ERROR
 
 relop:          '<' { $$ = '<'; }
         |       LE  { $$ = LE;  }
-        |       '=' { $$ = '='; }
+        |       EQ { $$ = EQ; }
         |       NE  { $$ = NE;  }
         |       GE  { $$ = GE;  }
         |       '>' { $$ = '>'; }
@@ -6853,35 +7961,35 @@ sum:                num_operand     { $$ = new refer_list_t($num_operand); }
 
 num_operand:    scalar
         |       signed_literal { $$ = new_reference($1); }
-        |       intrinsic_call
+        |       function_call
                 ;
 
 num_value:      scalar // might actually be a string
-        |       intrinsic_call
+        |       function_call
         |       num_literal { $$ = new_reference($1); }
         |       ADDRESS OF scalar {$$ = $scalar; $$->addr_of = true; }
         |       DETAIL OF scalar {$$ = $scalar; }
+        |       LENGTH_OF binary_type[size] {
+                  location_set(@1);
+                  $$ = new cbl_refer_t( new_tempnumeric(none_e) );
+		  dialect_ok(@1, IbmLengthOf, "LENGTH OF");
+		  parser_set_numeric($$->field, $size);
+		}
         |       LENGTH_OF name[val] {
                   location_set(@1);
-                  $$ = new cbl_refer_t( new_tempnumeric() );
-		  $$->field->clear_attr(signable_e);
-                  if( dialect_gcc() ) {
-		    dialect_error(@1, "LENGTH OF", "ibm");
-                  }
-		  parser_set_numeric($$->field, $val->data.capacity);
+                  $$ = new cbl_refer_t( new_tempnumeric(none_e) );
+		  dialect_ok(@1, IbmLengthOf, "LENGTH OF");
+		  parser_set_numeric($$->field, $val->data.capacity());
                 }
         |       LENGTH_OF name[val] subscripts[subs] {
                   location_set(@1);
-                  $$ = new cbl_refer_t( new_tempnumeric() );
-		  $$->field->clear_attr(signable_e);
-                  if( dialect_gcc() ) {
-		    dialect_error(@1, "LENGTH OF", "ibm");
-                  }
+                  $$ = new cbl_refer_t( new_tempnumeric(none_e) );
+		  dialect_ok(@1, IbmLengthOf, "LENGTH OF");
                   if( 0 == dimensions($val) ) {
 		    cbl_refer_t r1($val);
 		    subscript_dimension_error( @subs, $subs->refers.size(), &r1 );
                   }
-		  parser_set_numeric($$->field, $val->data.capacity);
+		  parser_set_numeric($$->field, $val->data.capacity());
                 }
                 ;
 
@@ -6904,7 +8012,7 @@ num_value:      scalar // might actually be a string
 /* cce_relexpr: cce_expr */
 /*      |       cce_relexpr '<' cce_expr { $$ = $1 <  $3; } */
 /*      |       cce_relexpr LE  cce_expr { $$ = $1 <= $3; } */
-/*      |       cce_relexpr '=' cce_expr { $$ = $1 == $3; } */
+/*      |       cce_relexpr EQ cce_expr { $$ = $1 == $3; } */
 /*      |       cce_relexpr NE  cce_expr { $$ = $1 != $3; } */
 /*      |       cce_relexpr GE  cce_expr { $$ = $1 >= $3; } */
 /*      |       cce_relexpr '>' cce_expr { $$ = $1 >  $3; } */
@@ -6912,33 +8020,38 @@ num_value:      scalar // might actually be a string
 
 cce_expr:       cce_factor
         |       cce_expr '+' cce_expr {
-                  real_arithmetic (&$$, PLUS_EXPR, &$1, &$3);
-                  real_convert (&$$, TYPE_MODE (float128_type_node), &$$);
+                  $$.s = nullptr;
+                  real_arithmetic (&$$.r, PLUS_EXPR, &$1.r, &$3.r);
+                  real_convert (&$$.r, TYPE_MODE (float128_type_node), &$$.r);
                 }
         |       cce_expr '-' cce_expr {
-                  real_arithmetic (&$$, MINUS_EXPR, &$1, &$3);
-                  real_convert (&$$, TYPE_MODE (float128_type_node), &$$);
+                  $$.s = nullptr;
+                  real_arithmetic (&$$.r, MINUS_EXPR, &$1.r, &$3.r);
+                  real_convert (&$$.r, TYPE_MODE (float128_type_node), &$$.r);
                 }
         |       cce_expr '*' cce_expr {
-                  real_arithmetic (&$$, MULT_EXPR, &$1, &$3);
-                  real_convert (&$$, TYPE_MODE (float128_type_node), &$$);
+                  $$.s = nullptr;
+                  real_arithmetic (&$$.r, MULT_EXPR, &$1.r, &$3.r);
+                  real_convert (&$$.r, TYPE_MODE (float128_type_node), &$$.r);
                 }
         |       cce_expr '/' cce_expr {
-                  real_arithmetic (&$$, RDIV_EXPR, &$1, &$3);
-                  real_convert (&$$, TYPE_MODE (float128_type_node), &$$);
+                  $$.s = nullptr;
+                  real_arithmetic (&$$.r, RDIV_EXPR, &$1.r, &$3.r);
+                  real_convert (&$$.r, TYPE_MODE (float128_type_node), &$$.r);
                 }
-        |                '+' cce_expr %prec NEG { $$ =  $2; }
-        |                '-' cce_expr %prec NEG { $$ = real_value_negate (&$2); }
-        |                '(' cce_expr ')'  { $$ = $2; }
+        |                '+' cce_expr %prec NEG { $$.r =  $2.r; }
+        |                '-' cce_expr %prec NEG { $$.r = real_value_negate (&$2.r); }
+        |                '(' cce_expr ')'  { $$.r = $2.r; }
         ;
 
 cce_factor:     NUMSTR {
                   /* real_from_string does not allow arbitrary radix.  */
                   // When DECIMAL IS COMMA, commas act as decimal points.
 		  gcc_assert($1.radix == decimal_e);
-		  auto p = $1.string, pend = p + strlen(p);
-		  std::replace(p, pend, ',', '.');
-		  real_from_string3( &$$, $1.string,
+                  $$.s = $1.string;
+                  std::string numstr($1.string);
+		  std::replace(numstr.begin(), numstr.end(), ',', '.');
+		  real_from_string3( &$$.r, numstr.c_str(),
 				     TYPE_MODE (float128_type_node) );
                 }
                 ;
@@ -6950,15 +8063,15 @@ cce_factor:     NUMSTR {
 section_name:	NAME section_kw '.'
                 {
                   statement_begin(@1, SECTION);
-		  $$ = label_add(@1, LblSection, $1);
-                  ast_enter_section($$);
+		  $$ = label_instantiate(@1, PROGRAM, LblSection, 0, $1);
+                  ast_enter_section(@1, $$);
                   apply_declaratives();
                 }
 	|	NAME section_kw // lexer swallows '.' before USE
                 <label>{
                   statement_begin(@1, SECTION);
-		  $$ = label_add(@1, LblSection, $1);
-                  ast_enter_section($$);
+		  $$ = label_instantiate(@1, PROGRAM, LblSection, 0, $1);
+                  ast_enter_section(@1, $$);
                   apply_declaratives();
                 } [label]
                 cdf_use dot
@@ -6968,19 +8081,27 @@ section_name:	NAME section_kw '.'
                 ;
 
 section_kw:     SECTION
-                {
-                  if( $1 ) {
+               {
+                 if( $1 && dialect_ok(@1, IbmSectionSegmentW, "SECTION segment") ) {
+		    cbl_message(@1, IbmSectionSegmentW,
+                               "SECTION segment %qs was ignored", $1);
 		    if( *$1 == '-' ) {
-		      error_msg(@1, "SECTION segment %s is negative", $1);
-                    } else {
-                      cbl_unimplementedw("SECTION segment %s was ignored", $1);
-                    }
+                     cbl_message(@1, IbmSectionNegE,
+                                 "SECTION segment %qs is negative", $1);
+                   } else {
+                     int sectno;
+                     sscanf($1, "%d", &sectno);
+                     if( ! (0 <= sectno && sectno <= 99) ) {
+                       cbl_message(@1, IbmSectionRangeE,
+                                    "SECTION segment %qs must be 0-99", $1);
+		      } 
+                   }
 		  }
-                }
-        |       SECTION error
-                {
-                  error_msg(@1, "unknown section qualifier");
-                }
+               }
+       |       SECTION error
+               {
+                 error_msg(@1, "unknown section qualifier");
+               }
                 ;
 
 stop:           STOP RUN exit_with
@@ -6991,11 +8112,8 @@ stop:           STOP RUN exit_with
         |       STOP NUMSTR[status] // IBM syntax
                 {
                   statement_begin(@1, STOP);
-                  if( ! dialect_ibm() ) {
-                    dialect_error(@2, "STOP <number> is not ISO syntax,", "ibm");
-                    YYERROR;
-                  }
-                  cbl_refer_t status( new_literal($status.string, $status.radix) );
+                  dialect_ok(@2, IbmStopNumber, "STOP <number>");
+                  cbl_refer_t status( new_literal(@status, $status.string, $status.radix) );
                   parser_see_stop_run( status, NULL );
                 }
         |       STOP LITERAL[name] // CCVS-85 && IBM syntax
@@ -7012,11 +8130,11 @@ stop:           STOP RUN exit_with
 stop_status:    status         { $$ = NULL; }
         |       status scalar  { $$ = $2; }
         |       status NUMSTR {
-                  $$ = new_reference(new_literal($2.string, $2.radix));
+                  $$ = new_reference(new_literal(@2, $2.string, $2.radix));
                 }
                 ;
 
-subscripts:     LPAREN expr_list ')' {
+subscripts:     LPAREN subscript_exprs ')' {
 		  $$ = $2;
 		  const auto& exprs( $$->refers );
 		  bool ok = std::all_of( exprs.begin(), exprs.end(),
@@ -7036,19 +8154,19 @@ subscripts:     LPAREN expr_list ')' {
 		  }
 		}
                 ;
-expr_list:	expr
+subscript_exprs:	cexpr
 		{
-		  if( ! require_numeric(@expr, *$expr) ) YYERROR;
-		  $$ = new refer_list_t($expr);
+		  if( ! require_integer(@cexpr, *$cexpr) ) YYERROR;
+		  $$ = new refer_list_t(*$cexpr);
 		}
-        |       expr_list expr {
+        |       subscript_exprs cexpr {
                   if( $1->size() == MAXIMUM_TABLE_DIMENSIONS ) {
                     error_msg(@1, "table dimensions limited to %d",
                              MAXIMUM_TABLE_DIMENSIONS);
                     YYERROR;
                   }
-		  if( ! require_numeric(@expr, *$expr) ) YYERROR;
-                  $1->push_back($2); $$ = $1;
+		  if( ! require_integer(@cexpr, *$cexpr) ) YYERROR;
+                  $1->push_back(*$2); $$ = $1;
                 }
         |       ALL {
                   auto ref = new_reference(constant_of(constant_index(ZERO)));
@@ -7056,11 +8174,11 @@ expr_list:	expr
                 }
                 ;
 
-arg_list:                any_arg { $$ = new refer_list_t($1); }
-        |       arg_list any_arg { $1->push_back($2); $$ = $1; }
+arg_list:                any_arg { $$ = new refer_list_t(*$1); }
+        |       arg_list any_arg { $1->push_back(*$2); $$ = $1; }
                 ;
-any_arg:        expr
-        |       LITERAL {$$ = new_reference(new_literal($1, quoted_e)); }
+any_arg:        cexpr
+        |       LITERAL {$$ = new_reference(new_literal(@1, $1, quoted_e)); }
                 ;
 
                 /*
@@ -7075,31 +8193,38 @@ signed_literal:     num_literal
                   struct cbl_field_t *zero = constant_of(constant_index(ZERO));
                   parser_subtract( $$, zero, $2, current_rounded_mode() );
                 }
+        |       LENGTH_OF binary_type[size] {
+                  location_set(@1);
+                  $$ = new_tempnumeric(none_e);
+		  dialect_ok(@1, IbmLengthOf, "LENGTH OF");
+                  parser_set_numeric($$, $size);
+		}
         |       LENGTH_OF name[val] {
                   location_set(@1);
-                  $$ = new_tempnumeric();
-		  $$->clear_attr(signable_e);
-                  if( dialect_gcc() ) {
-		    dialect_error(@1, "LENGTH OF", "ibm");
-                  }
-                  parser_set_numeric($$, $val->data.capacity);
+                  $$ = new_tempnumeric(none_e);
+		  dialect_ok(@1, IbmLengthOf, "LENGTH OF");
+                  parser_set_numeric($$, $val->data.capacity());
                 }
         |       LENGTH_OF name[val] subscripts[subs] {
                   location_set(@1);
-                  $$ = new_tempnumeric();
-		  $$->clear_attr(signable_e);
-                  if( dialect_gcc() ) {
-		    dialect_error(@1, "LENGTH OF", "ibm");
-                  }
+                  $$ = new_tempnumeric(none_e);
+		  dialect_ok(@1, IbmLengthOf, "LENGTH OF");
                   if( 0 == dimensions($val) ) {
 		    cbl_refer_t r1($val);
 		    subscript_dimension_error( @subs, $subs->refers.size(), &r1 );
                   }
-                  parser_set_numeric($$, $val->data.capacity);
+                  parser_set_numeric($$, $val->data.capacity());
                 }
                 ;
 
-num_literal:    NUMSTR { $$ = new_literal($1.string, $1.radix); }
+num_constant:   NUMSTR {
+                  if( $1.is_float ) {
+                    $$ = new_literal_float(@1, $1.string);
+                  } else {
+                    $$ = new_literal(@1, $1.string, $1.radix); }
+                }
+                ;
+num_literal:    num_constant
         |       ZERO   { $$ = constant_of(constant_index(ZERO)); }
                 ;
 
@@ -7249,11 +8374,45 @@ perform_proc:   perform_names %prec NAME
 
 perform_names:  label_1[para]
                 {
-                  perform_tgt_set($para);
+                  auto perf = perform_tgt_set($para);
+                  const auto sect = current.section();
+                  const auto para = current.paragraph();
+                  const cbl_label_t *curr = perf->tgt.recurses(para, sect); // disabled
+
+                  if( sect && curr && curr->type == LblParagraph ) {
+                    // It's not recursion if OF NAME does not match the current section.
+                    if( curr->parent ) {
+                      auto tgt_sect = cbl_label_of(symbol_at(curr->parent));
+                      if( 0 != strcasecmp(sect->name, tgt_sect->name) ) {
+                        curr = nullptr;
+                      }
+                    }
+                  }
+                  if( curr ) {
+                    error_msg(@$, "would recurse through current procedure %s",
+                              curr->name);
+                  }
                 }
         |       label_1[para1] THRU label_1[para2]
                 {
-                  perform_tgt_set($para1, $para2);
+                  auto perf = perform_tgt_set($para1, $para2);
+                  const auto sect = current.section();
+                  const auto para = current.paragraph();
+                  const cbl_label_t *curr = perf->tgt.recurses(para, sect); // disabled
+
+                  if( sect && curr && curr->type == LblParagraph ) {
+                    // It's not recursion if OF NAME does not match the current section.
+                    if( curr->parent ) {
+                      auto tgt_sect = cbl_label_of(symbol_at(curr->parent));
+                      if( 0 != strcasecmp(sect->name, tgt_sect->name) ) {
+                        curr = nullptr;
+                      }
+                    }
+                  }
+                  if( curr ) {
+                    error_msg(@$, "would recurse through current procedure %s",
+                              curr->name);
+                  }
                 }
                 ;
 
@@ -7300,21 +8459,22 @@ perform_until:  test_before perform_cond
                 }
                 ;
 perform_cond:   UNTIL { parser_perform_conditional( &perform_current()->tgt); }
-                bool_expr
+                until_expr[expr]
                 {
                   parser_perform_conditional_end( &perform_current()->tgt);
-		  if( !is_conditional($bool_expr) ) {
+		  if( !is_conditional($expr) ) {
 		    error_msg(@1, "%s is not a condition expression",
-		             name_of($bool_expr->field));
+		             name_of($expr->field));
 		    YYERROR;
 		  }
-                  $$ = $bool_expr->cond();
+                  $$ = $expr->cond();
                 }
                 ;
 
 perform_inline: perform_start statements END_PERFORM
                 {
 		  location_set(@END_PERFORM);
+		  parser_sleep(*cbl_refer_t::empty());
 		  $$ = perform_current();
 		  if( $perform_start == LOCATION ) {
 		    error_msg(@1, "LOCATION not valid with PERFORM Format 2");
@@ -7323,12 +8483,14 @@ perform_inline: perform_start statements END_PERFORM
         |       perform_start END_PERFORM
                 {
 		  location_set(@END_PERFORM);
+		  parser_sleep(*cbl_refer_t::empty());
 		  $$ = perform_current();
 		  if( $perform_start == LOCATION ) {
 		    error_msg(@1, "LOCATION not valid with PERFORM Format 2");
 		  }
                 }
                 ;
+
 perform_start:	%empty %prec LOCATION {
 		  perform_ec_setup();
 		  $$ = 0;
@@ -7355,18 +8517,7 @@ perform_except:	perform_start
 		perform_ec_finally
 		END_PERFORM
                 {
-		  auto perf = perform_current();
-		  // produce blob, jumped over by FINALLY paragraph
-		  size_t iblob = symbol_declaratives_add( PROGRAM, perf->dcls );
-		  auto lave = perf->ec_labels.new_label(LblParagraph, "lave");
-		  auto handlers = cbl_field_of(symbol_at(iblob));
-
-		  // install blob
-		  parser_label_label(perf->ec_labels.init);
-		  declarative_runtime_match(handlers, lave);
-
-		  // uninstall blob
-		  parser_label_label(perf->ec_labels.fini);
+		  cbl_unimplemented("PERFORM Format 3");
                 }
 		;
 
@@ -7384,10 +8535,10 @@ perform_when1:	WHEN perform_ec {
 		  std::transform( $perform_ec->elems.begin(),
 				  $perform_ec->elems.end(),
 				  std::back_inserter(perf->dcls),
-				  []( cbl_declarative_t *p ) {
+				  []( const cbl_declarative_t *p ) {
 				    return *p;
 				  } );
-		  ast_enter_paragraph(when);
+		  ast_enter_paragraph(@WHEN, when);
 		}
 		statements {
 		  parser_exit_paragraph();
@@ -7474,13 +8625,13 @@ except_files:	except_name[ec] FILE_KW filenames {
 
 perform_ec_other:
 		%empty %prec WHEN {
-		  auto& ec_labels( perform_current()->ec_labels );
-		  ast_enter_paragraph(ec_labels.other);
+                  const auto& ec_labels( perform_current()->ec_labels );
+		  ast_enter_paragraph(@$, ec_labels.other);
 		  parser_exit_paragraph();
 		}
 	|	WHEN OTHER {
-		  auto& ec_labels( perform_current()->ec_labels );
-		  ast_enter_paragraph(ec_labels.other);
+                  const auto& ec_labels( perform_current()->ec_labels );
+		  ast_enter_paragraph(@$, ec_labels.other);
 		}
 		exception statements %prec WHEN {
 		  parser_exit_paragraph();
@@ -7488,13 +8639,13 @@ perform_ec_other:
 		;
 perform_ec_common:
 		%empty {
-		  auto& ec_labels( perform_current()->ec_labels );
-		  ast_enter_paragraph(ec_labels.common);
+		  const auto& ec_labels( perform_current()->ec_labels );
+		  ast_enter_paragraph(@$, ec_labels.common);
 		  parser_exit_paragraph();
 		}
 	|	WHEN COMMON {
-		  auto& ec_labels( perform_current()->ec_labels );
-		  ast_enter_paragraph(ec_labels.common);
+		  const auto& ec_labels( perform_current()->ec_labels );
+		  ast_enter_paragraph(@$, ec_labels.common);
 		}
 		exception statements {
 		  parser_exit_paragraph();
@@ -7502,18 +8653,18 @@ perform_ec_common:
 		;
 perform_ec_finally:
 		%empty {
-		  auto& ec_labels( perform_current()->ec_labels );
-		  ast_enter_paragraph(ec_labels.finally);
+		  const auto& ec_labels( perform_current()->ec_labels );
+		  ast_enter_paragraph(@$, ec_labels.finally);
 		  parser_exit_paragraph();
 		  parser_label_goto(ec_labels.fini);
 		}
 	|	FINALLY {
-		  auto& ec_labels( perform_current()->ec_labels );
-		  ast_enter_paragraph(ec_labels.finally);
+		  const auto& ec_labels( perform_current()->ec_labels );
+		  ast_enter_paragraph(@$, ec_labels.finally);
 		}
 		exception statements {
 		  parser_exit_paragraph();
-		  auto& ec_labels( perform_current()->ec_labels );
+		  const auto& ec_labels( perform_current()->ec_labels );
 		  parser_label_goto(ec_labels.fini);
 		}
 		;
@@ -7604,9 +8755,10 @@ subtract_body:  sum FROM rnames
                     corresponding_arith_fields( $sum->refers.front().field,
                                                 rhs.front().refer.field );
                     if( pairs.empty() ) {
-                      yywarn( "%s and %s have no corresponding fields",
-                               $sum->refers.front().field->name,
-                               rhs.front().refer.field->name );
+                      cbl_message(@$, ParNoCorrespondingW,
+                                  "%qs and %qs have no corresponding fields",
+                                  $sum->refers.front().field->name,
+                                  rhs.front().refer.field->name );
                     }
                   // First src/tgt elements are templates.
                   // Their subscripts apply to the correspondents.
@@ -7635,7 +8787,7 @@ varg1a:         ADDRESS OF scalar {
 		  $$ = $scalar;
 		  $$->addr_of = true;
 		}
-        |       intrinsic_call
+        |       function_call
         |       literal
                 {
                   $$ = new_reference($1);
@@ -7644,41 +8796,42 @@ varg1a:         ADDRESS OF scalar {
                 {
                   $$ = new_reference(constant_of(constant_index($1)));
                 }
+        |       LENGTH_OF binary_type[size] {
+                  location_set(@1);
+                  $$ = new cbl_refer_t( new_tempnumeric(none_e) );
+		  dialect_ok(@1, IbmLengthOf, "LENGTH OF");
+		  parser_set_numeric($$->field, $size);
+		}
         |       LENGTH_OF name[val] {
                   location_set(@1);
-                  $$ = new cbl_refer_t( new_tempnumeric() );
-		  $$->field->clear_attr(signable_e);
-                  if( dialect_gcc() ) {
-		    dialect_error(@1, "LENGTH OF", "ibm");
-                  }
+                  $$ = new cbl_refer_t( new_tempnumeric(none_e) );
+		  dialect_ok(@1, IbmLengthOf, "LENGTH OF");
 		  parser_set_numeric($$->field, $val->size());
 		}
         |       LENGTH_OF name[val] subscripts[subs] {
                   location_set(@1);
-                  $$ = new cbl_refer_t( new_tempnumeric() );
-		  $$->field->clear_attr(signable_e);
-                  if( dialect_gcc() ) {
-		    dialect_error(@1, "LENGTH OF", "ibm");
-                  }
+                  $$ = new cbl_refer_t( new_tempnumeric(none_e) );
+		  dialect_ok(@1, IbmLengthOf, "LENGTH OF");
                   if( 0 == dimensions($val) ) {
 		    cbl_refer_t r1($val);
 		    subscript_dimension_error( @subs, $subs->refers.size(), &r1 );
                   }
-		  parser_set_numeric($$->field, $val->data.capacity);
+		  parser_set_numeric($$->field, $val->data.capacity());
                 }
                 ;
+
+binary_type:	BINARY_INTEGER { $$ = $1.capacity; }
+	|	COMPUTATIONAL  { $$ = $1.capacity; }
+		;
 
 literal:        literalism
                 {
                   $$ = $1.isymbol()?
                     cbl_field_of(symbol_at($1.isymbol()))
                     :
-                    new_literal($1, quoted_e);
+                    new_literal(@1, $1, quoted_e);
                 }
-        |       NUMSTR
-                {
-                  $$ = new_literal($1.string, $1.radix);
-                }
+        |       num_constant
         |       DATETIME_FMT
                 {
                   $$ = new_literal(strlen($1), $1, quoted_e);
@@ -7711,14 +8864,14 @@ raise:          RAISE EXCEPTION NAME
 			    "EXCEPTION CONDITION: %s", $NAME);
                     YYERROR;
                   }
-                  cbl_unimplemented("RAISE <EXCEPTION OBJECT>");
+                  cbl_unimplemented("RAISE %<EXCEPTION OBJECT%>");
                   YYERROR;
                 }
                 ;
 
 read:           read_file
                 {
-                  current.declaratives_evaluate($1.file, $1.handled);
+                  current.declaratives_evaluate($1.file);
                 }
                 ;
 
@@ -7762,37 +8915,29 @@ read_file:      READ read_body {
                 }
                 ;
 
-read_body:      NAME read_next read_into read_key
+read_body:      filename[file] read_next read_into read_key
                 {
                   statement_begin(@$, READ);
-                  struct symbol_elem_t *e = symbol_file(PROGRAM, $NAME);
-                  if( !e ) {
-                    error_msg(@1, "invalid file name '%s'", $NAME);
-                    YYERROR;
-                  }
 
-                  $$ = cbl_file_of(e);
+                  $$ = $file;
 
                   struct cbl_field_t *record = symbol_file_record($$);
                   if( !record ) {
-                    error_msg(@1, "syntax error? invalid file record name");
+                    error_msg(@file, "syntax error? invalid file record name");
                     YYERROR;
                   }
-                  if( 0 && $$->access == file_access_dyn_e && $read_next >= 0 ) {
-                    error_msg(@1, "sequential DYNAMIC access requires NEXT RECORD");
-                    YYERROR;
-                  }
+
                   if( $read_key->field && is_sequential($$) ) {
-                    error_msg(@1, "SEQUENTIAL file %s has no KEY", $$->name);
+                    error_msg(@file, "SEQUENTIAL file %s has no KEY", $$->name);
                     YYERROR;
                   }
                   if( $$->org == file_line_sequential_e && $read_next == -2 ) {
-                    error_msg(@1, "LINE SEQUENTIAL file %s cannot READ PREVIOUS",
+                    error_msg(@file, "LINE SEQUENTIAL file %s cannot READ PREVIOUS",
                              $$->name);
                     YYERROR;
                   }
                   if( $read_key->field && $read_next < 0 ) {
-                    error_msg(@1, "cannot read NEXT with KEY", $$->name);
+                    error_msg(@file, "cannot read NEXT with KEY %qs", $$->name);
                     YYERROR;
                   }
 
@@ -7905,7 +9050,7 @@ read_key:       %empty      { $$ = new cbl_refer_t();  }
 
 write:          write_file
                 {
-                  current.declaratives_evaluate( $1.file, $1.handled );
+                  current.declaratives_evaluate($1.file );
                 }
                 ;
 
@@ -7988,7 +9133,7 @@ file_record:    NAME
 		  auto namelocs( name_queue.pop() );
 		  auto names( name_queue.namelist_of(namelocs) );
 		  auto inner = namelocs.back();
-                  if( ($$ = field_find(names)) == NULL ) {
+                  if( ($$ = field_find(@1, names)) == NULL ) {
                     error_msg(inner.loc, "no record name '%s'", inner.name);
                     YYERROR;
                   }
@@ -8008,6 +9153,18 @@ file_record:    NAME
                 {
                   $$ = cbl_field_of(symbol_at($filename->default_record));
                 }
+        |       device_name[dev]
+                {
+                  auto dev = symbol_special($dev.id);
+                  error_msg(@dev, "invalid device %qs: FD name required", dev->name);
+                  YYERROR;
+                  auto e = symbol_file(PROGRAM, dev->name);
+                  if( ! e ) {
+                    error_msg(@dev, "no FD selected for device %qs", dev->name);
+                    YYERROR;
+                  } 
+                  $$ = cbl_field_of(symbol_at(cbl_file_of(e)->default_record)); 
+                }
                 ;
 advance_when:   BEFORE { $$ = BEFORE; }
         |       AFTER  { $$ = AFTER; }
@@ -8025,7 +9182,7 @@ advance_by:     scalar lines { $$ = $1; } /* BUG: should accept reference */
                    * number of lines is negative.  So, we use the
                    * negative Number Of The Beast as a PAGE flag.
                    */
-                  $$ = new_reference( new_literal("-666") );
+                  $$ = new_reference( new_constant(xstrdup("-666")) );
                 }
         |       device_name { $$ = new_reference(literally_one); }
                 ;
@@ -8082,7 +9239,33 @@ io_invalid:     INVALID key {
 
 delete:         delete_impl  end_delete
         |       delete_cond  end_delete
+        |       delete_file  end_delete
                 ;
+delete_file:    DELETE delete_file_body[stmt] delete_error[err] {
+                  if( ! $err.on_error )  parser_file_delete_on_exception($stmt);
+                  if( ! $err.not_error ) parser_file_delete_not_exception($stmt);
+                  parser_file_delete_end($stmt);
+                  current.declaratives_evaluate();
+                }
+delete_file_body:
+                FILE_KW override filenames retry_phrase {
+                  $$ = label_add(@$, LblXml, uniq_label("xfile"));
+                  xml_statements.push($$);
+                  statement_begin(@$, DELETE);
+                  std::vector<cbl_file_t*>
+                      filenames($filenames->files.begin(),
+                                $filenames->files.end() );
+                  parser_file_delete_file( $$, filenames);
+                }
+                ;
+retry_phrase:   %empty
+        |       RETRY cexpr TIMES
+        |       FOR cexpr  SECONDS
+        |       FOREVER {
+                  cbl_unimplemented("DELETE FILE RETRY");
+                }
+                ;
+
 delete_impl:    DELETE delete_body[file]
                 {
                   file_delete_args.call_parser_file_delete(true);
@@ -8115,13 +9298,70 @@ delete_body:    filename[file] record
                   $$ = $file;
                 }
                 ;
+
+delete_error:   %empty	%prec DELETE {
+                  $$.on_error = $$.not_error = nullptr;
+                }
+        |       delete_excepts %prec DELETE
+                ;
+delete_excepts:     delete_except[a] statements %prec DELETE
+                {
+                  assert( $a.on_error || $a.not_error );
+                  assert( ! ($a.on_error && $a.not_error) );
+                  $$ = $a;
+                }
+        |       delete_excepts[a] delete_except[b] statements %prec DELETE
+                {
+                  if( $a.on_error && $a.not_error ) {
+                    error_msg(@1, "too many ON ERROR clauses");
+                    YYERROR;
+                  }
+                  // "ON" and "NOT ON" could be reversed, but not duplicated.
+                  if( $a.on_error && $b.on_error ) {
+                    error_msg(@1, "duplicate ON ERROR clauses");
+                    YYERROR;
+                  }
+                  if( $a.not_error && $b.not_error ) {
+                    error_msg(@1, "duplicate NOT ON ERROR clauses");
+                    YYERROR;
+                  }
+                  $$ = $a;
+                  if( $$.on_error ) {
+                    assert($b.not_error);
+                    $$.not_error = $b.not_error;
+                  } else {
+                assert($b.on_error);
+                    $$.on_error = $b.on_error;
+                  }
+                }
+                ;
+delete_except:  EXCEPTION
+                {
+                  auto xml_stmt = xml_statements.top();
+                  // The value of the pointer no longer matters, only NULL or not. 
+                  $$.on_error = $$.not_error = nullptr;
+                  switch($1) {
+                  case EXCEPTION:
+                    $$.on_error = xml_stmt;
+                    parser_file_delete_on_exception(xml_stmt);
+                    break;
+                  case NOT:
+                    $$.not_error = xml_stmt;
+                    parser_file_delete_not_exception(xml_stmt);
+                    break;
+                  default:
+                    gcc_unreachable();
+                  }
+                }
+                ;
+
 end_delete:     %empty %prec DELETE
         |       END_DELETE
                 ;
 
 rewrite:        rewrite1
                 {
-                  current.declaratives_evaluate($1.file, $1.handled);
+                  current.declaratives_evaluate($1.file);
                 }
                 ;
 
@@ -8162,12 +9402,21 @@ end_rewrite:    %empty %prec REWRITE
                 ;
 
 start:          start_impl end_start
+                {
+                  current.declaratives_evaluate($1);
+                }
         |       start_cond end_start
+                {
+                  current.declaratives_evaluate($1);
+                }
                 ;
-start_impl:     START start_body
+start_impl:     START start_body {
+		  $$ = $2;
+		}
                 ;
 start_cond:     START start_body io_invalids {
                   parser_fi();
+		  $$ = $2;
                 }
                 ;
 end_start:      %empty %prec START
@@ -8177,7 +9426,7 @@ end_start:      %empty %prec START
 start_body:     filename[file]
                 {
                   statement_begin(@$, START);
-                  file_start_args.init(@file, $file);
+                  $$ = file_start_args.init(@file, $file);
                   parser_file_start( $file, lt_op, 0 );
                 }
         |       filename[file] KEY relop name[key]
@@ -8187,30 +9436,27 @@ start_body:     filename[file]
                   int size = key == 0 ? 0 : $file->keys[key - 1].size();
                   auto ksize = new_tempnumeric();
                   parser_set_numeric(ksize, size);
-                  if( yydebug ) {
-                    yywarn("START: key #%d '%s' has size %d",
-                          key, $key->name, size);
-                  }
-                  file_start_args.init(@file, $file);
+                  dbgmsg("START: key #%d '%s' has size %d", key, $key->name, size);
+                  $$ = file_start_args.init(@file, $file);
                   parser_file_start( $file, relop_of($relop), key, ksize );
                 }
-        |       filename[file] KEY relop name[key] with LENGTH expr
+        |       filename[file] KEY relop name[key] with LENGTH cexpr
                 { // lexer swallows IS, although relop allows it.
                   statement_begin(@$, START);
                   int key = $file->key_one($key);
-                  file_start_args.init(@file, $file);
-                  parser_file_start( $file, relop_of($relop), key, *$expr );
+                  $$ = file_start_args.init(@file, $file);
+                  parser_file_start( $file, relop_of($relop), key, *$cexpr );
                 }
         |       filename[file] FIRST
                 {
                   statement_begin(@$, START);
-                  file_start_args.init(@file, $file);
+                  $$ = file_start_args.init(@file, $file);
                   parser_file_start( $file, lt_op, -1 );
                 }
         |       filename[file] LAST
                 {
                   statement_begin(@$, START);
-                  file_start_args.init(@file, $file);
+                  $$ = file_start_args.init(@file, $file);
                   parser_file_start( $file, gt_op, -2 );
                 }
                 ;
@@ -8220,8 +9466,8 @@ merge:          MERGE { statement_begin(@1, MERGE); }
                   USING filenames[inputs] sort_output
                 {
                   std::vector <cbl_key_t> keys($sort_keys->key_list.size());
-		  std::copy( $sort_keys->key_list.begin(),
-			     $sort_keys->key_list.end(), keys.begin() );
+                  std::copy( $sort_keys->key_list.begin(),
+                             $sort_keys->key_list.end(), keys.begin() );
 
                   size_t ninput = $inputs->files.size();
                   size_t noutput = $sort_output->nfile();
@@ -8240,8 +9486,7 @@ merge:          MERGE { statement_begin(@1, MERGE); }
                     out_proc = &$sort_output->tgt;
                   }
 
-                  parser_file_merge( $file, $sort_seq,
-                                     keys.size(), keys.empty()? NULL : keys.data(),
+                  parser_file_merge( $file, $sort_seq, keys, 
                                      ninput, inputs,
                                      noutput, outputs,
                                      out_proc );
@@ -8361,9 +9606,27 @@ set:            SET set_tgts[tgts] TO set_operand[src]
                   auto literal = $src.isymbol()?
                     cbl_field_of(symbol_at($src.isymbol()))
                     :
-                    new_literal($src, quoted_e);
+                    new_literal(@src, $src, quoted_e);
                   ast_set_pointers($tgts->targets, literal);
                 }
+                // Format 12 (save-locale):
+        |       SET set_tgts[tgts] TO LOCALE locale_current
+                {
+                  if( $tgts->targets.size() > 1 ) {
+                    error_msg(@tgts, "only 1 save-locale data-item is valid");
+                  }
+                  switch($locale_current) {
+                  case LC_ALL_kw:
+                  case DEFAULT:
+                   ast_save_locale($tgts->targets.front().refer, $locale_current);
+                    break;
+                  default:
+                    gcc_unreachable();
+                  }
+                  cbl_unimplementedw(SynSetToLocale,
+                                     "unimplemented: %<SET ... TO LOCALE%>");
+                }
+                ;
         |       SET set_tgts[tgts] UP BY num_operand[src]
                 {
                   statement_begin(@1, SET);
@@ -8407,7 +9670,7 @@ set:            SET set_tgts[tgts] TO set_operand[src]
                   class set_conditional {
                     bool tf;
                    public:
-                    set_conditional( int token ) : tf(token == TRUE_kw) {}
+                    explicit set_conditional( int token ) : tf(token == TRUE_kw) {}
                     void operator()(cbl_refer_t& refer) {
                       if( refer.field->data.false_value_of() == NULL && !tf ) {
 			auto loc = symbol_field_location(field_index(refer.field));
@@ -8422,6 +9685,43 @@ set:            SET set_tgts[tgts] TO set_operand[src]
                                 set_conditional($yn));
                 }
         |       SET { statement_begin(@1, SET); } many_switches
+
+                // Format 11 (set-locale):
+        |       SET LOCALE locale_tgt[tgt] TO locale_src
+                {
+                  if( $tgt->is_default() ) {
+                    // do something $tgt->default_of()
+                  } else {
+                    // do something $tgt->lc_categories()
+                  }
+                  cbl_unimplementedw(SynSetLocaleTo,
+                                     "unimplemented: %<SET LOCALE ... TO%>");
+                }
+                ;
+
+locale_tgt:     user_default { $$ = new locale_tgt_t(); *$$ = $1; }
+        |       loc_categories
+                ;
+loc_categories: loc_category { $$ = new locale_tgt_t($1); }
+        |       loc_categories loc_category {
+                  $$ = $1;
+                  $$->push_back($2);
+                }
+                ;
+loc_category:   LC_ALL_kw      { $$ = LC_ALL_kw; }
+        |       LC_COLLATE_kw  { $$ = LC_COLLATE_kw; }
+        |       LC_CTYPE_kw    { $$ = LC_CTYPE_kw; }
+        |       LC_MESSAGES_kw { $$ = LC_MESSAGES_kw; }
+        |       LC_MONETARY_kw { $$ = LC_MONETARY_kw; }
+        |       LC_NUMERIC_kw  { $$ = LC_NUMERIC_kw; }
+        |       LC_TIME_kw     { $$ = LC_TIME_kw; }
+                ;
+locale_src:     scalar
+        |       DEFAULT { assert($1 == 'U' || $1 == 'S'); }
+                ;
+
+locale_current: LC_ALL_kw    { $$ = LC_ALL_kw; } // locale to be saved by SET Format 12.
+        |       user_default { $$ = DEFAULT; }
                 ;
 
 many_switches:                set_switches
@@ -8432,7 +9732,7 @@ set_switches:   switches TO on_off
                 {
                   struct switcheroo {
                     bitop_t op;
-                    switcheroo( bool tf ) : op( tf? bit_set_op : bit_clear_op ) {}
+                    explicit switcheroo( bool tf ) : op( tf? bit_set_op : bit_clear_op ) {}
                     switcheroo& operator()(cbl_field_t* sw) {
                       assert(sw->type == FldSwitch);
                       assert(sw->data.initial); // not a switch condition
@@ -8487,12 +9787,12 @@ search_1_body:  name[table] search_varying[varying]
 
                   cbl_name_t label_name;
 		  auto len = snprintf(label_name, sizeof(label_name),
-				     "linear_search_%d", yylineno);
+				     "linear_search_%d", @1.first_line);
 		  if( ! (0 < len && len < int(sizeof(label_name))) ) {
 		    gcc_unreachable();
 		  }
                   cbl_label_t *name = label_add( LblSearch,
-                                                 label_name, yylineno );
+                                                 label_name, @1.first_line );
 		  auto varying($varying);
                   if( index == varying ) varying = NULL;
                   parser_lsearch_start( name, $table, index, varying );
@@ -8516,7 +9816,7 @@ search_1_cases: search_1_case
                         lookahead = keyword_str(yychar);
                       }
                     }
-                    yywarn("Just one case, lookahead is '%s'", lookahead);
+                    dbgmsg("Just one case, lookahead is '%s'", lookahead);
                   }
                 }
         |       search_1_cases search_1_case
@@ -8545,9 +9845,9 @@ search_binary:  SEARCH ALL search_2_body search_2_cases
 search_2_body:  name[table]
                 {
                   statement_begin(@$, SEARCH);
-                  char *label_name = xasprintf("binary_search_%d", yylineno);
+                  char *label_name = xasprintf("binary_search_%d", @1.first_line);
                   cbl_label_t *name = label_add( LblSearch,
-                                                 label_name, yylineno );
+                                                 label_name, @1.first_line );
                   parser_bsearch_start( name, $table );
                   search_alloc(name);
                 }
@@ -8562,7 +9862,7 @@ search_2_case:  WHEN { parser_bsearch_conditional(search_current()); }
 
 search_stmts:   statements    %prec ADD
         |       NEXT SENTENCE %prec ADD {
-                  next_sentence = label_add(LblNone, "next_sentence", 0);
+                  next_sentence = label_add_once(LblNone, "next_sentence");
                   parser_label_goto(next_sentence);
                 }
                 ;
@@ -8570,16 +9870,16 @@ search_stmts:   statements    %prec ADD
 search_terms:   search_term
         |       search_terms AND search_term
                 ;
-search_term:    scalar[key] '=' search_expr[sarg]
+search_term:    scalar[key] EQ search_expr[sarg]
                 {
-                  if( $key->nsubscript == 0 ) {
+                  if( $key->nsubscript() == 0 ) {
                     error_msg(@1, "no index for key");
                     YYERROR;
                   }
-                  if( dimensions($key->field) < $key->nsubscript ) {
+                  if( dimensions($key->field) < $key->nsubscript() ) {
                     error_msg(@1, "too many subscripts: "
-                              "%zu for table of %zu dimensions",
-                              $key->nsubscript, dimensions($key->field) );
+                              "%u for table of %zu dimensions",
+                              $key->nsubscript(), dimensions($key->field) );
                     YYERROR;
                   }
 
@@ -8594,8 +9894,8 @@ search_term:    scalar[key] '=' search_expr[sarg]
                                        is_ascending_key(key) );
                 }
                 ;
-search_expr:    expr
-        |       LITERAL { $$ = new_reference(new_literal($1, quoted_e)); }
+search_expr:    cexpr
+        |       LITERAL { $$ = new_reference(new_literal(@1, $1, quoted_e)); }
                 ;
 
 sort:           sort_table
@@ -8607,6 +9907,7 @@ sort_table:     SORT tableref[table] sort_keys sort_dup sort_seq {
                   std::vector <cbl_key_t> keys($sort_keys->key_list.size());
 		  if( ! is_table($table->field) ) {
 		    error_msg(@1, "%s has no OCCURS clause", $table->field->name);
+                    YYERROR;
 		  }
                   // 23) If data-name-1 is omitted, the data item referenced by
                   // data-name-2 is the key data item.
@@ -8618,20 +9919,25 @@ sort_table:     SORT tableref[table] sort_keys sort_dup sort_seq {
                     keys.at(i++) = cbl_key_t(k);
                   }
 
-                  parser_sort( *$table, $sort_dup, $sort_seq,
-			       keys.size(), keys.empty()? NULL : keys.data() );
+                  parser_sort( *$table, $sort_dup, $sort_seq, keys );
                 }
         |       SORT tableref[table] sort_dup sort_seq {
                   statement_begin(@1, SORT);
 		  if( ! is_table($table->field) ) {
 		    error_msg(@1, "%s has no OCCURS clause", $table->field->name);
+                    YYERROR;
+		  }
+		  if( !$table->field->occurs.keys ) {
+		    error_msg(@1, "%s: no key defined", $table->field->name);
+                    YYERROR;
 		  }
                   cbl_key_t
                     key = cbl_key_t($table->field->occurs.keys[0]),
                     guess(1, &$table->field);
-                  ;
-                  if( key.nfield == 0 ) key = guess;
-                  parser_sort( *$table, $sort_dup, $sort_seq, 1, &key );
+                  
+                  if( key.fields.empty() ) key = guess;
+                  std::vector<cbl_key_t> keys(1, key);
+                  parser_sort( *$table, $sort_dup, $sort_seq, keys );
                 }
                 ;
 
@@ -8672,7 +9978,7 @@ sort_file:      SORT FILENAME[file] sort_keys  sort_dup    sort_seq
                   parser_file_sort( file,
                                     $sort_dup,
                                     $sort_seq,
-                                    keys.size(), keys.empty()? NULL : keys.data(),
+                                    keys, 
                                     ninput, inputs,
                                     noutput, outputs,
                                     in_proc, out_proc );
@@ -8756,16 +10062,20 @@ sort_target:    label_name
 
 release:        RELEASE NAME[record] FROM scalar[name]
                 {
-                  statement_begin(@1, RELEASE);
-                  symbol_elem_t *record = symbol_find(@record, $record);
-                  parser_move(cbl_field_of(record), *$name);
-                  parser_release(cbl_field_of(record));
+                  if( ! mode_syntax_only() ) {
+                    statement_begin(@1, RELEASE);
+                    symbol_elem_t *record = symbol_find(@record, $record);
+                    parser_move(cbl_field_of(record), *$name);
+                    parser_release(cbl_field_of(record));
+                  }
                 }
         |       RELEASE NAME[record]
                 {
-                  statement_begin(@1, RELEASE);
-                  symbol_elem_t *record = symbol_find(@record, $record);
-                  parser_release(cbl_field_of(record));
+                  if( ! mode_syntax_only() ) {
+                    statement_begin(@1, RELEASE);
+                    symbol_elem_t *record = symbol_find(@record, $record);
+                    parser_release(cbl_field_of(record));
+                  }
                 }
                 ;
 
@@ -8842,6 +10152,18 @@ filename:       NAME
                   }
                   $$ = cbl_file_of(e);
                 }
+        |       device_name[dev]
+                {
+                  auto dev = symbol_special($dev.id);
+                  error_msg(@dev, "invalid device %qs: FD name required", dev->name);
+                  YYERROR;
+                  auto e = symbol_file(PROGRAM, dev->name);
+                  if( ! e ) {
+                    error_msg(@dev, "no FD selected for device '%s'", dev->name);
+                    YYERROR;
+                  } 
+                  $$ = cbl_file_of(e);
+                }
                 ;
 
 label_name:     NAME
@@ -8856,7 +10178,7 @@ label_name:     NAME
                 ;
 
 inspected:      scalar
-        |       intrinsic_call
+        |       function_call
                 ;
 backward:	%empty   { $$ = false; }
 	|	BACKWARD { $$ = true;  }
@@ -8864,7 +10186,7 @@ backward:	%empty   { $$ = false; }
 inspect:        INSPECT backward inspected TALLYING tallies
                 {
                   statement_begin(@1, INSPECT);
-                  ast_inspect( *$inspected, $backward, *$tallies );
+                  ast_inspect( @$, *$inspected, $backward, *$tallies );
                 }
         |       INSPECT backward inspected TALLYING tallies REPLACING replacements
                 {
@@ -8876,8 +10198,8 @@ inspect:        INSPECT backward inspected TALLYING tallies
                   }
                   statement_begin(@1, INSPECT);
                   // All tallying is done before any replacing
-                  ast_inspect( *$inspected, $backward, *$tallies );
-                  ast_inspect( *$inspected, $backward, *$replacements );
+                  ast_inspect( @$, *$inspected, $backward, *$tallies );
+                  ast_inspect( @$, *$inspected, $backward, *$replacements );
                 }
         |       INSPECT backward inspected                  REPLACING replacements
                 {
@@ -8888,23 +10210,40 @@ inspect:        INSPECT backward inspected TALLYING tallies
                     YYERROR;
                   }
                   statement_begin(@1, INSPECT);
-                  ast_inspect( *$inspected, $backward, *$replacements );
+                  ast_inspect( @$, *$inspected, $backward, *$replacements );
                 }
         |       INSPECT backward inspected CONVERTING alpha_val[match]
                                   TO  all    alpha_val[replace_oper]
-                                             insp_mtquals[qual]
+                                             insp_mtqual[qual]
                 {
 		  if( $all ) {
 		    $replace_oper->all = true;
-		    if( is_literal($replace_oper->field) ) {
-		      if( $replace_oper->field->data.capacity != 1 ) {
+                    cbl_field_t *field( $replace_oper->field );
+		    if( is_literal(field) ) {
+		      if( field->data.capacity() != field->codeset.stride() ) {
 			error_msg(@all, "ALL %s must be a single character",
-				 $replace_oper->field->data.initial);
+                                  field->data.initial);
 			YYERROR;
 		      }
 		    } else {
 		      error_msg(@all, "ALL must be part of a figurative constant");
 		      YYERROR;
+		    }
+		  } else {
+		    cbl_field_t *match = $match->field,
+		                *replace = $replace_oper->field;
+		    if( is_literal(match) && is_literal(replace) ) {
+		      if( !$match->all && !$replace_oper->all) {
+			if( match->data.capacity() != replace->data.capacity() ) {
+			  // Make a copy of replace, because nice_name returns a static
+			  char *replace_name = xstrdup(nice_name_of(replace));
+			  error_msg(@match, "%qs, size %u NOT EQUAL %qs, size %u",
+				    nice_name_of(match), match->char_capacity(), 
+				    replace_name, replace->char_capacity());
+				    free(replace_name);
+			  YYERROR;
+			}
+		      }
 		    }
 		  }
                   if( is_constant($inspected->field) ) {
@@ -8925,7 +10264,7 @@ inspect:        INSPECT backward inspected TALLYING tallies
 
 tallies:        { need_nume_set(); } tally
                 {
-                  $$ = new ast_inspect_list_t( *$tally );
+                  $$ = new cbl_inspect_opers_t( 1, *$tally );
                 }
         |       tallies { need_nume_set(); } tally
                 {
@@ -8935,12 +10274,17 @@ tallies:        { need_nume_set(); } tally
                   if( !next.tally.field ) {
                     // prior tally swallowed one too many
                     cbl_inspect_t& prior = $$->back();
-                    assert(prior.nbound > 0);
-                    assert(prior.opers);
-                    cbl_inspect_oper_t& prior_op = prior.opers[prior.nbound - 1];
-
-                    assert(prior_op.n_identifier_3 > 0 );
-                    next.tally = prior_op.matches[--prior_op.n_identifier_3].matching;
+                    assert(prior.nbound() > 0);
+                    cbl_inspect_oper_t& prior_op = prior.back();
+                    assert(! prior_op.matches.empty() );
+                    assert(prior_op.n_identifier_3() > 0 );
+                    cbl_inspect_match_t wrong_match = prior_op.matches.back();
+                    dbgmsg("moving overeager tally to next clause");
+                    dump_inspect_match(wrong_match);
+                    next.tally = wrong_match.premature_tally();
+                    if( wrong_match.empty() ) {
+                      prior_op.matches.pop_back();
+                    }
                   }
                   if( !next.tally.field ) {
                     error_msg(@$, "missing summation field before FOR");
@@ -8952,44 +10296,37 @@ tallies:        { need_nume_set(); } tally
 
                 /*
                  * numref might be "empty" only because it was consumed by a
-                 * prior insp_mtquals, which can end in a scalar. If that
+                 * prior insp_mtqual, which can end in a scalar. If that
                  * happens, the tallies target, above, takes back the borrowed
                  * scalar and assigns it to be the tally total, as the user
                  * intended.
                  */
 tally:          numeref[total] FOR tally_fors[fors]
-                { // reduce ast_inspect_t to cbl_inspect_t
+                { 
                   if( yydebug && !$total ) {
-                    error_msg(@FOR, "caution: missing summation field before FOR");
+                    dbgmsg("tally: caution: missing summation field before FOR");
                   }
-                  cbl_refer_t total( $total? *$total : cbl_refer_t() );
-                  $$ = new cbl_inspect_t( total, $fors->opers() );
+                  $$ = $fors;
+                  if( $total ) $$->tally = *$total;
                 }
                 ;
 
-tally_fors:     tally_forth
-                { // reduce ast_inspect_oper_t to cbl_inspect_oper_t
-                  cbl_inspect_oper_t oper( $1->bound, $1->matches );
-                  $$ = new ast_inspect_t;
-                  $$ ->push_back(oper);
-                }
-        |       tally_fors tally_forth
-                {
-                  cbl_inspect_oper_t oper( $2->bound, $2->matches );
-                  $1 ->push_back(oper);
-                }
+tally_fors:     tally_forth { $$ = new cbl_inspect_t(1, *$1); }
+        |       tally_fors tally_forth { $$->push_back(*$2); $$ = $1; }
                 ;
 
-tally_forth:    CHARACTERS insp_mtquals[q] scalar[next_tally]
+tally_forth:    CHARACTERS insp_mtqual[q] scalar[next_tally]
                 {
                   // Add ensuing scalar as if it were an argument to CHARACTERS.
                   // It will be moved to the succeeding FOR as its tally.
-                  $q->matching = *$next_tally;
-                  $$ = new ast_inspect_oper_t(*$q);
+                  dbgmsg("saving overeager tally for next clause");
+                  $q->save_premature_tally(*$next_tally);
+                  $$ = new cbl_inspect_oper_t(*$q);
+                  dump_inspect_match($$->matches.back());
                 }
-        |       CHARACTERS insp_mtquals[q]
+        |       CHARACTERS insp_mtqual[q]
                 {
-                  $$ = new ast_inspect_oper_t(*$q);
+                  $$ = new cbl_inspect_oper_t(*$q);
                 }
         |       ALL tally_matches[q]
                 { $q->bound = bound_all_e;
@@ -9002,32 +10339,27 @@ tally_forth:    CHARACTERS insp_mtquals[q] scalar[next_tally]
         |       TRAILING tally_matches[q]
                 { $q->bound = bound_trailing_e;
                   $$ = $q;
-		  if( ! dialect_mf() ) {
-		    dialect_error(@1, "TRAILING", "mf");
-		  }
+                  dialect_ok(@1, MfTrailing, "TRAILING");
                 }
                 ;
 
-tally_matches:  tally_match { $$ = new ast_inspect_oper_t(*$1); }
+tally_matches:  tally_match { $$ = new cbl_inspect_oper_t(*$1); }
         |       tally_matches tally_match
                 { // add to the list of matches for an operand
                   $1->matches.push_back(*$2);
                 }
                 ;
-tally_match:    alpha_val[matching] insp_mtquals[q]
+tally_match:    alpha_val[matching] insp_mtqual[q]
                 { // include the matching field with the qualifiers
                   $$ = $q;
-                  $$->matching = *$matching;
+                  $$->matching(*$matching);
                 }
                 ;
 
 numeref:        %empty { $$ = NULL; need_nume_set(false); }
         |       nume[name] subscripts[subs]
                 {
-                  size_t n = $subs->size();
-                  auto offsets = new cbl_refer_t[n];
-                  std::copy( $subs->begin(), $subs->end(), offsets );
-                  $$ = new cbl_refer_t($name, n, offsets);
+                  $$ = new cbl_refer_t($name, $subs->vectorize());
                 }
         |       nume { $$ = new cbl_refer_t($nume); }
                 ;
@@ -9057,13 +10389,13 @@ qnume:          NUME            { name_queue.qualify(@1, $1); }
 
 replacements:   replacement
                 {
-                  cbl_inspect_t inspect( cbl_refer_t(), $1->opers() );
-                  $$ = new ast_inspect_list_t(inspect);
+                  cbl_inspect_t inspect( cbl_refer_t(), *$1 );
+                  $$ = new cbl_inspect_opers_t(1, inspect);
                 }
                 ;
 replacement:    replace_oper
                 {
-                  $$ = new ast_inspect_t;
+                  $$ = new cbl_inspect_t;
                   $$->push_back( cbl_inspect_oper_t($1->bound, $1->replaces) );
                 }
         |       replacement replace_oper
@@ -9071,9 +10403,9 @@ replacement:    replace_oper
                   $$->push_back( cbl_inspect_oper_t($2->bound, $2->replaces)  );
                 }
                 ;
-replace_oper:   CHARACTERS BY alpha_val[replace] insp_mtquals[q]
+replace_oper:   CHARACTERS BY alpha_val[replace] insp_mtqual[q]
                 {
-                  $$ = new ast_inspect_oper_t( cbl_inspect_replace_t(NULL,
+                  $$ = new cbl_inspect_oper_t( cbl_inspect_replace_t(NULL,
                                                                      *$replace,
                                                                      $q->before,
                                                                      $q->after) );
@@ -9087,21 +10419,22 @@ replace_oper:   CHARACTERS BY alpha_val[replace] insp_mtquals[q]
 
 x_by_ys:        x_by_y
                 {
-                  $$ = new ast_inspect_oper_t(*$1);
+                  $$ = new cbl_inspect_oper_t(*$1);
                 }
         |       x_by_ys x_by_y
                 {
                   $$->replaces.push_back(*$2);
                 }
                 ;
-x_by_y:         alpha_val[matching] BY alpha_val[replace] insp_mtquals[q]
+x_by_y:         alpha_val[matching] BY alpha_val[replace] insp_mtqual[q]
                 {
                   $$ = new cbl_inspect_replace_t(*$matching, *$replace,
                                                    $q->before, $q->after);
                 }
                 ;
 
-insp_mtquals:   %empty     { $$ = new cbl_inspect_match_t; }
+		/* mt may be "empty": match may have no qualifiers */
+insp_mtqual:	%empty { $$ = new cbl_inspect_match_t; }
         |       insp_quals
                 ;
 insp_quals:     insp_qual  {
@@ -9111,6 +10444,7 @@ insp_quals:     insp_qual  {
                   } else {
                     $$->after = *$insp_qual.qual;
                   }
+                  dump_inspect_match(*$$);
                 }
         |       insp_quals insp_qual
                 {
@@ -9136,18 +10470,16 @@ first_leading:  FIRST      { $$ = bound_first_e; }
         |       ALL        { $$ = bound_all_e; }
         |       LEADING    { $$ = bound_leading_e; }
         |       TRAILING   { $$ = bound_trailing_e;
-		  if( ! dialect_mf() ) {
-		    dialect_error(@1, "TRAILING", "mf");
-		  }
+                  dialect_ok(@1, MfTrailing, "TRAILING");
 		}
                 ;
 
-alphaval:       LITERAL { $$ = new_reference(new_literal($1, quoted_e)); }
+alphaval:       LITERAL { $$ = new_reference(new_literal(@1, $1, quoted_e)); }
         |       reserved_value
                 {
                   $$ = new_reference( constant_of(constant_index($1)) );
                 }
-        |       intrinsic_call
+        |       function_call
                 ;
 
 befter:         BEFORE { $$ = BEFORE; }
@@ -9252,9 +10584,7 @@ init_by:        init_category data BY init_data
                 }
                 ;
 init_data:      alpha_val
-        |       NUMSTR   {
-                  $$ = new_reference(new_literal($1.string, $1.radix));
-                }
+        |       num_constant { $$ = new_reference($1); }
                 ;
 
 call:           call_impl end_call
@@ -9270,7 +10600,7 @@ call_impl:      CALL call_body[body]
 		  cbl_ffi_arg_t *pargs = NULL;
                   if( narg > 0 ) {
 		    std::copy( params->elems.begin(),
-			       params->elems.end(), args.begin() );	 
+			       params->elems.end(), args.begin() );
                     pargs = args.data();
                   }
                   ast_call( $body.loc, *$body.ffi_name,
@@ -9287,15 +10617,13 @@ call_cond:      CALL call_body[body] call_excepts[except]
 		  cbl_ffi_arg_t *pargs = NULL;
                   if( narg > 0 ) {
 		    std::copy( params->elems.begin(),
-			       params->elems.end(), args.begin() );	 
+			       params->elems.end(), args.begin() );
                     pargs = args.data();
                   }
                   ast_call( $body.loc, *$body.ffi_name,
                                *$body.ffi_returning, narg, pargs,
                                $except.on_error, $except.not_error, false );
-                  auto handled = ec_type_t( static_cast<size_t>(ec_program_e) |
-                                            static_cast<size_t>(ec_external_e));
-                  current.declaratives_evaluate(handled);
+                  current.declaratives_evaluate();
                 }
                 ;
 end_call:       %empty %prec CALL
@@ -9330,20 +10658,18 @@ call_body:      ffi_name
                 ;
 call_returning:	RETURNING
 	|	GIVING {
-		  if( !dialect_mf() ) {
-		    dialect_error(@1, "CALL ... GIVING", "mf");
-		  }
+                  dialect_ok(@1, MfCallGiving, "CALL ... GIVING");
 		}
 		;
 
 entry:          ENTRY LITERAL
                 { statement_begin(@1, ENTRY);
-                  auto name = new_literal($2, quoted_e);
+                  auto name = new_literal(@2, $2, quoted_e);
                   parser_entry( name );
                 }
         |       ENTRY LITERAL USING parameters
                 { statement_begin(@1, ENTRY);
-                  auto name = new_literal($2, quoted_e);
+                  auto name = new_literal(@2, $2, quoted_e);
                   ffi_args_t *params = $parameters;
                   size_t narg = params? params->elems.size() : 0;
 		  cbl_ffi_arg_t *pargs = NULL;
@@ -9372,7 +10698,12 @@ ffi_name:       scalar
                     $$->field = new_literal(strlen(L.name), L.name, quoted_e);
                   }
                 }
-        |       LITERAL { $$ = new_reference(new_literal($1, quoted_e)); }
+        |       LITERAL
+                {
+                  // Pretend hex-encoded because that means use verbatim.
+                  auto attr = cbl_field_attr_t(quoted_e | hex_encoded_e);
+                  $$ = new_reference(new_literal(@1, $1, attr));
+                }
                 ;
 
 parameters:     parameter { $$ = new ffi_args_t($1); }
@@ -9391,6 +10722,20 @@ ffi_by_ref:     scalar_arg[refer]
                 {
                   $$ = new cbl_ffi_arg_t(by_reference_e, $refer);
                 }
+        |       LITERAL
+                {
+                  cbl_message(@1, MfCallLiteral,
+                              "cannot pass %qs BY REFERENCE", $1.data);
+                  cbl_refer_t *r = new_reference(new_literal(@1, $1, quoted_e));
+                  $$ = new cbl_ffi_arg_t(by_content_e, r);
+                }
+        |       num_literal
+                {
+                  cbl_message(@1, MfCallLiteral,
+                              "cannot pass %qs BY REFERENCE", $1->data.initial);
+                  cbl_refer_t *r = new_reference($1);
+                  $$ = new cbl_ffi_arg_t(by_content_e, r);
+                }
         |       ADDRESS OF scalar_arg[refer]
                 {
                   $$ = new cbl_ffi_arg_t(by_reference_e, $refer, address_of_e);
@@ -9402,14 +10747,14 @@ ffi_by_ref:     scalar_arg[refer]
                 }
                 ;
 
-ffi_by_con:     expr
+ffi_by_con:     cexpr
                 {
                   cbl_refer_t *r = new cbl_refer_t(*$1);
                   $$ = new cbl_ffi_arg_t(by_content_e, r);
                 }
         |       LITERAL
                 {
-                  cbl_refer_t *r = new_reference(new_literal($1, quoted_e));
+                  cbl_refer_t *r = new_reference(new_literal(@1, $1, quoted_e));
                   $$ = new cbl_ffi_arg_t(by_content_e, r);
                 }
         |       OMITTED
@@ -9425,7 +10770,8 @@ ffi_by_val:     by_value_arg
                 }
         |       cce_expr %prec NAME
                 {
-                  auto r = new_reference(new_literal(string_of($1)));
+                  const char *s = $1.s? $1.s : string_of($1.r);
+                  auto r = new_reference(new_literal(@1, s));
                   $$ = new cbl_ffi_arg_t(by_value_e, r);
                 }
         |       ADDRESS OF scalar
@@ -9438,8 +10784,8 @@ ffi_by_val:     by_value_arg
                 }
                 ;
 
-scalar_arg:     scalar
-        |       scalar AS FIXED LENGTH %prec NAME
+scalar_arg:     scalar_any
+        |       scalar_any AS FIXED LENGTH %prec NAME
                 ;
 
 call_excepts:   call_excepts[a] call_except[b] statements %prec CALL
@@ -9484,7 +10830,7 @@ call_except:    EXCEPTION
                 {
                   $$.not_error = NULL;
                   $$.on_error = label_add(LblArith,
-                                          uniq_label("call"), yylineno);
+                                          uniq_label("call"), @1.first_line);
                   if( !$$.on_error ) YYERROR;
                   parser_call_exception( $$.on_error );
 
@@ -9493,15 +10839,15 @@ call_except:    EXCEPTION
                     std::swap($$.on_error, $$.not_error);
                   }
                 }
-        |       OVERFLOW
+        |       OVERFLOW_kw
                 {
                   $$.not_error = NULL;
                   $$.on_error = label_add(LblArith,
-                                          uniq_label("call"), yylineno);
+                                          uniq_label("call"), @1.first_line);
                   if( !$$.on_error ) YYERROR;
                   parser_call_exception( $$.on_error );
 
-                  assert( $1 == OVERFLOW || $1 == NOT );
+                  assert( $1 == OVERFLOW_kw || $1 == NOT );
                   if( $1 == NOT ) {
                     std::swap($$.on_error, $$.not_error);
                   }
@@ -9532,7 +10878,7 @@ alter_tgt:      label_1[old] alter_to label_1[new]
                   cbl_perform_tgt_t tgt( $old, $new );
                   parser_alter(&tgt);
 
-                  auto prog = cbl_label_of( symbol_at(symbol_elem_of($old)->program));
+                  const auto prog = cbl_label_of( symbol_at(symbol_elem_of($old)->program));
                   if( prog->initial ) {
                     cbl_unimplemented("ALTER %s", $old->name);
                   }
@@ -9553,7 +10899,7 @@ go_to:          GOTO labels[args]
                   }
 
 		  for( auto& label : $args->elems ) {
-		    label->used = yylineno;
+		    label->used = @2.first_line;
 		  }
                   cbl_label_t *arg = $args->elems.front();
                   parser_goto( cbl_refer_t(), 1, &arg );
@@ -9565,7 +10911,7 @@ go_to:          GOTO labels[args]
                   std::vector <cbl_label_t *> args($args->elems.size());
 		  std::copy($args->elems.begin(), $args->elems.end(), args.begin());
 		  for( auto& label : $args->elems ) {
-		    label->used = yylineno;
+		    label->used = @2.first_line;
 		  }
                   parser_goto( *$value, args.size(), args.data() );
                 }
@@ -9579,13 +10925,15 @@ go_to:          GOTO labels[args]
 resume:         RESUME NEXT STATEMENT
                 {
                   statement_begin(@1, RESUME);
+                  dialect_not_ok( @1, IsoResume, "RESUME");
                   parser_clear_exception();
                 }
         |       RESUME label_1[tgt]
                 {
                   statement_begin(@1, RESUME);
+                  dialect_not_ok( @1, IsoResume, "RESUME");
                   parser_clear_exception();
-		  $tgt->used = yylineno;
+		  $tgt->used = @1.first_line;
                   parser_goto( cbl_refer_t(), 1, &$tgt );
                 }
                 ;
@@ -9609,14 +10957,16 @@ label_1:        qname
 
                   if( namelocs.size() == 2 ) {
 		    auto nameloc = namelocs.front();
-                    cbl_label_t *sect = label_add(nameloc.loc, LblSection, nameloc.name);
+                    cbl_label_t *sect = symbol_label(PROGRAM,
+                                                     LblSection, 0, nameloc.name);
+                    if( !sect ) sect = label_add(nameloc.loc, LblNone, nameloc.name);
                     isect = symbol_index(symbol_elem_of(sect));
                   }
 
-                  $$ = paragraph_reference(para, isect);
+                  $$ = paragraph_reference(@1, para, isect);
                   assert($$);
-                  if( yydebug ) dbgmsg( "using procedure %s of line %d",
-                                       $$->name, $$->line );
+                  size_t isym = symbol_index(symbol_elem_of($$));
+                  dbgmsg( "using procedure #%lu %s of line %d", isym, $$->name, $$->line );
                 }
         |       NUMSTR
                 {
@@ -9628,21 +10978,20 @@ label_1:        qname
 
   /* string & unstring */
 
-
 string:         string_impl end_string
         |       string_cond end_string
                 ;
 string_impl:    STRING_kw string_body[body]
                 {
                   stringify($body.inputs, *$body.into.first, *$body.into.second);
-                  current.declaratives_evaluate(ec_none_e);
+                  current.declaratives_evaluate();
                 }
                 ;
 string_cond:    STRING_kw string_body[body] on_overflows[over]
                 {
                   stringify($body.inputs, *$body.into.first, *$body.into.second,
                             $over.on_error, $over.not_error);
-                  current.declaratives_evaluate(ec_overflow_e);
+                  current.declaratives_evaluate();
                 }
                 ;
 end_string:     %empty %prec LITERAL
@@ -9688,16 +11037,16 @@ str_delimited:  str_input DELIMITED by str_size
                 ;
 
 str_input:      scalar
-        |       LITERAL { $$ = new_reference(new_literal($1, quoted_e)); }
+        |       LITERAL { $$ = new_reference(new_literal(@1, $1, quoted_e)); }
         |       reserved_value
                 {
                   $$ = new_reference(constant_of(constant_index($1)));
                 }
-        |       intrinsic_call
+        |       function_call
                 ;
 
 str_size:       SIZE   { $$ = new_reference(NULL); }
-        |       LITERAL { $$ = new_reference(new_literal($1, quoted_e)); }
+        |       LITERAL { $$ = new_reference(new_literal(@1, $1, quoted_e)); }
         |       scalar
         |       reserved_value
                 {
@@ -9756,15 +11105,15 @@ on_overflows:   on_overflow[over] statements %prec ADD
                 }
                 ;
 
-on_overflow:    OVERFLOW
+on_overflow:    OVERFLOW_kw
                 {
                   $$.not_error = NULL;
                   $$.on_error = label_add(LblString,
-                                          uniq_label("string"), yylineno);
+                                          uniq_label("string"), @1.first_line);
                   if( !$$.on_error ) YYERROR;
                   parser_string_overflow( $$.on_error );
 
-                  assert( $1 == OVERFLOW || $1 == NOT );
+                  assert( $1 == OVERFLOW_kw || $1 == NOT );
                   if( $1 == NOT ) {
                     std::swap($$.on_error, $$.not_error);
                   }
@@ -9781,14 +11130,14 @@ end_unstring:   %empty %prec UNSTRING
 unstring_impl:  UNSTRING unstring_body[body]
                 {
                   unstringify( *$body.input, $body.delimited, $body.into );
-                  current.declaratives_evaluate(ec_none_e);
+                  current.declaratives_evaluate();
                 }
                 ;
 unstring_cond:  UNSTRING unstring_body[body] on_overflows[over]
                 {
                   unstringify( *$body.input, $body.delimited, $body.into,
                                $over.on_error, $over.not_error );
-                  current.declaratives_evaluate(ec_overflow_e);
+                  current.declaratives_evaluate();
                 }
                 ;
 
@@ -9800,10 +11149,10 @@ unstring_body:  unstring_src[src] uns_delimited INTO uns_into[into]
                   $$.into = $into;
                 }
 unstring_src:   scalar
-        |       intrinsic_call
+        |       function_call
         |       LITERAL
                 {
-                  $$ = new_reference(new_literal($1, quoted_e));
+                  $$ = new_reference(new_literal(@1, $1, quoted_e));
                 }
                 ;
 
@@ -9880,8 +11229,7 @@ uns_tgt:        scalar[tgt]
                 }
                 ;
 
-  /* intrinsics */
-intrinsic_call: function intrinsic { // "intrinsic" includes UDFs.
+function_call:  function intrinsic { // "intrinsic" includes UDFs.
                   $$ = new_reference($intrinsic);
                   $$->field->attr |= constant_e;
                 }
@@ -9893,7 +11241,7 @@ intrinsic_call: function intrinsic { // "intrinsic" includes UDFs.
                     YYERROR;
                   }
                   if( $intrinsic->type != FldAlphanumeric ) {
-                    error_msg(@ref, "'%s' only AlphaNumeric fields accept refmods",
+                    error_msg(@ref, "%qs only AlphaNumeric fields accept refmods",
                              $intrinsic->name);
                     YYERROR;
                   }
@@ -9902,13 +11250,13 @@ intrinsic_call: function intrinsic { // "intrinsic" includes UDFs.
                   $$->field->attr |= constant_e;
                 }
 	|	function NAME {
-		  error_msg(@NAME, "no such function: %s", $NAME);
+		  error_msg(@NAME, "no such function: %qs", $NAME);
 		  YYERROR;
 		}
 
                 ;
 function:       %empty   %prec FUNCTION
-                {
+                { // typed_name in scan_ante.h allows FUNCTION keyword to be ommitted.
                   statement_begin(@$, FUNCTION);
                 }
         |       FUNCTION
@@ -9918,23 +11266,38 @@ function:       %empty   %prec FUNCTION
                 ;
 
 function_udf:   FUNCTION_UDF '(' arg_list[args] ')' {
-		  std::vector<function_descr_arg_t> params;
                   auto L = cbl_label_of(symbol_at($1));
-		  if( ! current.udf_args_valid(L, $args->refers, params) ) {
-		    YYERROR;
-		  }
-                  $$ = new_temporary_clone(cbl_field_of(symbol_at(L->returning)));
+		  const auto returning = cbl_field_of(symbol_at(L->returning));
+                  $$ = new_temporary_clone(returning);
+		  $$->data.initial = returning->name; // user's name for the field
+                  auto proto = function_prototypes.find($1);
+                  if( yydebug && proto == function_prototypes.end() ) {
+                    dbgmsg( "function_udf:%d: %s not found by prototype_args",
+                            __LINE__, L->name );
+                  }
+                  gcc_assert(proto != function_prototypes.end()); // lexer asked parser for UDF
+                  const auto& formals = proto->second;
+                  auto  pf = formals.begin(),
+                       epf = formals.end();
                   std::vector <cbl_ffi_arg_t> args($args->refers.size());
-		  size_t i = 0;
 		  // Pass parameters as defined by the function.
-                  std::transform( $args->refers.begin(), $args->refers.end(), args.begin(),
-				  [params, &i]( cbl_refer_t& arg ) {
-				    function_descr_arg_t param = params.at(i++);
-				    auto ar = new cbl_refer_t(arg);
-				    cbl_ffi_arg_t actual(param.crv, ar);
-				    return actual;
-				  } );
-		  auto name = new_literal(strlen(L->name), L->name, quoted_e);
+                  std::transform( $args->refers.begin(),
+                                  $args->refers.end(), args.begin(),
+                                  [&pf, epf]( const cbl_refer_t& r ) {
+                                    auto arg = new cbl_refer_t(r);
+                                    auto crv = by_reference_e;
+                                    if( pf != epf ) {
+                                      crv = pf->crv;
+                                      pf++;
+                                    }
+                                    cbl_ffi_arg_t actual(crv, arg);
+                                    return actual;
+                                  } );
+                  verify_args(@1, L->name, args.size(), args.data());
+                  // Pretend hex-encoded because that means use verbatim.
+                  auto attr = cbl_field_attr_t(quoted_e | hex_encoded_e);
+                  auto name = new_literal(strlen(L->name), L->name, attr);
+                  symbol_temporary_location(name, @1);
 		  ast_call( @1, name, $$, args.size(), args.data(), NULL, NULL, true );
                 }
         |       FUNCTION_UDF_0 {
@@ -9942,9 +11305,14 @@ function_udf:   FUNCTION_UDF '(' arg_list[args] ')' {
                   static cbl_ffi_arg_t *args = NULL;
 
                   auto L = cbl_label_of(symbol_at($1));
-                  $$ = new_temporary_clone(cbl_field_of(symbol_at(L->returning)));
+		  const auto returning = cbl_field_of(symbol_at(L->returning));
+                  $$ = new_temporary_clone(returning);
+		  $$->data.initial = returning->name; // user's name for the field
 
-                  auto name = new_literal(strlen(L->name), L->name, quoted_e);
+                  // Pretend hex-encoded because that means use verbatim.
+                  auto attr = cbl_field_attr_t(quoted_e | hex_encoded_e);
+                  auto name = new_literal(strlen(L->name), L->name, attr);
+                  symbol_temporary_location(name, @1);
                   ast_call( @1, name, $$, narg, args, NULL, NULL, true );
                 }
                 ;
@@ -9963,7 +11331,6 @@ function_udf:   FUNCTION_UDF '(' arg_list[args] ')' {
                  *  var: [ALL] LITERAL, NUMSTR, instrinsic, or scalar
                  *  num_operand: signed NUMSTR/ZERO, instrinsic, or scalar
                  *  alpahaval: LITERAL, reserved_value, instrinsic, or scalar
-                 * Probably any numeric argument could be an expression.
                  */
 intrinsic:      function_udf
         |       intrinsic0
@@ -9976,272 +11343,328 @@ intrinsic:      function_udf
 								    args.data());
                   if( p != NULL ) {
 		    auto loc = symbol_field_location(field_index(p->field));
-                    error_msg(loc, "FUNCTION %s has "
-                              "inconsistent parameter type %zu ('%s')",
-                              keyword_str($1), p - args.data(), name_of(p->field) );
+                    error_msg(loc, "FUNCTION %qs has "
+                              "inconsistent parameter type %ld (%qs)",
+                              keyword_str($1), (long)(p - args.data()), name_of(p->field) );
                     YYERROR;
                   }
-                  $$ = is_numeric(args[0].field)?
-                         new_tempnumeric_float() :
-                         new_alphanumeric(args[0].field->data.capacity);
-
+                  $$ = intrinsic_return_field($1, args);
+		  $$->data.initial = keyword_str($1);
                   parser_intrinsic_callv( $$, intrinsic_cname($1),
 					  args.size(), args.data() );
                 }
 
-        |       PRESENT_VALUE '(' expr_list[args] ')'
+        |       PRESENT_VALUE '(' arg_list[args] ')'
                 {
                   static char s[] = "__gg__present_value";
                   location_set(@1);
-                  $$ = new_tempnumeric_float();
+                  $$ = new_tempnumeric_float("PRESENT-VALUE");
                   size_t n = $args->size();
                   assert(n > 0);
                   if( n < 2 ) {
-                    error_msg(@args, "PRESENT VALUE requires 2 parameters");
+                    error_msg(@args, "PRESENT-VALUE requires 2 parameters");
                     YYERROR;
                   }
                   std::vector <cbl_refer_t> args(n);
 		  std::copy( $args->begin(), $args->end(), args.begin() );
+		  bool ok = std::all_of( args.begin(),
+					 args.end(), [loc = @1]( auto r ) {
+					     return require_numeric(loc, r); } );
+		  if( ! ok ) YYERROR;
                   parser_intrinsic_callv( $$, s, args.size(), args.data() );
                 }
 
 	|       BASECONVERT  '(' varg[r1] varg[r2] varg[r3] ')' {
                   location_set(@1);
-                  $$ = new_tempnumeric();
+                  $$ = new_alphanumeric("BASECONVERT", $r1->field->codeset.encoding);
 		  cbl_unimplemented("BASECONVERT");
                   if( ! intrinsic_call_3($$, BASECONVERT, $r1, $r2, $r3 )) YYERROR;
                 }
-        |       BIT_OF  '(' expr[r1] ')' {
+        |       BIT_OF  '(' cexpr[r1] ')' {
                   location_set(@1);
-                  $$ = new_alphanumeric(8 * $r1->field->data.capacity);
+                  $$ = new_alphanumeric("BIT-OF");
                   if( ! intrinsic_call_1($$, BIT_OF, $r1, @r1)) YYERROR;
                 }
-        |       CHAR  '(' expr[r1] ')' {
+        |       CHAR  '(' cexpr[r1] ')' {
                   location_set(@1);
-                  $$ = new_alphanumeric(1);
+                  $$ = new_alphanumeric("CHAR");
                   if( ! intrinsic_call_1($$, CHAR, $r1, @r1)) YYERROR;
                 }
-
-	|       CONVERT  '(' varg[r1] convert_src[src] convert_dst[dst] ')' {
+                /* convert formulations: 
+                 *  1. ANY to ALNUM HEX, or NAT HEX
+                 *  2. HEX to BYTE
+                 *  3. ALNUM to NAT, ALNUM HEX, or NAT HEX
+                 *  4. NAT to ALNUM, ALNUM HEX, or NAT HEX
+                 */
+	|       CONVERT  '(' varg[r1] ANY convert_alpha[dst] convert_hex[hex]')' {
                   location_set(@1);
-                  $$ = new_alphanumeric(1);
-		  cbl_unimplemented("CONVERT");
-                  /* if( ! intrinsic_call_3($$, CONVERT, $r1, $src, $dst) ) YYERROR; */
+                  $$ = new_alphanumeric("CONVERT");
+                  unsigned int dst = ($dst | $hex );
+                  parser_intrinsic_convert($$, *$r1, convert_any_e, dst);
+                }
+	|       CONVERT  '(' varg[r1] ANY convert_nat[dst] convert_hex[hex]')' {
+                  location_set(@1);
+                  $$ = new_alphanumeric("CONVERT", current_encoding('N'));
+                  unsigned int dst = ($dst | $hex );
+                  parser_intrinsic_convert($$, *$r1, convert_any_e, dst);
+                }
+	|       CONVERT  '(' varg[r1] HEX BYTE ')' {
+                  location_set(@1);
+                  $$ = new_alphanumeric("CONVERT");
+                  parser_intrinsic_convert($$, *$r1, convert_hex_e, convert_byte_e);
+                }
+	|       CONVERT  '(' varg[r1] convert_alpha[src] convert_nat[dst] ')' {
+                  location_set(@1);
+                  $$ = new_alphanumeric("CONVERT", current_encoding('N'));
+                  auto src = convert_type_t($src);
+                  parser_intrinsic_convert($$, *$r1, src, $dst);
+                }
+	|       CONVERT  '(' varg[r1] convert_alpha[src] convert_alpha[dst] convert_hex[hex] ')' {
+                  location_set(@1);
+                  $$ = new_alphanumeric("CONVERT");
+                  auto src = convert_type_t($src);
+                  unsigned int dst = ($dst | $hex );
+                  parser_intrinsic_convert($$, *$r1, src, dst);
+                }
+	|       CONVERT  '(' varg[r1] convert_nat[src] convert_alpha[dst] ')' {
+                  location_set(@1);
+                  $$ = new_alphanumeric("CONVERT");
+                  auto src = convert_type_t($src);
+                  parser_intrinsic_convert($$, *$r1, src, $dst);
+                }
+	|       CONVERT  '(' varg[r1] convert_nat[src] convert_nat[dst] convert_hex[hex] ')' {
+                  location_set(@1);
+                  $$ = new_alphanumeric("CONVERT", current_encoding('N'));
+                  auto src = convert_type_t($src);
+                  unsigned int dst = ($dst | $hex );
+                  parser_intrinsic_convert($$, *$r1, src, dst);
                 }
 
         |       DISPLAY_OF  '(' varg[r1]  ')' {
                   location_set(@1);
-                  uint32_t len = $r1->field->data.capacity;
-                  $$ = new_alphanumeric(4 * len);
+                  $$ = new_alphanumeric("DISPLAY-OF");
                   if( ! intrinsic_call_2($$, DISPLAY_OF, $r1, NULL) ) YYERROR;
                 }
         |       DISPLAY_OF  '(' varg[r1] varg[r2]  ')' {
                   location_set(@1);
-                  uint32_t len = $r1->field->data.capacity
-                    + $r2->field->data.capacity;
-                  $$ = new_alphanumeric(4 * len);
+                  $$ = new_alphanumeric("DISPLAY-OF");
                   if( ! intrinsic_call_2($$, DISPLAY_OF, $r1, $r2) ) YYERROR;
                 }
 
         |       EXCEPTION_FILE filename {
                   location_set(@1);
-                  $$ = new_alphanumeric(256);
+                  $$ = new_alphanumeric("EXCEPTION-FILE");
                   parser_exception_file( $$, $filename );
                 }
 
-        |       FIND_STRING '(' varg[r1] last start_after anycase ')' {
+                /* FIND-STRING argument-1 argument-2 
+                 * [LAST] [[START AFTER] argument-3] [ANYCASE] */
+        |       FIND_STRING '(' varg[r1] varg[r2] last start_after[after] anycase ')' {
                   location_set(@1);
-                  $$ = new_alphanumeric($r1->field->data.capacity);
-                  /* auto r1 = new_reference(new_literal(strlen($r1), $r1, quoted_e)); */
-		  cbl_unimplemented("FIND_STRING");
-                  /* if( ! intrinsic_call_4($$, FIND_STRING, r1, $r2) ) YYERROR; */
+                  $$ = new_tempnumeric("FIND-STRING");
+                  if( $after && ! is_numeric($after->field) ) {
+                    error_msg(@after, "START AFTER %qs must be numeric", $after->name());
+                    YYERROR;
+                  }
+                  parser_intrinsic_find_string($$, *$r1, *$r2, $after, $last, $anycase);
                 }
 
-        |       FORMATTED_DATE '(' DATE_FMT[r1] expr[r2] ')' {
+        |       FORMATTED_DATE '(' DATE_FMT[r1] cexpr[r2] ')' {
                   location_set(@1);
-                  $$ = new_alphanumeric(MAXLENGTH_FORMATTED_DATE);
+                  $$ = new_alphanumeric("FORMATTED-DATE");
                   auto r1 = new_reference(new_literal(strlen($r1), $r1, quoted_e));
+                  symbol_temporary_location(r1->field, @r1);
                   if( ! intrinsic_call_2($$, FORMATTED_DATE, r1, $r2) ) YYERROR;
                 }
 
 
-        |       FORMATTED_DATETIME '(' DATETIME_FMT[r1] expr[r2]
-                                                        expr[r3] ')' {
+        |       FORMATTED_DATETIME '(' DATETIME_FMT[r1] cexpr[r2]
+                                                        cexpr[r3] ')' {
                   location_set(@1);
-                  $$ = new_alphanumeric(MAXLENGTH_FORMATTED_DATETIME);
+                  $$ = new_alphanumeric("FORMATTED-DATETIME");
                   auto r1 = new_reference(new_literal(strlen($r1), $r1, quoted_e));
+                  symbol_temporary_location(r1->field, @r1);
                   static cbl_refer_t r3(literally_zero);
                   if( ! intrinsic_call_4($$, FORMATTED_DATETIME,
                                          r1, $r2, $r3, &r3) ) YYERROR;
                 }
-        |       FORMATTED_DATETIME '(' DATETIME_FMT[r1] expr[r2]
-                                        expr[r3] expr[r4] ')' {
+        |       FORMATTED_DATETIME '(' DATETIME_FMT[r1] cexpr[r2]
+                                        cexpr[r3] cexpr[r4] ')' {
                   location_set(@1);
-                  $$ = new_alphanumeric(MAXLENGTH_FORMATTED_DATETIME);
+                  $$ = new_alphanumeric("FORMATTED-DATETIME");
                   auto r1 = new_reference(new_literal(strlen($r1), $r1, quoted_e));
+                  symbol_temporary_location(r1->field, @r1);
                   if( ! intrinsic_call_4($$, FORMATTED_DATETIME,
                                              r1, $r2, $r3, $r4) ) YYERROR;
                 }
         |       FORMATTED_DATETIME '(' error ')' {
                   YYERROR;
                 }
-        |       FORMATTED_TIME '(' TIME_FMT[r1] expr[r2]
-                                                expr[r3]  ')' {
+        |       FORMATTED_TIME '(' TIME_FMT[r1] cexpr[r2]
+                                                cexpr[r3]  ')' {
                   location_set(@1);
-                  $$ = new_alphanumeric(MAXLENGTH_FORMATTED_TIME);
+                  $$ = new_alphanumeric("FORMATTED-DATETIME");
                   auto r1 = new_reference(new_literal(strlen($r1), $r1, quoted_e));
+                  symbol_temporary_location(r1->field, @r1);
                   if( ! intrinsic_call_3($$, FORMATTED_TIME,
                                              r1, $r2, $r3) ) YYERROR;
                 }
-        |       FORMATTED_TIME '(' TIME_FMT[r1] expr[r2]  ')' {
+        |       FORMATTED_TIME '(' TIME_FMT[r1] cexpr[r2]  ')' {
                   location_set(@1);
-                  $$ = new_alphanumeric(MAXLENGTH_FORMATTED_TIME);
-                  auto r3 = new_reference(new_literal("0"));
+                  $$ = new_alphanumeric("FORMATTED-TIME");
                   auto r1 = new_reference(new_literal(strlen($r1), $r1, quoted_e));
+                  auto r3 = new_reference(new_constant("0"));
+                  symbol_temporary_location(r1->field, @r1);
                   if( ! intrinsic_call_3($$, FORMATTED_TIME,
                                              r1, $r2, r3) ) YYERROR;
                 }
         |       FORMATTED_CURRENT_DATE '(' DATETIME_FMT[r1] ')' {
                   location_set(@1);
-                  $$ = new_alphanumeric(MAXLENGTH_FORMATTED_DATETIME);
+                  $$ = new_alphanumeric("FORMATTED-CURRENT_DATE");
                   auto r1 = new_reference(new_literal(strlen($r1), $r1, quoted_e));
+                  symbol_temporary_location(r1->field, @r1);
                   if( ! intrinsic_call_1($$, FORMATTED_CURRENT_DATE, r1, @r1) )
                                          YYERROR;
                 }
         |       TEST_FORMATTED_DATETIME '(' DATE_FMT[r1] varg[r2] ')' {
-                location_set(@1);
-                  $$ = new_tempnumeric();
+                  location_set(@1);
+		  $$ = new_tempnumeric("TEST-FORMATTED-DATETIME");
                   auto r1 = new_reference(new_literal(strlen($r1), $r1, quoted_e));
+                  symbol_temporary_location(r1->field, @r1);
                   if( ! intrinsic_call_2($$, TEST_FORMATTED_DATETIME,
                                               r1, $r2) ) YYERROR;
                 }
         |       TEST_FORMATTED_DATETIME '(' TIME_FMT[r1] varg[r2] ')' {
                 location_set(@1);
-                  $$ = new_tempnumeric();
+		$$ = new_tempnumeric("TEST-FORMATTED-DATETIME");
                   auto r1 = new_reference(new_literal(strlen($r1), $r1, quoted_e));
+                  symbol_temporary_location(r1->field, @r1);
                   if( ! intrinsic_call_2($$, TEST_FORMATTED_DATETIME,
                                               r1, $r2) ) YYERROR;
                 }
         |       TEST_FORMATTED_DATETIME '(' DATETIME_FMT[r1] varg[r2] ')'
                 {
                 location_set(@1);
-                  $$ = new_tempnumeric();
+		$$ = new_tempnumeric("TEST-FORMATTED-DATETIME");
                   auto r1 = new_reference(new_literal(strlen($r1), $r1, quoted_e));
+                  symbol_temporary_location(r1->field, @r1);
                   if( ! intrinsic_call_2($$, TEST_FORMATTED_DATETIME,
                                               r1, $r2) ) YYERROR;
                 }
         |       INTEGER_OF_FORMATTED_DATE '(' DATE_FMT[r1] varg[r2] ')' {
                 location_set(@1);
-                  $$ = new_tempnumeric();
+		$$ = new_tempnumeric("INTEGER-OF-FORMATTED-DATE");
                   auto r1 = new_reference(new_literal(strlen($r1), $r1, quoted_e));
+                  symbol_temporary_location(r1->field, @r1);
                   if( ! intrinsic_call_2($$, INTEGER_OF_FORMATTED_DATE,
                                               r1, $r2) ) YYERROR;
                 }
         |       INTEGER_OF_FORMATTED_DATE '(' DATETIME_FMT[r1] varg[r2] ')'
                 {
                 location_set(@1);
-                  $$ = new_tempnumeric();
+		$$ = new_tempnumeric("INTEGER-OF-FORMATTED-DATE");
                   auto r1 = new_reference(new_literal(strlen($r1), $r1, quoted_e));
+                  symbol_temporary_location(r1->field, @r1);
                   if( ! intrinsic_call_2($$, INTEGER_OF_FORMATTED_DATE,
                                               r1, $r2) ) YYERROR;
                 }
         |       SECONDS_FROM_FORMATTED_TIME '(' TIME_FMT[r1] varg[r2] ')' {
                 location_set(@1);
-                  $$ = new_tempnumeric();
+		$$ = new_tempnumeric("SECONDS-FROM-FORMATTED-TIME");
                   auto r1 = new_reference(new_literal(strlen($r1), $r1, quoted_e));
+                  symbol_temporary_location(r1->field, @r1);
                   if( ! intrinsic_call_2($$, SECONDS_FROM_FORMATTED_TIME,
                                               r1, $r2) ) YYERROR;
                 }
         |       SECONDS_FROM_FORMATTED_TIME '(' DATETIME_FMT[r1] varg[r2] ')'
                 {
                 location_set(@1);
-                  $$ = new_tempnumeric();
+		$$ = new_tempnumeric("SECONDS-FROM-FORMATTED-TIME");
                   auto r1 = new_reference(new_literal(strlen($r1), $r1, quoted_e));
+                  symbol_temporary_location(r1->field, @r1);
                   if( ! intrinsic_call_2($$, SECONDS_FROM_FORMATTED_TIME,
                                               r1, $r2) ) YYERROR;
                 }
 
         |       HEX_OF  '(' varg[r1] ')' {
                   location_set(@1);
-                  $$ = new_alphanumeric(2 * $r1->field->data.capacity);
+                  $$ = new_alphanumeric("HEX-OF");
                   if( ! intrinsic_call_1($$, HEX_OF, $r1, @r1)) YYERROR;
                 }
 	|	LENGTH '(' tableish[val] ')' {
                   location_set(@1);
-                  $$ = new_tempnumeric();
-		  $$->clear_attr(signable_e);
+                  $$ = new_tempnumeric("LENGTH", none_e);
 		  parser_set_numeric($$, $val->field->size());
 		  if( ! intrinsic_call_1($$, LENGTH, $val, @val)) YYERROR;
 		}
 	|	LENGTH '(' varg1a[val] ')' {
                   location_set(@1);
-                  $$ = new_tempnumeric();
-		  $$->clear_attr(signable_e);
-		  parser_set_numeric($$, $val->field->data.capacity);
+                  $$ = new_tempnumeric("LENGTH", none_e);
+		  parser_set_numeric($$, $val->field->data.capacity());
 		  if( ! intrinsic_call_1($$, LENGTH, $val, @val)) YYERROR;
 		}
         |       lopper_case[func] '(' alpha_val[r1] ')' {
                   location_set(@1);
-                  $$ = new_alphanumeric($r1->field->data.capacity);
+                  $$ = new_alphanumeric("lopper_case[func]");
                   if( ! intrinsic_call_1($$, $func, $r1, @r1)) YYERROR;
                 }
 
 	|	MODULE_NAME '(' module_type[type] ')'
 		{
-		  $$ = new_alphanumeric(sizeof(cbl_name_t));
+		  $$ = new_alphanumeric("MODULE-NAME");
 		  parser_module_name( $$, $type );
 		}
 
         |       NUMVAL_C '(' varg[r1] numval_locale[r2] anycase ')' {
                   location_set(@1);
-                  $$ = new_tempnumeric();
+                  $$ = new_tempnumeric("NUMVAL-C");
                   parser_intrinsic_numval_c( $$, *$r1, $r2.is_locale,
                                                       *$r2.arg2, $anycase );
                 }
         |       ORD  '(' alpha_val[r1] ')'
                 {
                   location_set(@1);
-                  $$ = new_tempnumeric();
+                  $$ = new_tempnumeric("ORD", none_e);
                   if( ! intrinsic_call_1($$, ORD, $r1, @r1)) YYERROR;
                 }
         |       RANDOM
                 {
                   location_set(@1);
-                  $$ = new_tempnumeric_float();
+                  $$ = new_tempnumeric_float("RANDOM");
                   parser_intrinsic_call_0( $$, intrinsic_cname(RANDOM) );
                 }
-        |       RANDOM_SEED expr[r1] ')'
+        |       RANDOM_SEED cexpr[r1] ')'
                 { // left parenthesis consumed by lexer
                   location_set(@1);
-                  $$ = new_tempnumeric_float();
+                  $$ = new_tempnumeric_float("RANDOM-SEED");
                   if( ! intrinsic_call_1($$, RANDOM, $r1, @r1)) YYERROR;
                 }
 
         |       STANDARD_COMPARE  '(' varg[r1] varg[r2] varg[r3] varg[r4] ')'
                 {
                   location_set(@1);
-                  $$ = new_tempnumeric();
+                  $$ = new_tempnumeric("STANDARD-COMPARE");
 		  cbl_unimplemented("STANDARD-COMPARE");
                   /* if( ! intrinsic_call_4($$, STANDARD_COMPARE, $r1) ) YYERROR; */
                 }
         |       STANDARD_COMPARE  '(' varg[r1] varg[r2] varg[r3]  ')'
                 {
                   location_set(@1);
-                  $$ = new_tempnumeric();
+                  $$ = new_tempnumeric("STANDARD-COMPARE");
 		  cbl_unimplemented("STANDARD-COMPARE");
                   /* if( ! intrinsic_call_4($$, STANDARD_COMPARE, $r1) ) YYERROR; */
                 }
         |       STANDARD_COMPARE  '(' varg[r1] varg[r2] ')'
                 {
                   location_set(@1);
-                  $$ = new_tempnumeric();
+                  $$ = new_tempnumeric("STANDARD-COMPARE");
 		  cbl_unimplemented("STANDARD-COMPARE");
                   /* if( ! intrinsic_call_4($$, STANDARD_COMPARE, $r1) ) YYERROR; */
                 }
 
         |       SUBSTITUTE '(' varg[r1] subst_inputs[inputs] ')' {
                   location_set(@1);
-                  $$ = new_alphanumeric(64);
+                  $$ = new_alphanumeric("SUBSTITUTE");
                   std::vector <cbl_substitute_t> args($inputs->size());
                   std::transform( $inputs->begin(), $inputs->end(), args.begin(),
                                   []( const substitution_t& arg ) {
@@ -10257,7 +11680,7 @@ intrinsic:      function_udf
 
         |       TEST_NUMVAL_C '(' varg[r1] numval_locale[r2] anycase ')' {
                   location_set(@1);
-                  $$ = new_tempnumeric();
+                  $$ = new_tempnumeric("parser_intrinsic_subst($$,");
                   parser_intrinsic_numval_c( $$, *$r1, $r2.is_locale,
                                                  *$r2.arg2, $anycase, true );
                 }
@@ -10265,7 +11688,11 @@ intrinsic:      function_udf
                   error_msg(@error, "invalid TRIM argument");
                   YYERROR;
                 }
-        |       TRIM '(' expr[r1] trim_trailing ')'
+                /*
+                 * TRIM (arg-1 arg-2a arg-2b) is the same as 
+                 * TRIM (TRIM (arg-1 arg-2a) arg-2b).
+                 */
+        |       TRIM '(' cexpr[r1] trim_trailing[how] trim_expr[args2] ')'
                 {
                   location_set(@1);
                    switch( $r1->field->type ) {
@@ -10278,35 +11705,38 @@ intrinsic:      function_udf
                    default:
                      // BLANK WHEN ZERO implies numeric-edited, so OK
                      if( $r1->field->has_attr(blank_zero_e) ) {
+                       dbgmsg("logic error: must be numeric-edited");
+                       gcc_unreachable();
                        break;
                      }
                      error_msg(@r1, "TRIM argument must be alphanumeric");
                      YYERROR;
                      break;
                   }
-                  $$ = new_alphanumeric($r1->field->data.capacity);
-                  cbl_refer_t * how = new_reference($trim_trailing);
-                  if( ! intrinsic_call_2($$, TRIM, $r1, how) ) YYERROR;
-                }
+                  $$ = new_alphanumeric("TRIM", $r1->field->codeset.encoding);
+                  std::vector<cbl_refer_t> args($args2->args.begin(),
+                                                $args2->args.end());
+                  parser_trim($$, *$r1, $how, args);
+                }  
 
-        |       USUBSTR '(' alpha_val[r1] expr[r2] expr[r3]  ')' {
+        |       USUBSTR '(' alpha_val[r1] cexpr[r2] cexpr[r3]  ')' {
                   location_set(@1);
-                  $$ = new_alphanumeric(32);  // how long?
+                  $$ = new_alphanumeric("USUBSTR");
                   if( ! intrinsic_call_3($$, FORMATTED_DATETIME,
                                              $r1, $r2, $r3) ) YYERROR;
                 }
 
-        |       intrinsic_I  '(' expr[r1] ')'
+        |       intrinsic_I  '(' cexpr[r1] ')'
                 {
                   location_set(@1);
-                  $$ = new_tempnumeric();
+                  $$ = new_tempnumeric(keyword_str($1));
                   if( ! intrinsic_call_1($$, $1, $r1, @r1)) YYERROR;
                 }
 
-        |       intrinsic_N  '(' expr[r1] ')'
+        |       intrinsic_N  '(' cexpr[r1] ')'
                 {
                   location_set(@1);
-                  $$ = new_tempnumeric_float();
+                  $$ = new_tempnumeric_float(keyword_str($1));
                   if( ! intrinsic_call_1($$, $1, $r1, @r1)) YYERROR;
                 }
 
@@ -10316,17 +11746,14 @@ intrinsic:      function_udf
                   auto type = intrinsic_return_type($1);
                   switch(type) {
                   case FldAlphanumeric:
-                    $$ = new_alphanumeric($r1->field->data.capacity);
+                    $$ = new_alphanumeric(keyword_str($1));
                     break;
                   default:
-                    if( $1 == NUMVAL || $1 == NUMVAL_F )
-                      {
-                      $$ = new_temporary(FldFloat);
-                      }
-                    else
-                      {
-                      $$ = new_temporary(type);
-                      }
+                    if( $1 == NUMVAL || $1 == NUMVAL_F ) {
+			$$ = new_temporary(FldFloat, keyword_str($1));
+		    } else {
+                      $$ = new_temporary(type, keyword_str($1));
+		    }
                   }
                   if( $1 == NUMVAL_F ) {
 		    if( is_literal($r1->field) && ! is_numeric($r1->field->type) ) {
@@ -10338,161 +11765,161 @@ intrinsic:      function_udf
                   if( ! intrinsic_call_1($$, $1, $r1, @r1)) YYERROR;
                 }
 
-        |       intrinsic_I2 '(' expr[r1] expr[r2] ')'
+        |       intrinsic_I2 '(' cexpr[r1] cexpr[r2] ')'
                 {
                   location_set(@1);
-                  $$ = new_tempnumeric();
+                  $$ = new_tempnumeric("intrinsic_I2");
                   if( ! intrinsic_call_2($$, $1, $r1, $r2) ) YYERROR;
                 }
 
-        |       DATE_TO_YYYYMMDD '(' expr[r1] ')'
+        |       DATE_TO_YYYYMMDD '(' cexpr[r1] ')'
                 {
                   location_set(@1);
                   static auto r2 = new_reference(FldNumericDisplay, "50");
-                  static auto one = new cbl_refer_t( new_literal("1") );
-                  static auto four = new cbl_refer_t( new_literal("4") );
+                  static auto one = new cbl_refer_t( new_constant("1") );
+                  static auto four = new cbl_refer_t( new_constant("4") );
                   cbl_span_t year(one, four);
-                  auto r3 = new_reference(new_alphanumeric(21));
+                  auto r3 = new_reference(new_alphanumeric());
                   r3->refmod = year;
 
                   parser_intrinsic_call_0( r3->field, "__gg__current_date" );
 
-                  $$ = new_tempnumeric();
+                  $$ = new_tempnumeric("DATE_TO_YYYYMMDD");
                   if( ! intrinsic_call_3($$, DATE_TO_YYYYMMDD,
                                          $r1, r2, r3) ) YYERROR;
                 }
 
-        |       DATE_TO_YYYYMMDD '(' expr[r1] expr[r2] ')'
+        |       DATE_TO_YYYYMMDD '(' cexpr[r1] cexpr[r2] ')'
                 {
                   location_set(@1);
-                  static auto one = new cbl_refer_t( new_literal("1") );
-                  static auto four = new cbl_refer_t( new_literal("4") );
+                  static auto one = new cbl_refer_t( new_constant("1") );
+                  static auto four = new cbl_refer_t( new_constant("4") );
                   cbl_span_t year(one, four);
-                  auto r3 = new_reference(new_alphanumeric(21));
+                  auto r3 = new_reference(new_alphanumeric());
                   r3->refmod = year;
 
                   parser_intrinsic_call_0( r3->field, "__gg__current_date" );
 
-                  $$ = new_tempnumeric();
+                  $$ = new_tempnumeric("DATE_TO_YYYYMMDD");
                   if( ! intrinsic_call_3($$, DATE_TO_YYYYMMDD,
                                          $r1, $r2, r3) ) YYERROR;
                 }
 
-        |       DATE_TO_YYYYMMDD '(' expr[r1]
-                                     expr[r2] expr[r3] ')'
+        |       DATE_TO_YYYYMMDD '(' cexpr[r1]
+                                     cexpr[r2] cexpr[r3] ')'
                 {
                   location_set(@1);
-                  $$ = new_tempnumeric();
+                  $$ = new_tempnumeric("DATE_TO_YYYYMMDD");
                   if( ! intrinsic_call_3($$, DATE_TO_YYYYMMDD,
                                          $r1, $r2, $r3) ) YYERROR;
                 }
 
-        |       DAY_TO_YYYYDDD '(' expr[r1] ')'
+        |       DAY_TO_YYYYDDD '(' cexpr[r1] ')'
                 {
                   location_set(@1);
                   static auto r2 = new_reference(FldNumericDisplay, "50");
-                  static auto one = new cbl_refer_t( new_literal("1") );
-                  static auto four = new cbl_refer_t( new_literal("4") );
+                  static auto one = new cbl_refer_t( new_constant("1") );
+                  static auto four = new cbl_refer_t( new_constant("4") );
                   cbl_span_t year(one, four);
-                  auto r3 = new_reference(new_alphanumeric(21));
+                  auto r3 = new_reference(new_alphanumeric());
                   r3->refmod = year;
 
                   parser_intrinsic_call_0( r3->field, "__gg__current_date" );
 
-                  $$ = new_tempnumeric();
+                  $$ = new_tempnumeric("DAY_TO_YYYYDDD");
                   if( ! intrinsic_call_3($$, DAY_TO_YYYYDDD,
                                          $r1, r2, r3) ) YYERROR;
                 }
 
-        |       DAY_TO_YYYYDDD '(' expr[r1] expr[r2] ')'
+        |       DAY_TO_YYYYDDD '(' cexpr[r1] cexpr[r2] ')'
                 {
                   location_set(@1);
-                  static auto one = new cbl_refer_t( new_literal("1") );
-                  static auto four = new cbl_refer_t( new_literal("4") );
+                  static auto one = new cbl_refer_t( new_constant("1") );
+                  static auto four = new cbl_refer_t( new_constant("4") );
                   cbl_span_t year(one, four);
-                  auto r3 = new_reference(new_alphanumeric(21));
+                  auto r3 = new_reference(new_alphanumeric());
                   r3->refmod = year;
 
                   parser_intrinsic_call_0( r3->field, "__gg__current_date" );
 
-                  $$ = new_tempnumeric();
+                  $$ = new_tempnumeric("DAY_TO_YYYYDDD");
                   if( ! intrinsic_call_3($$, DAY_TO_YYYYDDD,
                                          $r1, $r2, r3) ) YYERROR;
                 }
 
-        |       DAY_TO_YYYYDDD '(' expr[r1]
-                                     expr[r2] expr[r3] ')'
+        |       DAY_TO_YYYYDDD '(' cexpr[r1]
+                                     cexpr[r2] cexpr[r3] ')'
                 {
                   location_set(@1);
-                  $$ = new_tempnumeric();
+                  $$ = new_tempnumeric("DAY_TO_YYYYDDD");
                   if( ! intrinsic_call_3($$, DAY_TO_YYYYDDD,
                                          $r1, $r2, $r3) ) YYERROR;
                 }
 
-        |       YEAR_TO_YYYY '(' expr[r1] ')'
+        |       YEAR_TO_YYYY '(' cexpr[r1] ')'
                 {
                   location_set(@1);
-                  static auto r2 = new_reference(new_literal("50", decimal_e));
-                  static auto one = new cbl_refer_t( new_literal("1") );
-                  static auto four = new cbl_refer_t( new_literal("4") );
+                  static auto r2 = new_reference(new_constant("50"));
+                  static auto one = new cbl_refer_t( new_constant("1") );
+                  static auto four = new cbl_refer_t( new_constant("4") );
                   cbl_span_t year(one, four);
-                  auto r3 = new_reference(new_alphanumeric(21));
+                  auto r3 = new_reference(new_alphanumeric());
                   r3->refmod = year;
 
                   parser_intrinsic_call_0( r3->field, "__gg__current_date" );
 
-                  $$ = new_tempnumeric();
+                  $$ = new_tempnumeric("YEAR_TO_YYYY");
                   if( ! intrinsic_call_3($$, YEAR_TO_YYYY,
                                          $r1, r2, r3) ) YYERROR;
                 }
 
-        |       YEAR_TO_YYYY '(' expr[r1] expr[r2] ')'
+        |       YEAR_TO_YYYY '(' cexpr[r1] cexpr[r2] ')'
                 {
                   location_set(@1);
-                  static auto one = new cbl_refer_t( new_literal("1") );
-                  static auto four = new cbl_refer_t( new_literal("4") );
+                  static auto one = new cbl_refer_t( new_constant("1") );
+                  static auto four = new cbl_refer_t( new_constant("4") );
                   cbl_span_t year(one, four);
-                  auto r3 = new_reference(new_alphanumeric(21));
+                  auto r3 = new_reference(new_alphanumeric());
                   r3->refmod = year;
 
                   parser_intrinsic_call_0( r3->field, "__gg__current_date" );
 
-                  $$ = new_tempnumeric();
+                  $$ = new_tempnumeric("YEAR_TO_YYYY");
                   if( ! intrinsic_call_3($$, YEAR_TO_YYYY,
                                          $r1, $r2, r3) ) YYERROR;
                 }
 
-        |       YEAR_TO_YYYY '(' expr[r1]
-                                     expr[r2] expr[r3] ')'
+        |       YEAR_TO_YYYY '(' cexpr[r1]
+                                     cexpr[r2] cexpr[r3] ')'
                 {
                   location_set(@1);
-                  $$ = new_tempnumeric();
+                  $$ = new_tempnumeric("YEAR_TO_YYYY");
                   if( ! intrinsic_call_3($$, YEAR_TO_YYYY,
                                          $r1, $r2, $r3) ) YYERROR;
                 }
 
-        |       intrinsic_N2 '(' expr[r1] expr[r2] ')'
+        |       intrinsic_N2 '(' cexpr[r1] cexpr[r2] ')'
                 {
                   location_set(@1);
-                  switch($1)
-                    {
-                    case ANNUITY:
-                      $$ = new_tempnumeric_float();
-                      break;
-                    case COMBINED_DATETIME:
-                      $$ = new_tempnumeric();
-                      break;
-                    case REM:
-                      $$ = new_tempnumeric_float();
-                      break;
-                    }
+                  switch($1) {
+		  case ANNUITY:
+		    $$ = new_tempnumeric_float();
+		    break;
+		  case COMBINED_DATETIME:
+		    $$ = new_tempnumeric();
+		    break;
+		  case REM:
+		    $$ = new_tempnumeric_float();
+		    break;
+		  }
+		  $$->data.initial = keyword_str($1); // function name
                   if( ! intrinsic_call_2($$, $1, $r1, $r2) ) YYERROR;
                 }
 
         |       intrinsic_X2 '(' varg[r1] varg[r2] ')'
                 {
                   location_set(@1);
-                  $$ = new_alphanumeric($r1->field->data.capacity);
+                  $$ = new_alphanumeric(keyword_str($1));
                   if( ! intrinsic_call_2($$, $1, $r1, $r2) ) YYERROR;
                 }
         |       intrinsic_locale
@@ -10505,25 +11932,26 @@ module_type:	ACTIVATING { $$ = module_activating_e; }
 	|	TOP_LEVEL  { $$ = module_toplevel_e; }
 		;
 
-convert_src:	ANY
-	|	HEX
-	|	convert_fmt
+//convert_fmt:	convert_alpha
+//        |       convert_nat
+//                ;
+convert_alpha:	ALPHANUMERIC { $$ = convert_alpha_e; }
+	|	ANUM         { $$ = convert_alpha_e; }
 		;
-convert_dst:	convert_fmt HEX
-	|	BYTE
+convert_nat:	NAT          { $$ = convert_nat_e; }
+	|	NATIONAL     { $$ = convert_nat_e; }
 		;
-convert_fmt:	ALPHANUMERIC
-	|	ANUM
-	|	NAT
-	|	NATIONAL
-		;
+convert_hex:    HEX                 { $$ = convert_hex_e; }
+        |       HEX JUSTIFIED       { $$ = convert_just_e; }
+        |       HEX JUSTIFIED RIGHT { $$ = convert_rjust_e; }
+        ;
 
 numval_locale:  %empty {
                   $$.is_locale = false;
                   $$.arg2 = cbl_refer_t::empty();
                 }
         |       LOCALE NAME  { $$.is_locale = true;  $$.arg2 = NULL;
-                  cbl_unimplemented("NUMVAL_C LOCALE"); YYERROR;
+                  cbl_unimplemented("%<NUMVAL_C LOCALE%>"); YYERROR;
                 }
         |       varg         { $$.is_locale = false; $$.arg2 = $1; }
                 ;
@@ -10536,58 +11964,71 @@ subst_input:    anycase first_last varg[v1] varg[v2] {
                 }
                 ;
 
+locale_name:    NAME
+                {
+                  auto e = symbol_locale(PROGRAM, $NAME);
+                  if( !e ) {
+                    error_msg(@NAME, "no such SPECIAL-NAMES LOCALE: %qs", $NAME);
+                    YYERROR;
+                  }
+                  $$ = const_cast<char*>(
+                           __gg__encoding_iconv_name(cbl_locale_of(e)->encoding) );
+                }
+                ;
+
 intrinsic_locale:
                 LOCALE_COMPARE '(' varg[r1] varg[r2]  ')'
                 {
                   location_set(@1);
-                  $$ = new_alphanumeric($r1->field->data.capacity);
+                  $$ = new_alphanumeric();
                   cbl_refer_t dummy = {};
                   if( ! intrinsic_call_3($$, LOCALE_COMPARE, $r1, $r2, &dummy) ) YYERROR;
                 }
-        |       LOCALE_COMPARE '(' varg[r1] varg[r2] varg[r3] ')'
+        |       LOCALE_COMPARE '(' varg[r1] varg[r2] locale_name ')'
                 {
                   location_set(@1);
-                  $$ = new_alphanumeric($r1->field->data.capacity);
-                  if( ! intrinsic_call_3($$, LOCALE_COMPARE, $r1, $r2, $r3) ) YYERROR;
+                  $$ = new_alphanumeric();
+                  cbl_refer_t locale(new_literal(@locale_name, $locale_name));
+                  if( ! intrinsic_call_3($$, LOCALE_COMPARE, $r1, $r2, &locale) ) YYERROR;
                 }
 
         |       LOCALE_DATE '(' varg[r1]  ')'
                 {
                   location_set(@1);
-                  $$ = new_alphanumeric($r1->field->data.capacity);
+                  $$ = new_alphanumeric();
                   cbl_refer_t dummy = {};
                   if( ! intrinsic_call_2($$, LOCALE_DATE, $r1, &dummy) ) YYERROR;
                 }
         |             LOCALE_DATE '(' varg[r1] varg[r2]  ')'
                 {
                   location_set(@1);
-                  $$ = new_alphanumeric($r1->field->data.capacity);
+                  $$ = new_alphanumeric();
                   if( ! intrinsic_call_2($$, LOCALE_DATE, $r1, $r2) ) YYERROR;
                 }
         |       LOCALE_TIME '(' varg[r1]  ')'
                 {
                   location_set(@1);
-                  $$ = new_alphanumeric($r1->field->data.capacity);
+                  $$ = new_alphanumeric();
                   cbl_refer_t dummy = {};
                   if( ! intrinsic_call_2($$, LOCALE_TIME, $r1, &dummy) ) YYERROR;
                 }
         |       LOCALE_TIME '(' varg[r1] varg[r2]  ')'
                 {
                   location_set(@1);
-                  $$ = new_alphanumeric($r1->field->data.capacity);
+                  $$ = new_alphanumeric();
                   if( ! intrinsic_call_2($$, LOCALE_TIME, $r1, $r2) ) YYERROR;
                 }
         |       LOCALE_TIME_FROM_SECONDS '(' varg[r1]  ')'
                 {
                   location_set(@1);
-                  $$ = new_alphanumeric($r1->field->data.capacity);
+                  $$ = new_alphanumeric();
                   cbl_refer_t dummy = {};
                   if( ! intrinsic_call_2($$, LOCALE_TIME_FROM_SECONDS, $r1, &dummy) ) YYERROR;
                 }
         |       LOCALE_TIME_FROM_SECONDS '(' varg[r1] varg[r2]  ')'
                 {
                   location_set(@1);
-                  $$ = new_alphanumeric($r1->field->data.capacity);
+                  $$ = new_alphanumeric();
                   if( ! intrinsic_call_2($$, LOCALE_TIME_FROM_SECONDS, $r1, $r2) ) YYERROR;
                 }
                 ;
@@ -10596,82 +12037,107 @@ lopper_case:    LOWER_CASE      { $$ = LOWER_CASE; }
         |       UPPER_CASE      { $$ = UPPER_CASE; }
                 ;
 
-trim_trailing:  %empty          { $$ = new_literal("0"); }  // Remove both
-        |       LEADING         { $$ = new_literal("1"); }  // Remove leading  spaces
-        |       TRAILING        { $$ = new_literal("2"); }  // Remove trailing spaces
+trim_trailing:  %empty          { $$ = 3; }  // Remove both
+        |       LEADING         { $$ = 1; }  // Remove leading  spaces
+        |       TRAILING        { $$ = 2; }  // Remove trailing spaces
         ;
+
+trim_expr:      %empty {
+                  cbl_field_t *space = constant_of(constant_index(SPACES));
+                  $$ = new vargs_t( new_reference(space) );
+                }
+        |       vargs {
+                  $$ = new vargs_t;
+                  std::copy_if( $vargs->args.begin(),
+                                $vargs->args.end(),
+                                std::back_inserter($$->args), 
+                                []( const auto& arg ) {
+                     bool is_alpha =
+                       arg.field->type == FldAlphanumeric ||
+                       arg.field->type == FldLiteralA;
+                    if( arg.addr_of || ! is_alpha ) {
+                      error_msg(arg.loc, "invalid TRIM character");
+                      return false;
+                    }
+                    if( arg.field->char_capacity() != 1 ) {
+                      error_msg(arg.loc, "TRIM argument may be only 1 character");
+                      return false;
+                    }
+                    return true;
+                  } );
+                }
+                ;
 
 intrinsic0:     CURRENT_DATE {
                   location_set(@1);
-                  $$ = new_alphanumeric(21);
+                  $$ = new_alphanumeric("CURRENT-DATE");
                   parser_intrinsic_call_0( $$, "__gg__current_date" );
                 }
         |       E {
                   location_set(@1);
-                  $$ = new_tempnumeric();
+                  $$ = new_tempnumeric("E");
                  parser_intrinsic_call_0( $$, "__gg__e" );
                 }
 
         |       EXCEPTION_FILE_N {
                   location_set(@1);
-                  $$ = new_alphanumeric(256);
+                  $$ = new_alphanumeric("EXCEPTION-FILE-N");
                   intrinsic_call_0( $$, EXCEPTION_FILE_N );
                 }
 
         |       EXCEPTION_FILE {
                   location_set(@1);
-                  $$ = new_alphanumeric(256);
+                  $$ = new_alphanumeric("EXCEPTION-FILE");
                   parser_exception_file( $$ );
                 }
         |       EXCEPTION_LOCATION_N {
                   location_set(@1);
-                  $$ = new_alphanumeric(256);
+                  $$ = new_alphanumeric("EXCEPTION-LOCATION-N");
                   intrinsic_call_0( $$, EXCEPTION_LOCATION_N );
                 }
         |       EXCEPTION_LOCATION {
                   location_set(@1);
-                  $$ = new_alphanumeric(256);
+                  $$ = new_alphanumeric("EXCEPTION-LOCATION");
                   intrinsic_call_0( $$, EXCEPTION_LOCATION );
                 }
         |       EXCEPTION_STATEMENT {
                   location_set(@1);
-                  $$ = new_alphanumeric(63);
+                  $$ = new_alphanumeric("EXCEPTION-STATEMENT");
                   intrinsic_call_0( $$, EXCEPTION_STATEMENT );
                 }
         |       EXCEPTION_STATUS {
                   location_set(@1);
-                  $$ = new_alphanumeric(31);
+                  $$ = new_alphanumeric("EXCEPTION-STATUS");
                   intrinsic_call_0( $$, EXCEPTION_STATUS );
                 }
 
         |       PI {
                   location_set(@1);
-                  $$ = new_tempnumeric_float();
+                  $$ = new_tempnumeric("PI");
                  parser_intrinsic_call_0( $$, "__gg__pi" );
                 }
         |       SECONDS_PAST_MIDNIGHT {
                   location_set(@1);
-                  $$ = new_tempnumeric();
+                  $$ = new_tempnumeric("SECONDS-PAST-MIDNIGHT");
                  intrinsic_call_0( $$, SECONDS_PAST_MIDNIGHT );
                 }
         |       UUID4 {
                   location_set(@1);
-                  $$ = new_alphanumeric(32); // don't know correct size
+                  $$ = new_alphanumeric("UUID4");
                  parser_intrinsic_call_0( $$, "__gg__uuid4" );
                 }
         |       WHEN_COMPILED {
                   location_set(@1);
-                  $$ = new_alphanumeric(21); // Returns YYYYMMDDhhmmssss-0500
-                 parser_intrinsic_call_0( $$, "__gg__when_compiled" );
+		  // Returns YYYYMMDDhhmmssss-0500)
+                  $$ = new_alphanumeric("WHEN-COMPILED"); 
+                  parser_intrinsic_call_0( $$, "__gg__when_compiled" );
                 }
                 ;
 
 intrinsic_I:    BOOLEAN_OF_INTEGER     { $$ = BOOLEAN_OF_INTEGER;
 		  cbl_unimplemented("BOOLEAN-OF-INTEGER");
 		}
-        |       CHAR_NATIONAL          { $$ = CHAR_NATIONAL;
-		    cbl_unimplemented("CHAR-NATIONAL");
-		}
+        |       CHAR_NATIONAL          { $$ = CHAR_NATIONAL; }
         |       DATE_OF_INTEGER        { $$ = DATE_OF_INTEGER; }
         |       DAY_OF_INTEGER         { $$ = DAY_OF_INTEGER; }
         |       FACTORIAL              { $$ = FACTORIAL; }
@@ -10795,9 +12261,17 @@ file:           %empty
         |       FILE_KW
                 ;
 
+filler:         %empty      { $$ = false; }
+        |       FILLER_kw   { $$ = true; }
+                ;
+
 first_last:     %empty  { $$ = 0; }
         |       FIRST   { $$ = 'F'; }
         |       LAST    { $$ = 'L'; }
+                ;
+
+for:            %empty
+        |       FOR
                 ;
 
 is_global:      %empty %prec GLOBAL { $$ = false; }
@@ -10820,8 +12294,8 @@ key:            %empty
         |       KEY
                 ;
 
-last:		%empty %prec LAST
-	|	LAST
+last:		%empty { $$ = false; } %prec LAST
+	|	LAST   { $$ = true;  }
 		;
 
 lines:          %empty
@@ -10849,6 +12323,10 @@ optional:       %empty   { $$ = false; }
         |       OPTIONAL { $$ = true;  }
                 ;
 
+override:	%empty   { $$ = false; }
+	|	OVERRIDE { $$ = true; }
+		;
+
 program_kw:     %empty
         |       PROGRAM_kw
                 ;
@@ -10865,9 +12343,18 @@ sign:           %empty
         |       SIGN
                 ;
 
-start_after:	%empty %prec AFTER
-	|	START AFTER varg
+is_signed:	%empty      { $$ = true; }
+	|	SIGNED_kw   { $$ = true; }
+	|	UNSIGNED_kw { $$ = false; }
 		;
+
+start_after:	%empty { $$ = nullptr; } %prec AFTER
+	|	START AFTER start_pos { $$ = $start_pos; }
+	|	start_pos             { $$ = $start_pos; }
+		;
+start_pos:      num_constant { $$ = new_reference($1); }
+        |       scalar
+                ;
 
 status:         %empty
         |       STATUS
@@ -10892,6 +12379,24 @@ usage:          %empty
         |       USAGE IS
                 ;
 
+user_default:   DEFAULT
+                { // cannot be empty
+                  switch( $1 ) {
+                  case 'U': break;
+                  case 'S':
+                    error_msg(@1, "invalid syntax: SYSTEM-DEFAULT");
+                    break;
+                  default: 
+                    error_msg(@1, "invalid syntax: DEFAULT");
+                    gcc_unreachable();
+                  }
+                }
+                ;
+
+when:           %empty
+        |       WHEN
+                ;
+
 with:           %empty
         |       WITH
                 ;
@@ -10913,7 +12418,12 @@ cdf_basis:      BASIS NAME /* BASIS is never passed to the parser.  */
         |       BASIS LITERAL
                 ;
 
-cdf_use:        USE DEBUGGING on labels
+cdf_use:        cdf_use_when {
+		  statement_cleanup = false;
+		}
+		;
+
+cdf_use_when:	USE DEBUGGING on labels
                 {
                   if( ! current.declarative_section_name() ) {
                     error_msg(@1, "USE valid only in DECLARATIVES");
@@ -10930,13 +12440,12 @@ cdf_use:        USE DEBUGGING on labels
                     YYERROR;
                   }
                   static const cbl_label_t all = {
-		    LblNone, 0, 0,0,0, false, false, false, 0,0, ":all:" };
-		      ////.name = { ':', 'a', 'l', 'l', ':',  } // workaround for gcc < 11.3
+		    LblNone, 0, 0,0,0, false, false, false, false, 0,0, ":all:" };
                   add_debugging_declarative(&all);
                  }
 
         |       USE globally mistake procedure on filenames
-		{
+		{ // Format 1
                   if( ! current.declarative_section_name() ) {
 		    error_msg(@1, "USE valid only in DECLARATIVES");
                     YYERROR;
@@ -10948,8 +12457,8 @@ cdf_use:        USE DEBUGGING on labels
                                     std::back_inserter(files),
                                     file_list_t::symbol_index );
                   cbl_declarative_t declarative(current.declarative_section(),
-                                                ec_all_e, files,
-                                                file_mode_none_e, global);
+                                                ec_io_e, files,
+                                                file_mode_any_e, global);
                   current.declaratives.add(declarative);
 		}
 
@@ -10962,12 +12471,12 @@ cdf_use:        USE DEBUGGING on labels
                   bool global = $globally == GLOBAL;
                   std::list<size_t> files;
                   cbl_declarative_t declarative(current.declarative_section(),
-                                                ec_all_e, files,
+                                                ec_io_e, files,
                                                 $io_mode, global);
                   current.declaratives.add(declarative);
                 }
-        |       USE cdf_use_excepts // Format 3: AFTER swallowed by lexer
-                {
+        |       USE cdf_use_excepts
+                { // Format 3 (AFTER swallowed by lexer)
                   if( ! current.declarative_section_name() ) {
                     error_msg(@1, "USE valid only in DECLARATIVES");
                     YYERROR;
@@ -11052,70 +12561,475 @@ cdf_none:       ENTER
         |       SERVICE_RELOAD
         ;
 
+xmlgenerate:    xmlgen_impl end_xml {
+                  cbl_unimplemented("XML GENERATE");
+                }
+        |       xmlgen_cond end_xml {
+                  cbl_unimplemented("XML GENERATE");
+                }
+                ;
+xmlgen_impl:
+                XMLGENERATE xmlgen_body 
+                ;
+xmlgen_cond:    XMLGENERATE xmlgen_body[body] xmlexcepts[err]
+                ;
 
+xmlgen_body:    name[id1] FROM name[id2]
+                xmlgen_count xmlencoding xmlgen_decl xmlgen_namespace
+                xmlgen_nameof xmlgen_typeof xmlgen_suppress
+                ;
+
+xmlgen_count:   %empty { $$ = nullptr; }
+        |       COUNT in name[id3] { $$ = $id3; }
+                ;
+xmlgen_decl:    %empty { $$ = {}; }
+        |       with XML_DECLARATION with ATTRIBUTES { $$ = {true, true}; }
+        |       with XML_DECLARATION                 { $$ = {true, false}; }
+        |                            with ATTRIBUTES { $$ = {false, true}; }
+                ;
+xmlgen_namespace:
+                %empty 
+        |       NAMESPACE is name[id4] namespace_prefix
+                ;
+namespace_prefix:
+                %empty 
+        |       NAMESPACE_PREFIX is name[id5] 
+        |       NAMESPACE_PREFIX is LITERAL[id5] 
+                ;
+xmlgen_nameof:  %empty
+        |       NAME of xmlgen_ids
+                ;
+xmlgen_ids:     xmlgen_id
+        |       xmlgen_ids xmlgen_id
+                ;
+xmlgen_id:      name[id6] is LITERAL[lit]
+                ;
+
+xmlgen_typeof:  %empty
+        |       TYPE of xmlgen_types
+                ;
+xmlgen_types:   xmlgen_type
+        |       xmlgen_types xmlgen_type
+                ;
+xmlgen_type:    name[id6] is xmlgen_eltype
+                ;
+xmlgen_eltype:  ATTRIBUTE
+        |       ELEMENT
+        |       CONTENT
+                ;
+
+xmlgen_suppress:
+                %empty
+        |       SUPPRESS xml_suppressions
+                ;
+xml_suppressions:
+                xml_suppression
+        |       xml_suppressions xml_suppression
+        ;
+xml_suppression:
+                name[id8] xml_when_phrase
+        |       xml_generic_suppression xml_when_figs
+                ;
+xml_when_phrase:
+                %empty         %prec ZERO
+        |       xml_when_figs
+                ;
+xml_when_figs:  xml_when_fig
+        |       xml_when_figs OR xml_when_fig
+                ;
+xml_when_fig:   ZERO
+        |       SPACES
+        |       LOW_VALUES
+        |       HIGH_VALUES
+                ;
+xml_generic_suppression:
+                %empty
+        |       EVERY xml_generic_numeric xmlgen_eltype
+                ;
+xml_generic_numeric:
+                %empty
+        |       NUMERIC
+        |       NONNUMERIC
+                ;
+
+xmlparse:       xmlparse_impl end_xml {
+                  auto xml_stmt = xml_statements.top();
+                  parser_xml_end(xml_stmt);
+                  xml_statements.pop();
+                  current.declaratives_evaluate();
+                }
+        |       xmlparse_cond end_xml {
+                  auto xml_stmt = xml_statements.top();
+                  parser_xml_end(xml_stmt);
+                  xml_statements.pop();
+                  current.declaratives_evaluate();
+                }
+                ;
+xmlparse_impl:  XMLPARSE xmlparse_body[body]
+                {
+                  parser_xml_on_exception($body);
+                  parser_xml_not_exception($body);
+                }
+                ;
+xmlparse_cond:  XMLPARSE xmlparse_body[body] xmlexcepts[err]
+                {
+                  if( ! $err.on_error )  parser_xml_on_exception($body);
+                  if( ! $err.not_error ) parser_xml_not_exception($body);
+                }
+                ;
+
+xmlparse_body:  scalar xmlencoding xmlreturning xmlvalidating
+                PROCESSING PROCEDURE is xmlprocs[procs]
+                {
+                  $$ = label_add(@$, LblXml, uniq_label("xml"));
+                  xml_statements.push($$);
+                  statement_begin(@$, XMLPARSE);
+                  parser_xml_parse( $$,
+                                    *$scalar,
+                                    $xmlencoding,
+                                    $xmlvalidating,
+                                    $xmlreturning == NATIONAL,
+                                    $procs.from, 
+                                    $procs.to );
+                }
+                ;
+
+xmlencoding:    %empty %prec NAME { $$ = nullptr; }
+        |       with ENCODING name [codepage] { $$ = $codepage; }
+                ;
+
+xmlreturning:   %empty             { $$ = 0; }
+        |       RETURNING NATIONAL { $$ = NATIONAL; }
+                ;
+xmlvalidating:  %empty                       { $$ = nullptr; }
+        |       VALIDATING with name         { $$ = $name; }
+        |       VALIDATING with FILE_KW name { $$ = $name; }
+                ;
+xmlprocs:       label_1 {
+                  $$ = label_pair_t{$1};
+                }
+        |       label_1[from] THRU label_1[to] {
+                  $$ = label_pair_t{$from, $to};
+                }
+                ;
+
+xmlexcepts:     xmlexcept[a] statements %prec XMLPARSE
+                {
+                  assert( $a.on_error || $a.not_error );
+                  assert( ! ($a.on_error && $a.not_error) );
+                  $$ = $a;
+                }
+        |       xmlexcepts[a] xmlexcept[b] statements %prec XMLPARSE
+                {
+                  if( $a.on_error && $a.not_error ) {
+                    error_msg(@1, "too many ON ERROR clauses");
+                    YYERROR;
+                  }
+                  // "ON" and "NOT ON" could be reversed, but not duplicated.
+                  if( $a.on_error && $b.on_error ) {
+                    error_msg(@1, "duplicate ON ERROR clauses");
+                    YYERROR;
+                  }
+                  if( $a.not_error && $b.not_error ) {
+                    error_msg(@1, "duplicate NOT ON ERROR clauses");
+                    YYERROR;
+                  }
+                  $$ = $a;
+                  if( $$.on_error ) {
+                    assert($b.not_error);
+                    $$.not_error = $b.not_error;
+                  } else {
+                    assert($b.on_error);
+                    $$.on_error = $b.on_error;
+                  }
+                }
+                ;
+xmlexcept:      EXCEPTION
+                {
+                  auto xml_stmt = xml_statements.top();
+                  // The value of the pointer no longer matters, only NULL or not. 
+                  $$.on_error = $$.not_error = nullptr;
+                  switch($1) {
+                  case EXCEPTION:
+                    $$.on_error = xml_stmt;
+                    parser_xml_on_exception(xml_stmt);
+                    break;
+                  case NOT:
+                    $$.not_error = xml_stmt;
+                    parser_xml_not_exception(xml_stmt);
+                    break;
+                  default:
+                    gcc_unreachable();
+                  }
+                }
+                ;
+
+end_xml:        %empty   %prec XMLPARSE
+        |       END_XML  %prec XMLPARSE
+                ;
 %%
 
-static YYLTYPE
-first_line_of( YYLTYPE loc ) {
+static cbl_loc_t
+first_line_of( cbl_loc_t loc ) {
     if( loc.first_line < loc.last_line ) loc.last_line = loc.first_line;
     if( loc.last_column < loc.first_column ) loc.last_column = loc.first_column;
     return loc;
 }
 
-void ast_call( const YYLTYPE& loc, cbl_refer_t name, cbl_refer_t returning,
-                  size_t narg, cbl_ffi_arg_t args[],
-                  cbl_label_t *except,
-                  cbl_label_t *not_except,
-                  bool is_function)
+/*
+ *  Return true if actual parameter matches formal definition.
+ *
+ * "The definition of the formal parameter and the definition of the argument
+ *  shall have the same ALIGN, BLANK WHEN ZERO, DYNAMIC LENGTH, JUSTIFIED,
+ *  PICTURE, SIGN, and USAGE clauses, [with exceptions]."
+ */
+bool
+cbl_ffi_arg_t::matches( const cbl_ffi_arg_t& that ) const {
+  if( this->refer.field == nullptr ) return optional;
+  auto formal = refer.field;
+  auto actual = that.refer.field;
+
+  dbgmsg( "%s: %s by %s", __func__,
+          nice_name_of(formal), cbl_ffi_crv_str(that.crv) );
+
+  static const size_t mask =
+      rjust_e
+    | ljust_e
+    | blank_zero_e
+    | signable_e
+    | separate_e;
+
+  switch( that.crv ) {
+  case by_default_e:
+  case by_reference_e:
+    if( crv == by_reference_e ) {
+      if( (formal->attr & mask) == (actual->attr & mask) ) {
+        if( capacity_ok(formal, actual) ) {
+          if( formal->type == actual->type ) { // captures USAGE except COMP-X
+            return true;
+          }
+        }
+        else if (actual->attr & any_length_e)
+          return true;
+      }
+    }
+    // If actual is by reference, so must the formal be.
+    dbgmsg("%s:%d: failed, reference feature mismatch", __func__, __LINE__);
+    return false;
+    break;
+  case by_content_e:
+    break;
+  case by_value_e:
+    if( crv != by_value_e ) {
+      dbgmsg("%s:%d: failed, actual %s not by value", __func__, __LINE__, actual->name);
+      return false;
+    }
+    if( formal->type == FldPointer && that.refer.is_pointer() ) return true;
+    break;
+  }
+
+  assert(that.crv != by_reference_e);
+
+  if( is_numeric(formal->type) == is_numeric(actual->type) ) {
+    if( is_numeric(formal->type) ) { // for numeric types, actual must fit
+      return actual->data.capacity() <= formal->data.capacity();
+    }
+    // The actual parameter size must match.  If the caller is bigger, some
+    // input may not reach the called.  If the called updates a smaller actual,
+    // it will write beyond the end of the By Content copy.  
+    return actual->data.capacity() == formal->data.capacity()
+        && actual->codeset.encoding == formal->codeset.encoding;
+  }          
+  dbgmsg("%s:%d: failed, for some reason", __func__, __LINE__);
+  return false;
+}
+
+// Return the formal mismatched argument and its position.
+static const std::pair<cbl_ffi_arg_t *, size_t>
+bad_arg( const char name[],
+         size_t narg, const cbl_ffi_arg_t args[] ) 
+{
+  static cbl_ffi_arg_t output;
+  static const std::pair<cbl_ffi_arg_t *, size_t> ok(nullptr, 0);
+
+  auto proto = prototype_args(name);
+  if( proto.second ) {
+    const auto& formals = proto.first;
+    auto earg = args + std::min(narg, formals.size());
+    auto p = std::mismatch( formals.begin(), formals.end(), args, earg, 
+                            []( const cbl_ffi_arg_t& formal,
+                                const cbl_ffi_arg_t& actual ) {
+                              return formal.matches(actual);
+                            } );
+    if( p.second < earg ) {
+      output = *p.second;
+      size_t ord = p.second - args;
+      return std::make_pair(&output, ord); // bad actual
+    }
+    if( earg < args + narg ) {
+      output = *earg;
+      size_t ord = earg - args;
+      return std::make_pair(&output, ord); // too many actuals
+    }
+    if( narg < formals.size() ) { // missing actuals might be optional
+      auto p = std::find_if( formals.begin() + narg, 
+                             formals.end(),
+                             [] ( auto& arg ) {
+                               return ! arg.optional;
+                             } );
+      if( p != formals.end() ) {
+        output = *p;
+        size_t ord = p - formals.begin();
+        return std::make_pair(&output, ord); // insufficient actuals
+      }
+    }
+  } else {
+    dbgmsg("%s: no prototype for %s", __func__, name);
+  }
+  return ok;
+}  
+
+// Verify provided actual parameters against formals.
+static void
+verify_args( const YYLTYPE& loc, 
+             const char name[], size_t narg,
+             const cbl_ffi_arg_t args[] ) {
+  auto parg_pair = bad_arg(name, narg, args);
+  
+  if( parg_pair.first ) {
+    auto parg = parg_pair.first;
+    auto ord =  parg_pair.second;
+    const auto& formals = prototype_args(name).first;
+    /*
+     * Four possibilities for parg;
+     * 0.  each actual matched its formal
+     * 1.  is actual argument that does not match the formal
+     * 2.  is actual argument, but there is no formal (passed too many)
+     * 3.  is not an argument (too few)
+     */
+    if( ord < narg ) {
+      if( ord < formals.size() ) {
+        error_msg( loc, "parameter %zu %qs (%s, capacity %u, %s) "
+                   "invalid for %qs parameter %qs (%s, capacity %u, %s)",
+                   1 + ord,
+                   nice_name_of(parg->field()),
+                    cbl_field_type_name(parg->field()->type),
+                    parg->field()->data.capacity(),
+                    parg->field()->attr & signable_e ? "signed" : "unsigned",
+                   name, 
+                   nice_name_of(formals[ord].refer.field),
+                   cbl_field_type_name(formals[ord].refer.field->type),
+                   formals[ord].refer.field->data.capacity(),
+                   formals[ord].refer.field->attr & signable_e ? "signed" : "unsigned");
+      } else {
+        error_msg( loc, "parameter %zu %qs (%s) "
+                   "exceed %qs parameter count",
+                   1 + ord,
+                   nice_name_of(parg->field()),
+                   cbl_field_type_name(parg->field()->type),
+                   name);
+      }
+    } else {
+      error_msg( loc, "%qs requires %zu parameters, "
+                 "but only %zu were passed, "
+                 "parameter %zu (%qs) is required",
+                 name,
+                 formals.size(), narg, 1 + ord, 
+                 nice_name_of(formals[ord].refer.field) );
+    } 
+  }
+}
+
+static void
+ast_call( const cbl_loc_t& loc, cbl_refer_t name, const cbl_refer_t& returning,
+               size_t narg, cbl_ffi_arg_t args[],
+               cbl_label_t *except,
+               cbl_label_t *not_except,
+               bool is_function)
 {
   if( is_literal(name.field) ) {
-    cbl_field_t called = {      0, FldLiteralA, FldInvalid, quoted_e | constant_e,
-                                0, 0, 77, nonarray, 0, "",
-                                0, cbl_field_t::linkage_t(), {}, NULL };
+    cbl_field_t called = { FldLiteralA, quoted_e | constant_e,
+                           name.field->data, 77 };
+    called.attr |= name.field->attr;
     snprintf(called.name, sizeof(called.name), "_%s", name.field->data.initial);
-    called.data = name.field->data;
+    called.attr |= name.field->attr;
     name.field = cbl_field_of(symbol_field_add(PROGRAM, &called));
     symbol_field_location(field_index(name.field), loc);
     parser_symbol_add(name.field);
+
+    verify_args(loc, name.field->data.initial, narg, args);
   }
 
-  if( getenv("ast_call") ) {
-    dbgmsg("%s: calling %s returning %s with %zu args:", __func__,
-	   name_of(name.field),
-	   (returning.field)? returning.field->name : "[none]",
-	   narg);
-    for( size_t i=0; i < narg; i++ ) {
-      const char *crv = "?";
-      switch(args[i].crv) {
-      case by_default_e: crv = "def"; break;
-      case by_reference_e: crv = "ref"; break;
-      case by_content_e: crv = "con"; break;
-      case by_value_e: crv = "val"; break;
-      }
-      dbgmsg("%s: %4zu: %s @%p %s", __func__,
-	     i, crv, args[i].refer.field, args[i].refer.field->name);
-    }
-  }
   parser_call( name, returning, narg, args, except, not_except, is_function );
 }
 
-static size_t
-statement_begin( const YYLTYPE& loc, int token ) {
-  // The following statement generates a message at run-time
-  // parser_print_string("statement_begin()\n");
-  location_set(loc);
-  prior_statement = token;
+/*
+ * Check if any EC *could* be raised that would be handled by a declarative. If
+ * so, the generated statement epilog will ask the runtime library to attempt
+ * to match any raised EC with a declarative.  If not, the statement epilog
+ * will be limited to calling the default EC handler, which logs unhandled ECs
+ * [todo] and calls abort(3) for fatal ECs.
+ */
+static bool
+possible_ec() {
+  cbl_enabled_exceptions_t& enabled_exceptions( cdf_enabled_exceptions() );
+  bool format_1 = current.declaratives.has_format_1();
+      
+  bool enabled = 0xFF < (current.declaratives.status()
+			 &
+			 enabled_exceptions.status());
+  bool epilog = enabled || format_1;
+  
+  dbgmsg("%sEC handling for DCL %08x && EC %08x with %s Format 1",
+	 epilog? "" : "no ", 
+	 current.declaratives.status(),
+	 enabled_exceptions.status(), format_1? "a" : "no");
+  
+  return epilog;
+}
 
-  parser_statement_begin();
-
-  if( token != CONTINUE ) {
+/*
+ * If there's potential overlap between enabled ECs and Declaratives, generate
+ * a PERFORM of the _DECLARATIVES_EVAL "ladder" that matches a section number
+ * to its name, and executes the Declarative.
+ */
+static void
+statement_epilog( int token ) {
+  cbl_enabled_exceptions_t& enabled_exceptions( cdf_enabled_exceptions() );
+  if( possible_ec() && token != CONTINUE ) { 
     if( enabled_exceptions.size() ) {
-      current.declaratives_evaluate(ec_none_e);
-      cbl_enabled_exceptions_array_t enabled(enabled_exceptions);
-      parser_exception_prepare( keyword_str(token), &enabled );
+      current.declaratives_evaluate();
     }
   }
-  return 0;
+  parser_check_fatal_exception();
+}
+
+static inline void
+statement_prolog( int token ) {
+  parser_statement_begin( keyword_str(token),
+			  current.declaratives.runtime.ena,
+			  current.declaratives.runtime.dcl );
+}
+
+/*
+ * We check the EC against the Declarative status prior to parsing the
+ * statement because a TURN directive can be embedded in the statement.  An
+ * embedded directive applies to the following statement, not the one being
+ * parsed.
+ */
+static void
+statement_begin( const cbl_loc_t& loc, int token ) {
+  static int prior_token = 0;
+
+  if( statement_cleanup )  {
+    statement_epilog(prior_token);
+  } else {
+    statement_cleanup = true;
+  }
+  location_set(loc);
+  statement_prolog(token);
+
+  prior_token = token;
 }
 
 #include "parse_util.h"
@@ -11123,7 +13037,7 @@ statement_begin( const YYLTYPE& loc, int token ) {
 
 struct string_match {
   const char *name;
-  string_match( const char name[] ) : name(name) {}
+  explicit string_match( const char name[] ) : name(name) {}
   bool operator()( const char input[] ) const {
     return strlen(name) == strlen(input) && 0 == strcasecmp(name, input);
   }
@@ -11131,17 +13045,23 @@ struct string_match {
 
 const char *
 keyword_str( int token ) {
-  if( token == YYEOF )   return "YYEOF";
-  if( token == YYEMPTY ) return "YYEMPTY";
-
+  switch( token ) {
+  case YYEOF:   return "YYEOF";
+  case YYEMPTY: return "YYEMPTY";
+  case 256:     return "YYerror";
+  case 257:     return "invalid token"; // YYUNDEF
+  }
+  
   if( token < 256 ) {
     static char ascii[2];
     ascii[0] = token;
     return ascii;
   }
 
-  return tokens.name_of(token);
+  return cdf_tokens.name_of(token);
 }
+
+bool iso_cobol_word( const std::string& name, bool include_context );
 
 /*
  * Return the token for the Cobol name, unless it is a function name.  The
@@ -11152,14 +13072,9 @@ keyword_str( int token ) {
  * REPOSITORY names.
  */
 
-// tokens.h is generated as needed from parse.h with tokens.h.gen
-tokenset_t::tokenset_t() {
-#include "token_names.h"
-}
-
 // Look up the lowercase form of a keyword, excluding some CDF names.
 int
-tokenset_t::find( const cbl_name_t name, bool include_intrinsics ) {
+current_tokens_t::tokenset_t::find( const cbl_name_t name, bool include_intrinsics ) {
   static const cbl_name_t non_names[] = { // including CDF NAMES, and "SWITCH"
     "CHECKING", "LIST", "LOCATION", "MAP", "SWITCH",
   }, * const eonames = non_names + COUNT_OF(non_names);
@@ -11175,9 +13090,9 @@ tokenset_t::find( const cbl_name_t name, bool include_intrinsics ) {
   if( dialect_ibm() ) {
       static const cbl_name_t ibm_non_names[] = {
 	  "RESUME",
-      }, * const eonames = ibm_non_names + COUNT_OF(ibm_non_names);
+      }, * const eoibm = ibm_non_names + COUNT_OF(ibm_non_names);
 
-      if( std::any_of(ibm_non_names, eonames,
+      if( std::any_of(ibm_non_names, eoibm,
 		      [candidate=name](const cbl_name_t non_name) {
 			  return 0 == strcasecmp(non_name, candidate)
 			      && strlen(non_name) == strlen(candidate);
@@ -11186,27 +13101,36 @@ tokenset_t::find( const cbl_name_t name, bool include_intrinsics ) {
       }
   }
 
+  /*
+   * The input name may be one of:
+   *  1. an intrinsic function name (OK if include_intrinsics)
+   *  2. an ISO/GCC reserved word or context-sensitive word (OK)
+   *  3. a token in our token list for convenience, such as BINARY_INTEGER (bzzt)
+   */  
   cbl_name_t lname;
-  std::transform(name, name + strlen(name) + 1, lname, tolower);
+  std::transform(name, name + strlen(name) + 1, lname, ftolower);
+  dbgmsg("current_tokens_t::tokenset_t::find: scanning %lu tokens for '%s'",
+         (unsigned long)tokens.size(), lname);
   auto p = tokens.find(lname);
   if( p == tokens.end() ) return 0;
   int token = p->second;
 
   if( token == SECTION ) yylval.number = 0;
 
-  if( include_intrinsics ) return token;
-
-  return intrinsic_cname(token)? 0 : token;
+  if( include_intrinsics && intrinsic_cname(token) ) return token;
+  if( iso_cobol_word(uppercase(name), true) ) return token;
+  
+  return 0;
 }
 
 int
 keyword_tok( const char * text, bool include_intrinsics ) {
-  return tokens.find(text, include_intrinsics);
+  return cdf_tokens.find(text, include_intrinsics);
 }
 
 static inline size_t
 verify_figconst( enum cbl_figconst_t figconst , size_t pos ) {
-  cbl_field_t *f = cbl_field_of(symbol_at(pos));
+  const cbl_field_t *f = cbl_field_of(symbol_at(pos));
   assert((f->attr & FIGCONST_MASK) == figconst);
   return pos;
 }
@@ -11214,12 +13138,13 @@ verify_figconst( enum cbl_figconst_t figconst , size_t pos ) {
 static size_t
 constant_index( int token ) {
   switch(token) {
+  // These tokens refer to constants at fixed positions in the symbol table.
   case SPACES      : return 0;
-  case LOW_VALUES  : return verify_figconst(low_value_e, 2);
-  case ZERO        : return verify_figconst(zero_value_e, 3);
-  case HIGH_VALUES : return verify_figconst(high_value_e, 4);
-  case QUOTES      : return 5;
-  case NULLS       : return 6;
+  case LOW_VALUES  : return verify_figconst(low_value_e, 1);
+  case ZERO        : return verify_figconst(zero_value_e, 2);
+  case HIGH_VALUES : return verify_figconst(high_value_e, 3);
+  case QUOTES      : return 4;
+  case NULLS       : return 5;
   }
   cbl_errx( "%s:%d: no such constant %d", __func__, __LINE__, token);
   return (size_t)-1;
@@ -11231,7 +13156,7 @@ relop_of(int token) {
   switch(token) {
   case '<': return lt_op;
   case LE:  return le_op;
-  case '=': return eq_op;
+  case EQ: return eq_op;
   case NE:  return ne_op;
   case GE:  return ge_op;
   case '>': return gt_op;
@@ -11252,7 +13177,7 @@ relop_invert(relop_t op) {
   case ge_op: return lt_op;
   case gt_op: return le_op;
   }
-  cbl_errx( "%s:%d: invalid relop_t %d", __func__, __LINE__, op);
+  cbl_internal_error("%s:%d: invalid %<relop_t%> %d", __func__, __LINE__, op);
 
   return relop_t(0); // not reached
 }
@@ -11264,7 +13189,7 @@ relop_debug_str(int token) {
   case 0:   return "zilch";
   case '<': return "<";
   case LE:  return "LE";
-  case '=': return "=";
+  case EQ: return "=";
   case NE:  return "NE";
   case GE:  return "GE";
   case '>': return ">";
@@ -11278,7 +13203,7 @@ token_of(enum relop_t op) {
   switch(op) {
   case lt_op: return '<';
   case le_op: return LE;
-  case eq_op: return '=';
+  case eq_op: return EQ;
   case ne_op: return NE;
   case ge_op: return GE;
   case gt_op: return '>';
@@ -11367,8 +13292,8 @@ class label_named {
 typedef label_named<LblSection> section_named;
 typedef label_named<LblParagraph> paragraph_named;
 
-static struct cbl_label_t *
-label_add( const YYLTYPE& loc,
+static cbl_label_t *
+label_add( const cbl_loc_t& loc,
 	   enum cbl_label_type_t type, const char name[] ) {
   size_t parent = 0;
 
@@ -11389,11 +13314,17 @@ label_add( const YYLTYPE& loc,
     auto p = std::find_if(symbols_begin(PROGRAM), symbols_end(),
                           paragraph_named(PROGRAM, name));
     if( p != symbols_end() ) {
-      error_msg(loc, "section %s conflicts with paragraph %s on line %d",
-                name, cbl_label_of(p)->name, cbl_label_of(p)->line);
+      const auto& para(*cbl_label_of(p));
+      if( 0 < para.line ) {
+        error_msg(loc, "section %s conflicts with paragraph %s on line %d",
+                  name, para.name, para.line);
+      } else {
+        error_msg(loc, "section %s would conflict with paragraph of same name",
+                  name);
+      }
     }
   }
-  struct cbl_label_t label = { type, parent, loc.last_line };
+  struct cbl_label_t label = { type, parent, loc.first_line };
 
   if( !namcpy(loc, label.name, name) ) return NULL;
   auto p =  symbol_label_add(PROGRAM, &label);
@@ -11404,12 +13335,28 @@ label_add( const YYLTYPE& loc,
 
   assert( !(p->type == LblSection && p->parent > 0) );
 
-  if( getenv(__func__) ) {
-    yywarn("%s: added label %3zu %10s for '%s' of %zu", __func__,
-          symbol_elem_of(p) - symbols_begin(), p->type_str()+3, p->name, p->parent);
+  if( type == LblNone ) {
+    auto isym = symbol_index(symbol_elem_of(p));
+    current.forward_add(isym);
+    dbgmsg("%s: add forward %s %s #%lu", __func__,
+           p->type_str(), p->name, (unsigned long)isym);
   }
-
   return p;
+}
+
+/*
+ * Special treatment for the "next_sentence" label, which the compiler creates and
+ * remains LblNone.
+ */
+static cbl_label_t *
+label_add_once( cbl_label_type_t type, const char name[] ) {
+  cbl_label_t *L = symbol_label(PROGRAM, type, 0, name);
+  if( L ) return L;
+
+  cbl_label_t label = { type, 0, 0 }; // no parent, line 0
+  strcpy(label.name, name);
+  
+  return symbol_label_add(PROGRAM, &label);
 }
 
 /*
@@ -11417,10 +13364,55 @@ label_add( const YYLTYPE& loc,
  * bounds. Often they are created far away from the yacc metavariables, so
  * there's no location to access.
  */
-static struct cbl_label_t *
+static cbl_label_t *
 label_add( enum cbl_label_type_t type, const char name[], int line ) {
-  YYLTYPE loc { line, 1, line, 1 };
+  cbl_loc_t loc { line, 1, line, 1 };
   return label_add(loc, type, name);
+}
+
+// When a Section or Paragraph is defined, first see if a LblNone exists for
+// it.  If so, imbue it as now defined. Else create one.  
+static cbl_label_t *
+label_instantiate( const cbl_loc_t& loc, size_t program,
+                          cbl_label_type_t type, size_t section,
+                          const char name[] )
+{
+  cbl_label_t *label = symbol_label(program, type, section, name);
+  if( ! label && type == LblParagraph ) {
+    // A forward reference could be mistakenly attached to a section with no
+    // such paragraph.
+    auto& forwards = current.forwards();
+
+    for( auto isym : forwards ) {
+      auto para = cbl_label_of(symbol_at(isym));
+      if( para->type == LblNone ) {
+        if( 0 == strcasecmp(para->name, name) ) {
+          assert(para->parent);
+          auto sect = cbl_label_of(symbol_at(para->parent));            
+          if( 0 == strcasecmp(sect->name, current.section()->name) ) {
+            // The current section has the same name as a prior one, and that
+            // prior one was parsed without instantiating a forward reference
+            // that was attached to it.  So, use it.  
+            label = para;
+            forwards.erase(isym);
+            break;
+          }
+        }
+      }
+    }
+  }
+  if( label && label->type == LblNone ) {
+    label->type = type;
+    label->parent = section;
+    label->line = loc.first_line;
+    dbgmsg("%s:%d: instantiated %s", __func__, __LINE__, label->str());
+    return label;
+  }
+
+  label = label_add(loc, type, name);
+  dbgmsg("%s:%d: add %s", __func__, __LINE__, label->str());
+  
+  return label;
 }
 
 cbl_label_t *
@@ -11429,7 +13421,7 @@ perform_t::ec_labels_t::new_label( cbl_label_type_t type,
 {
   size_t n = 1 + symbols_end() - symbols_begin();
   cbl_name_t name;
-  sprintf(name, "_perf_%s_%zu", role, n);
+  sprintf(name, "_perf_%s_" HOST_SIZE_T_PRINT_UNSIGNED, role, (fmt_size_t)n);
   return label_add( type, name, yylineno );
 }
 
@@ -11460,28 +13452,38 @@ perform_t::ec_labels_t::new_label( cbl_label_type_t type,
  * detects and corrects its misstep.
  */
 static struct cbl_label_t *
-paragraph_reference( const char name[], size_t section )
+paragraph_reference( const cbl_loc_t& loc, const char name[], size_t section )
 {
-  // A reference has line == 0.  It is LblParagraph if the section is
-  // explicitly named, else LblNone (because we don't know).
-  struct cbl_label_t *p, label = { section? LblParagraph : LblNone, section };
+  dbgmsg("%s: find '%s' in section #%lu", __func__, name, (unsigned long)section);
+  // A reference has line == 0.  It is LblNone, possibly with a parent, until instantiated.
+  cbl_label_t label = { LblNone, section };
   assert(strlen(name) < sizeof(label.name)); // caller ensures
   strcpy(label.name, name);
-  if( label.type == LblNone ) assert(label.parent == 0);
 
-  const symbol_elem_t *last = symbols_end();
-
-  p = symbol_label_add(PROGRAM, &label);
-  assert(p);
-
-  const char *sect_name = section? cbl_label_of(symbol_at(section))->name : NULL;
-  procedure_reference_add(sect_name, p->name, yylineno, current.program_section());
-
-  if( getenv(__func__) ) {
-    yywarn("%s: %s label %3zu %10s for '%s' of %zu", __func__,
-          symbols_end() == last? "added" : "found",
-          symbol_index(symbol_elem_of(p)), p->type_str()+3, p->name, p->parent);
+  auto p = symbol_label(PROGRAM, LblParagraph, label.parent, label.name);
+  if( !p && section == 0 ) {
+    p = symbol_label(PROGRAM, LblSection, label.parent, label.name);
   }
+  if( ! p  ) {
+    p = symbol_label_add(PROGRAM, &label);
+    assert(p);
+    if( p->type == LblNone ) {
+      auto isym = symbol_index(symbol_elem_of(p));
+      current.forward_add(isym);
+      dbgmsg("%s: add forward %s %s #%lu in section %lu", __func__,
+             p->type_str(), p->name,
+             (unsigned long)isym, (unsigned long)p->parent);
+    }
+  }
+  
+  const char *para_name = p->name;
+  const char *sect_name = section? cbl_label_of(symbol_at(section))->name : NULL;
+  
+  match_proc::statement_compose( loc.first_line,
+                                 current.program_section(),
+                                 para_name, sect_name );
+                   
+  procedure_reference_add(sect_name, p->name, yylineno, current.program_section());
 
   return p;
 }
@@ -11511,9 +13513,14 @@ current_t::udf_update( const ffi_args_t *ffi_args ) {
   if( ! ffi_args ) return;
   assert(ffi_args->elems.size() < sizeof(function_descr_t::types));
 
-  auto returning = cbl_field_of(symbol_at(L->returning));
+  const auto returning = cbl_field_of(symbol_at(L->returning));
   auto key = function_descr_t::init(L->name);
   auto func = udfs.find(key);
+  if (func == udfs.end()) {
+    // Try to find it as a function prototype.
+    key = function_descr_t::init(L->name, true);
+    func = udfs.find(key);
+  }
   assert(func != udfs.end());
 
   function_descr_t udf = *func;
@@ -11535,6 +13542,7 @@ current_t::udf_update( const ffi_args_t *ffi_args ) {
   assert(result.second);
 }
 
+#if 0
 bool
 current_t::udf_args_valid( const cbl_label_t *L,
 			   const std::list<cbl_refer_t>& args,
@@ -11542,6 +13550,11 @@ current_t::udf_args_valid( const cbl_label_t *L,
 {
   auto key = function_descr_t::init(L->name);
   auto func = udfs.find(key);
+  if (func == udfs.end()) {
+    // Try to find it as a function prototype.
+    key = function_descr_t::init(L->name, true);
+    func = udfs.find(key);
+  }
   assert(func != udfs.end());
   function_descr_t udf = *func;
   params = udf.linkage_fields;
@@ -11553,14 +13566,15 @@ current_t::udf_args_valid( const cbl_label_t *L,
   }
 
   size_t i = 0;
-  for( cbl_refer_t arg : args ) {
+  for( const cbl_refer_t& arg : args ) {
     if( arg.field ) { // else omitted
       auto tgt = cbl_field_of(symbol_at(udf.linkage_fields.at(i).isym));
       if( ! valid_move(tgt, arg.field) ) {
-	auto loc = symbol_field_location(field_index(arg.field));
-	error_msg(loc, "FUNCTION %s arg %zu, '%s' cannot be passed to %s, type %s",
-		  L->name, i, arg.field->pretty_name(),
-		  tgt->pretty_name(), 3 + cbl_field_type_str(tgt->type) );
+	auto loc = current_location;
+	error_msg(loc, "FUNCTION %s argument %zu, '%s' (%s) cannot be passed to %s (%s)",
+		  L->name, 1 + i, arg.field->pretty_name(),
+		  cbl_field_type_str(arg.field->type),
+		  tgt->pretty_name(), cbl_field_type_str(tgt->type) );
 	return false;
       }
     }
@@ -11568,13 +13582,17 @@ current_t::udf_args_valid( const cbl_label_t *L,
   }
   return true;
 }
+#endif
 
 bool
 current_t::repository_add( const char name[]) {
   assert( !programs.empty() );
   function_descr_t arg = function_descr_t::init(name);
   auto parg = std::find( function_descrs, function_descrs_end, arg );
-  if( parg == function_descrs_end ) return false;
+  if( parg == function_descrs_end ) {
+    dbgmsg("%s:%d: no intrinsic %s found", __func__, __LINE__, name);
+    return false;
+  }
   auto p = programs.top().function_repository.insert(*parg);
   if( yydebug ) {
     for( auto descr : programs.top().function_repository ) {
@@ -11607,13 +13625,68 @@ int repository_function_tok( const char name[] ) {
 }
 
 function_descr_t
-function_descr_t::init( int isym ) {
+function_descr_t::init( int isym, bool prototype ) {
   function_descr_t descr = { FUNCTION_UDF_0 };
   descr.ret_type = FldInvalid;
-  auto L = cbl_label_of(symbol_at(isym));
-  bool ok = namcpy(YYLTYPE(), descr.name, L->name);
+  const auto L = cbl_label_of(symbol_at(isym));
+  bool ok = namcpy(cbl_loc_t(), descr.name, L->name);
+  descr.prototype = prototype;
   gcc_assert(ok);
   return descr;
+}
+
+static bool
+valid_pointer_relop( const cbl_loc_t& lloc,
+                     const cbl_loc_t& oloc,
+                     const cbl_loc_t& rloc, 
+                     cbl_refer_t *lhs, relop_t op, cbl_refer_t *rhs )
+{
+  static const char reference[] = "ISO 2023, 8.8.4.2.16 Comparison of pointer operands";
+  
+  if( lhs->is_pointer() || rhs->is_pointer() ) {
+    dbgmsg( "comparing %s%s (%s) to %s%s (%s)",
+            lhs->addr_of? "addr of " : "", 
+            nice_name_of(lhs->field), cbl_field_type_name(lhs->field->type),
+            rhs->addr_of? "addr of " : "", 
+            nice_name_of(rhs->field), cbl_field_type_name(rhs->field->type) );
+    if( lhs->is_pointer() ) {
+      if( rhs->is_pointer() ) {
+        switch(op) {
+        case lt_op:
+        case le_op:
+        case ge_op:
+        case gt_op:
+          error_msg(oloc, "operator %qs invalid for POINTER or ADDRESS OF [%s]",
+                    relop_str(op), reference);
+          return false;
+          break;
+        case eq_op:
+        case ne_op:
+          break;
+        } 
+        return true; // end 2 pointers
+      } else {
+        // rhs not a pointer
+        error_msg(rloc, "cannot compare %s%qs (%s) to non-pointer %qs (%s) [%s]",
+                  lhs->addr_of? "addr of " : "", 
+                  nice_name_of(lhs->field), cbl_field_type_name(lhs->field->type),
+                  nice_name_of(rhs->field), cbl_field_type_name(rhs->field->type),
+                  reference);
+        return false;
+      }
+      gcc_assert(rhs->is_pointer());
+      // lhs not a pointer
+      error_msg(lloc, "cannot compare non-pointer %qs (%s) to %s%qs (%s) [%s]",
+                nice_name_of(lhs->field), cbl_field_type_name(lhs->field->type),
+                rhs->addr_of? "addr of " : "", 
+                nice_name_of(rhs->field), cbl_field_type_name(rhs->field->type),
+                reference);
+      return false;
+    }
+    // pointer || pointer was handled
+    gcc_unreachable();
+  }
+  return true; // no pointers
 }
 
 arith_t::arith_t( cbl_arith_format_t format, refer_list_t * refers )
@@ -11624,45 +13697,98 @@ arith_t::arith_t( cbl_arith_format_t format, refer_list_t * refers )
   delete refers;
 }
 
-
-cbl_key_t::cbl_key_t( const sort_key_t& that )
+cbl_key_t::cbl_key_t( sort_key_t that )
   : ascending(that.ascending)
-  , nfield(that.fields.size())
-  , fields(NULL)
-{
-  if( nfield > 0 ) {
-    fields = new cbl_field_t* [nfield];
-    std::copy(that.fields.begin(), that.fields.end(), fields);
-  }
+  , fields( that.fields.begin(), that.fields.end() )
+{}
+
+cbl_key_t&
+cbl_key_t::operator=( const sort_key_t& that ) {
+  ascending = that.ascending;
+  fields = that.as_vector();
+  return *this;
 }
 
-static cbl_refer_t *
-ast_op( cbl_refer_t *lhs, char op, cbl_refer_t *rhs ) {
-  assert(lhs);
-  assert(rhs);
-  if( ! (is_numeric(lhs->field) && is_numeric(rhs->field)) ) {
-    // If one of the fields isn't numeric, allow for index addition.
+ast_op_t::choose_intermediate_type& 
+ast_op_t::choose_intermediate_type::select_highest( const rpn_t& rpn ) {
+  const cbl_field_t *field = rpn.term.field;
+
+  if( field ) {  
+    if( ! is_numeric(field) ) { output = *field; return *this; }
+    if( output.type == FldFloat ) return *this;
+
+    if( field->type == FldFloat ) {
+      output.type = FldFloat;
+      output.data.capacity(16);
+      output.attr = intermediate_e;
+    }
+    this->operand = field;
+    return *this;
+  }
+  
+  if( rpn.op == '*' ) {
+    if( operand ) {
+      output.data.digits += operand->data.digits;
+    }
+    if( output.data.digits > MAX_FIXED_POINT_DIGITS) {
+      output.type = FldFloat;
+      output.data.capacity(16);
+      output.attr = intermediate_e;
+    }
+  }
+  return *this;
+}
+
+bool
+ast_op_t::op_ok( const cbl_loc_t& loc, char op, const ast_op_t *rhstack )
+{
+  assert(rhstack);
+  
+  const rpn_t& rpn(rhstack->top());
+  const cbl_refer_t& rhs(rpn.term);
+  gcc_assert( rhs.field || rpn.op );
+
+  if( rhs.field && ! is_numeric(rhs.field) ) {
+    // If the field isn't numeric, allow for index addition.
     switch(op) {
     case '+':
     case '-':
       // Simple addition OK for table indexes.
-      if( lhs->field->type == FldIndex || rhs->field->type == FldIndex ) {
-        goto ok;
+      if( rhs.field->type == FldIndex ) {
+        return true;
       }
     }
 
-    auto f  = !is_numeric(lhs->field)? lhs->field : rhs->field;
-    auto loc = symbol_field_location(field_index(f));
-    error_msg(loc, "'%s' is not numeric", f->name);
-    return NULL;
+    error_msg(loc, "%qs is not numeric", rhs.field->name);
+    return false;
   }
- ok:
-  cbl_field_t skel = determine_intermediate_type( *lhs, op, *rhs );
-  cbl_refer_t *tgt = new_reference_like(skel);
-  if( !mode_syntax_only() ) {
-    parser_op( *tgt, *lhs, op, *rhs, current.compute_label() );
+  return true;
+}
+
+/*
+ * Verify that any field being compared can be moved.  If it cannot, and one
+ * operand is not numeric, ensure the other is not FldFloat.
+ */
+static void
+ast_relop( const cbl_loc_t& loc, cbl_field_t *tgt,
+           cbl_refer_t lhs, relop_t op, cbl_refer_t rhs ) {
+  if( was_fd_name(lhs.field) || was_fd_name(rhs.field) ) {
+    const char *name = was_fd_name(lhs.field) ? lhs.field->name : rhs.field->name;
+    error_msg(loc, "cannot compare anything to FD %qs", name);
+    return;
   }
-  return tgt;
+
+  if( ! (valid_move(lhs.field, rhs.field) && valid_move(rhs.field, lhs.field)) ) {
+    if( is_numeric(lhs.field) != is_numeric(rhs.field) ) {
+      if( (lhs.field->type == FldFloat) || (rhs.field->type == FldFloat) ) {
+        error_msg(loc, "cannot compare %s to %s",
+                  cbl_field_type_name(lhs.field->type),
+                  cbl_field_type_name(rhs.field->type));
+        return;
+      }
+    }
+  }
+  parser_relop(tgt, lhs, op, rhs);
 }
 
 static void
@@ -11676,14 +13802,9 @@ ast_add( arith_t *arith ) {
   pC = use_any(arith->tgts, C);
   pA = use_any(arith->A, A);
 
-  if( getenv(__func__) ) {
-    dbgmsg("%s:%d: %-12s C{%zu %p} A{%zu %p}", __func__, __LINE__,
-          arith->format_str(), nC, pC, nA, pA );
-  }
   parser_add( nC, pC, nA, pA, arith->format, arith->on_error, arith->not_error );
 
-  ec_type_t handled = arith->on_error || arith->not_error ? ec_size_e : ec_none_e;
-  current.declaratives_evaluate(handled);
+  current.declaratives_evaluate();
 }
 
 static bool
@@ -11699,8 +13820,7 @@ ast_subtract( arith_t *arith ) {
 
   parser_subtract( nC, pC, nA, pA, nB, pB, arith->format, arith->on_error, arith->not_error );
 
-  ec_type_t handled = arith->on_error || arith->not_error ? ec_size_e : ec_none_e;
-  current.declaratives_evaluate(handled);
+  current.declaratives_evaluate();
   return true;
 }
 
@@ -11717,8 +13837,7 @@ ast_multiply( arith_t *arith ) {
 
   parser_multiply( nC, pC, nA, pA, nB, pB, arith->on_error, arith->not_error );
 
-  ec_type_t handled = arith->on_error || arith->not_error ? ec_size_e : ec_none_e;
-  current.declaratives_evaluate(handled);
+  current.declaratives_evaluate();
   return true;
 }
 
@@ -11736,8 +13855,7 @@ ast_divide( arith_t *arith ) {
   parser_divide( nC, pC, nA, pA, nB, pB,
                  arith->remainder, arith->on_error, arith->not_error );
 
-  ec_type_t handled = arith->on_error || arith->not_error ? ec_size_e : ec_none_e;
-  current.declaratives_evaluate(handled);
+  current.declaratives_evaluate();
   return true;
 }
 
@@ -11747,48 +13865,45 @@ ast_divide( arith_t *arith ) {
  * the convenience of the parser.
 */
 struct stringify_src_t : public cbl_string_src_t {
- stringify_src_t( const refer_marked_list_t& marked = refer_marked_list_t() )
-   : cbl_string_src_t( marked.marker? *marked.marker : null_reference,
-                       marked.refers.size(),
-                       new cbl_refer_t[marked.refers.size()] )
+  stringify_src_t( const refer_marked_list_t& marked = refer_marked_list_t() )
+    : cbl_string_src_t( marked.marker? *marked.marker : null_reference,
+                        marked.refers.size(),
+                        new cbl_refer_t[marked.refers.size()] )
   {
     std::copy( marked.refers.begin(), marked.refers.end(), inputs );
   }
 
   static void dump( const cbl_string_src_t& src ) {
-    dbgmsg( "%s:%d:, %zu inputs delimited by %s:", __func__, __LINE__,
-           src.ninput,
+    dbgmsg( "%s:%d:, " HOST_SIZE_T_PRINT_UNSIGNED " inputs delimited by %s:",
+           __func__, __LINE__, (fmt_size_t)src.ninput,
            src.delimited_by.field? field_str(src.delimited_by.field) : "SIZE" );
     std::for_each(src.inputs, src.inputs + src.ninput, dump_input);
   }
 
  protected:
   static void dump_input( const cbl_refer_t& refer ) {
-    yywarn( "%s:\t%s", __func__, field_str(refer.field) );
+    dbgmsg( "%s: %s", __func__, field_str(refer.field) );
   }
 };
 
 void
 stringify( refer_collection_t *inputs,
-           cbl_refer_t into, cbl_refer_t pointer,
+           const cbl_refer_t& into, const cbl_refer_t& pointer,
            cbl_label_t  *on_error,
            cbl_label_t *not_error )
 {
-  std::vector <stringify_src_t> sources(inputs->lists.size());
-
   if( inputs->lists.back().marker == NULL ) {
     inputs->lists.back().marker = cbl_refer_t::empty();
   }
   assert( inputs->lists.back().marker );
-  std::copy( inputs->lists.begin(), inputs->lists.end(), sources.begin() );
-  if( yydebug && getenv(__func__) ) {
-    std::for_each(sources.begin(), sources.end(), stringify_src_t::dump);
-  }
+
+  std::vector <stringify_src_t> sources(inputs->lists.begin(), inputs->lists.end());
+
   parser_string( into, pointer, sources.size(), sources.data(), on_error, not_error );
 }
 
 void
-unstringify( cbl_refer_t& src,
+unstringify( const cbl_refer_t& src,
              refer_list_t *delimited,
              unstring_into_t * into,
              cbl_label_t  *on_error,
@@ -11796,6 +13911,7 @@ unstringify( cbl_refer_t& src,
 {
   size_t ndelimited = delimited? delimited->size() : 0;
   cbl_refer_t *pdelimited = NULL;
+  // cppcheck-suppress [variableScope] pdelimited points to delimiteds.data()
   std::vector <cbl_refer_t> delimiteds(ndelimited);
   if( ndelimited > 0 ) {
     pdelimited = use_any( delimited->refers, delimiteds );
@@ -11839,7 +13955,7 @@ data_section_str( data_section_t section ) {
 }
 
 static bool
-current_data_section_set(const YYLTYPE& loc,  data_section_t data_section ) {
+current_data_section_set(const cbl_loc_t& loc,  data_section_t data_section ) {
   // order is mandatory
   if( data_section < current_data_section ) {
     error_msg(loc, "%s SECTION must precede %s SECTION",
@@ -11907,15 +14023,19 @@ lang_check_failed (const char* file, int line, const char* function) {}
 
 #pragma GCC diagnostic pop
 
-void ast_inspect( cbl_refer_t& input, bool backward, ast_inspect_list_t& inspects ) {
+static void
+ast_inspect( cbl_loc_t loc, cbl_refer_t& input, bool backward,
+             cbl_inspect_opers_t& inspects )
+{
   if( yydebug ) {
-    dbgmsg("%s:%d: INSPECT %zu operations on %s, line %d", __func__, __LINE__,
-          inspects.size(), input.field->name, yylineno);
+    dbgmsg("%s:%d: INSPECT " HOST_SIZE_T_PRINT_UNSIGNED " operations on %s, "
+           "lines %d:%d - %d:%d",
+           __func__, __LINE__,
+           (fmt_size_t)inspects.size(), input.field->name,
+           loc.first_line, loc.first_column, loc.last_line, loc.last_column );
   }
   std::for_each(inspects.begin(), inspects.end(), dump_inspect);
-  auto array = inspects.as_array();
-  parser_inspect( input, backward, inspects.size(), array );
-  delete[] array;
+  parser_inspect( input, backward, inspects );
 }
 
 static const char *
@@ -11927,28 +14047,29 @@ cbl_refer_str( char output[], const cbl_refer_t& R ) {
   return output;
 }
 
-static void
+void
 dump_inspect_match( const cbl_inspect_match_t& M ) {
-  static char fields[3][4 * 64];
-  cbl_refer_str(fields[0], M.matching);
-  cbl_refer_str(fields[1], M.before.identifier_4);
-  cbl_refer_str(fields[2], M.after.identifier_4);
+  static char fields[4][4 * 64];
+  cbl_refer_str(fields[0], M.match);
+  cbl_refer_str(fields[1], M.tally);
+  cbl_refer_str(fields[2], M.before.identifier_4);
+  cbl_refer_str(fields[3], M.after.identifier_4);
 
-  yywarn( "matching %s \n\t\tbefore %s%s \n\t\tafter  %s%s",
-         fields[0],
-         M.before.initial? "initial " : "", fields[1],
-         M.after.initial?  "initial " : "", fields[2] );
+  dbgmsg( "matching %s [tally %s]\n\t\tbefore %s%s \n\t\tafter  %s%s",
+         fields[0], fields[1],
+         M.before.initial? "initial " : "", fields[2],
+         M.after.initial?  "initial " : "", fields[3] );
 }
 
 static void
 dump_inspect_replace( const cbl_inspect_replace_t& R ) {
   static char fields[4][4 * 64];
-  cbl_refer_str(fields[0], R.matching);
+  cbl_refer_str(fields[0], R.matching());
   cbl_refer_str(fields[1], R.before.identifier_4);
   cbl_refer_str(fields[2], R.after.identifier_4);
   cbl_refer_str(fields[3], R.replacement);
 
-  yywarn( "matching    %s \n\treplacement %s\n\t\tbefore %s%s \n\t\tafter  %s%s",
+  dbgmsg( "matching    %s \n\treplacement %s\n\t\tbefore %s%s \n\t\tafter  %s%s",
          fields[0], fields[3],
          R.before.initial? "initial " : "", fields[1],
          R.after.initial?  "initial " : "", fields[2] );
@@ -12007,7 +14128,6 @@ data_category_of( const cbl_refer_t& refer ) {
   case FldIndex:
   case FldSwitch:
   case FldDisplay:
-  case FldBlob:
     return data_category_none;
   }
   gcc_unreachable();
@@ -12040,7 +14160,6 @@ valid_target( const cbl_refer_t& refer ) {
   case FldIndex:
   case FldSwitch:
   case FldDisplay:
-  case FldBlob:
     return false;
   }
   gcc_unreachable();
@@ -12051,6 +14170,7 @@ static REAL_VALUE_TYPE
 numstr2i( const char input[], radix_t radix ) {
   REAL_VALUE_TYPE output;
   size_t integer = 0;
+  fmt_size_t integerf = 0;
   int erc=0;
 
   switch( radix ) {
@@ -12062,13 +14182,14 @@ numstr2i( const char input[], radix_t radix ) {
     }
     break;
   case hexadecimal_e:
-    erc = sscanf(input, "%zx", &integer);
+    erc = sscanf(input, "%" GCC_PRISZ "x", &integerf);
+    integer = integerf;
     real_from_integer (&output, VOIDmode, integer, UNSIGNED);
     break;
   case boolean_e:
     for( const char *p = input; *p != '\0'; p++ ) {
       if( ssize_t(8 * sizeof(integer) - 1) < p - input ) {
-        yywarn("'%s' was accepted as %d", input, integer);
+        dbgmsg("'%s' was accepted as %lu", input, (unsigned long)integer);
         break;
       }
       switch(*p) {
@@ -12078,7 +14199,7 @@ numstr2i( const char input[], radix_t radix ) {
           integer |= ((*p) == '0' ? 0 : 1);
           break;
       default:
-        yywarn("'%s' was accepted as %d", input, integer);
+        dbgmsg("'%s' was accepted as %lu", input, (unsigned long)integer);
 	break;
       }
     }
@@ -12086,13 +14207,13 @@ numstr2i( const char input[], radix_t radix ) {
     return output;
   }
   if( erc == -1 ) {
-    yywarn("'%s' was accepted as %lld", input, output);
+    cbl_message(ParNumstrW, "'%s' was accepted as %zu", input, integer);
   }
   return output;
 }
 
 static inline cbl_field_t *
-new_literal( const char initial[], enum radix_t radix ) {
+new_literal( const cbl_loc_t loc, const char initial[], enum radix_t radix ) {
   auto attr = constant_e;
 
   switch( radix ) {
@@ -12105,14 +14226,16 @@ new_literal( const char initial[], enum radix_t radix ) {
     attr = bool_encoded_e;
     break;
   }
-  return new_literal(strlen(initial), initial,
-                     cbl_field_attr_t(constant_e | attr));
+  auto field =  new_literal(strlen(initial), initial,
+                            cbl_field_attr_t(constant_e | attr));
+  symbol_temporary_location(field, loc);
+  return field;
 }
 
 class is_elementary_type { // for INITIALIZE purposes
   bool with_filler;
 public:
-  is_elementary_type( bool with_filler ) : with_filler(with_filler) {}
+  explicit is_elementary_type( bool with_filler ) : with_filler(with_filler) {}
 
   bool operator()( const symbol_elem_t& elem ) const {
     if( elem.type != SymField ) return false;
@@ -12126,7 +14249,7 @@ public:
 size_t end_of_group( size_t igroup );
 
 static std::list<cbl_refer_t>
-symbol_group_data_members( cbl_refer_t refer, bool with_filler ) {
+symbol_group_data_members( const cbl_refer_t& refer, bool with_filler ) {
   std::list<cbl_refer_t> refers;
   refers.push_front( refer );
 
@@ -12134,7 +14257,7 @@ symbol_group_data_members( cbl_refer_t refer, bool with_filler ) {
 
   class refer_of : public cbl_refer_t {
    public:
-    refer_of( const cbl_refer_t& refer ) : cbl_refer_t(refer) {}
+    explicit refer_of( const cbl_refer_t& refer ) : cbl_refer_t(refer) {}
     cbl_refer_t operator()( symbol_elem_t& elem ) {
       this->field = cbl_field_of(&elem); // preserve subscript/refmod
       return *this;
@@ -12158,7 +14281,7 @@ struct expand_group : public std::list<cbl_refer_t> {
     return cbl_refer_t(field);
   }
   bool with_filler;
-  expand_group( bool with_filler ) : with_filler(with_filler) {}
+  explicit expand_group( bool with_filler ) : with_filler(with_filler) {}
 
   void operator()( const cbl_refer_t& refer ) {
     assert(refer.field);
@@ -12173,18 +14296,21 @@ struct expand_group : public std::list<cbl_refer_t> {
 };
 
 
-static const char * initial_default_value;
-       const char * wsclear() { return initial_default_value; }
+static const uint32_t *initial_default_value;
+const uint32_t *
+wsclear() {
+  return initial_default_value;
+}
 
 void
-wsclear( char ch ) {
-  static char byte = ch;
-  initial_default_value = &byte;
+wsclear( uint32_t i ) {
+  static uint32_t init_val = i;
+  initial_default_value = &init_val;
   current.program_needs_initial();
 }
 
 static void
-initialize_allocated( cbl_refer_t input ) {
+initialize_allocated( const cbl_refer_t& input ) {
   cbl_num_result_t result = { truncation_e, input };
   std::list<cbl_num_result_t> results;
   results.push_back(result);
@@ -12193,13 +14319,14 @@ initialize_allocated( cbl_refer_t input ) {
 }
 
 static int
-initialize_with( cbl_refer_t tgt ) {
+initialize_with( const cbl_refer_t& tgt ) {
   if( tgt.field->type == FldPointer ) return ZERO;
   if( tgt.is_refmod_reference() ) return SPACES;
   return is_numeric(tgt.field)? ZERO : SPACES;
 }
 
 static bool
+// cppcheck-suppress [passedByValue] target.refer.field is modified
 initialize_one( cbl_num_result_t target, bool with_filler,
                 data_category_t value_category,
                 const category_map_t& replacements,
@@ -12219,7 +14346,7 @@ initialize_one( cbl_num_result_t target, bool with_filler,
       char ach[5];
       int v = *s;
       sprintf(ach, "%d", v);
-      source.field = new_literal(ach);
+      source.field = new_constant(ach);
       source.addr_of = true;
     }
 
@@ -12227,9 +14354,6 @@ initialize_one( cbl_num_result_t target, bool with_filler,
       parser_set_pointers(1, &tgt, source);
     } else {
       parser_move(tgt, src, current_rounded_mode());
-    }
-    if( getenv(__func__) ) {
-      yywarn("%s:%-5s: %s", __func__, keyword_str(token), field_str(tgt.field));
     }
     return true;
   }
@@ -12241,15 +14365,11 @@ initialize_one( cbl_num_result_t target, bool with_filler,
   if( value_category == data_category_all ||
       value_category == data_category_of(tgt) ) {
     // apply any applicable VALUE
-    if( explicitly || tgt.field->data.initial ) {
+    if( explicitly || tgt.field->data.original() ) {
       assert( with_filler || !tgt.field->has_attr(filler_e) );
-      if( tgt.field->data.initial ) {
+      if( tgt.field->data.original() ) {
         parser_initialize(tgt);
       }
-    }
-
-    if( getenv(__func__) ) {
-      yywarn("%s: value: %s", __func__, field_str(tgt.field));
     }
   }
 
@@ -12263,87 +14383,24 @@ initialize_one( cbl_num_result_t target, bool with_filler,
   if( r != replacements.end() ) {
     parser_move( tgt, *r->second );
 
-    if( getenv(__func__) ) {
-      cbl_field_t *from = r->second->field;
-      char from_str[128]; // copy static buffer from field_str
-      strcpy( from_str, field_str(from) );
-      yywarn("%s:  move: %-18s %s \n\t      from %-18s %s", __func__,
-            cbl_field_type_str(tgt.field->type) + 3, field_str(tgt.field),
-            cbl_field_type_str(from->type) + 3, from_str);
-    }
     return true;
   }
 
   return true;
-
 }
 
 typedef std::pair<cbl_field_t*,cbl_field_t*> field_span_t;
 typedef std::pair<size_t, size_t>  cbl_bytespan_t;
 
-static void
-dump_spans( size_t isym,
-	    const cbl_field_t *table,
-	    const std::list<field_span_t>& spans,
-	    size_t nrange,
-	    const cbl_bytespan_t ranges[],
-	    size_t depth,
-	    const std::list<cbl_subtable_t>& subtables )
-{
-  int i=0;
-  assert( nrange == 0 || nrange == spans.size() );
-
-  if( isym != field_index(table) ) {
-    dbgmsg("%s:%d: isym %zu is not #%zu %02u %s", __func__, __LINE__,
-	  isym, field_index(table), table->level, table->name);
-  }
-  dbgmsg( "%s: [%zu] #%zu %s has %zu spans and %zu subtables",
-	 __func__, depth, isym, table->name, nrange, subtables.size() );
-  for( auto span : spans ) {
-    unsigned int last_level = 0;
-    const char *last_name = "<none>";
-    if( span.second ) {
-      last_level = span.second->level;
-      last_name = span.second->name;
-    }
-
-    char at_subtable[64] = {};
-    size_t offset = nrange? ranges[i].first : 0;
-    auto p = std::find_if(subtables.begin(), subtables.end(),
-			  [offset]( const cbl_subtable_t& tbl ) {
-			    return tbl.offset == offset;
-			  });
-    if( p != subtables.end() ) {
-      sprintf(at_subtable, "(subtable #%zu)", p->isym);
-    }
-    dbgmsg("\t    %02u %-20s to %02u %-20s: %3zu-%zu %s",
-	  span.first->level, span.first->name,
-	  last_level, last_name,
-	  nrange? ranges[i].first : 1,
-	  nrange? ranges[i].second : 0,
-	  at_subtable);
-    i++;
-  }
-  if( ! subtables.empty() ) {
-    dbgmsg("\ttable #%zu has %zu subtables", isym, subtables.size());
-    for( auto tbl : subtables ) {
-      dbgmsg("\t    #%zu @ %4zu", tbl.isym, tbl.offset);
-    }
-  }
-}
-
 /*
  * After the 1st record is initialized, copy it to the others.
  */
 static bool
-initialize_table( cbl_num_result_t target,
+initialize_table( const cbl_num_result_t& target,
 		  size_t nspan, const cbl_bytespan_t spans[],
 		  const std::list<cbl_subtable_t>& subtables )
 {
-  if( getenv("initialize_statement") ) {
-    dbgmsg("%s:%d: %s ", __func__, __LINE__, target.refer.str());
-  }
-  assert( target.refer.nsubscript == dimensions(target.refer.field) );
+  assert( target.refer.nsubscript() == dimensions(target.refer.field) );
   const cbl_refer_t& src( target.refer );
   size_t n( src.field->occurs.ntimes());
   assert( 0 < n );
@@ -12359,17 +14416,17 @@ static cbl_refer_t
 synthesize_table_refer( cbl_refer_t tgt ) {
   // For a table, use supplied subscripts or start with 1.
   auto ndim( dimensions(tgt.field) );
-  if( tgt.nsubscript < ndim ) { // it's an incomplete table
+  if( tgt.nsubscript() < ndim ) { // it's an incomplete table
     std::vector <cbl_refer_t> subscripts(ndim);
     for( size_t i=0; i < ndim; i++ ) {
-      if( i < tgt.nsubscript ) {
+      if( i < tgt.nsubscript() ) {
 	subscripts[i] = tgt.subscripts[i];
 	continue;
       }
       subscripts[i].field = new_tempnumeric();
       parser_set_numeric(subscripts[i].field, 1);
     }
-    return cbl_refer_t( tgt.field, subscripts.size(), subscripts.data() );
+    return cbl_refer_t( tgt.field, subscripts );
   }
   return tgt;
 }
@@ -12379,7 +14436,7 @@ group_offset( const cbl_field_t *field ) {
   if( field->parent ) {
     auto e = symbol_at(field->parent);
     if( e->type == SymField ) {
-      auto parent = cbl_field_of(e);
+      const auto parent = cbl_field_of(e);
       return field->offset - parent->offset;
     }
   }
@@ -12392,14 +14449,8 @@ initialize_statement( const cbl_num_result_t& target, bool with_filler,
                       const category_map_t& replacements,
                       size_t depth = 0 )
 {
-  if( getenv(__func__) ) {
-    dbgmsg("%s:%d: %2zu: %s (%s%zuR)",
-	  __func__, __LINE__, depth, target.refer.str(),
-	  with_filler? "F" : "",
-	  replacements.size());
-  }
   const cbl_refer_t& tgt( target.refer );
-  assert(dimensions(tgt.field) == tgt.nsubscript || 0 < depth);
+  assert(dimensions(tgt.field) == tgt.nsubscript() || 0 < depth);
   assert(!is_literal(tgt.field));
 
   if( tgt.field->type == FldGroup ) {
@@ -12436,7 +14487,7 @@ initialize_statement( const cbl_num_result_t& target, bool with_filler,
 
     if( fOK && is_table(tgt.field) ) {
       cbl_num_result_t output = { target.rounded, synthesize_table_refer(tgt) };
-      if( tgt.nsubscript < output.refer.nsubscript ) { // tgt is whole table
+      if( tgt.nsubscript() < output.refer.nsubscript() ) { // tgt is whole table
 	std::list<field_span_t> field_spans;
 	static const field_span_t empty_span = { NULL, NULL };
 	field_span_t span = empty_span;
@@ -12470,20 +14521,16 @@ initialize_statement( const cbl_num_result_t& target, bool with_filler,
 			    size_t first, second;
 			    first = second = group_offset(span.first);
 			    if( ! span.second ) {
-			      second += std::max(span.first->data.capacity,
+			      second += std::max(span.first->data.capacity(),
 						 span.first->data.memsize);
 			    } else {
 			      second = group_offset(span.second)
 				     - group_offset(span.first);
-			      second += std::max(span.second->data.capacity,
+			      second += std::max(span.second->data.capacity(),
 						 span.second->data.memsize);
 			    }
 			    return std::make_pair(first, second);
 			  } );
-	}
-	if( getenv("initialize_statement") ) {
-	  dump_spans( field_index(output.refer.field), output.refer.field,
-		      field_spans, ranges.size(), ranges.data(), depth, subtables );
 	}
 	return initialize_table( output, nrange, ranges.data(), subtables );
       }
@@ -12551,29 +14598,7 @@ static void
 initialize_statement( std::list<cbl_num_result_t>& tgts, bool with_filler,
                      data_category_t value_category,
                      const category_map_t& replacements) {
-  if( yydebug && getenv(__func__) ) {
-    yywarn( "%s: %zu targets, %s filler",
-           __func__, tgts.size(), with_filler? "with" : "no");
-    for( auto tgt : tgts ) {
-      fprintf( stderr, "%28s: %s\n", __func__, name_of(tgt.refer.field) );
-    }
-    for( const auto& elem : replacements ) {
-      fprintf( stderr, "%28s: %s <-%s\n", __func__,
-               data_category_str(elem.first),
-               name_of(elem.second->field) );
-    }
-  }
-
-  bool is_refmod = std::any_of( tgts.begin(), tgts.end(),
-				[]( const auto& tgt ) {
-				  return tgt.refer.is_refmod_reference();
-				} );
-  if( false && is_refmod ) { // refmod seems valid per ISO
-    dbgmsg("INITIALIZE cannot initialize a refmod");
-    return;
-  }
-
-  for( auto tgt : tgts ) {
+  for( const auto& tgt : tgts ) {
     initialize_statement( tgt, with_filler, value_category,
                          replacements );
   }
@@ -12582,13 +14607,13 @@ initialize_statement( std::list<cbl_num_result_t>& tgts, bool with_filler,
 
 static void
 dump_inspect_oper( const cbl_inspect_oper_t& op ) {
-  dbgmsg("\t%s: %zu \"matches\", %zu \"replaces\"",
-        bound_str(op.bound),
-        op.matches? op.n_identifier_3 : 0, op.replaces? op.n_identifier_3 : 0);
-  if( op.matches )
-    std::for_each(op.matches, op.matches + op.n_identifier_3, dump_inspect_match);
-  if( op.replaces )
-    std::for_each(op.replaces, op.replaces + op.n_identifier_3, dump_inspect_replace);
+  dbgmsg("\t%s: " HOST_SIZE_T_PRINT_UNSIGNED
+         " \"matches\", " HOST_SIZE_T_PRINT_UNSIGNED " \"replaces\"",
+         bound_str(op.bound),
+         (fmt_size_t)op.matches.size(), 
+         (fmt_size_t)op.replaces.size());
+  std::for_each(op.matches.begin(), op.matches.end(), dump_inspect_match);
+  std::for_each(op.replaces.begin(), op.replaces.end(), dump_inspect_replace);
 }
 
 #pragma GCC diagnostic push
@@ -12605,14 +14630,14 @@ dump_inspect( const cbl_inspect_t& I ) {
   } else {
     fprintf( stderr, "\tREPLACING:\n" );
   }
-  std::for_each( I.opers, I.opers + I.nbound, dump_inspect_oper );
+  std::for_each( I.begin(), I.end(), dump_inspect_oper );
 }
 #pragma GCC diagnostic pop
 
 #include <iterator>
 
 struct declarative_file_list_t : protected cbl_declarative_t {
-  declarative_file_list_t( const cbl_declarative_t& d )
+  explicit declarative_file_list_t( const cbl_declarative_t& d )
     : cbl_declarative_t(d)
     {
       if( nfile > 0 )
@@ -12637,7 +14662,7 @@ operator<<( std::ostream& os, const declarative_file_list_t& dcl ) {
 
 static declarative_file_list_t
 file_list_of( const cbl_declarative_t& dcl ) {
-  return dcl;
+  return declarative_file_list_t(dcl);
 }
 
 std::ostream&
@@ -12669,22 +14694,16 @@ void parser_add_declaratives( size_t n, cbl_declarative_t *declaratives) {
 }
 
 cbl_field_t *
-new_literal( const literal_t& lit, enum cbl_field_attr_t attr ) {
-  bool zstring = lit.prefix[0] == 'Z';
-  if( !zstring && lit.data[lit.len] != '\0' ) {
-    dbgmsg("%s:%d: line %d, no NUL terminator '%-*.*s'{%zu/%zu}",
-          __func__, __LINE__, yylineno,
-          int(lit.len), int(lit.len),
-          lit.data, strlen(lit.data), lit.len);
-  }
-  assert(zstring || lit.data[lit.len] == '\0');
-
+new_literal( const cbl_loc_t loc, const literal_t& lit, enum cbl_field_attr_t attr ) {
   size_t attrs(attr);
   attrs |= constant_e;
   attrs |= literal_attr(lit.prefix);
 
-  return new_literal(lit.len, lit.data, cbl_field_attr_t(attrs));
+  auto field = new_literal(lit.len, lit.data, cbl_field_attr_t(attrs), lit.encoding);
+  symbol_temporary_location(field, loc);
+  return field;
 }
+
 
 bool
 cbl_file_t::validate_forward( size_t isym ) const {
@@ -12708,7 +14727,7 @@ cbl_file_t::validate_key( const cbl_file_key_t& key ) const {
 
 bool
 cbl_file_t::validate() const {
-  size_t members[] = { user_status, vsam_status, record_length };
+  const size_t members[] = { user_status, vsam_status, record_length };
   bool tf = true;
 
   for( auto isym : members ) {
@@ -12755,6 +14774,82 @@ cbl_figconst_of( const char *value ) {
   return p == eovalues? normal_value_e : p->type;
 }
 
+int
+cbl_figconst_tok( const char *value ) {
+  struct values_t {
+    const char *value; int token;
+  } static const values[] = {
+    { constant_of(constant_index(ZERO))->data.initial, ZERO },
+    { constant_of(constant_index(SPACES))->data.initial, SPACES },
+    { constant_of(constant_index(HIGH_VALUES))->data.initial, HIGH_VALUES },
+    { constant_of(constant_index(LOW_VALUES))->data.initial, LOW_VALUES },
+    { constant_of(constant_index(QUOTES))->data.initial, QUOTES },
+    { constant_of(constant_index(NULLS))->data.initial, NULLS },
+  }, *eovalues = values + COUNT_OF(values);
+
+  auto p = std::find_if( values, eovalues,
+                         [value]( const values_t& elem ) {
+                           return elem.value == value;
+                         } );
+
+  return p == eovalues? 0 : p->token;
+}
+
+const cbl_field_t *
+cbl_figconst_field_of( const char *value ) {
+  int token = cbl_figconst_tok(value);
+  return token == 0 ? nullptr : constant_of(constant_index(token));
+}
+
+const char *
+literal_t::symbol_name() const {
+  return isym? cbl_field_of(symbol_at(isym))->name : "";
+}
+
+literal_t&
+literal_t::set( const cbl_field_t * field ) {
+  assert(field->has_attr(constant_e));
+  assert(is_literal(field));
+
+  set_prefix( "", 0 );
+  set_data( field->data.capacity(),
+            const_cast<char*>(field->data.initial),
+            field_index(field) );
+  return *this;
+}
+
+literal_t&
+literal_t::set_prefix( const char *input, size_t len ) {
+  encoding = current_encoding(display_encoding_e);
+  assert(len < sizeof(prefix));
+  std::fill(prefix, prefix + sizeof(prefix), '\0');
+  std::transform(input, input + len, prefix, toupper);
+  switch(prefix[0]) {
+  case '\0': case 'Z':
+    encoding = current_encoding(display_encoding_e);
+    break;
+  case 'N':
+    encoding = current_encoding(national_encoding_e);
+    if( 'X' == prefix[1] ) {
+      cbl_unimplemented("NX literals");
+    }
+    break;
+  case 'G':
+    cbl_unimplemented("DBCS encoding not supported");
+    break;
+  case 'U':
+    encoding = UTF8_e;
+    break;
+  case 'X':
+      break;
+  default:
+    gcc_unreachable();
+  }
+  assert(valid_encoding(encoding));
+  return *this;
+}
+
+
 cbl_field_attr_t
 literal_attr( const char prefix[] ) {
   switch(strlen(prefix)) {
@@ -12763,7 +14858,8 @@ literal_attr( const char prefix[] ) {
   case 1:
     switch(prefix[0]) {
     case 'B': return bool_encoded_e;
-    case 'N': cbl_unimplemented("National"); return none_e;
+    case 'N': 
+    case 'U': return none_e; // nothing to say yet
     case 'X': return hex_encoded_e;
     case 'Z': return quoted_e;
     }
@@ -12774,14 +14870,15 @@ literal_attr( const char prefix[] ) {
     case 'X':
       switch(prefix[0]) {
       case 'B': return cbl_field_attr_t(hex_encoded_e | bool_encoded_e);
-      case 'N': cbl_unimplemented("National"); return none_e;
+      case 'N': cbl_unimplemented("Hexadecimal National"); return none_e;
+      case 'U': cbl_unimplemented("Hexadecimal Unicode");  return none_e;
       }
       break;
     }
   }
 
   // must be [BN]X
-  cbl_internal_error("'%s': invalid literal prefix", prefix);
+  cbl_internal_error("invalid literal prefix: %qs", prefix);
   gcc_unreachable();
   return none_e;
 }
@@ -12798,35 +14895,33 @@ const char *
 cbl_field_t::value_str() const {
     if( data.etc_type == cbl_field_data_t::value_e )
 	return string_of( data.value_of() );
-    return "???";
-}
-
-static const cbl_division_t not_syntax_only = cbl_division_t(-1);
-             cbl_division_t cbl_syntax_only = not_syntax_only;
-
-void
-mode_syntax_only( cbl_division_t division ) {
-  cbl_syntax_only = division;
-}
-
-// Parser moves to syntax-only mode if data-division errors preclude compilation.
-bool
-mode_syntax_only() {
-  return cbl_syntax_only != not_syntax_only
-    && cbl_syntax_only <= current_division;
+    return data.etc_type_str();
 }
 
 void
 cobol_dialect_set( cbl_dialect_t dialect ) {
-  cbl_dialect = dialect;
-  if( dialect & dialect_ibm_e ) cobol_gcobol_feature_set(feature_embiggen_e);
+  switch(dialect) {
+  case dialect_iso_e: 
+  case dialect_gcc_e:
+    break;
+  case dialect_ibm_e:
+    cobol_gcobol_feature_set(feature_embiggen_e);
+    break;
+  case dialect_mf_e:
+    break;
+  case dialect_gnu_e:
+    if( 0 == (cbl_dialects & dialect) ) { // first time
+      cdf_tokens.equate(cbl_loc_t(), "BINARY-DOUBLE", "BINARY-C-LONG");
+    }
+    break;
+  }    
+  cbl_dialects |= dialect;
 }
-cbl_dialect_t cobol_dialect() { return cbl_dialect; }
 
 static bool internal_ebcdic_locked = false;
 
 void internal_ebcdic_lock() {
-  internal_ebcdic_locked = true;
+////  internal_ebcdic_locked = true;
 }
 void internal_ebcdic_unlock() {
   internal_ebcdic_locked = false;
@@ -12834,9 +14929,6 @@ void internal_ebcdic_unlock() {
 
 bool
 cobol_gcobol_feature_set( cbl_gcobol_feature_t gcobol_feature, bool on ) {
-  if( gcobol_feature == feature_internal_ebcdic_e ) {
-    if( internal_ebcdic_locked ) return false;
-  }
   if( on ) {
     cbl_gcobol_features |= gcobol_feature;
   } else {
@@ -12846,54 +14938,79 @@ cobol_gcobol_feature_set( cbl_gcobol_feature_t gcobol_feature, bool on ) {
 }
 
 static bool
-literal_refmod_valid( YYLTYPE loc, const cbl_refer_t& r ) {
+literal_refmod_valid( cbl_loc_t loc, const cbl_refer_t& r ) {
   if( r.field->has_attr(any_length_e) ) return true;
 
+  unsigned int nchar = r.field->char_capacity();
   const cbl_span_t& refmod(r.refmod);
+  const char *len_name = refmod.len? nice_name_of(refmod.len->field) : "";
 
+  // Check ANY LENGTH for initial refmod FROM literal 0. A bit specific....
+  if( r.field->has_attr(any_length_e) ) {
+    if( is_literal(refmod.from->field) ) {
+      auto from = refmod.from->field->as_integer();
+      if( from < 1 ) {
+        error_msg(loc,"%s(%zu:%s) out of bounds, must be within 1:%u",
+                  r.field->name,
+                  size_t(refmod.from->field->as_integer()),
+                  len_name,
+                  nchar );
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // from is unknown
   if( ! is_literal(refmod.from->field) ) {
     if( ! refmod.len ) return true;
     if( ! is_literal(refmod.len->field) ) return true;
-    auto edge = refmod.len->field->as_integer();
-    if( 0 < edge ) {
-      if( --edge < r.field->data.capacity ) return true;
+    auto len = refmod.len->field->as_integer();
+    if( 0 < len ) {
+      if( len-1 < nchar ) return true; // len is less than the field's size
     }
-    // len < 0 or not: 0 < from + len <= capacity
+    // len too big: 0 < from + len <= capacity
     error_msg(loc, "%s(%s:%zu) out of bounds, "
 	           "size is %u",
 	      r.field->name,
 	      refmod.from->name(),
-	      size_t(refmod.len->field->data.value_of()),
-	      static_cast<unsigned int>(r.field->data.capacity) );
+	      size_t(len),
+	      nchar );
     return false;
   }
 
-  auto edge = refmod.from->field->as_integer();
-  if( edge > 0 ) {
-    if( --edge < r.field->data.capacity ) {
-      if( ! refmod.len ) return true;
-      if( ! is_literal(refmod.len->field) ) return true;
-      auto len = refmod.len->field->as_integer();
-      if( len > 0 ) {
-	edge += len;
-	if( --edge < r.field->data.capacity ) return true;
-      }
-      // len < 0 or not: 0 < from + len <= capacity
-      auto loc = symbol_field_location(field_index(r.field));
-      error_msg(loc, "%s(%zu:%zu) out of bounds, "
-		"size is %u",
-		r.field->name,
-		size_t(refmod.from->field->as_integer()),
-		size_t(len),
-		static_cast<unsigned int>(r.field->data.capacity) );
-      return false;
+  gcc_assert(is_literal(refmod.from->field));
+
+  // from is known
+  auto from = refmod.from->field->as_integer();
+  if( 0 < from && from <= nchar ) {
+    // from is in bounds
+    if( ! refmod.len ) return true;
+    if( ! is_literal(refmod.len->field) ) return true;
+    // len is known
+    auto len = refmod.len->field->as_integer();
+    if( 0 < len ) {
+      if( from + len - 2 < nchar ) return true;
     }
+    // from + len too big: 0 < from + len <= capacity
+    loc = symbol_field_location(field_index(r.field));
+    error_msg(loc, "%s(%zu:%zu) out of bounds, "
+      	"size is %u",
+      	r.field->name,
+      	size_t(from),
+      	size_t(len),
+      	nchar );
+    return false;
   }
-  // not: 0 < from <= capacity
-  error_msg(loc,"%s(%zu) out of bounds, size is %u",
+
+  // from is too big or 0
+  gcc_assert(from < 1 || nchar <= from);
+
+  error_msg(loc,"%s(%zu:%s) out of bounds, must be within 1:%u",
 	    r.field->name,
-	    size_t(refmod.from->field->as_integer()),
-	    static_cast<unsigned int>(r.field->data.capacity) );
+	    size_t(from),
+            len_name,
+	    nchar );
   return false;
 }
 
@@ -12901,31 +15018,35 @@ const cbl_field_t *
 literal_subscript_oob( const cbl_refer_t& r, size_t& isub );
 
 static bool
-literal_subscripts_valid( YYLTYPE loc, const cbl_refer_t& name ) {
-  static char subs[ 7 * 32 ], *esub = subs + sizeof(subs);
-  char *p = subs;
+literal_subscripts_valid( cbl_loc_t loc, const cbl_refer_t& name ) {
   size_t isub;
 
-  // Find subscript in the supplied refer
+  // Report any out-of-bound subscript. 
   const cbl_field_t *oob = literal_subscript_oob(name, isub);
   if( oob ) {
-    const char *sep = "";
-    for( auto r = name.subscripts; r < name.subscripts + name.nsubscript; r++ ) {
-      snprintf( p, esub - p, "%s%s", sep, nice_name_of(r->field) );
-      sep = " ";
-    }
-
+    std::string sep("");
+    std::string subscript_names = 
+      std::accumulate( name.subscripts.begin(),
+                       name.subscripts.end(),
+                       std::string(),
+                       [&sep]( std::string acc, const auto& sub ) {
+                         acc += sep;
+                         sep = " ";
+                         return acc + nice_name_of(sub.field);
+                       } );
+    
     const char *upper_phrase = "";
     if( ! oob->occurs.bounds.fixed_size() ) {
       static char ub[32] = "boo";
-      sprintf(ub, " to %lu", oob->occurs.bounds.upper);
+      sprintf(ub, " to " HOST_SIZE_T_PRINT_UNSIGNED,
+              (fmt_size_t)oob->occurs.bounds.upper);
       upper_phrase = ub;
     }
 
     // X(0): subscript 1 of for out of range for 02 X OCCURS 4 to 6
     error_msg(loc, "%s(%s): subscript %zu out of range "
-                   "for %s %s OCCURS %lu%s",
-	      oob->name, subs, 1 + isub,
+                   "for %s %s OCCURS %zu%s",
+	      oob->name, subscript_names.c_str(), 1 + isub,
 	      oob->level_str(), oob->name,
 	      oob->occurs.bounds.lower, upper_phrase );
     return false;
@@ -12934,7 +15055,7 @@ literal_subscripts_valid( YYLTYPE loc, const cbl_refer_t& name ) {
 }
 
 static void
-subscript_dimension_error( YYLTYPE loc, size_t nsub, const cbl_refer_t *scalar ) {
+subscript_dimension_error( cbl_loc_t loc, size_t nsub, const cbl_refer_t *scalar ) {
   if( 0 == dimensions(scalar->field) ) {
     error_msg(loc, "%zu subscripts provided for %s, "
               "which has no dimensions",
@@ -12947,14 +15068,14 @@ subscript_dimension_error( YYLTYPE loc, size_t nsub, const cbl_refer_t *scalar )
 }
 
 static void
-reject_refmod( YYLTYPE loc, cbl_refer_t scalar ) {
+reject_refmod( cbl_loc_t loc, const cbl_refer_t& scalar ) {
   if( scalar.is_refmod_reference() ) {
     error_msg(loc, "%s cannot be reference-modified here", scalar.name());
   }
 }
 
 static bool
-require_pointer( YYLTYPE loc, cbl_refer_t scalar ) {
+require_pointer( cbl_loc_t loc, const cbl_refer_t& scalar ) {
   if( scalar.field->type != FldPointer ) {
     error_msg(loc, "%s must have USAGE POINTER", scalar.name());
     return false;
@@ -12963,7 +15084,7 @@ require_pointer( YYLTYPE loc, cbl_refer_t scalar ) {
 }
 
 static bool
-require_numeric( YYLTYPE loc, cbl_refer_t scalar ) {
+require_numeric( cbl_loc_t loc, const cbl_refer_t& scalar ) {
   if( ! is_numeric(scalar.field) ) {
     error_msg(loc, "%s must have numeric USAGE", scalar.name());
     return false;
@@ -12971,6 +15092,17 @@ require_numeric( YYLTYPE loc, cbl_refer_t scalar ) {
   return true;
 }
 
+static bool
+require_integer( cbl_loc_t loc, const cbl_refer_t& scalar ) {
+  if( is_literal(scalar.field) ) {
+    if( ! is_integer_literal(scalar.field) ) {
+      error_msg(loc, "numeric literal '%s' must be an integer",
+		scalar.field->pretty_name());
+      return false;
+    }
+  }
+  return require_numeric(loc, scalar);
+}
 /* eval methods */
 
 eval_subject_t::eval_subject_t()
@@ -12988,7 +15120,8 @@ eval_subject_t::label( const char skel[] ) {
   cbl_label_t label = protolabel;
   label.line = yylineno;
   size_t n = 1 + symbols_end() - symbols_begin();
-  snprintf(label.name, sizeof(label.name), "_eval_%s_%zu", skel, n);
+  snprintf(label.name, sizeof(label.name),
+           "_eval_%s_" HOST_SIZE_T_PRINT_UNSIGNED, skel, (fmt_size_t)n);
   auto output = symbol_label_add( PROGRAM, &label );
   return output;
 }
@@ -13033,12 +15166,13 @@ eval_subject_t::compare( int token ) {
 }
 
 cbl_field_t *
-eval_subject_t::compare( relop_t op, const cbl_refer_t& object, bool deciding ) {
+eval_subject_t::compare( const cbl_loc_t& loc, 
+                         relop_t op, const cbl_refer_t& object, bool deciding ) {
   auto subject(*pcol);
   if( compatible(object.field) ) {
     if( ! is_conditional(subject.field) ) {
       auto result = deciding? this->result : new_temporary(FldConditional);
-      parser_relop(result, subject, op, object);
+      ast_relop(loc, result, subject, op, object);
       return result;
       }
     }
@@ -13096,4 +15230,97 @@ eval_subject_t::compare( const cbl_refer_t& object,
 
   parser_relop(result, subject, eq_op, object);
   return result;
+}
+
+/*
+ * Define a binary field according to USAGE: attr, type, and capacity. 
+ * Return type. 
+ * Do not set initial value; that is up to PICTURE and VALUE.
+ */
+static cbl_field_type_t
+field_binary_usage( cbl_loc_t loc, cbl_field_t *field,
+                    cbl_field_type_t type, uint32_t capacity,
+                    bool signable )
+{
+  bool infer = true;
+  
+  // Some binary types have defined capacity;
+  switch(type) {
+    // COMPUTATIONAL and COMP-5 rely on PICTURE.
+  case FldNumericBinary:
+    field->attr |= big_endian_e;
+    __attribute__((fallthrough));
+  case FldNumericBin5:
+    if( cobol_target_big_endian() ) // cppcheck-suppress knownConditionTrueFalse
+      {
+      field->attr |= big_endian_e;
+      }
+    // If no capacity yet, then no picture, infer $comp.capacity.
+    // If field has capacity, ensure USAGE is compatible.
+    if( field->data.capacity() > 0 ) { // PICTURE before USAGE
+      infer = false;
+      auto true_capacity = field->data.capacity();
+      
+      switch( field->type ) {
+      case FldAlphanumeric:   // PIC X COMP-5 or COMP-X
+        assert( field->data.digits == 0 );
+        assert( field->data.rdigits == 0 );
+        dialect_ok(loc, MfCompX, "alphanumeric PICTURE with numeric USAGE");
+        symbol_field_type_update(field, type, true);
+        field->clear_attr(signable_e);
+        // In case PIC X for UTF-16 (say), the X's represent digits.
+        true_capacity /= field->codeset.stride();
+        field->data.capacity(true_capacity);
+        break;
+      case FldNumericDisplay: // PIC 9 COMP-5 or COMP-X
+        if( capacity == 0xFF ) { // comp-x is a bit like comp-5
+          assert( field->data.digits == field->data.capacity() );
+          dialect_ok(loc, MfCompX, "alphanumeric PICTURE with numeric USAGE");
+        }
+        symbol_field_type_update(field, type, true);
+        capacity = type_capacity(field->type, field->data.digits);
+        field->data.capacity(capacity);
+        field->blank_initial(capacity / field->codeset.stride());
+        break;
+      case FldInvalid:
+        symbol_field_type_update(field, type, true);
+        field->data.capacity(capacity);
+        if( signable ) field->set_attr(signable_e);
+        gcc_assert(field->type == FldNumericBin5);
+        break;
+      default:
+        break;
+      }
+    }
+    break;
+  case FldPacked: // comp-6 is unsigned comp-3
+    assert(! signable);  // else PACKED_DECIMAL from scanner
+    field->set_attr(separate_e);
+    dialect_ok(loc, MfComp6, "COMP-6");
+    if( symbol_field_type_update(field, type, true) ) {
+      infer = false;
+      field->set_capacity(type_capacity(field->type, field->data.digits));
+    } else {
+      error_msg(loc, "USAGE PACKED DECIMAL conflicts with PICTURE");
+    }
+    break;
+  default:
+    break;
+  }
+
+  if( infer ) {
+    symbol_field_type_update(field, type, true);
+    if( capacity > 0 ) {
+      if( field->data.capacity() > 0 ) {
+        error_msg(loc, "%s is BINARY type, incompatible with PICTURE",
+                  field->name);
+      }
+      if( signable ) {
+        field->set_attr(signable_e);
+      }
+      field->set_capacity(capacity);
+    }
+  }
+
+  return field->type;
 }

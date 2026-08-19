@@ -1,5 +1,5 @@
 /* Utility routines for data type conversion for GCC.
-   Copyright (C) 1987-2025 Free Software Foundation, Inc.
+   Copyright (C) 1987-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -702,6 +702,12 @@ convert_to_integer_1 (tree type, tree expr, bool dofold)
 	    code = NOP_EXPR;
 
 	  return maybe_fold_build1_loc (dofold, loc, code, type, expr);
+	}
+
+      else if (TREE_CODE (type) == ENUMERAL_TYPE && BITINT_TYPE_P (type))
+	{
+	  expr = convert_to_integer_1 (TREE_TYPE (type), expr, dofold);
+	  return maybe_fold_build1_loc (dofold, loc, NOP_EXPR, type, expr);
 	}
 
       /* If TYPE is an enumeral type or a type with a precision less

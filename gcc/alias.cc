@@ -1,5 +1,5 @@
 /* Alias analysis for GNU C
-   Copyright (C) 1997-2025 Free Software Foundation, Inc.
+   Copyright (C) 1997-2026 Free Software Foundation, Inc.
    Contributed by John Carr (jfc@mit.edu).
 
 This file is part of GCC.
@@ -442,7 +442,7 @@ alias_set_subset_of (alias_set_type set1, alias_set_type set2)
      *ptr2 = ...
 
      Additionally if a set contains universal pointer, we consider every pointer
-     to be a subset of it, but we do not represent this explicitely - doing so
+     to be a subset of it, but we do not represent this explicitly - doing so
      would require us to update transitive closure each time we introduce new
      pointer type.  This makes aliasing_component_refs_p to return true
      on the following testcase:
@@ -464,7 +464,7 @@ alias_set_subset_of (alias_set_type set1, alias_set_type set2)
  	     them subset of each other.  */
 	  if (set1 == voidptr_set || set2 == voidptr_set)
 	    return true;
-	  /* If SET2 contains universal pointer's alias set, then we consdier
+	  /* If SET2 contains universal pointer's alias set, then we consider
  	     every (non-universal) pointer.  */
 	  if (ase2->children && set1 != voidptr_set
 	      && ase2->children->get (voidptr_set))
@@ -850,7 +850,7 @@ alias_ptr_types_compatible_p (tree t1, tree t2)
 	    == TYPE_MAIN_VARIANT (TREE_TYPE (t2)));
 }
 
-/* Create emptry alias set entry.  */
+/* Create empty alias set entry.  */
 
 alias_set_entry *
 init_alias_set_entry (alias_set_type set)
@@ -948,7 +948,12 @@ get_alias_set (tree t)
   else
     {
       t = TYPE_CANONICAL (t);
-      gcc_checking_assert (!TYPE_STRUCTURAL_EQUALITY_P (t));
+      gcc_checking_assert (TYPE_CANONICAL (t) == t);
+      if (t != TYPE_MAIN_VARIANT (t))
+	{
+	  t = TYPE_MAIN_VARIANT (t);
+	  gcc_checking_assert (TYPE_CANONICAL (t) == t);
+	}
     }
 
   /* If this is a type with a known alias set, return it.  */
@@ -1099,7 +1104,7 @@ get_alias_set (tree t)
 		p = build_pointer_type (p);
 	      gcc_checking_assert (p == TYPE_MAIN_VARIANT (p));
 	      /* build_pointer_type should always return the canonical type.
-		 For LTO TYPE_CANOINCAL may be NULL, because we do not compute
+		 For LTO TYPE_CANONICAL may be NULL, because we do not compute
 		 them.  Be sure that frontends do not glob canonical types of
 		 pointers in unexpected way and that p == TYPE_CANONICAL (p)
 		 in all other cases.  */
@@ -1110,7 +1115,7 @@ get_alias_set (tree t)
 	  /* Assign the alias set to both p and t.
 	     We cannot call get_alias_set (p) here as that would trigger
 	     infinite recursion when p == t.  In other cases it would just
-	     trigger unnecesary legwork of rebuilding the pointer again.  */
+	     trigger unnecessary legwork of rebuilding the pointer again.  */
 	  gcc_checking_assert (p == TYPE_MAIN_VARIANT (p));
 	  if (TYPE_ALIAS_SET_KNOWN_P (p))
 	    set = TYPE_ALIAS_SET (p);
@@ -1303,7 +1308,7 @@ record_component_aliases (tree type, alias_set_type superset)
 	      alias_set_type set = get_alias_set (t);
 	      record_alias_subset (superset, set);
 	      /* If the field has alias-set zero make sure to still record
-		 any componets of it.  This makes sure that for
+		 any components of it.  This makes sure that for
 		   struct A {
 		     struct B {
 		       int i;
@@ -2238,7 +2243,7 @@ base_alias_check (rtx x, rtx x_base, rtx y, rtx y_base,
      alias one another, though "char a; long b;" cannot.  AND addresses may
      implicitly alias surrounding objects; i.e. unaligned access in DImode
      via AND address can alias all surrounding object types except those
-     with aligment 8 or higher.  */
+     with alignment 8 or higher.  */
   if (GET_CODE (x) == AND && GET_CODE (y) == AND)
     return true;
   if (GET_CODE (x) == AND
@@ -2269,10 +2274,10 @@ base_alias_check (rtx x, rtx x_base, rtx y, rtx y_base,
 static bool
 refs_newer_value_p (const_rtx expr, rtx v)
 {
-  int minuid = CSELIB_VAL_PTR (v)->uid;
+  int minuid = CSELIB_VAL_UID (v);
   subrtx_iterator::array_type array;
   FOR_EACH_SUBRTX (iter, array, expr, NONCONST)
-    if (GET_CODE (*iter) == VALUE && CSELIB_VAL_PTR (*iter)->uid >= minuid)
+    if (GET_CODE (*iter) == VALUE && CSELIB_VAL_UID (*iter) >= minuid)
       return true;
   return false;
 }
@@ -3337,7 +3342,7 @@ memory_modified_in_insn_p (const_rtx mem, const_rtx insn)
     return true;
   memory_modified = false;
   note_stores (as_a<const rtx_insn *> (insn), memory_modified_1,
-	       CONST_CAST_RTX(mem));
+	       const_cast<rtx> (mem));
   return memory_modified;
 }
 

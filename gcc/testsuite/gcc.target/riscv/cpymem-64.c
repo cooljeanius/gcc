@@ -35,7 +35,7 @@ COPY_N(7)
 /*
 **copy_aligned_7:
 **    ...
-**    lw\t[at][0-9],0\([at][0-9]\)
+**    (lwu|lw)\t[at][0-9],0\([at][0-9]\)
 **    sw\t[at][0-9],0\([at][0-9]\)
 **    ...
 **    lbu\t[at][0-9],6\([at][0-9]\)
@@ -95,7 +95,7 @@ COPY_ALIGNED_N(11)
 /*
 **copy_15:
 **    ...
-**    (call|tail)\tmemcpy
+**    (call|tail)\tmemcpy(?:@plt)?
 **    ...
 */
 COPY_N(15)
@@ -116,7 +116,7 @@ COPY_ALIGNED_N(15)
 /*
 **copy_27:
 **    ...
-**    (call|tail)\tmemcpy
+**    (call|tail)\tmemcpy(?:@plt)?
 **    ...
 */
 COPY_N(27)

@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 2022-2025, Free Software Foundation, Inc.         --
+--          Copyright (C) 2022-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -26,7 +26,6 @@
 with Atree;          use Atree;
 with Checks;         use Checks;
 with Debug;          use Debug;
-with Einfo;          use Einfo;
 with Einfo.Entities; use Einfo.Entities;
 with Elists;         use Elists;
 with Errout;         use Errout;
@@ -46,7 +45,6 @@ with Sem_Aux;        use Sem_Aux;
 with Sem_Ch8;        use Sem_Ch8;
 with Sem_Res;        use Sem_Res;
 with Sem_Util;       use Sem_Util;
-with Sinfo;          use Sinfo;
 with Sinfo.Nodes;    use Sinfo.Nodes;
 with Sinfo.Utils;    use Sinfo.Utils;
 with Snames;         use Snames;
@@ -54,6 +52,39 @@ with Stand;          use Stand;
 with Tbuild;         use Tbuild;
 
 package body Accessibility is
+
+   -----------------------
+   -- Local Subprograms --
+   -----------------------
+
+   procedure Apply_Accessibility_Check_For_Anonymous_Return
+     (Exp         : Node_Id;
+      Func        : Entity_Id;
+      Insert_Node : Node_Id);
+   --  If the result type of the function is an anonymous access type, insert
+   --  a check that the accessibility level of the entity designated by the
+   --  result is not deeper than the level of the master of the call. Exp is
+   --  an expression being returned from Func.
+
+   procedure Apply_Accessibility_Check_For_Class_Wide_Return
+     (Exp  : Node_Id;
+      Func : Entity_Id);
+   --  Ada 2005 (AI95-344): If the result type is class-wide, insert a check
+   --  that the level of the return expression's underlying type is not deeper
+   --  than the level of the master enclosing the function. Always generate the
+   --  check when the type of the return expression is class-wide, when it's a
+   --  type conversion, or when it's a formal parameter. Otherwise suppress the
+   --  check in the case where the return expression has a specific type whose
+   --  level is known not to be statically deeper than the result type of the
+   --  function. Exp is an expression being returned from Func.
+
+   procedure Apply_Accessibility_Check_For_Discriminated_Return
+     (Exp  : Node_Id;
+      Func : Entity_Id);
+   --  If the result type of the function has access discriminants, insert
+   --  checks that the accessibility level of each entity designated by an
+   --  access discriminant of the result is not deeper than the level of the
+   --  master of the call. Exp is an expression being returned from Func.
 
    ---------------------------
    -- Accessibility_Message --
@@ -66,10 +97,13 @@ package body Accessibility is
 
    begin
       --  In an instance, this is a runtime check, but one we know will fail,
-      --  so generate an appropriate warning.
+      --  so generate an appropriate warning. As usual, this kind of warning
+      --  is an error in SPARK mode or if No_Dynamic_Accessibility_Checks.
 
       if In_Instance_Body then
-         Error_Msg_Warn := SPARK_Mode /= On;
+         Error_Msg_Warn := SPARK_Mode /= On
+                             and then not
+                               No_Dynamic_Accessibility_Checks_Enabled (P);
          Error_Msg_F
            ("non-local pointer cannot point to local object<<", P);
          Error_Msg_F ("\Program_Error [<<", P);
@@ -77,7 +111,6 @@ package body Accessibility is
            Make_Raise_Program_Error (Loc,
              Reason => PE_Accessibility_Check_Failed));
          Set_Etype (N, Typ);
-         return;
 
       else
          Error_Msg_F ("non-local pointer cannot point to local object", P);
@@ -154,7 +187,7 @@ package body Accessibility is
       begin
          --  Locate the nearest enclosing node (by traversing Parents)
          --  that Defining_Entity can be applied to, and return the
-         --  depth of that entity's nearest enclosing scope.
+         --  depth of that entity's nearest enclosing dynamic scope.
 
          --  The RM 7.6.1(3) definition of "master" includes statements
          --  and conditions for loops among other things. Are these cases
@@ -164,19 +197,7 @@ package body Accessibility is
             Ent := Defining_Entity_Or_Empty (Node_Par);
 
             if Present (Ent) then
-               --  X'Old is nested within the current subprogram, so we do not
-               --  want Find_Enclosing_Scope of that subprogram. If this is an
-               --  allocator, then we're looking for the innermost master of
-               --  the call, so again we do not want Find_Enclosing_Scope.
-
-               if (Nkind (N) = N_Attribute_Reference
-                    and then Attribute_Name (N) = Name_Old)
-                 or else Nkind (N) = N_Allocator
-               then
-                  Encl_Scop := Ent;
-               else
-                  Encl_Scop := Find_Enclosing_Scope (Ent);
-               end if;
+               Encl_Scop := Nearest_Dynamic_Scope (Ent);
 
                --  Ignore transient scopes made during expansion while also
                --  taking into account certain expansions - like iterators
@@ -219,9 +240,13 @@ package body Accessibility is
             then
                return Scope_Depth (Enclosing_Subprogram (Node_Par));
 
-            --  Statements are counted as masters
+            --  Non-package bodies and statements are counted as masters
 
-            elsif Is_Master (Node_Par) then
+            elsif Nkind (Node_Par) in N_Entry_Body
+                                    | N_Subprogram_Body
+                                    | N_Task_Body
+              or else Is_Statement (Node_Par)
+            then
                Master_Lvl_Modifier := Master_Lvl_Modifier + 1;
 
             end if;
@@ -253,42 +278,54 @@ package body Accessibility is
       --------------------------------------
 
       function Function_Call_Or_Allocator_Level (N : Node_Id) return Node_Id is
-         Par      : Node_Id;
-         Prev_Par : Node_Id;
-      begin
-         --  Results of functions are objects, so we either get the
-         --  accessibility of the function or, in case of a call which is
-         --  indirect, the level of the access-to-subprogram type.
+         Prev_Par : Node_Id := Expr;
+         Par      : Node_Id := Parent (Expr);
+         --  Par and Prev_Par will be used for traversing the AST, while
+         --  maintaining an invariant that Par = Parent (Prev_Par).
 
-         --  This code looks wrong ???
+      begin
+         --  First deal with function calls in Ada 95
 
          if Nkind (N) = N_Function_Call
-           and then Ada_Version < Ada_2005
+           and then Ada_Version <= Ada_95
          then
-            if Is_Entity_Name (Name (N)) then
+            --  With a return by reference, we either get the accessibility of
+            --  the function or, in case of an indirect call, the accessibility
+            --  level of the access-to-subprogram type.
+
+            if Is_Entity_Name (Name (N))
+              and then Is_Inherently_Limited_Type (Etype (N))
+            then
                return Make_Level_Literal
                         (Subprogram_Access_Level (Entity (Name (N))));
-            else
+
+            elsif Nkind (Name (N)) = N_Explicit_Dereference
+              and then Is_Inherently_Limited_Type (Etype (N))
+            then
                return Make_Level_Literal
                         (Typ_Access_Level (Etype (Prefix (Name (N)))));
+
+            --  Otherwise the accessibility level of the innermost master
+
+            else
+               return Make_Level_Literal (Innermost_Master_Scope_Depth (Expr));
             end if;
 
          --  We ignore coextensions as they cannot be implemented under the
-         --  "small-integer" model.
+         --  "small integer" model.
 
          elsif Nkind (N) = N_Allocator
            and then (Is_Static_Coextension (N)
                       or else Is_Dynamic_Coextension (N))
          then
             return Make_Level_Literal (Scope_Depth (Standard_Standard));
-         end if;
 
-         --  Named access types have a designated level
+         --  Objects of a named access type get their level from their type
 
-         if Is_Named_Access_Type (Etype (N)) then
+         elsif Is_Named_Access_Type (Etype (N)) then
             return Make_Level_Literal (Typ_Access_Level (Etype (N)));
 
-         --  Otherwise, the level is dictated by RM 3.10.2 (10.7/3)
+         --  Function calls in Ada 2005 and later, and anonymous allocators
 
          else
             --  Check No_Dynamic_Accessibility_Checks restriction override for
@@ -305,103 +342,151 @@ package body Accessibility is
                   return Make_Level_Literal (Typ_Access_Level (Etype (N)));
 
                --  For function calls the level is that of the innermost
-               --  master, otherwise (for allocators etc.) we get the level
-               --  of the corresponding anonymous access type, which is
+               --  master; otherwise, for allocators we get the level of
+               --  the corresponding anonymous access type, which is
                --  calculated through the normal path of execution.
 
                elsif Nkind (N) = N_Function_Call then
-                  return Make_Level_Literal
-                           (Innermost_Master_Scope_Depth (Expr));
+                  return
+                    Make_Level_Literal (Innermost_Master_Scope_Depth (Expr));
                end if;
             end if;
 
-            if Nkind (N) = N_Function_Call then
-               --  Dynamic checks are generated when we are within a return
-               --  value or we are in a function call within an anonymous
-               --  access discriminant constraint of a return object (signified
-               --  by In_Return_Context) on the side of the callee.
+            --  AI12-0402: The master of the function call for a function
+            --  whose result type is a scalar type is always the innermost
+            --  master invoking the function.
 
-               --  So, in this case, return accessibility level of the
-               --  enclosing subprogram.
-
-               if In_Return_Value (N)
-                 or else In_Return_Context
-               then
-                  return Make_Level_Literal
-                           (Subprogram_Access_Level (Current_Subprogram));
-               end if;
-            end if;
-
-            --  When the call is being dereferenced the level is that of the
-            --  enclosing master of the dereferenced call.
-
-            if Nkind (Parent (N)) in N_Explicit_Dereference
-                                   | N_Indexed_Component
-                                   | N_Selected_Component
+            if Ada_Version >= Ada_2022
+              and then Nkind (N) = N_Function_Call
+              and then Is_Scalar_Type (Etype (N))
             then
-               return Make_Level_Literal
-                        (Innermost_Master_Scope_Depth (Expr));
+               return Make_Level_Literal (Innermost_Master_Scope_Depth (Expr));
             end if;
 
-            --  Find any relevant enclosing parent nodes that designate an
-            --  object being initialized.
+            --  Dynamic checks are generated when we are within a return
+            --  value or we are in a function call within an anonymous
+            --  access discriminant constraint of a return object (signified
+            --  by In_Return_Context) on the side of the callee.
 
-            --  Note: The above is only relevant if the result is used "in its
-            --  entirety" as RM 3.10.2 (10.2/3) states. However, this is
-            --  accounted for in the case statement in the main body of
-            --  Accessibility_Level for N_Selected_Component.
+            if In_Return_Value (N) or else In_Return_Context then
+               declare
+                  Extra_Formal : constant Entity_Id :=
+                    Extra_Accessibility_Of_Result (Current_Subprogram);
 
-            Par      := Parent (Expr);
-            Prev_Par := Empty;
+               begin
+                  --  If a function is passed an extra "level of the
+                  --  master of the call" parameter and that function
+                  --  returns a call to another such function (or
+                  --  possibly to the same function, in the case of a
+                  --  recursive call), then that parameter should be
+                  --  "passed along".
+
+                  if Present (Extra_Formal) and then Level = Dynamic_Level then
+                     return New_Occurrence_Of (Extra_Formal, Loc);
+
+                  --  Otherwise, return accessibility level of the enclosing
+                  --  subprogram.
+
+                  else
+                     return Make_Level_Literal
+                              (Subprogram_Access_Level (Current_Subprogram));
+                  end if;
+               end;
+            end if;
+
+            --  Find any relevant parent nodes that designate an object being
+            --  initialized and stop when there is an inappropriate construct.
+
             while Present (Par) loop
-               --  Detect an expanded implicit conversion, typically this
-               --  occurs on implicitly converted actuals in calls.
 
-               --  Does this catch all implicit conversions ???
+               case Nkind (Par) is
 
-               if Nkind (Par) = N_Type_Conversion
-                 and then Is_Named_Access_Type (Etype (Par))
-               then
-                  return Make_Level_Literal
-                           (Typ_Access_Level (Etype (Par)));
-               end if;
+                  --  RM 3.10.2 (10.2/5) is relevant only if the result is used
+                  --  to "directly initialize" the object.
 
-               --  Jump out when we hit an object declaration or the right-hand
-               --  side of an assignment, or a construct such as an aggregate
-               --  subtype indication which would be the result is not used
-               --  "in its entirety."
+                  when N_Explicit_Dereference | N_Function_Call | N_Op =>
+                     exit;
 
-               exit when Nkind (Par) in N_Object_Declaration
-                           or else (Nkind (Par) = N_Assignment_Statement
-                                     and then Name (Par) /= Prev_Par);
+                  --  RM 3.10.2 (10.2/5) is relevant only if the result is used
+                  --  "in its entirety".
+
+                  when N_Indexed_Component | N_Selected_Component | N_Slice =>
+                     exit;
+
+                  --  Accept operative constituents
+
+                  when N_Case_Expression =>
+                     exit when Prev_Par = Expression (Par);
+
+                  when N_If_Expression =>
+                     exit when Prev_Par = First (Expressions (Par));
+
+                  when N_Case_Expression_Alternative
+                     | N_Qualified_Expression
+                     | N_Unchecked_Type_Conversion
+                  =>
+                     null;
+
+                  --  Detect an expanded implicit conversion, typically this
+                  --  occurs on implicitly converted actuals in calls.
+
+                  --  Does this catch all implicit conversions ???
+
+                  when N_Type_Conversion  =>
+                     if Is_Named_Access_Type (Etype (Par)) then
+                        return
+                          Make_Level_Literal (Typ_Access_Level (Etype (Par)));
+                     end if;
+
+                  --  For the (static) declaration of an object, return the
+                  --  accessibility level of the master of the object.
+
+                  when N_Object_Declaration =>
+                     return
+                       Accessibility_Level
+                         (Defining_Identifier (Par), Object_Decl_Level);
+
+                  --  For the dynamic allocation of an object, return the
+                  --  accessibility level of the allocator.
+
+                  when N_Allocator =>
+                     return Accessibility_Level (Par);
+
+                  --  RM 3.10.2(10.3/5): If the result is of an anonymous
+                  --  access type and is converted to a (named or anonymous)
+                  --  access type, the master is determined following the
+                  --  rules given for determining the master of an object
+                  --  created by an allocator.
+
+                  --  The conversion can be an implicit subtype conversion,
+                  --  in particular the one in an assignment (RM 5.2(11/5)).
+
+                  --  For an anonymous allocator in an assignment, return the
+                  --  accessibility level of the name (RM 3.10.2(14/6)).
+
+                  when N_Assignment_Statement =>
+                     exit when Prev_Par = Name (Par)
+                       or else not Is_Anonymous_Access_Type (Etype (N));
+
+                     return Accessibility_Level
+                              (Expr              => Name (Par),
+                               Level             => Object_Decl_Level,
+                               In_Return_Context => In_Return_Context);
+
+                  when others =>
+                     --  Prevent the search from going too far
+
+                     exit when Is_Statement (Par)
+                       or else Is_Body_Or_Package_Declaration (Par);
+               end case;
 
                Prev_Par := Par;
-               Par      := Parent (Par);
+               Par := Parent (Par);
             end loop;
 
-            --  Assignment statements are handled in a similar way in
-            --  accordance to the left-hand part. However, strictly speaking,
-            --  this is illegal according to the RM, but this change is needed
-            --  to pass an ACATS C-test and is useful in general ???
+            --  Return the accessibility level of the innermost master
 
-            case Nkind (Par) is
-               when N_Object_Declaration =>
-                  return Make_Level_Literal
-                           (Scope_Depth
-                             (Scope (Defining_Identifier (Par))));
-
-               when N_Assignment_Statement =>
-                  --  Return the accessibility level of the left-hand part
-
-                  return Accessibility_Level
-                           (Expr              => Name (Par),
-                            Level             => Object_Decl_Level,
-                            In_Return_Context => In_Return_Context);
-
-               when others =>
-                  return Make_Level_Literal
-                           (Innermost_Master_Scope_Depth (Expr));
-            end case;
+            return Make_Level_Literal (Innermost_Master_Scope_Depth (Expr));
          end if;
       end Function_Call_Or_Allocator_Level;
 
@@ -431,9 +516,12 @@ package body Accessibility is
          E := Expr;
       end if;
 
-      --  Extract the entity
+      --  Extract the entity when it is valid
 
-      if Nkind (E) in N_Has_Entity and then Present (Entity (E)) then
+      if Nkind (E) in N_Has_Entity
+        and then Present (Entity (E))
+        and then Entity (E) /= Any_Type
+      then
          E := Entity (E);
 
          --  Deal with a possible renaming of a private protected component
@@ -446,6 +534,11 @@ package body Accessibility is
       --  Perform the processing on the expression
 
       case Nkind (E) is
+         --  The accessibility level of the literal null is the library level
+
+         when N_Null =>
+            return Make_Level_Literal (Scope_Depth (Standard_Standard));
+
          --  The level of an aggregate is that of the innermost master that
          --  evaluates it as defined in RM 3.10.2 (10/4).
 
@@ -490,13 +583,22 @@ package body Accessibility is
                         (Innermost_Master_Scope_Depth
                           (Enclosing_Declaration (Expr)));
 
-            --  Unchecked or unrestricted attributes have unlimited depth
+            --  Return the library level to null out the check for the Address,
+            --  Deref, Unchecked_Access and Unrestricted_Access attributes.
 
             elsif Attribute_Name (E) in Name_Address
+                                      | Name_Deref
                                       | Name_Unchecked_Access
                                       | Name_Unrestricted_Access
             then
                return Make_Level_Literal (Scope_Depth (Standard_Standard));
+
+            --  For 'Old return the level of the associated entity, if any
+
+            elsif Attribute_Name (E) = Name_Old
+              and then Is_Entity_Name (Expr)
+            then
+               return Accessibility_Level (Entity (Expr));
 
             --  'Access can be taken further against other special attributes,
             --  so handle these cases explicitly.
@@ -515,12 +617,11 @@ package body Accessibility is
                --  Named access types
 
                if Is_Named_Access_Type (Etype (Pre)) then
-                  return Make_Level_Literal
-                           (Typ_Access_Level (Etype (Pre)));
+                  return Make_Level_Literal (Typ_Access_Level (Etype (Pre)));
 
                --  Anonymous access types
 
-               elsif Nkind (Pre) in N_Has_Entity
+               elsif Is_Entity_Name (Pre)
                  and then Ekind (Entity (Pre)) not in Subprogram_Kind
                  and then Present (Get_Dynamic_Accessibility (Entity (Pre)))
                  and then Level = Dynamic_Level
@@ -548,39 +649,41 @@ package body Accessibility is
          --  means we are near the end of our recursive traversal.
 
          when N_Defining_Identifier =>
-            --  A dynamic check is performed on the side of the callee when we
-            --  are within a return statement, so return a library-level
-            --  accessibility level to null out checks on the side of the
-            --  caller.
+            --  RM 3.10.2(21.1/5): Notwithstanding other rules [in 3.10.2],
+            --  the accessibility level of an entity that is tied to that of
+            --  an explicitly aliased formal parameter of an enclosing function
+            --  is considered (both statically and dynamically) to be the same
+            --  as that of an entity whose accessibility level is tied to that
+            --  of the return object of that function.
+
+            --  This means that no checks are needed for an explicitly aliased
+            --  formal parameter in a return context and we return the library
+            --  level to null them out there.
+
+            --  Note that we have to deal specifically with _Wrapped_Statements
+            --  functions of functions returning an access result, generated by
+            --  the expansion of contracts and postconditions, because they get
+            --  the same anonymous access result type as their parent function.
 
             if Is_Explicitly_Aliased (E)
-              and then (In_Return_Context
-                         or else (Level /= Dynamic_Level
-                                   and then In_Return_Value (Expr)))
+              and then (Scope (E) = Current_Subprogram
+                         or else (Has_Expanded_Contract (Scope (E))
+                                   and then
+                                     Wrapped_Statements (Scope (E)) =
+                                                           Current_Subprogram))
+              and then (In_Return_Value (Expr) or else In_Return_Context)
             then
                return Make_Level_Literal (Scope_Depth (Standard_Standard));
 
-            --  Something went wrong and an extra accessibility formal has not
-            --  been generated when one should have ???
+            --  Formal parameters with an extra accessibility formal, as well
+            --  as stand-alone objects of an anonymous access type (SAOOAAAT).
 
-            elsif Is_Formal (E)
-              and then No (Get_Dynamic_Accessibility (E))
-              and then Ekind (Etype (E)) = E_Anonymous_Access_Type
-            then
-               return Make_Level_Literal (Scope_Depth (Standard_Standard));
-
-            --  Stand-alone object of an anonymous access type "SAOAAT"
-
-            elsif (Is_Formal (E)
-                    or else Ekind (E) in E_Variable
-                                       | E_Constant)
+            elsif (Is_Formal (E) or else Ekind (E) in E_Constant | E_Variable)
               and then Present (Get_Dynamic_Accessibility (E))
-              and then (Level = Dynamic_Level
-                         or else Level = Zero_On_Dynamic_Level)
+              and then Level in Dynamic_Level | Zero_On_Dynamic_Level
             then
                if Level = Zero_On_Dynamic_Level then
-                  return Make_Level_Literal
-                           (Scope_Depth (Standard_Standard));
+                  return Make_Level_Literal (Scope_Depth (Standard_Standard));
                end if;
 
                --  No_Dynamic_Accessibility_Checks restriction override for
@@ -609,8 +712,20 @@ package body Accessibility is
 
                --  Return the dynamic level in the normal case
 
-               return New_Occurrence_Of
-                        (Get_Dynamic_Accessibility (E), Loc);
+               return New_Occurrence_Of (Get_Dynamic_Accessibility (E), Loc);
+
+            --  Return the library level for formal parameters or stand-alone
+            --  objects of an anonymous access type without extra accessibility
+            --  object. This may happen for subprograms with foreign convention
+            --  or when expansion is disabled, see Sem_Ch6.Create_Extra_Formals
+            --  and Exp_Ch3.Expand_N_Object_Declaration.
+
+            elsif (Is_Formal (E) or else Ekind (E) in E_Constant | E_Variable)
+              and then Is_Anonymous_Access_Type (Etype (E))
+              and then not Is_Local_Anonymous_Access (Etype (E))
+              and then Level in Dynamic_Level | Zero_On_Dynamic_Level
+            then
+               return Make_Level_Literal (Scope_Depth (Standard_Standard));
 
             --  Initialization procedures have a special extra accessibility
             --  parameter associated with the level at which the object
@@ -655,11 +770,10 @@ package body Accessibility is
             then
                return Accessibility_Level (Renamed_Entity_Or_Object (E));
 
-            --  Named access types get their level from their associated type
+            --  Objects of a named access type get their level from their type
 
             elsif Is_Named_Access_Type (Etype (E)) then
-               return Make_Level_Literal
-                        (Typ_Access_Level (Etype (E)));
+               return Make_Level_Literal (Typ_Access_Level (Etype (E)));
 
             --  Check if E is an expansion-generated renaming of an iterator
             --  by examining Related_Expression. If so, determine the
@@ -672,12 +786,19 @@ package body Accessibility is
 
             elsif Level = Dynamic_Level
                and then Ekind (E) in E_In_Parameter | E_In_Out_Parameter
+               and then Is_Subprogram (Scope (E))
                and then Present (Init_Proc_Level_Formal (Scope (E)))
             then
                return New_Occurrence_Of
                         (Init_Proc_Level_Formal (Scope (E)), Loc);
 
-            --  Normal object - get the level of the enclosing scope
+            --  Formal object of generic subprogram - get the level of the
+            --  subprogram
+
+            elsif Is_Formal_Object (E) and then Is_Subprogram (Scope (E)) then
+               return Make_Level_Literal (Subprogram_Access_Level (Scope (E)));
+
+            --  Normal object - get the depth of the enclosing dynamic scope
 
             else
                return Make_Level_Literal
@@ -688,8 +809,6 @@ package body Accessibility is
          --  whereby there is an implicit dereference, a component of a
          --  composite type, or a function call in prefix notation.
 
-         --  We don't handle function calls in prefix notation correctly ???
-
          when N_Indexed_Component | N_Selected_Component | N_Slice =>
             Pre := Prefix (E);
 
@@ -697,10 +816,12 @@ package body Accessibility is
             --  of expanding a function call since we want to find the level
             --  of the original source call.
 
-            if not Comes_From_Source (Pre)
-              and then Nkind (Original_Node (Pre)) = N_Function_Call
-            then
-               Pre := Original_Node (Pre);
+            if not Comes_From_Source (Pre) then
+               if Nkind (Original_Node (Pre)) = N_Function_Call then
+                  Pre := Original_Node (Pre);
+               elsif Is_Captured_Function_Call (Pre) then
+                  Pre := Prefix (Constant_Value (Entity (Prefix (Pre))));
+               end if;
             end if;
 
             --  When E is an indexed component or selected component and
@@ -715,16 +836,14 @@ package body Accessibility is
             --  of the named access type in the prefix.
 
             elsif Is_Named_Access_Type (Etype (Pre)) then
-               return Make_Level_Literal
-                        (Typ_Access_Level (Etype (Pre)));
+               return Make_Level_Literal (Typ_Access_Level (Etype (Pre)));
 
             --  The current expression is a named access type, so there is no
             --  reason to look at the prefix. Instead obtain the level of E's
             --  named access type.
 
             elsif Is_Named_Access_Type (Etype (E)) then
-               return Make_Level_Literal
-                        (Typ_Access_Level (Etype (E)));
+               return Make_Level_Literal (Typ_Access_Level (Etype (E)));
 
             --  A nondiscriminant selected component where the component
             --  is an anonymous access type means that its associated
@@ -766,49 +885,42 @@ package body Accessibility is
                  and then No_Dynamic_Accessibility_Checks_Enabled (E)
                  and then Debug_Flag_Underscore_B
                then
-                  return Make_Level_Literal
-                           (Typ_Access_Level (Etype (E)));
+                  return Make_Level_Literal (Typ_Access_Level (Etype (E)));
                end if;
 
                --  Otherwise proceed normally
 
-               return Make_Level_Literal
-                        (Typ_Access_Level (Etype (Prefix (E))));
+               return
+                 Make_Level_Literal (Typ_Access_Level (Etype (Prefix (E))));
 
             --  The accessibility calculation routine that handles function
-            --  calls (Function_Call_Level) assumes, in the case the
-            --  result is of an anonymous access type, that the result will be
-            --  used "in its entirety" when the call is present within an
-            --  assignment or object declaration.
+            --  calls (Function_Call_Or_Allocator_Level) assumes, in the case
+            --  the result is not of a named access type, that the result will
+            --  be used "in its entirety" when the call is present within an
+            --  assignment or object declaration or return value.
 
             --  To properly handle cases where the result is not used in its
             --  entirety, we test if the prefix of the component in question is
             --  a function call, which tells us that one of its components has
-            --  been identified and is being accessed. Therefore we can
-            --  conclude that the result is not used "in its entirety"
-            --  according to RM 3.10.2 (10.2/3).
+            --  been identified and is being accessed.
 
             elsif Nkind (Pre) = N_Function_Call
               and then not Is_Named_Access_Type (Etype (Pre))
             then
-               --  Dynamic checks are generated when we are within a return
-               --  value or we are in a function call within an anonymous
-               --  access discriminant constraint of a return object (signified
-               --  by In_Return_Context) on the side of the callee.
+               --  Even if the result is not used "in it entirety", if the call
+               --  has an accessibility level tied to that of the result of the
+               --  enclosing function, it is nevertheless considered to define
+               --  the result for the purpose of determining its master and its
+               --  accessibility level by the RM 3.10.2(10.5/5) rule.
 
-               --  So, in this case, return a library accessibility level to
-               --  null out the check on the side of the caller.
-
-               if (In_Return_Value (E)
-                    or else In_Return_Context)
-                 and then Level /= Dynamic_Level
+               if (Ekind (Etype (Pre)) = E_Anonymous_Access_Type
+                    or else Has_Implicit_Dereference (Etype (Pre)))
+                 and then (In_Return_Value (E) or else In_Return_Context)
                then
-                  return Make_Level_Literal
-                           (Scope_Depth (Standard_Standard));
+                  return Function_Call_Or_Allocator_Level (Prefix (E));
                end if;
 
-               return Make_Level_Literal
-                        (Innermost_Master_Scope_Depth (Expr));
+               return Make_Level_Literal (Innermost_Master_Scope_Depth (Expr));
 
             --  Otherwise, continue recursing over the expression prefixes
 
@@ -820,8 +932,7 @@ package body Accessibility is
 
          when N_Qualified_Expression =>
             if Is_Named_Access_Type (Etype (E)) then
-               return Make_Level_Literal
-                        (Typ_Access_Level (Etype (E)));
+               return Make_Level_Literal (Typ_Access_Level (Etype (E)));
             else
                return Accessibility_Level (Expression (E));
             end if;
@@ -866,8 +977,7 @@ package body Accessibility is
             --  access type.
 
             elsif Is_Named_Access_Type (Etype (E)) then
-               return Make_Level_Literal
-                        (Typ_Access_Level (Etype (E)));
+               return Make_Level_Literal (Typ_Access_Level (Etype (E)));
 
             --  In section RM 3.10.2 (10/4) the accessibility rules for
             --  aggregates and value conversions are outlined. Are these
@@ -887,124 +997,11 @@ package body Accessibility is
       end case;
    end Accessibility_Level;
 
-   -------------------------------
-   -- Apply_Accessibility_Check --
-   -------------------------------
+   --------------------------------------------------------
+   -- Apply_Accessibility_Check_For_Class_Wide_Allocator --
+   --------------------------------------------------------
 
-   procedure Apply_Accessibility_Check
-     (N           : Node_Id;
-      Typ         : Entity_Id;
-      Insert_Node : Node_Id)
-   is
-      Loc : constant Source_Ptr := Sloc (N);
-
-      Check_Cond  : Node_Id;
-      Param_Ent   : Entity_Id := Param_Entity (N);
-      Param_Level : Node_Id;
-      Type_Level  : Node_Id;
-
-   begin
-      --  Verify we haven't tried to add a dynamic accessibility check when we
-      --  shouldn't.
-
-      pragma Assert (not No_Dynamic_Accessibility_Checks_Enabled (N));
-
-      if Ada_Version >= Ada_2012
-         and then No (Param_Ent)
-         and then Is_Entity_Name (N)
-         and then Ekind (Entity (N)) in E_Constant | E_Variable
-         and then Present (Effective_Extra_Accessibility (Entity (N)))
-      then
-         Param_Ent := Entity (N);
-         while Present (Renamed_Object (Param_Ent)) loop
-            --  Renamed_Object must return an Entity_Name here
-            --  because of preceding "Present (E_E_A (...))" test.
-
-            Param_Ent := Entity (Renamed_Object (Param_Ent));
-         end loop;
-      end if;
-
-      if Inside_A_Generic then
-         return;
-
-      --  Only apply the run-time check if the access parameter has an
-      --  associated extra access level parameter and when accessibility checks
-      --  are enabled.
-
-      elsif Present (Param_Ent)
-         and then Present (Get_Dynamic_Accessibility (Param_Ent))
-         and then not Accessibility_Checks_Suppressed (Param_Ent)
-         and then not Accessibility_Checks_Suppressed (Typ)
-      then
-         --  Obtain the parameter's accessibility level
-
-         Param_Level :=
-           New_Occurrence_Of (Get_Dynamic_Accessibility (Param_Ent), Loc);
-
-         --  Use the dynamic accessibility parameter for the function's result
-         --  when one has been created instead of statically referring to the
-         --  deepest type level so as to appropriatly handle the rules for
-         --  RM 3.10.2 (10.1/3).
-
-         if Ekind (Scope (Param_Ent)) = E_Function
-           and then In_Return_Value (N)
-           and then Ekind (Typ) = E_Anonymous_Access_Type
-         then
-            --  Associate the level of the result type to the extra result
-            --  accessibility parameter belonging to the current function.
-
-            if Present (Extra_Accessibility_Of_Result (Scope (Param_Ent))) then
-               Type_Level :=
-                 New_Occurrence_Of
-                   (Extra_Accessibility_Of_Result (Scope (Param_Ent)), Loc);
-
-            --  In Ada 2005 and earlier modes, a result extra accessibility
-            --  parameter is not generated and no dynamic check is performed.
-
-            else
-               return;
-            end if;
-
-         --  Otherwise get the type's accessibility level normally
-
-         else
-            Type_Level :=
-              Make_Integer_Literal (Loc, Deepest_Type_Access_Level (Typ));
-         end if;
-
-         --  Raise Program_Error if the accessibility level of the access
-         --  parameter is deeper than the level of the target access type.
-
-         Check_Cond :=
-           Make_Op_Gt (Loc,
-             Left_Opnd  => Param_Level,
-             Right_Opnd => Type_Level);
-
-         Insert_Action (Insert_Node,
-           Make_Raise_Program_Error (Loc,
-             Condition => Check_Cond,
-             Reason    => PE_Accessibility_Check_Failed));
-
-         Analyze_And_Resolve (N);
-
-         --  If constant folding has happened on the condition for the
-         --  generated error, then warn about it being unconditional.
-
-         if Nkind (Check_Cond) = N_Identifier
-           and then Entity (Check_Cond) = Standard_True
-         then
-            Error_Msg_Warn := SPARK_Mode /= On;
-            Error_Msg_N ("accessibility check fails<<", N);
-            Error_Msg_N ("\Program_Error [<<", N);
-         end if;
-      end if;
-   end Apply_Accessibility_Check;
-
-   ---------------------------------------------
-   -- Apply_Accessibility_Check_For_Allocator --
-   ---------------------------------------------
-
-   procedure Apply_Accessibility_Check_For_Allocator
+   procedure Apply_Accessibility_Check_For_Class_Wide_Allocator
      (N              : Node_Id;
       Exp            : Node_Id;
       Ref            : Node_Id;
@@ -1035,14 +1032,13 @@ package body Accessibility is
          --  If the allocator was built in place, Ref is already a reference
          --  to the access object initialized to the result of the allocator
          --  (see Exp_Ch6.Make_Build_In_Place_Call_In_Allocator). We call
-         --  Remove_Side_Effects for cases where the build-in-place call may
+         --  Duplicate_Subexpr for cases where the build-in-place call may
          --  still be the prefix of the reference (to avoid generating
          --  duplicate calls). Otherwise, it is the entity associated with
          --  the object containing the address of the allocated object.
 
          if Built_In_Place then
-            Remove_Side_Effects (Ref);
-            Obj_Ref := New_Copy_Tree (Ref);
+            Obj_Ref := Duplicate_Subexpr (Ref);
          else
             Obj_Ref := New_Occurrence_Of (Ref, Loc);
          end if;
@@ -1185,9 +1181,585 @@ package body Accessibility is
          Insert_Action (N,
            Make_Implicit_If_Statement (N,
              Condition       => Cond,
-             Then_Statements => Stmts));
+             Then_Statements => Stmts),
+           Suppress => All_Checks);
       end if;
-   end Apply_Accessibility_Check_For_Allocator;
+   end Apply_Accessibility_Check_For_Class_Wide_Allocator;
+
+   ----------------------------------------------------
+   -- Apply_Accessibility_Check_For_Anonymous_Return --
+   ----------------------------------------------------
+
+   procedure Apply_Accessibility_Check_For_Anonymous_Return
+     (Exp         : Node_Id;
+      Func        : Entity_Id;
+      Insert_Node : Node_Id)
+   is
+      Loc : constant Source_Ptr := Sloc (Exp);
+
+      function Has_Level_Tied_To_Explicitly_Aliased_Parameter
+        (Exp : Node_Id) return Boolean;
+      --  Exp is an anonymous access value. Return True iff the accessibility
+      --  of the type of Exp is the level of an explicitly aliased parameter
+      --  of Func. If true, this indicates that no check should be performed
+      --  for Exp.
+
+      -----------------------------------------------------
+      --  Has_Level_Tied_To_Explicitly_Aliased_Parameter --
+      -----------------------------------------------------
+
+      function Has_Level_Tied_To_Explicitly_Aliased_Parameter
+        (Exp : Node_Id) return Boolean
+      is
+         E, P : Node_Id;
+
+      begin
+         E := Exp;
+
+         --  Look through constants
+
+         while Is_Entity_Name (E)
+           and then Ekind (Entity (E)) = E_Constant
+           and then Present (Constant_Value (Entity (E)))
+         loop
+            E := Constant_Value (Entity (E));
+         end loop;
+
+         if Nkind (E) = N_Attribute_Reference
+           and then Get_Attribute_Id (Attribute_Name (E)) = Attribute_Access
+         then
+            P := Ultimate_Prefix (E);
+            if Is_Entity_Name (P)
+              and then Is_Explicitly_Aliased (Entity (P))
+              and then Scope (Entity (P)) = Func
+            then
+               return True;
+            end if;
+         end if;
+
+         return False;
+      end Has_Level_Tied_To_Explicitly_Aliased_Parameter;
+
+   --  Start of processing for Apply_Accessibility_Check_For_Anonymous_Return
+
+   begin
+      if Present (Extra_Accessibility_Of_Result (Func))
+        and then not Has_Level_Tied_To_Explicitly_Aliased_Parameter (Exp)
+      then
+         Insert_Action (Insert_Node,
+           Make_Raise_Program_Error (Loc,
+             Condition =>
+               Make_Op_Gt (Loc,
+                 Left_Opnd  =>
+                   Accessibility_Level
+                     (Exp, Dynamic_Level, In_Return_Context => True),
+                 Right_Opnd => New_Occurrence_Of
+                   (Extra_Accessibility_Of_Result (Func), Loc)),
+             Reason    => PE_Accessibility_Check_Failed),
+           Suppress => Access_Check);
+      end if;
+   end Apply_Accessibility_Check_For_Anonymous_Return;
+
+   -----------------------------------------------------
+   -- Apply_Accessibility_Check_For_Class_Wide_Return --
+   -----------------------------------------------------
+
+   procedure Apply_Accessibility_Check_For_Class_Wide_Return
+     (Exp  : Node_Id;
+      Func : Entity_Id)
+   is
+      Loc : constant Source_Ptr := Sloc (Exp);
+
+   begin
+       --  CodePeer does not do anything useful on Ada.Tags.Type_Specific_Data
+       --  components.
+
+      if Ada_Version >= Ada_2005
+        and then not CodePeer_Mode
+        and then Tagged_Type_Expansion
+        and then
+          (Is_Class_Wide_Type (Etype (Exp))
+            or else Nkind (Exp) in
+                      N_Type_Conversion | N_Unchecked_Type_Conversion
+            or else (Is_Entity_Name (Exp)
+                      and then Is_Formal (Entity (Exp)))
+            or else Scope_Depth (Enclosing_Dynamic_Scope (Etype (Exp))) >
+                      Subprogram_Access_Level (Func))
+      then
+         declare
+            Tag_Node : Node_Id;
+
+         begin
+            --  Ada 2005 (AI-251): In class-wide interface objects we displace
+            --  "this" to reference the base of the object. This is required to
+            --  get access to the TSD of the object.
+
+            if Is_Class_Wide_Type (Etype (Exp))
+              and then Is_Interface (Etype (Exp))
+            then
+               --  If the expression is an explicit dereference then we can
+               --  directly displace the pointer to reference the base of
+               --  the object.
+
+               if Nkind (Exp) = N_Explicit_Dereference then
+                  Tag_Node :=
+                    Make_Explicit_Dereference (Loc,
+                      Prefix =>
+                        Unchecked_Convert_To (RTE (RE_Tag_Ptr),
+                          Make_Function_Call (Loc,
+                            Name                   =>
+                              New_Occurrence_Of (RTE (RE_Base_Address), Loc),
+                            Parameter_Associations => New_List (
+                              Unchecked_Convert_To (RTE (RE_Address),
+                                Duplicate_Subexpr (Prefix (Exp)))))));
+
+               --  Similar case to the previous one but the expression is a
+               --  renaming of an explicit dereference.
+
+               elsif Nkind (Exp) = N_Identifier
+                 and then Present (Renamed_Object (Entity (Exp)))
+                 and then Nkind (Renamed_Object (Entity (Exp)))
+                            = N_Explicit_Dereference
+               then
+                  Tag_Node :=
+                    Make_Explicit_Dereference (Loc,
+                      Prefix =>
+                        Unchecked_Convert_To (RTE (RE_Tag_Ptr),
+                          Make_Function_Call (Loc,
+                            Name                   =>
+                              New_Occurrence_Of (RTE (RE_Base_Address), Loc),
+                            Parameter_Associations => New_List (
+                              Unchecked_Convert_To (RTE (RE_Address),
+                                Duplicate_Subexpr
+                                  (Prefix
+                                    (Renamed_Object (Entity (Exp)))))))));
+
+               --  Common case: obtain the address of the actual object and
+               --  displace the pointer to reference the base of the object.
+
+               else
+                  Tag_Node :=
+                    Make_Explicit_Dereference (Loc,
+                      Prefix =>
+                        Unchecked_Convert_To (RTE (RE_Tag_Ptr),
+                          Make_Function_Call (Loc,
+                            Name               =>
+                              New_Occurrence_Of (RTE (RE_Base_Address), Loc),
+                            Parameter_Associations => New_List (
+                              Make_Attribute_Reference (Loc,
+                                Prefix         => Duplicate_Subexpr (Exp),
+                                Attribute_Name => Name_Address)))));
+               end if;
+            else
+               Tag_Node :=
+                 Make_Attribute_Reference (Loc,
+                   Prefix         => Duplicate_Subexpr (Exp),
+                   Attribute_Name => Name_Tag);
+            end if;
+
+            --  Suppress junk access chacks on RE_Tag_Ptr
+
+            Insert_Action (Exp,
+              Make_Raise_Program_Error (Loc,
+                Condition =>
+                  Make_Op_Gt (Loc,
+                    Left_Opnd  => Build_Get_Access_Level (Loc, Tag_Node),
+                    Right_Opnd =>
+                      Make_Integer_Literal (Loc,
+                        Subprogram_Access_Level (Func))),
+                Reason    => PE_Accessibility_Check_Failed),
+              Suppress => Access_Check);
+         end;
+      end if;
+   end Apply_Accessibility_Check_For_Class_Wide_Return;
+
+   -----------------------------------------------------------
+   -- Apply_Accessibility_Check_For_Discriminated_Allocator --
+   -----------------------------------------------------------
+
+   procedure Apply_Accessibility_Check_For_Discriminated_Allocator
+     (N : Node_Id)
+   is
+      Loc     : constant Source_Ptr := Sloc (N);
+      Typ     : constant Entity_Id  := Etype (Expression (N));
+      Exp     : constant Node_Id    := Unqualify (Expression (N));
+      Exp_Typ : constant Entity_Id  := Etype (Exp);
+
+      Discr      : Entity_Id;
+      Discr_Elmt : Elmt_Id;
+      Discr_Exp  : Node_Id;
+
+   --  Start of Apply_Accessibility_Check_For_Discriminated_Allocator
+
+   begin
+      --  Return immediately if accessibility checks are suppressed for N
+
+      if Scope_Suppress.Suppress (Accessibility_Check)
+        or else No_Dynamic_Accessibility_Checks_Enabled (N)
+      then
+         return;
+
+      --  Check that the allocator's access discriminants do not designate
+      --  entities that the allocator could outlive (RM 4.8(10.1)).
+
+      elsif not Has_Anonymous_Access_Discriminant (Typ) then
+         return;
+
+      --  We ignore coextensions as they cannot be implemented under the
+      --  "small integer" model.
+
+      elsif Is_Static_Coextension (N) or else Is_Dynamic_Coextension (N) then
+         return;
+
+      --  If we are allocating a function result, then that function will
+      --  perform the check.
+
+      elsif Nkind (Exp) = N_Function_Call then
+         return;
+
+      --  When the value of the access discriminant is determined by
+      --  an object with an unconstrained nominal subtype, its level
+      --  is the accessibility level of the object (RM 3.10.2(12.4)).
+
+      elsif not Is_Constrained (Exp_Typ) then
+         Insert_Action (N,
+           Make_Raise_Program_Error (Loc,
+             Condition =>
+               Make_Op_Gt (Loc,
+                 Left_Opnd  => Accessibility_Level (Exp, Dynamic_Level),
+                 Right_Opnd => Accessibility_Level (N, Dynamic_Level)),
+             Reason    => PE_Accessibility_Check_Failed),
+           Suppress => Access_Check);
+
+         return;
+      end if;
+
+      Discr := First_Discriminant (Typ);
+      Discr_Elmt := First_Elmt (Discriminant_Constraint (Exp_Typ));
+
+      while Present (Discr) loop
+         if Is_Anonymous_Access_Type (Etype (Discr)) then
+            Discr_Exp := Node (Discr_Elmt);
+
+            --  The accessibility level of a function call whose result type is
+            --  an anonymous access type used to define the discriminant of an
+            --  object is the level of the object (RM 3.10.2(10.3, 14.1)).
+
+            if Nkind (Original_Node (Discr_Exp)) = N_Function_Call
+              and then
+                Is_Anonymous_Access_Type (Etype (Original_Node (Discr_Exp)))
+            then
+               null;
+
+            else
+               Insert_Action (N,
+                 Make_Raise_Program_Error (Loc,
+                   Condition =>
+                     Make_Op_Gt (Loc,
+                       Left_Opnd  =>
+                         Accessibility_Level (Discr_Exp, Dynamic_Level),
+                       Right_Opnd => Accessibility_Level (N, Dynamic_Level)),
+                   Reason    => PE_Accessibility_Check_Failed),
+                 Suppress => Access_Check);
+            end if;
+         end if;
+
+         Next_Discriminant (Discr);
+         Next_Elmt (Discr_Elmt);
+      end loop;
+   end Apply_Accessibility_Check_For_Discriminated_Allocator;
+
+   --------------------------------------------------------
+   -- Apply_Accessibility_Check_For_Discriminated_Return --
+   --------------------------------------------------------
+
+   --  A case that is not addressed today is the case where we need to check
+   --  an access discriminant subcomponent of the function result other than
+   --  a discriminant of the function result. This case can only happen if the
+   --  function result type has an unconstrained subcomponent subtype that has
+   --  an access discriminant (which implies that the function result type must
+   --  be limited).
+
+   --  A further corner case of that corner case arises if the limited result
+   --  type is class-wide and it is not known statically whether this access
+   --  discriminant subcomponent exists. The easiest way to address it properly
+   --  would probably involve adding a compiler-generated dispatching procedure
+   --  and a dispatching call could be used to perform the check in a context
+   --  where we know statically the specific type of the function result.
+   --  Finding a less important unimplemented case would be challenging.
+
+   procedure Apply_Accessibility_Check_For_Discriminated_Return
+     (Exp : Node_Id; Func : Entity_Id)
+   is
+      function Constraint_Bearing_Subtype_If_Any
+        (Exp : Node_Id) return Node_Id;
+      --  If we can locate a constrained subtype whose constraint applies
+      --  to Exp, then return that. Otherwise, return Etype (Exp).
+
+      ---------------------------------------
+      -- Constraint_Bearing_Subtype_If_Any --
+      ---------------------------------------
+
+      function Constraint_Bearing_Subtype_If_Any
+        (Exp : Node_Id) return Entity_Id
+      is
+         Result : Entity_Id := Etype (Exp);
+
+      begin
+         if Is_Constrained (Result) then
+            return Result;
+         end if;
+
+         --  Look through expansion-generated levels of indirection
+         --  to find a constrained subtype. Yuck. This comes up in
+         --  some cases when the unexpanded source returns an aggregate.
+
+         if Nkind (Exp) = N_Explicit_Dereference then
+            declare
+               P : Node_Id := Prefix (Exp);
+
+            begin
+               while Is_Entity_Name (P)
+                 and then Ekind (Entity (P)) = E_Constant
+                 and then Present (Constant_Value (Entity (P)))
+               loop
+                  P := Constant_Value (Entity (P));
+               end loop;
+
+               if Nkind (P) = N_Allocator
+                 and then Nkind (Expression (P)) = N_Qualified_Expression
+               then
+                  Result := Etype (Expression (P));
+               end if;
+            end;
+         end if;
+
+         if Is_Constrained (Result) then
+            return Result;
+         end if;
+
+         --  No constrained subtype found
+
+         return Etype (Exp);
+      end Constraint_Bearing_Subtype_If_Any;
+
+      --  Local variables
+
+      Discr      : Entity_Id;
+      Discr_Elmt : Elmt_Id;
+      Exp_Typ    : Entity_Id;
+
+   --  Start of Apply_Accessibility_Check_For_Discriminated_Return
+
+   begin
+      --  ??? Do not generate a check if version is Ada 95 (or earlier).
+      --  It is unclear whether this is really correct, or is just a stopgap
+      --  measure. Investigation is needed to decide how post-Ada-95 binding
+      --  interpretation changes in RM 3.10.2 should interact with Ada 95's
+      --  return-by-reference model for functions with limited result types
+      --  (which was abandoned in Ada 2005).
+
+      if Ada_Version <= Ada_95 then
+         return;
+
+      --  If we are returning a function result, then that function will
+      --  perform the check.
+
+      elsif Nkind (Unqualify (Exp)) = N_Function_Call then
+         return;
+
+     --  ??? Cope with the consequences of the Disable_Tagged_Cases flag
+     --  in accessibility.adb (which can cause the extra formal parameter
+     --  needed for the check(s) generated here to be missing in the case
+     --  of a tagged result type); this is a workaround and can
+     --  prevent generation of a required check (or even a required
+     --  legality check - see "statically too deep" check below).
+
+      elsif No (Extra_Accessibility_Of_Result (Func)) then
+         return;
+      end if;
+
+      Exp_Typ := Constraint_Bearing_Subtype_If_Any (Exp);
+
+      --  When the value of the access discriminant is determined by
+      --  an object with an unconstrained nominal subtype, its level
+      --  is the accessibility level of the object (RM 3.10.2(12.4)).
+
+      if not Is_Constrained (Exp_Typ) then
+         Apply_Accessibility_Check_For_Anonymous_Return (Exp, Func, Exp);
+
+         return;
+      end if;
+
+      Discr := First_Discriminant (Etype (Func));
+      Discr_Elmt := First_Elmt (Discriminant_Constraint (Exp_Typ));
+
+      while Present (Discr) loop
+         if Is_Anonymous_Access_Type (Etype (Discr)) then
+            Apply_Accessibility_Check_For_Anonymous_Return
+              (Node (Discr_Elmt), Func, Exp);
+         end if;
+
+         Next_Discriminant (Discr);
+         Next_Elmt (Discr_Elmt);
+      end loop;
+   end Apply_Accessibility_Check_For_Discriminated_Return;
+
+   ----------------------------------------------
+   -- Apply_Accessibility_Check_For_Conversion --
+   ----------------------------------------------
+
+   procedure Apply_Accessibility_Check_For_Conversion
+     (N           : Node_Id;
+      Typ         : Entity_Id;
+      Insert_Node : Node_Id)
+   is
+      Loc : constant Source_Ptr := Sloc (N);
+
+      Check_Cond  : Node_Id;
+      Param_Ent   : Entity_Id;
+      Param_Level : Node_Id;
+      Type_Level  : Node_Id;
+
+   begin
+      if Inside_A_Generic then
+         return;
+      end if;
+
+      --  Verify we haven't tried to add a dynamic accessibility check when we
+      --  shouldn't.
+
+      pragma Assert (not No_Dynamic_Accessibility_Checks_Enabled (N));
+
+      Param_Ent := Param_Entity (N);
+
+      --  Stand-alone object of an anonymous access type (SAOOAAAT)
+
+      if Ada_Version >= Ada_2012
+         and then No (Param_Ent)
+         and then Is_Entity_Name (N)
+         and then Ekind (Entity (N)) in E_Constant | E_Variable
+         and then Present (Extra_Accessibility (Entity (N)))
+      then
+         Param_Ent := Entity (N);
+      end if;
+
+      --  Apply the run-time check only if the access object has an associated
+      --  extra access level object and when accessibility checks are enabled.
+
+      if Present (Param_Ent)
+        and then Present (Get_Dynamic_Accessibility (Param_Ent))
+        and then not Accessibility_Checks_Suppressed (Param_Ent)
+        and then not Accessibility_Checks_Suppressed (Typ)
+      then
+         --  Obtain the parameter's accessibility level
+
+         Param_Level :=
+           New_Occurrence_Of (Get_Dynamic_Accessibility (Param_Ent), Loc);
+
+         --  Use the dynamic accessibility parameter for the function's result
+         --  when one has been created instead of statically referring to the
+         --  deepest type level so as to appropriatly handle the rules for
+         --  RM 3.10.2 (10.1/3).
+
+         if Ekind (Scope (Param_Ent)) = E_Function
+           and then In_Return_Value (N)
+           and then Ekind (Typ) = E_Anonymous_Access_Type
+         then
+            --  Associate the level of the result type to the extra result
+            --  accessibility parameter belonging to the current function.
+
+            if Present (Extra_Accessibility_Of_Result (Scope (Param_Ent))) then
+               Type_Level :=
+                 New_Occurrence_Of
+                   (Extra_Accessibility_Of_Result (Scope (Param_Ent)), Loc);
+
+            --  In Ada 2005 and earlier modes, a result extra accessibility
+            --  parameter is not generated and no dynamic check is performed.
+
+            else
+               return;
+            end if;
+
+         --  Otherwise get the type's accessibility level normally
+
+         else
+            Type_Level :=
+              Make_Integer_Literal (Loc, Deepest_Type_Access_Level (Typ));
+         end if;
+
+         --  Raise Program_Error if the accessibility level of the access
+         --  parameter is deeper than the level of the target access type.
+
+         Check_Cond :=
+           Make_Op_Gt (Loc,
+             Left_Opnd  => Param_Level,
+             Right_Opnd => Type_Level);
+
+         Insert_Action (Insert_Node,
+           Make_Raise_Program_Error (Loc,
+             Condition => Check_Cond,
+             Reason    => PE_Accessibility_Check_Failed));
+
+         Analyze_And_Resolve (N);
+
+         --  If constant folding has happened on the condition for the
+         --  generated error, then warn about it being unconditional.
+
+         if Nkind (Check_Cond) = N_Identifier
+           and then Entity (Check_Cond) = Standard_True
+         then
+            Error_Msg_Warn := SPARK_Mode /= On;
+            Error_Msg_N ("accessibility check fails<<", N);
+            Error_Msg_N ("\Program_Error [<<", N);
+         end if;
+      end if;
+   end Apply_Accessibility_Check_For_Conversion;
+
+   ------------------------------------------
+   -- Apply_Accessibility_Check_For_Return --
+   ------------------------------------------
+
+   procedure Apply_Accessibility_Check_For_Return
+     (Exp  : Node_Id;
+      Func : Entity_Id)
+   is
+      Typ : constant Entity_Id := Etype (Func);
+
+   begin
+      --  Return immediately if accessibility checks are suppressed for Func
+
+      if Accessibility_Checks_Suppressed (Func) then
+         return;
+      end if;
+
+      --  No checks are needed for the return synthesized in a function whose
+      --  body has been wrapped in a nested _Wrapped_Statements function.
+
+      if Present (Wrapped_Statements (Func)) then
+         return;
+      end if;
+
+      --  Ada 2005 (AI95-344): If the result type is class-wide, then insert
+      --  a check that the level of the return expression's underlying type
+      --  is not deeper than the level of the master enclosing the function.
+
+      if Is_Class_Wide_Type (Typ) then
+         Apply_Accessibility_Check_For_Class_Wide_Return (Exp, Func);
+
+      --  Check that the access result does not designate an entity that
+      --  the result could outlive.
+
+      elsif Ekind (Typ) = E_Anonymous_Access_Type then
+         Apply_Accessibility_Check_For_Anonymous_Return (Exp, Func, Exp);
+
+      --  Check that the result's access discriminants do not designate
+      --  entities that the result could outlive (RM 6.5(21)).
+
+      elsif Has_Anonymous_Access_Discriminant (Typ) then
+         Apply_Accessibility_Check_For_Discriminated_Return (Exp, Func);
+      end if;
+   end Apply_Accessibility_Check_For_Return;
 
    ------------------------------------------
    -- Check_Return_Construct_Accessibility --
@@ -1197,20 +1769,48 @@ package body Accessibility is
      (Return_Stmt : Node_Id;
       Stm_Entity  : Entity_Id)
    is
-      Loc      : constant Source_Ptr := Sloc (Return_Stmt);
-      Scope_Id : constant Entity_Id  := Return_Applies_To (Stm_Entity);
+      Scope_Id : constant Entity_Id := Return_Applies_To (Stm_Entity);
+      R_Type   : constant Entity_Id := Etype (Scope_Id);
 
-      R_Type : constant Entity_Id := Etype (Scope_Id);
-      --  Function result subtype
+      procedure Accessibility_Error;
+      --  Give an error about the accessibility level of the return
 
       function First_Selector (Assoc : Node_Id) return Node_Id;
       --  Obtain the first selector or choice from a given association
 
-      function Is_Formal_Of_Current_Function
-        (Assoc_Expr : Node_Id) return Boolean;
-      --  Predicate to test if a given expression associated with a
-      --  discriminant is a formal parameter to the function in which the
-      --  return construct we checking applies to.
+      -------------------------
+      -- Accessibility_Error --
+      -------------------------
+
+      procedure Accessibility_Error is
+         Suffix : constant String :=
+           (if Is_Expression_Function_Or_Completion (Scope_Id)
+            then "in expression function"
+            else "in return");
+         Message : constant String :=
+           "level of type of access discriminant is too deep " & Suffix;
+
+      begin
+         --  In an instance, this is a runtime check, but one we know will fail
+         --  so generate an appropriate warning. As usual, this kind of warning
+         --  is an error in SPARK mode or if No_Dynamic_Accessibility_Checks.
+
+         if In_Instance_Body then
+            Error_Msg_Warn := SPARK_Mode /= On
+                                and then not
+                                  No_Dynamic_Accessibility_Checks_Enabled
+                                                                 (Return_Stmt);
+            Error_Msg_N (Message & "<<", Return_Stmt);
+            Error_Msg_F ("\Program_Error [<<", Return_Stmt);
+            Rewrite (Return_Stmt,
+              Make_Raise_Program_Error (Sloc (Return_Stmt),
+                Reason => PE_Accessibility_Check_Failed));
+            Set_Etype (Return_Stmt, Standard_Void_Type);
+
+         else
+            Error_Msg_N (Message, Return_Stmt);
+         end if;
+      end Accessibility_Error;
 
       --------------------
       -- First_Selector --
@@ -1229,31 +1829,12 @@ package body Accessibility is
          end if;
       end First_Selector;
 
-      -----------------------------------
-      -- Is_Formal_Of_Current_Function --
-      -----------------------------------
-
-      function Is_Formal_Of_Current_Function
-        (Assoc_Expr : Node_Id) return Boolean is
-      begin
-         return Is_Entity_Name (Assoc_Expr)
-                  and then Enclosing_Subprogram
-                             (Entity (Assoc_Expr)) = Scope_Id
-                  and then Is_Formal (Entity (Assoc_Expr));
-      end Is_Formal_Of_Current_Function;
-
       --  Local declarations
 
-      Assoc : Node_Id := Empty;
-      --  Assoc should perhaps be renamed and declared as a
-      --  Node_Or_Entity_Id since it encompasses not only component and
-      --  discriminant associations, but also discriminant components within
-      --  a type declaration or subtype indication ???
-
+      Assoc         : Node_Or_Entity_Id;
       Assoc_Expr    : Node_Id;
       Assoc_Present : Boolean := False;
 
-      Check_Cond        : Node_Id;
       Unseen_Disc_Count : Nat := 0;
       Seen_Discs        : Elist_Id;
       Disc              : Entity_Id;
@@ -1266,37 +1847,37 @@ package body Accessibility is
    --  Start of processing for Check_Return_Construct_Accessibility
 
    begin
+      pragma Assert (Nkind (Return_Stmt) in N_Extended_Return_Statement
+                                          | N_Simple_Return_Statement);
+
       --  Only perform checks on record types with access discriminants and
-      --  non-internally generated functions.
+      --  functions present in the source.
 
       if not Is_Record_Type (R_Type)
         or else not Has_Anonymous_Access_Discriminant (R_Type)
-        or else not Comes_From_Source (Return_Stmt)
+        or else not Comes_From_Source (Scope_Id)
       then
          return;
       end if;
 
-      --  We are only interested in return statements
-
-      if Nkind (Return_Stmt) not in
-           N_Extended_Return_Statement | N_Simple_Return_Statement
-      then
-         return;
-      end if;
-
-      --  Fetch the object from the return statement, in the case of a
+      --  Fetch the object from the original return statement, in the case of a
       --  simple return statement the expression is part of the node.
 
-      if Nkind (Return_Stmt) = N_Extended_Return_Statement then
+      if Nkind (Original_Node (Return_Stmt)) = N_Extended_Return_Statement then
          --  Obtain the object definition from the expanded extended return
 
-         Return_Con := First (Return_Object_Declarations (Return_Stmt));
+         Return_Con :=
+           First (Return_Object_Declarations (Original_Node (Return_Stmt)));
          while Present (Return_Con) loop
             --  Inspect the original node to avoid object declarations
             --  expanded into renamings.
 
             if Nkind (Original_Node (Return_Con)) = N_Object_Declaration
-              and then Comes_From_Source (Original_Node (Return_Con))
+              and then
+                (Comes_From_Source (Original_Node (Return_Con))
+                  or else
+                    Is_Return_Object
+                      (Defining_Identifier (Original_Node (Return_Con))))
             then
                exit;
             end if;
@@ -1306,16 +1887,14 @@ package body Accessibility is
 
          pragma Assert (Present (Return_Con));
 
-         --  Could be dealing with a renaming
-
          Return_Con := Original_Node (Return_Con);
+
       else
-         Return_Con := Expression (Return_Stmt);
+         Return_Con := Expression (Original_Node (Return_Stmt));
       end if;
 
       --  Obtain the accessibility levels of the expressions associated
-      --  with all anonymous access discriminants, then generate a
-      --  dynamic check or static error when relevant.
+      --  with anonymous access discriminants and apply a static check.
 
       --  Note the repeated use of Original_Node to avoid checking
       --  expanded code.
@@ -1325,10 +1904,10 @@ package body Accessibility is
       --  Get the corresponding declaration based on the return object's
       --  identifier.
 
-      if Nkind (Unqual) = N_Identifier
-        and then Nkind (Parent (Entity (Unqual)))
-                   in N_Object_Declaration
-                    | N_Object_Renaming_Declaration
+      if Is_Entity_Name (Unqual)
+        and then
+          Nkind (Parent (Entity (Unqual))) in N_Object_Declaration
+                                            | N_Object_Renaming_Declaration
       then
          Obj_Decl := Original_Node (Parent (Entity (Unqual)));
 
@@ -1343,17 +1922,13 @@ package body Accessibility is
 
       else
          Obj_Decl := Empty;
-
       end if;
 
       --  Hop up object renamings when present
 
-      if Present (Obj_Decl)
-        and then Nkind (Obj_Decl) = N_Object_Renaming_Declaration
-      then
+      if Present (Obj_Decl) then
          while Nkind (Obj_Decl) = N_Object_Renaming_Declaration loop
-
-            if Nkind (Name (Obj_Decl)) not in N_Entity then
+            if not Is_Entity_Name (Name (Obj_Decl)) then
                --  We may be looking at the expansion of iterators or
                --  some other internally generated construct, so it is safe
                --  to ignore checks ???
@@ -1370,7 +1945,7 @@ package body Accessibility is
 
             else
                Obj_Decl := Original_Node
-                             (Declaration_Node (Name (Obj_Decl)));
+                             (Declaration_Node (Entity (Name (Obj_Decl))));
             end if;
          end loop;
       end if;
@@ -1385,6 +1960,18 @@ package body Accessibility is
          else
             Assoc := First (Component_Associations (Unqual));
          end if;
+
+      --  Apply the RM 3.10.2(12.4) rule to formal parameters
+
+      elsif Is_Entity_Name (Unqual) and then Is_Formal (Entity (Unqual)) then
+         if Static_Accessibility_Level
+              (Unqual, Zero_On_Dynamic_Level, In_Return_Context => True)
+                > Subprogram_Access_Level (Scope_Id)
+         then
+            Accessibility_Error;
+         end if;
+
+         return;
 
       --  There is an object declaration for the return object
 
@@ -1621,72 +2208,18 @@ package body Accessibility is
             Unseen_Disc_Count := Unseen_Disc_Count - 1;
          end if;
 
-         --  Check the accessibility level of the expression when the
+         --  Check the static accessibility level of the expression when the
          --  discriminant is of an anonymous access type.
 
          if Present (Assoc_Expr)
            and then Present (Disc)
            and then Ekind (Etype (Disc)) = E_Anonymous_Access_Type
-
-           --  We disable the check when we have a tagged return type and
-           --  the associated expression for the discriminant is a formal
-           --  parameter since the check would require us to compare the
-           --  accessibility level of Assoc_Expr to the level of the
-           --  Extra_Accessibility_Of_Result of the function - which is
-           --  currently disabled for functions with tagged return types.
-           --  This may change in the future ???
-
-           --  See Needs_Result_Accessibility_Level for details.
-
-           and then not
-             (No (Extra_Accessibility_Of_Result (Scope_Id))
-               and then Is_Formal_Of_Current_Function (Assoc_Expr)
-               and then Is_Tagged_Type (Etype (Scope_Id)))
+           and then
+             Static_Accessibility_Level
+               (Assoc_Expr, Zero_On_Dynamic_Level, In_Return_Context => True)
+                 > Subprogram_Access_Level (Scope_Id)
          then
-            --  Generate a dynamic check based on the extra accessibility of
-            --  the result or the scope of the current function.
-
-            Check_Cond :=
-              Make_Op_Gt (Loc,
-                Left_Opnd  => Accessibility_Level
-                                (Expr              => Assoc_Expr,
-                                 Level             => Dynamic_Level,
-                                 In_Return_Context => True),
-                Right_Opnd =>
-                  (if Present (Extra_Accessibility_Of_Result (Scope_Id))
-
-                     --  When Assoc_Expr is a formal we have to look at the
-                     --  extra accessibility-level formal associated with
-                     --  the result.
-
-                     and then Is_Formal_Of_Current_Function (Assoc_Expr)
-                   then
-                      New_Occurrence_Of
-                        (Extra_Accessibility_Of_Result (Scope_Id), Loc)
-
-                   --  Otherwise, we compare the level of Assoc_Expr to the
-                   --  scope of the current function.
-
-                   else
-                      Make_Integer_Literal
-                        (Loc, Scope_Depth (Scope (Scope_Id)))));
-
-            Insert_Before_And_Analyze (Return_Stmt,
-              Make_Raise_Program_Error (Loc,
-                Condition => Check_Cond,
-                Reason    => PE_Accessibility_Check_Failed));
-
-            --  If constant folding has happened on the condition for the
-            --  generated error, then warn about it being unconditional when
-            --  we know an error will be raised.
-
-            if Nkind (Check_Cond) = N_Identifier
-              and then Entity (Check_Cond) = Standard_True
-            then
-               Error_Msg_N
-                 ("access discriminant in return object would be a dangling"
-                  & " reference", Return_Stmt);
-            end if;
+            Accessibility_Error;
          end if;
 
          --  Iterate over the discriminants, except when we have encountered
@@ -1748,20 +2281,24 @@ package body Accessibility is
       end if;
    end Deepest_Type_Access_Level;
 
-   -----------------------------------
-   -- Effective_Extra_Accessibility --
-   -----------------------------------
+   -------------------------
+   -- Extra_Accessibility --
+   -------------------------
 
-   function Effective_Extra_Accessibility (Id : Entity_Id) return Entity_Id is
+   function Extra_Accessibility (Id : Entity_Id) return Entity_Id is
    begin
       if Present (Renamed_Object (Id))
         and then Is_Entity_Name (Renamed_Object (Id))
       then
-         return Effective_Extra_Accessibility (Entity (Renamed_Object (Id)));
-      else
-         return Extra_Accessibility (Id);
+         return Extra_Accessibility (Entity (Renamed_Object (Id)));
       end if;
-   end Effective_Extra_Accessibility;
+
+      if Is_Formal (Id) or else Ekind (Id) in E_Constant | E_Variable then
+         return Extra_Accessibility_Of_Object (Id);
+      else
+         return Empty;
+      end if;
+   end Extra_Accessibility;
 
    -------------------------------
    -- Get_Dynamic_Accessibility --
@@ -1892,18 +2429,20 @@ package body Accessibility is
       return False;
    end Has_Unconstrained_Access_Discriminants;
 
-   --------------------------------
-   -- Is_Anonymous_Access_Actual --
-   --------------------------------
+   ---------------------------------------------
+   -- Needs_Accessibility_Level_Temp_Or_Check --
+   ---------------------------------------------
 
-   function Is_Anonymous_Access_Actual (N : Node_Id) return Boolean is
+   function Needs_Accessibility_Level_Temp_Or_Check
+     (Conditional_Expr : Node_Id) return Boolean
+   is
       Par : Node_Id;
    begin
-      if Ekind (Etype (N)) /= E_Anonymous_Access_Type then
+      if Ekind (Etype (Conditional_Expr)) /= E_Anonymous_Access_Type then
          return False;
       end if;
 
-      Par := Parent (N);
+      Par := Parent (Conditional_Expr);
       while Present (Par)
         and then Nkind (Par) in N_Case_Expression
                               | N_If_Expression
@@ -1911,40 +2450,9 @@ package body Accessibility is
       loop
          Par := Parent (Par);
       end loop;
-      return Nkind (Par) in N_Subprogram_Call;
-   end Is_Anonymous_Access_Actual;
 
-   --------------------------------------
-   -- Is_Special_Aliased_Formal_Access --
-   --------------------------------------
-
-   function Is_Special_Aliased_Formal_Access
-     (Exp               : Node_Id;
-      In_Return_Context : Boolean := False) return Boolean
-   is
-      Scop : constant Entity_Id := Current_Subprogram;
-   begin
-      --  Verify the expression is an access reference to 'Access within a
-      --  return statement as this is the only time an explicitly aliased
-      --  formal has different semantics.
-
-      if Nkind (Exp) /= N_Attribute_Reference
-        or else Get_Attribute_Id (Attribute_Name (Exp)) /= Attribute_Access
-        or else not (In_Return_Value (Exp)
-                      or else In_Return_Context)
-        or else not Needs_Result_Accessibility_Level (Scop)
-      then
-         return False;
-      end if;
-
-      --  Check if the prefix of the reference is indeed an explicitly aliased
-      --  formal parameter for the function Scop. Additionally, we must check
-      --  that Scop returns an anonymous access type, otherwise the special
-      --  rules dictating a need for a dynamic check are not in effect.
-
-      return Is_Entity_Name (Prefix (Exp))
-               and then Is_Explicitly_Aliased (Entity (Prefix (Exp)));
-   end Is_Special_Aliased_Formal_Access;
+      return Nkind (Par) in N_Subprogram_Call | N_Assignment_Statement;
+   end Needs_Accessibility_Level_Temp_Or_Check;
 
    --------------------------------------
    -- Needs_Result_Accessibility_Level --
@@ -2179,8 +2687,7 @@ package body Accessibility is
       In_Return_Context : Boolean := False) return Uint
    is
    begin
-      return Intval
-               (Accessibility_Level (Expr, Level, In_Return_Context));
+      return Intval (Accessibility_Level (Expr, Level, In_Return_Context));
    end Static_Accessibility_Level;
 
    -----------------------
@@ -2294,25 +2801,13 @@ package body Accessibility is
                 (Is_Itype (Btyp)
                   and then Nkind (Associated_Node_For_Itype (Btyp)) =
                                                          N_Object_Declaration
-                  and then Is_Return_Object
-                             (Defining_Identifier
-                                (Associated_Node_For_Itype (Btyp))))
+                  and then
+                    Is_Return_Object
+                      (Defining_Identifier (Associated_Node_For_Itype (Btyp))))
             then
-               declare
-                  Scop : Entity_Id;
-
-               begin
-                  Scop := Scope (Scope (Btyp));
-                  while Present (Scop) loop
-                     exit when Ekind (Scop) = E_Function;
-                     Scop := Scope (Scop);
-                  end loop;
-
-                  --  Treat the return object's type as having the level of the
-                  --  function's result subtype (as per RM05-6.5(5.3/2)).
-
-                  return Type_Access_Level (Etype (Scop), Allow_Alt_Model);
-               end;
+               return
+                 Type_Access_Level
+                   (Etype (Enclosing_Subprogram (Btyp)), Allow_Alt_Model);
             end if;
          end if;
 
@@ -2357,20 +2852,7 @@ package body Accessibility is
          return Scope_Depth (Standard_Standard);
       end if;
 
-      --  It is possible that the current scope is an aliased subprogram -
-      --  this can happen when an abstract primitive from a root type is not
-      --  not visible.
-
-      if Is_Subprogram (Enclosing_Dynamic_Scope (Btyp))
-        and then Present (Alias (Enclosing_Dynamic_Scope (Btyp)))
-      then
-         return Scope_Depth (Ultimate_Alias (Enclosing_Dynamic_Scope (Btyp)));
-
-      --  Otherwise, simply use the enclosing dynamic scope
-
-      else
-         return Scope_Depth (Enclosing_Dynamic_Scope (Btyp));
-      end if;
+      return Scope_Depth (Enclosing_Dynamic_Scope (Btyp));
    end Type_Access_Level;
 
 end Accessibility;

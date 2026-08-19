@@ -1,6 +1,6 @@
 // <tr1/shared_ptr.h> -*- C++ -*-
 
-// Copyright (C) 2007-2025 Free Software Foundation, Inc.
+// Copyright (C) 2007-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -595,7 +595,7 @@ namespace tr1
         explicit
         __shared_ptr(std::auto_ptr<_Tp1>& __r)
 	: _M_ptr(__r.get()), _M_refcount()
-        { // TODO requries delete __r.release() well-formed
+        { // TODO requires delete __r.release() well-formed
 	  __glibcxx_function_requires(_ConvertibleConcept<_Tp1*, _Tp*>)
 	  typedef int _IsComplete[sizeof(_Tp1)];
 	  _Tp1* __tmp = __r.get();

@@ -1,0 +1,17 @@
+About to call FOO
+  entry point FOO: This is FOO
+  entry point BAR: This is FOO
+About to call BAR
+  entry point BAR: This is BAR
+About to call FOO again
+  entry point FOO: This is FOO2
+  entry point BAR: This is FOO2
+About to call BAZZ
+  entry point BAZZ: This is BAZZ
+  entry point FAZZ: This is BAZZ
+About to call FAZZ
+  entry point FAZZ: This is FAZZ
+About to call BAZZ again
+  entry point BAZZ: This is baz2
+  entry point FAZZ: This is baz2
+

@@ -2,7 +2,7 @@
    directives to separate functions, converts others into explicit calls to the
    runtime library (libgomp) and so forth
 
-Copyright (C) 2005-2025 Free Software Foundation, Inc.
+Copyright (C) 2005-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -661,6 +661,25 @@ expand_parallel_call (struct omp_region *region, basic_block bb,
     {
       val = OMP_CLAUSE_NUM_THREADS_EXPR (c);
       clause_loc = OMP_CLAUSE_LOCATION (c);
+      if (TREE_CODE (val) == TREE_LIST)
+	{
+	  if (OMP_CLAUSE_NUM_THREADS_DIMS (c)
+	      && (TREE_CHAIN (val) || OMP_CLAUSE_NUM_THREADS_STRICT (c)))
+	    /* Accept 'dim(1),relaxed'. */
+	    sorry_at (clause_loc,
+		      "%<num_threads%> clause with %<dims%> modifier");
+	  else if (TREE_CHAIN (val))
+	    sorry_at (clause_loc,
+		      "%<num_threads%> clause with more than one argument");
+	  else if (OMP_CLAUSE_NUM_THREADS_STRICT (c))
+	    sorry_at (clause_loc,
+		      "%<num_threads%> clause with %<strict%> modifier");
+	  val = TREE_VALUE (val);
+	}
+      else if (OMP_CLAUSE_NUM_THREADS_STRICT (c))
+	sorry_at (clause_loc,
+		  "%<num_threads%> clause with %<strict%> modifier");
+      /* FIXME: Handle OMP_CLAUSE_MESSAGE (only relevant with 'strict').  */
     }
   else
     clause_loc = gimple_location (entry_stmt);
@@ -969,20 +988,54 @@ expand_teams_call (basic_block bb, gomp_teams *entry_stmt)
 {
   tree clauses = gimple_omp_teams_clauses (entry_stmt);
   tree num_teams = omp_find_clause (clauses, OMP_CLAUSE_NUM_TEAMS);
+  tree thread_limit = omp_find_clause (clauses, OMP_CLAUSE_THREAD_LIMIT);
+  tree message = omp_find_clause (clauses, OMP_CLAUSE_MESSAGE);
+  if (message
+      && ((thread_limit && OMP_CLAUSE_THREAD_LIMIT_STRICT (thread_limit))
+	  || (num_teams && (TREE_CODE (num_teams) != INTEGER_CST
+			    || tree_int_cst_sgn (num_teams) < 0))))
+    sorry_at (OMP_CLAUSE_LOCATION (message), "%<message%> clause");
   if (num_teams == NULL_TREE)
     num_teams = build_int_cst (unsigned_type_node, 0);
   else
     {
-      num_teams = OMP_CLAUSE_NUM_TEAMS_UPPER_EXPR (num_teams);
-      num_teams = fold_convert (unsigned_type_node, num_teams);
+      tree expr = OMP_CLAUSE_NUM_TEAMS_UPPER_EXPR (num_teams);
+      /* FIXME: Implement lower-bound handling as well; however, currently,
+	 on the host the use-specified value is always used.  */
+      if (TREE_CODE (expr) == TREE_LIST
+	  && OMP_CLAUSE_NUM_TEAMS_DIMS (num_teams)
+	  && TREE_CHAIN (expr))
+	{
+	  sorry_at (OMP_CLAUSE_LOCATION (num_teams),
+		    "%<num_teams%> clause with %<dims%> modifier");
+	  expr = TREE_VALUE (expr);
+	}
+      else if (TREE_CODE (expr) == TREE_LIST)
+	expr = (TREE_CHAIN (expr)
+		? TREE_VALUE (TREE_CHAIN (expr)) : TREE_VALUE (expr));
+      num_teams = fold_convert (unsigned_type_node, expr);
     }
-  tree thread_limit = omp_find_clause (clauses, OMP_CLAUSE_THREAD_LIMIT);
   if (thread_limit == NULL_TREE)
     thread_limit = build_int_cst (unsigned_type_node, 0);
   else
     {
-      thread_limit = OMP_CLAUSE_THREAD_LIMIT_EXPR (thread_limit);
-      thread_limit = fold_convert (unsigned_type_node, thread_limit);
+      tree expr = OMP_CLAUSE_THREAD_LIMIT_EXPR (thread_limit);
+      if (TREE_CODE (expr) == TREE_LIST)
+	{
+	  if (OMP_CLAUSE_THREAD_LIMIT_DIMS (thread_limit)
+	      && (TREE_CHAIN (expr)
+		  || OMP_CLAUSE_THREAD_LIMIT_STRICT (thread_limit)))
+	    sorry_at (OMP_CLAUSE_LOCATION (thread_limit),
+		      "%<thread_limit%> clause with %<dims%> modifier");
+	  else if (OMP_CLAUSE_THREAD_LIMIT_STRICT (thread_limit))
+	    sorry_at (OMP_CLAUSE_LOCATION (thread_limit),
+		      "%<thread_limit%> clause with %<strict%> modifier");
+	  expr = TREE_VALUE (expr);
+	}
+      else if (OMP_CLAUSE_THREAD_LIMIT_STRICT (thread_limit))
+	sorry_at (OMP_CLAUSE_LOCATION (thread_limit),
+		  "%<thread_limit%> clause with %<strict%> modifier");
+      thread_limit = fold_convert (unsigned_type_node, expr);
     }
 
   gimple_stmt_iterator gsi = gsi_last_nondebug_bb (bb);
@@ -1000,7 +1053,7 @@ expand_teams_call (basic_block bb, gomp_teams *entry_stmt)
   args->quick_push (t1);
   args->quick_push (num_teams);
   args->quick_push (thread_limit);
-  /* For future extensibility.  */
+  /* For future extensibility: flags.  */
   args->quick_push (build_zero_cst (unsigned_type_node));
 
   t = build_call_expr_loc_vec (UNKNOWN_LOCATION,
@@ -1798,7 +1851,7 @@ expand_oacc_collapse_vars (const struct omp_for_data *fd, bool inner,
    store number of iterations of the loops from fd->first_nonrect
    to fd->last_nonrect inclusive, i.e. the above COUNT multiplied
    by the counts of rectangular loops not referenced in any non-rectangular
-   loops sandwitched in between those.  */
+   loops sandwiched in between those.  */
 
 /* NOTE: It *could* be better to moosh all of the BBs together,
    creating one larger BB with all the computation and the unexpected
@@ -1895,6 +1948,7 @@ expand_omp_for_init_counts (struct omp_for_data *fd, gimple_stmt_iterator *gsi,
 	}
     }
   bool rect_count_seen = false;
+  bool init_n2 = SSA_VAR_P (fd->loop.n2) && zero_iter1_bb;
   for (i = 0; i < (fd->ordered ? fd->ordered : fd->collapse); i++)
     {
       tree itype = TREE_TYPE (fd->loops[i].v);
@@ -1919,6 +1973,21 @@ expand_omp_for_init_counts (struct omp_for_data *fd, gimple_stmt_iterator *gsi,
 	{
 	  gcond *cond_stmt;
 	  tree n1, n2;
+	  if (init_n2 && i < fd->collapse && !rect_count_seen)
+	    {
+	      /* When called with non-NULL zero_iter1_bb, we won't clear
+		 fd->loop.n2 in the if (zero_iter_bb == NULL) code below
+		 and if it is prior to storing fd->loop.n2 where
+		 rect_count_seen is set, it could be used uninitialized.
+		 As zero_iter1_bb in that case can be reached also if there
+		 are non-zero iterations, the clearing can't be emitted
+		 to the zero_iter1_bb, but needs to be done before the
+		 condition.  */
+	      gassign *assign_stmt
+		= gimple_build_assign (fd->loop.n2, build_zero_cst (type));
+	      gsi_insert_before (gsi, assign_stmt, GSI_SAME_STMT);
+	      init_n2 = false;
+	    }
 	  n1 = fold_convert (itype, unshare_expr (fd->loops[i].n1));
 	  n1 = force_gimple_operand_gsi (gsi, n1, true, NULL_TREE,
 					 true, GSI_SAME_STMT);
@@ -2795,7 +2864,7 @@ expand_omp_for_init_vars (struct omp_for_data *fd, gimple_stmt_iterator *gsi,
 	    }
 	  /* Fallback implementation.  Evaluate the loops in between
 	     (inclusive) fd->first_nonrect and fd->last_nonrect at
-	     runtime unsing temporaries instead of the original iteration
+	     runtime using temporaries instead of the original iteration
 	     variables, in the body just bump the counter and compare
 	     with the desired value.  */
 	  gimple_stmt_iterator gsi2 = *gsi;
@@ -3283,7 +3352,7 @@ extract_omp_for_update_vars (struct omp_for_data *fd, tree *nonrect_bounds,
 	  if (DECL_P (v) && TREE_ADDRESSABLE (v))
 	    v = force_gimple_operand_gsi (&gsi, v, true, NULL_TREE,
 					  false, GSI_CONTINUE_LINKING);
-	  t = fold_build2 (fd->loops[i].cond_code, boolean_type_node, v, t);
+	  t = build2 (fd->loops[i].cond_code, boolean_type_node, v, t);
 	  stmt = gimple_build_cond_empty (t);
 	  gsi_insert_after (&gsi, stmt, GSI_CONTINUE_LINKING);
 	  if (walk_tree (gimple_cond_lhs_ptr (as_a <gcond *> (stmt)),
@@ -5174,27 +5243,6 @@ expand_omp_for_static_nochunk (struct omp_region *region,
 	  release_ssa_name (gimple_assign_lhs (g));
 	}
     }
-  switch (gimple_omp_for_kind (fd->for_stmt))
-    {
-    case GF_OMP_FOR_KIND_FOR:
-      nthreads = builtin_decl_explicit (BUILT_IN_OMP_GET_NUM_THREADS);
-      threadid = builtin_decl_explicit (BUILT_IN_OMP_GET_THREAD_NUM);
-      break;
-    case GF_OMP_FOR_KIND_DISTRIBUTE:
-      nthreads = builtin_decl_explicit (BUILT_IN_OMP_GET_NUM_TEAMS);
-      threadid = builtin_decl_explicit (BUILT_IN_OMP_GET_TEAM_NUM);
-      break;
-    default:
-      gcc_unreachable ();
-    }
-  nthreads = build_call_expr (nthreads, 0);
-  nthreads = fold_convert (itype, nthreads);
-  nthreads = force_gimple_operand_gsi (&gsi, nthreads, true, NULL_TREE,
-				       true, GSI_SAME_STMT);
-  threadid = build_call_expr (threadid, 0);
-  threadid = fold_convert (itype, threadid);
-  threadid = force_gimple_operand_gsi (&gsi, threadid, true, NULL_TREE,
-				       true, GSI_SAME_STMT);
 
   n1 = fd->loop.n1;
   n2 = fd->loop.n2;
@@ -5229,6 +5277,53 @@ expand_omp_for_static_nochunk (struct omp_region *region,
     t = fold_build2 (TRUNC_DIV_EXPR, itype, t, step);
   t = fold_convert (itype, t);
   n = force_gimple_operand_gsi (&gsi, t, true, NULL_TREE, true, GSI_SAME_STMT);
+
+  /* When GOMP_loop_end (or one of its variants) is emitted (e.g. with the
+     inscan modifier), which already implies the end of the scope, _start
+     variants of GOMP builtin calls have to be used and _end can be skipped.  */
+  bool has_gomp_loop_end = fd->have_reductemp
+			   || ((fd->have_pointer_condtemp || fd->have_scantemp)
+			       && !fd->have_nonctrl_scantemp);
+  {
+    /* Fetch the thread/team id and the number of threads/teams in a single
+       call to GOMP_loop_static_worksharing or
+       GOMP_distribute_static_worksharing. The helper returns both values packed
+       into one complex int, with the id as the imaginary part and the count as
+       the real part.  Returning (rather than writing through pointers) keeps
+       both values as plain SSA names, which lets later passes - notably IPA-CP
+       propagating constants into the outlined kernel - reason about them.
+       Also pass the total number of iterations for OMPT.  */
+    tree decl;
+    switch (gimple_omp_for_kind (fd->for_stmt))
+      {
+      case GF_OMP_FOR_KIND_FOR:
+	decl = builtin_decl_explicit (
+	  flag_openmp_ompt || has_gomp_loop_end
+	    ? BUILT_IN_GOMP_LOOP_STATIC_WORKSHARING_START
+	    : BUILT_IN_GOMP_LOOP_STATIC_WORKSHARING);
+	break;
+      case GF_OMP_FOR_KIND_DISTRIBUTE:
+	decl = builtin_decl_explicit (
+	  flag_openmp_ompt || has_gomp_loop_end
+	    ? BUILT_IN_GOMP_DISTRIBUTE_STATIC_WORKSHARING_START
+	    : BUILT_IN_GOMP_DISTRIBUTE_STATIC_WORKSHARING);
+	break;
+      default:
+	gcc_unreachable ();
+      }
+    tree n_ull = fold_convert (long_long_unsigned_type_node, n);
+    tree packed = build_call_expr (decl, 1, n_ull);
+    packed = force_gimple_operand_gsi (&gsi, packed, true, NULL_TREE,
+				       true, GSI_SAME_STMT);
+    threadid = fold_build1 (IMAGPART_EXPR, integer_type_node, packed);
+    threadid = fold_convert (itype, threadid);
+    threadid = force_gimple_operand_gsi (&gsi, threadid, true, NULL_TREE,
+					 true, GSI_SAME_STMT);
+    nthreads = fold_build1 (REALPART_EXPR, integer_type_node, packed);
+    nthreads = fold_convert (itype, nthreads);
+    nthreads = force_gimple_operand_gsi (&gsi, nthreads, true, NULL_TREE,
+					 true, GSI_SAME_STMT);
+  }
 
   q = create_tmp_reg (itype, "q");
   t = fold_build2 (TRUNC_DIV_EXPR, itype, n, nthreads);
@@ -5549,8 +5644,56 @@ expand_omp_for_static_nochunk (struct omp_region *region,
 						   cont_bb, body_bb);
     }
 
-  /* Replace the GIMPLE_OMP_RETURN with a barrier, or nothing.  */
+  if (flag_openmp_ompt_detailed)
+    {
+      /* Insert call to GOMP_*_static_worksharing_dispatch at the end of
+	 seq_start_bb.  */
+      gsi = gsi_last_nondebug_bb (seq_start_bb);
+      tree decl;
+      switch (gimple_omp_for_kind (fd->for_stmt))
+	{
+	case GF_OMP_FOR_KIND_FOR:
+	  decl = builtin_decl_explicit (
+	    BUILT_IN_GOMP_LOOP_STATIC_WORKSHARING_DISPATCH);
+	  break;
+	case GF_OMP_FOR_KIND_DISTRIBUTE:
+	  decl = builtin_decl_explicit (
+	    BUILT_IN_GOMP_DISTRIBUTE_STATIC_WORKSHARING_DISPATCH);
+	  break;
+	default:
+	  gcc_unreachable ();
+	}
+      tree s0_ull = fold_convert (long_long_unsigned_type_node, s0);
+      tree q_ull = fold_convert (long_long_unsigned_type_node, q);
+      tree call = build_call_expr (decl, 2, s0_ull, q_ull);
+      force_gimple_operand_gsi (&gsi, call, true, NULL_TREE, true,
+				GSI_SAME_STMT);
+    }
+
   gsi = gsi_last_nondebug_bb (exit_bb);
+  if (flag_openmp_ompt && !has_gomp_loop_end)
+    {
+      /* Insert call to GOMP_*_static_worksharing_end at the end of exit_bb.
+       */
+      tree decl;
+      switch (gimple_omp_for_kind (fd->for_stmt))
+	{
+	case GF_OMP_FOR_KIND_FOR:
+	  decl
+	    = builtin_decl_explicit (BUILT_IN_GOMP_LOOP_STATIC_WORKSHARING_END);
+	  break;
+	case GF_OMP_FOR_KIND_DISTRIBUTE:
+	  decl = builtin_decl_explicit (
+	    BUILT_IN_GOMP_DISTRIBUTE_STATIC_WORKSHARING_END);
+	  break;
+	default:
+	  gcc_unreachable ();
+	}
+      gcall *g = gimple_build_call (decl, 0);
+      gsi_insert_after (&gsi, g, GSI_SAME_STMT);
+    }
+
+  /* Replace the GIMPLE_OMP_RETURN with a barrier, or nothing.  */
   if (!gimple_omp_return_nowait_p (gsi_stmt (gsi)))
     {
       t = gimple_omp_return_lhs (gsi_stmt (gsi));
@@ -5575,7 +5718,10 @@ expand_omp_for_static_nochunk (struct omp_region *region,
 	  gsi_insert_after (&gsi, g, GSI_SAME_STMT);
 	}
       else
-	gsi_insert_after (&gsi, omp_build_barrier (t), GSI_SAME_STMT);
+	gsi_insert_after (&gsi,
+			  omp_build_barrier (t,
+					     GOMP_BARRIER_IMPLICIT_WORKSHARE),
+			  GSI_SAME_STMT);
     }
   else if ((fd->have_pointer_condtemp || fd->have_scantemp)
 	   && !fd->have_nonctrl_scantemp)
@@ -5616,6 +5762,7 @@ expand_omp_for_static_nochunk (struct omp_region *region,
       exit3_bb = split_block (exit2_bb, g)->dest;
       gsi = gsi_after_labels (exit3_bb);
     }
+
   gsi_remove (&gsi, true);
 
   /* Connect all the blocks.  */
@@ -5928,27 +6075,6 @@ expand_omp_for_static_chunk (struct omp_region *region,
 	  release_ssa_name (gimple_assign_lhs (g));
 	}
     }
-  switch (gimple_omp_for_kind (fd->for_stmt))
-    {
-    case GF_OMP_FOR_KIND_FOR:
-      nthreads = builtin_decl_explicit (BUILT_IN_OMP_GET_NUM_THREADS);
-      threadid = builtin_decl_explicit (BUILT_IN_OMP_GET_THREAD_NUM);
-      break;
-    case GF_OMP_FOR_KIND_DISTRIBUTE:
-      nthreads = builtin_decl_explicit (BUILT_IN_OMP_GET_NUM_TEAMS);
-      threadid = builtin_decl_explicit (BUILT_IN_OMP_GET_TEAM_NUM);
-      break;
-    default:
-      gcc_unreachable ();
-    }
-  nthreads = build_call_expr (nthreads, 0);
-  nthreads = fold_convert (itype, nthreads);
-  nthreads = force_gimple_operand_gsi (&gsi, nthreads, true, NULL_TREE,
-				       true, GSI_SAME_STMT);
-  threadid = build_call_expr (threadid, 0);
-  threadid = fold_convert (itype, threadid);
-  threadid = force_gimple_operand_gsi (&gsi, threadid, true, NULL_TREE,
-				       true, GSI_SAME_STMT);
 
   n1 = fd->loop.n1;
   n2 = fd->loop.n2;
@@ -5990,6 +6116,51 @@ expand_omp_for_static_chunk (struct omp_region *region,
   t = fold_convert (itype, t);
   n = force_gimple_operand_gsi (&gsi, t, true, NULL_TREE,
 				true, GSI_SAME_STMT);
+
+  /* When GOMP_loop_end (or one of its variants) is emitted (e.g. with the
+     inscan modifier), which already implies the end of the scope, _start
+     variants of GOMP builtin calls have to be used and _end can be skipped.  */
+  bool has_gomp_loop_end = fd->have_reductemp || fd->have_pointer_condtemp;
+  {
+    /* Fetch the thread/team id and the number of threads/teams in a single
+       call to GOMP_loop_static_worksharing or
+       GOMP_distribute_static_worksharing. The helper returns both values packed
+       into one complex int, with the id as the imaginary part and the count as
+       the real part.  Returning (rather than writing through pointers) keeps
+       both values as plain SSA names, which lets later passes - notably IPA-CP
+       propagating constants into the outlined kernel - reason about them.
+       Also pass the total number of iterations for OMPT.  */
+    tree decl;
+    switch (gimple_omp_for_kind (fd->for_stmt))
+      {
+      case GF_OMP_FOR_KIND_FOR:
+	decl = builtin_decl_explicit (
+	  flag_openmp_ompt || has_gomp_loop_end
+	    ? BUILT_IN_GOMP_LOOP_STATIC_WORKSHARING_START
+	    : BUILT_IN_GOMP_LOOP_STATIC_WORKSHARING);
+	break;
+      case GF_OMP_FOR_KIND_DISTRIBUTE:
+	decl = builtin_decl_explicit (
+	  flag_openmp_ompt || has_gomp_loop_end
+	    ? BUILT_IN_GOMP_DISTRIBUTE_STATIC_WORKSHARING_START
+	    : BUILT_IN_GOMP_DISTRIBUTE_STATIC_WORKSHARING);
+	break;
+      default:
+	gcc_unreachable ();
+      }
+    tree n_ull = fold_convert (long_long_unsigned_type_node, n);
+    tree packed = build_call_expr (decl, 1, n_ull);
+    packed = force_gimple_operand_gsi (&gsi, packed, true, NULL_TREE, true,
+				       GSI_SAME_STMT);
+    threadid = fold_build1 (IMAGPART_EXPR, integer_type_node, packed);
+    threadid = fold_convert (itype, threadid);
+    threadid = force_gimple_operand_gsi (&gsi, threadid, true, NULL_TREE, true,
+					 GSI_SAME_STMT);
+    nthreads = fold_build1 (REALPART_EXPR, integer_type_node, packed);
+    nthreads = fold_convert (itype, nthreads);
+    nthreads = force_gimple_operand_gsi (&gsi, nthreads, true, NULL_TREE, true,
+					 GSI_SAME_STMT);
+  }
 
   trip_var = create_tmp_reg (itype, ".trip");
   if (gimple_in_ssa_p (cfun))
@@ -6229,9 +6400,10 @@ expand_omp_for_static_chunk (struct omp_region *region,
 	    t = fold_build_pointer_plus (vmain, step);
 	  else
 	    t = fold_build2 (PLUS_EXPR, type, vmain, step);
-	  if (DECL_P (vback) && TREE_ADDRESSABLE (vback))
-	    t = force_gimple_operand_gsi (&gsi, t, true, NULL_TREE,
-					  true, GSI_SAME_STMT);
+	  t = force_gimple_operand_gsi (&gsi, t,
+					DECL_P (vback)
+					 && TREE_ADDRESSABLE (vback), NULL_TREE,
+					true, GSI_SAME_STMT);
 	  assign_stmt = gimple_build_assign (vback, t);
 	  gsi_insert_before (&gsi, assign_stmt, GSI_SAME_STMT);
 
@@ -6261,8 +6433,30 @@ expand_omp_for_static_chunk (struct omp_region *region,
       gsi_insert_after (&gsi, assign_stmt, GSI_CONTINUE_LINKING);
     }
 
-  /* Replace the GIMPLE_OMP_RETURN with a barrier, or nothing.  */
   gsi = gsi_last_nondebug_bb (exit_bb);
+  if (flag_openmp_ompt && !has_gomp_loop_end)
+    {
+      /* Insert call to GOMP_*_static_worksharing_end at the end of exit_bb.
+       */
+      tree decl;
+      switch (gimple_omp_for_kind (fd->for_stmt))
+	{
+	case GF_OMP_FOR_KIND_FOR:
+	  decl
+	    = builtin_decl_explicit (BUILT_IN_GOMP_LOOP_STATIC_WORKSHARING_END);
+	  break;
+	case GF_OMP_FOR_KIND_DISTRIBUTE:
+	  decl = builtin_decl_explicit (
+	    BUILT_IN_GOMP_DISTRIBUTE_STATIC_WORKSHARING_END);
+	  break;
+	default:
+	  gcc_unreachable ();
+	}
+      gcall *g = gimple_build_call (decl, 0);
+      gsi_insert_after (&gsi, g, GSI_SAME_STMT);
+    }
+
+  /* Replace the GIMPLE_OMP_RETURN with a barrier, or nothing.  */
   if (!gimple_omp_return_nowait_p (gsi_stmt (gsi)))
     {
       t = gimple_omp_return_lhs (gsi_stmt (gsi));
@@ -6285,7 +6479,10 @@ expand_omp_for_static_chunk (struct omp_region *region,
 	  gsi_insert_after (&gsi, g, GSI_SAME_STMT);
 	}
       else
-	gsi_insert_after (&gsi, omp_build_barrier (t), GSI_SAME_STMT);
+	gsi_insert_after (&gsi,
+			  omp_build_barrier (t,
+					     GOMP_BARRIER_IMPLICIT_WORKSHARE),
+			  GSI_SAME_STMT);
     }
   else if (fd->have_pointer_condtemp)
     {
@@ -6294,6 +6491,33 @@ expand_omp_for_static_chunk (struct omp_region *region,
       gsi_insert_after (&gsi, g, GSI_SAME_STMT);
     }
   gsi_remove (&gsi, true);
+
+  if (flag_openmp_ompt_detailed)
+    {
+      /* Insert call to GOMP_*_static_worksharing_dispatch at the end of
+	 seq_start_bb.  */
+      gsi = gsi_last_nondebug_bb (seq_start_bb);
+      tree decl;
+      switch (gimple_omp_for_kind (fd->for_stmt))
+	{
+	case GF_OMP_FOR_KIND_FOR:
+	  decl = builtin_decl_explicit (
+	    BUILT_IN_GOMP_LOOP_STATIC_WORKSHARING_DISPATCH);
+	  break;
+	case GF_OMP_FOR_KIND_DISTRIBUTE:
+	  decl = builtin_decl_explicit (
+	    BUILT_IN_GOMP_DISTRIBUTE_STATIC_WORKSHARING_DISPATCH);
+	  break;
+	default:
+	  gcc_unreachable ();
+	}
+      tree s0_ull = fold_convert (long_long_unsigned_type_node, s0);
+      tree iterations = fold_build2 (MINUS_EXPR, itype, e0, s0);
+      iterations = fold_convert (long_long_unsigned_type_node, iterations);
+      tree call = build_call_expr (decl, 2, s0_ull, iterations);
+      force_gimple_operand_gsi (&gsi, call, true, NULL_TREE, true,
+				GSI_SAME_STMT);
+    }
 
   /* Connect the new blocks.  */
   find_edge (iter_part_bb, seq_start_bb)->flags = EDGE_TRUE_VALUE;
@@ -7701,27 +7925,24 @@ expand_oacc_for (struct omp_region *region, struct omp_for_data *fd)
   basic_block bottom_bb = NULL;
 
   /* entry_bb has two successors; the branch edge is to the exit
-     block, fallthrough edge to body.  */
-  gcc_assert (EDGE_COUNT (entry_bb->succs) == 2
-	      && BRANCH_EDGE (entry_bb)->dest == exit_bb);
+     block (or to finalization blocks preceding it), fallthrough edge
+     to body.  */
+  gcc_assert (EDGE_COUNT (entry_bb->succs) == 2);
 
   /* If cont_bb non-NULL, it has 2 successors.  The branch successor is
      body_bb, or to a block whose only successor is the body_bb.  Its
      fallthrough successor is the final block (same as the branch
-     successor of the entry_bb).  */
+     successor of the entry_bb), possibly via finalization blocks.  */
   if (cont_bb)
     {
       basic_block body_bb = FALLTHRU_EDGE (entry_bb)->dest;
       basic_block bed = BRANCH_EDGE (cont_bb)->dest;
 
-      gcc_assert (FALLTHRU_EDGE (cont_bb)->dest == exit_bb);
+      gcc_assert (EDGE_COUNT (cont_bb->succs) == 2);
       gcc_assert (bed == body_bb || single_succ_edge (bed)->dest == body_bb);
     }
   else
     gcc_assert (!gimple_in_ssa_p (cfun));
-
-  /* The exit block only has entry_bb and cont_bb as predecessors.  */
-  gcc_assert (EDGE_COUNT (exit_bb->preds) == 1 + (cont_bb != NULL));
 
   tree chunk_no;
   tree chunk_max = NULL_TREE;
@@ -8239,7 +8460,7 @@ expand_omp_for (struct omp_region *region, gimple *inner_stmt)
       FALLTHRU_EDGE (region->cont)->flags &= ~EDGE_ABNORMAL;
     }
   else
-    /* If there isn't a continue then this is a degerate case where
+    /* If there isn't a continue then this is a degenerate case where
        the introduction of abnormal edges during lowering will prevent
        original loops from being detected.  Fix that up.  */
     loops_state_set (LOOPS_NEED_FIXUP);
@@ -8666,7 +8887,9 @@ expand_omp_single (struct omp_region *region)
   if (!gimple_omp_return_nowait_p (gsi_stmt (si)))
     {
       tree t = gimple_omp_return_lhs (gsi_stmt (si));
-      gsi_insert_after (&si, omp_build_barrier (t), GSI_SAME_STMT);
+      gsi_insert_after (&si,
+			omp_build_barrier (t, GOMP_BARRIER_IMPLICIT_WORKSHARE),
+			GSI_SAME_STMT);
     }
   gsi_remove (&si, true);
   single_succ_edge (exit_bb)->flags = EDGE_FALLTHRU;
@@ -9021,7 +9244,7 @@ expand_omp_atomic_fetch_op (basic_block load_bb,
 
   /* We could test all of the various optabs involved, but the fact of the
      matter is that (with the exception of i486 vs i586 and xadd) all targets
-     that support any atomic operaton optab also implements compare-and-swap.
+     that support any atomic operation optab also implements compare-and-swap.
      Let optabs.cc take care of expanding any compare-and-swap loop.  */
   if (!can_compare_and_swap_p (imode, true) || !can_atomic_load_p (imode))
     return false;
@@ -9779,22 +10002,64 @@ get_target_arguments (gimple_stmt_iterator *gsi, gomp_target *tgt_stmt)
 {
   auto_vec <tree, 6> args;
   tree clauses = gimple_omp_target_clauses (tgt_stmt);
-  tree t, c = omp_find_clause (clauses, OMP_CLAUSE_NUM_TEAMS);
-  if (c)
-    t = OMP_CLAUSE_NUM_TEAMS_UPPER_EXPR (c);
+  tree num_teams = omp_find_clause (clauses, OMP_CLAUSE_NUM_TEAMS);
+  tree thread_limit = omp_find_clause (clauses, OMP_CLAUSE_THREAD_LIMIT);
+  tree message = omp_find_clause (clauses, OMP_CLAUSE_MESSAGE);
+  if (message)
+    /* FIXME: error termination checking also requires to check
+       OMP_CLAUSE_NUM_TEAMS_LOWER_EXPR not only UPPER, i.e. it
+       needs to be passed to the runtime! Note that both target and
+       a nested teams can have a 'message' clause - and both take a
+       thread_limit clause.  */
+    sorry_at (OMP_CLAUSE_LOCATION (message), "%<message%> clause");
+  if (num_teams)
+    {
+      tree expr = OMP_CLAUSE_NUM_TEAMS_UPPER_EXPR (num_teams);
+      /* FIXME: Update omp-low.cc's lower_omp_teams when implementing.  */
+      if (TREE_CODE (expr) == TREE_LIST
+	  && OMP_CLAUSE_NUM_TEAMS_DIMS (num_teams)
+	  && TREE_CHAIN (expr))
+	{
+	  sorry_at (OMP_CLAUSE_LOCATION (num_teams),
+		    "%<num_teams%> clause with %<dims%> modifier");
+	  num_teams = TREE_VALUE (expr);
+	}
+      else if (TREE_CODE (expr) == TREE_LIST)
+	num_teams = (TREE_CHAIN (expr)
+		     ? TREE_VALUE (TREE_CHAIN (expr)) : TREE_VALUE (expr));
+      else
+	num_teams = expr;
+    }
   else
-    t = integer_minus_one_node;
+    num_teams = integer_minus_one_node;
   push_target_argument_according_to_value (gsi, GOMP_TARGET_ARG_DEVICE_ALL,
-					   GOMP_TARGET_ARG_NUM_TEAMS, t, &args);
-
-  c = omp_find_clause (clauses, OMP_CLAUSE_THREAD_LIMIT);
-  if (c)
-    t = OMP_CLAUSE_THREAD_LIMIT_EXPR (c);
+					   GOMP_TARGET_ARG_NUM_TEAMS,
+					   num_teams, &args);
+  if (thread_limit)
+    {
+      tree expr = OMP_CLAUSE_THREAD_LIMIT_EXPR (thread_limit);
+      if (TREE_CODE (expr) == TREE_LIST)
+	{
+	  if (OMP_CLAUSE_THREAD_LIMIT_DIMS (thread_limit)
+	      && (TREE_CHAIN (expr)
+		  || OMP_CLAUSE_THREAD_LIMIT_STRICT (thread_limit)))
+	    sorry_at (OMP_CLAUSE_LOCATION (thread_limit),
+		      "%<thread_limit%> clause with %<dims%> modifier");
+	  else if (OMP_CLAUSE_THREAD_LIMIT_STRICT (thread_limit))
+	    sorry_at (OMP_CLAUSE_LOCATION (thread_limit),
+		      "%<thread_limit%> clause with %<strict%> modifier");
+	  expr = TREE_VALUE (expr);
+	}
+      else if (OMP_CLAUSE_THREAD_LIMIT_STRICT (thread_limit))
+	sorry_at (OMP_CLAUSE_LOCATION (thread_limit),
+		  "%<thread_limit%> clause with %<strict%> modifier");
+      thread_limit = expr;
+    }
   else
-    t = integer_minus_one_node;
+    thread_limit = integer_minus_one_node;
   push_target_argument_according_to_value (gsi, GOMP_TARGET_ARG_DEVICE_ALL,
-					   GOMP_TARGET_ARG_THREAD_LIMIT, t,
-					   &args);
+					   GOMP_TARGET_ARG_THREAD_LIMIT,
+					   thread_limit, &args);
 
   /* Produce more, perhaps device specific, arguments here.  */
 
@@ -9865,6 +10130,7 @@ expand_omp_target (struct omp_region *region)
   tree clauses = gimple_omp_target_clauses (entry_stmt);
 
   bool is_ancestor = false;
+  bool is_host_only = false;
   child_fn = child_fn2 = NULL_TREE;
   child_cfun = NULL;
   if (offloaded)
@@ -9872,6 +10138,9 @@ expand_omp_target (struct omp_region *region)
       c = omp_find_clause (clauses, OMP_CLAUSE_DEVICE);
       if (ENABLE_OFFLOADING && c)
 	is_ancestor = OMP_CLAUSE_DEVICE_ANCESTOR (c);
+      c = omp_find_clause (clauses, OMP_CLAUSE_DEVICE_TYPE);
+      if (c && OMP_CLAUSE_DEVICE_TYPE_KIND (c) == OMP_CLAUSE_DEVICE_TYPE_HOST)
+	is_host_only = true;
       child_fn = gimple_omp_target_child_fn (entry_stmt);
       child_cfun = DECL_STRUCT_FUNCTION (child_fn);
     }
@@ -10062,7 +10331,7 @@ expand_omp_target (struct omp_region *region)
 	{
 	  if (in_lto_p)
 	    DECL_PRESERVE_P (child_fn) = 1;
-	  if (!is_ancestor)
+	  if (!is_ancestor && !is_host_only)
 	    vec_safe_push (offload_funcs, child_fn);
 	}
 
@@ -10244,8 +10513,10 @@ expand_omp_target (struct omp_region *region)
     }
   else
     {
-      c = omp_find_clause (clauses, OMP_CLAUSE_DEVICE);
-      if (c)
+      if (is_host_only)
+	device = build_int_cst (integer_type_node,
+				GOMP_DEVICE_HOST_FALLBACK - 1);
+      else if ((c = omp_find_clause (clauses, OMP_CLAUSE_DEVICE)) != NULL_TREE)
 	{
 	  device = OMP_CLAUSE_DEVICE_ID (c);
 	  /* Ensure 'device' is of the correct type.  */
@@ -10849,7 +11120,7 @@ build_omp_regions_1 (basic_block bb, struct omp_region *parent,
 	    region = NULL;
 	  else if (code == GIMPLE_OMP_TASKGROUP)
 	    /* #pragma omp taskgroup isn't a stand-alone directive, but
-	       gimplifier put the end API call into try finall block
+	       gimplifier put the end API call into try finally block
 	       for it, so omp expansion can treat it as such.  */
 	    region = NULL;
 	  /* ..., this directive becomes the parent for a new region.  */

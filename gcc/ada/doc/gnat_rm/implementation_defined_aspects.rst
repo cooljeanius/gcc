@@ -267,6 +267,89 @@ or propagate an exception).
 For the syntax and semantics of this aspect, see the SPARK 2014 Reference
 Manual, section 6.1.10.
 
+Aspect Extended_Access
+======================
+
+This nonoverridable boolean-valued type-related representation aspect can be
+specified as part of a full_type_declaration for a general access type
+designating an unconstrained array subtype.
+
+The absence of an Extended_Access aspect specification for such a
+full_type_declaration is equivalent to an explicit
+"Extended_Access => False" specification. This implies
+that the aspect is never unspecified for an eligible access type.
+An access type for which this aspect is True is said to be an extended access
+type; this includes the case of a type derived from an extended access type.
+Similarly, a value of such a type is said to be an extended access value.
+
+The representation of an extended access value is different than that of
+other access values. This representation makes it possible to designate
+objects that cannot be designated using the usual "thin" or "fat" access
+representations for an access type designating an unconstrained array
+subtype (notably slices and array objects imported from other languages).
+
+In particular, two rules are modified in determining the legality of an Access
+or Unchecked_Access attribute reference if the expected access type is
+an extended access type:
+
+* A slice of an aliased array object of a non-bitpacked type (more precisely,
+  of an array type having independently addressable components) is considered
+  to be aliased (and the accessibility level of a slice of an array object is
+  defined to be that of the array object); this also applies to renamings
+  of such slices, slices of such renamings, etc.
+
+* The requirement that the nominal subtype of the prefix shall statically
+  match the designated subtype of the access type need not be met.
+
+The Size aspect (and other aspects including Stream_Size, Object_Size,
+and Alignment) of an extended access type may depend on the properties of the
+designated type. Further details of this dependence are not documented.
+
+An extended access value is not convertible to a non-extended access type,
+although conversions in the opposite direction are allowed. We don't want
+to allow
+
+.. code-block:: ada
+
+   type Big_Ref is access all String with Extended_Access;
+   type Small_Ref is access all String;
+   Obj : aliased String := "abcde";
+   Big_Ptr : Big_Ref := Obj (2 .. 4)'Access; -- OK
+   Small_Ptr : Small_Ref := Small_Ref (Big_Ptr); -- ERROR: illegal conversion
+
+because there is no way to represent the result of such a conversion.
+
+A dereference of an extended access value (or a reference to a renaming
+thereof) shall not occur in any of the following contexts:
+
+* as an operative constituent of the prefix of an Access or
+  Unchecked_Access attribute reference whose expected type is not extended; or
+
+* as an operative constituent of an actual parameter in a call where
+  the corresponding formal parameter is explicitly aliased.
+
+For the same reasons that explicit conversions from an extended access type to a
+non-extended access type are forbidden, we also need to disallow getting the
+same effect via a Extended_Ptr.all'Access reference; this includes the case
+of passing Extended_Ptr.all as an actual parameter in a call where the
+corresponding formal parameter is explicitly aliased (because the callee
+could evaluate Formal_Parameter'Access). This goal is accomplished by
+adjusting the definition of the term "aliased". A dereference of an extended
+value occurring in one of these contexts is defined to denote
+a nonaliased view. This has the desired effect because these contexts require
+an aliased view. Continuing the preceding example, this rule disallows
+
+.. code-block:: ada
+
+   Sneaky_1 : Small_Ptr := Big_Ptr.all'Access; -- ERROR: illegal 'Access prefix
+
+   function Make (Str : aliased in out String) return Small_Ptr
+     is (Str'Access); -- OK
+
+   Sneaky_2 : Small_Ptr := Make (Str => Big_Ptr.all); -- ERROR: bad parameter
+
+for the same reason given above in the case of an explicit type conversion.
+
 Aspect Extensions_Visible
 =========================
 .. index:: Extensions_Visible
@@ -342,12 +425,15 @@ Aspect Iterable
 This aspect provides a light-weight mechanism for loops and quantified
 expressions over container types, without the overhead imposed by the tampering
 checks of standard Ada 2012 iterators. The value of the aspect is an aggregate
-with six named components, of which the last three are optional: ``First``,
-``Next``, ``Has_Element``, ``Element``, ``Last``, and ``Previous``.
+with six named components, of which the last four are optional: ``First``,
+``Next``, ``Has_Element``, ``Element``, ``Constant_Reference``, ``Last``, and
+``Previous``.
 When only the first three components are specified, only the
-``for .. in`` form of iteration over cursors is available. When ``Element``
-is specified, both this form and the ``for .. of`` form of iteration over
-elements are available. If the last two components are specified, reverse
+``for .. in`` form of iteration over cursors is available. When either
+``Element`` or ``Constant_Reference`` is specified, both this form and the
+``for .. of`` form of iteration over elements are available. ``Element``
+and ``Constant_Reference`` cannot be specified together.
+If the last two components are specified, reverse
 iterations over the container can be specified (analogous to what can be done
 over predefined containers that support the ``Reverse_Iterator`` interface).
 The following is a typical example of use:
@@ -355,12 +441,13 @@ The following is a typical example of use:
 .. code-block:: ada
 
   type List is private with
-      Iterable => (First       => First_Cursor,
-                   Next        => Advance,
-                   Has_Element => Cursor_Has_Element
-                 [,Element     => Get_Element]
-                 [,Last        => Last_Cursor]
-                 [,Previous    => Retreat]);
+      Iterable => (First              => First_Cursor,
+                   Next               => Advance,
+                   Has_Element        => Cursor_Has_Element
+                 [,Element            => Get_Element]
+                 [,Constant_Reference => Element_Constant_Access]
+                 [,Last               => Last_Cursor]
+                 [,Previous           => Retreat]);
 
 * The values of ``First`` and ``Last`` are primitive operations of the
   container type that return a ``Cursor``, which must be a type declared in
@@ -393,6 +480,16 @@ The following is a typical example of use:
 .. code-block:: ada
 
   function Get_Element (Cont : Container; Position : Cursor) return Element_Type;
+
+* The value of ``Constant_Reference`` is a primitive operation of the container
+  type that
+  takes both a container and a cursor and yields an anonymous access-to-constant
+  type designating ``Element_Type`` with null exclusion, which must
+  be a type declared in the container package or visible from it. For example:
+
+.. code-block:: ada
+
+  function Element_Constant_Access (Cont : Container; Position : Cursor) return not null access constant Element_Type;
 
 This aspect is used in the GNAT-defined formal container packages.
 
@@ -466,6 +563,13 @@ Aspect Max_Queue_Length
 
 This aspect is equivalent to :ref:`pragma Max_Queue_Length<Pragma-Max_Queue_Length>`.
 
+Aspect Modifies
+===============
+.. index:: Modifies
+
+For the syntax and semantics of this aspect, see the SPARK 2014 Reference
+Manual, section TBD.
+
 Aspect No_Caching
 =================
 .. index:: No_Caching
@@ -538,6 +642,14 @@ Aspect Persistent_BSS
 
 This boolean aspect is equivalent to :ref:`pragma Persistent_BSS<Pragma-Persistent_BSS>`.
 
+Aspect Potentially_Invalid
+==========================
+.. index:: Potentially_Invalid
+
+For the syntax and semantics of this aspect, see the SPARK 2014 Reference
+Manual, section 13.9.1.
+
+
 Aspect Predicate
 ================
 .. index:: Predicate
@@ -548,6 +660,12 @@ and ``Static_Predicate`` except that whether the resulting
 predicate is static or dynamic is controlled by the form of the
 expression. It is also separately controllable using pragma
 ``Assertion_Policy``.
+
+Aspect Program_Exit
+===================
+.. index:: Program_Exit
+
+This boolean aspect is equivalent to :ref:`pragma Program_Exit<Pragma-Program_Exit>`.
 
 Aspect Pure_Function
 ====================

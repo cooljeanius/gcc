@@ -1,6 +1,6 @@
 /* Communication between the Local Register Allocator (LRA) and
    the rest of the compiler.
-   Copyright (C) 2010-2025 Free Software Foundation, Inc.
+   Copyright (C) 2010-2026 Free Software Foundation, Inc.
    Contributed by Vladimir Makarov <vmakarov@redhat.com>.
 
 This file is part of GCC.
@@ -38,5 +38,8 @@ extern rtx lra_eliminate_regs (rtx, machine_mode, rtx);
 extern void lra (FILE *, int);
 extern void lra_init_once (void);
 extern void lra_finish_once (void);
+extern const HARD_REG_SET *lra_get_dependent_filter
+  (int, machine_mode, unsigned int, machine_mode, bool);
+extern void lra_reset_dependent_filters (void);
 
 #endif /* GCC_LRA_H */

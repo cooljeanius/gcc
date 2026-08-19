@@ -1,5 +1,5 @@
 /* CPP Library. (Directive handling.)
-   Copyright (C) 1986-2025 Free Software Foundation, Inc.
+   Copyright (C) 1986-2026 Free Software Foundation, Inc.
    Contributed by Per Bothner, 1994-95.
    Based on CCCP program by Paul Rubin, June 1986
    Adapted to ANSI C, Richard Stallman, Jan 1987
@@ -734,13 +734,38 @@ do_undef (cpp_reader *pfile)
       if (pfile->cb.undef)
 	pfile->cb.undef (pfile, pfile->directive_line, node);
 
+      /* Handle -Wkeyword-macro registered identifiers.  */
+      bool diagnosed = false;
+      if (CPP_OPTION (pfile, cpp_warn_keyword_macro)
+	  && !CPP_OPTION (pfile, suppress_builtin_macro_warnings)
+	  && cpp_keyword_p (node))
+	{
+	  if (CPP_OPTION (pfile, cplusplus)
+	      && (strcmp ((const char *) NODE_NAME (node), "likely") == 0
+		  || strcmp ((const char *) NODE_NAME (node),
+			     "unlikely") == 0))
+	    /* CWG3053: likely and unlikely can be undefined.  */;
+	  else if (CPP_OPTION (pfile, cpp_pedantic)
+		   && CPP_OPTION (pfile, cplusplus)
+		   && CPP_OPTION (pfile, lang) >= CLK_GNUCXX26)
+	    cpp_pedwarning (pfile, CPP_W_KEYWORD_MACRO,
+			    "undefining keyword %qs", NODE_NAME (node));
+	  else
+	    cpp_warning (pfile, CPP_W_KEYWORD_MACRO,
+			 "undefining keyword %qs", NODE_NAME (node));
+	  diagnosed = true;
+	}
       /* 6.10.3.5 paragraph 2: [#undef] is ignored if the specified
 	 identifier is not currently defined as a macro name.  */
       if (cpp_macro_p (node))
 	{
-	  if (node->flags & NODE_WARN)
-	    cpp_error (pfile, CPP_DL_WARNING,
-		       "undefining %qs", NODE_NAME (node));
+	  if ((node->flags & NODE_WARN)
+	      && !CPP_OPTION (pfile, suppress_builtin_macro_warnings))
+	    {
+	      if (!diagnosed)
+		cpp_error (pfile, CPP_DL_WARNING,
+			   "undefining %qs", NODE_NAME (node));
+	    }
 	  else if (cpp_builtin_macro_p (node)
 		   && CPP_OPTION (pfile, warn_builtin_macro_redefined))
 	    cpp_warning (pfile, CPP_W_BUILTIN_MACRO_REDEFINED,
@@ -752,6 +777,11 @@ do_undef (cpp_reader *pfile)
 
 	  _cpp_free_definition (node);
 	}
+      else if ((node->flags & NODE_WARN)
+	       && !CPP_OPTION (pfile, suppress_builtin_macro_warnings)
+	       && !diagnosed
+	       && !cpp_keyword_p (node))
+	cpp_error (pfile, CPP_DL_WARNING, "undefining %qs", NODE_NAME (node));
     }
 
   check_eol (pfile, false);
@@ -1076,6 +1106,7 @@ skip_balanced_token_seq (cpp_reader *pfile, cpp_ttype end,
   EMBED_PARAM (PREFIX, "prefix")	\
   EMBED_PARAM (SUFFIX, "suffix")	\
   EMBED_PARAM (IF_EMPTY, "if_empty")	\
+  EMBED_PARAM (OFFSET, "offset")	\
   EMBED_PARAM (GNU_BASE64, "base64")	\
   EMBED_PARAM (GNU_OFFSET, "offset")
 
@@ -1084,7 +1115,7 @@ enum embed_param_kind {
   EMBED_PARAMS
 #undef EMBED_PARAM
   NUM_EMBED_PARAMS,
-  NUM_EMBED_STD_PARAMS = EMBED_PARAM_IF_EMPTY + 1
+  NUM_EMBED_STD_PARAMS = EMBED_PARAM_OFFSET + 1
 };
 
 static struct { int len; const char *name; } embed_params[NUM_EMBED_PARAMS] = {
@@ -1128,6 +1159,7 @@ _cpp_parse_embed_params (cpp_reader *pfile, struct cpp_embed_params *params)
 	    }
 	  if (params->base64.count
 	      && (seen & ((1 << EMBED_PARAM_LIMIT)
+			  | (1 << EMBED_PARAM_OFFSET)
 			  | (1 << EMBED_PARAM_GNU_OFFSET))) != 0)
 	    {
 	      ret = false;
@@ -1135,8 +1167,8 @@ _cpp_parse_embed_params (cpp_reader *pfile, struct cpp_embed_params *params)
 		cpp_error_with_line (pfile, CPP_DL_ERROR,
 				     params->base64.base_run.base->src_loc, 0,
 				     "%<gnu::base64%> parameter conflicts "
-				     "with %<limit%> or %<gnu::offset%> "
-				     "parameters");
+				     "with %<limit%> or %<offset%> or "
+				     "%<gnu::offset%> parameters");
 	    }
 	  else if (params->base64.count == 0
 		   && CPP_OPTION (pfile, preprocessed))
@@ -1211,6 +1243,13 @@ _cpp_parse_embed_params (cpp_reader *pfile, struct cpp_embed_params *params)
 		&& memcmp (param_name, embed_params[i].name,
 			   param_name_len) == 0)
 	      {
+		/* Until C standardizes offset, people should use just
+		   gnu::offset in C.  When/if it is standardized, these
+		   3 lines should be removed and pedwarn condition and
+		   wording adjusted to cope with C too.  */
+		if (i == EMBED_PARAM_OFFSET
+		    && !CPP_OPTION (pfile, cplusplus))
+		  continue;
 		param_kind = i;
 		break;
 	      }
@@ -1255,6 +1294,7 @@ _cpp_parse_embed_params (cpp_reader *pfile, struct cpp_embed_params *params)
 	cpp_error_with_line (pfile, CPP_DL_ERROR, loc, 0,
 			     "expected %<(%>");
       else if (param_kind == EMBED_PARAM_LIMIT
+	       || param_kind == EMBED_PARAM_OFFSET
 	       || param_kind == EMBED_PARAM_GNU_OFFSET)
 	{
  	  if (params->has_embed && pfile->op_stack == NULL)
@@ -1264,9 +1304,27 @@ _cpp_parse_embed_params (cpp_reader *pfile, struct cpp_embed_params *params)
 	    params->limit = res;
 	  else
 	    {
+	      if ((seen & ((1 << EMBED_PARAM_OFFSET)
+			   | (1 << EMBED_PARAM_GNU_OFFSET)))
+		  == ((1 << EMBED_PARAM_OFFSET)
+		      | (1 << EMBED_PARAM_GNU_OFFSET)))
+		cpp_error_with_line (pfile, CPP_DL_ERROR, loc, 0,
+				     "%qs parameter conflicts with %qs "
+				     "parameter",
+				     param_kind == EMBED_PARAM_OFFSET
+				     ? "offset" : "gnu::offset",
+				     param_kind == EMBED_PARAM_OFFSET
+				     ? "gnu::offset" : "offset");
+	      if (param_kind == EMBED_PARAM_OFFSET
+		  && CPP_OPTION (pfile, lang) < CLK_GNUCXX29)
+		cpp_pedwarning_with_line (pfile, CPP_W_CXX29_EXTENSIONS, loc,
+					  0, "%qs parameter before C++29 is "
+					     "a GCC extension", "offset");
 	      if (res > INTTYPE_MAXIMUM (off_t))
 		cpp_error_with_line (pfile, CPP_DL_ERROR, loc, 0,
-				     "too large %<gnu::offset%> argument");
+				     "too large %qs argument",
+				     param_kind == EMBED_PARAM_OFFSET
+				     ? "offset" : "gnu::offset");
 	      else
 		params->offset = res;
 	    }
@@ -3070,7 +3128,9 @@ cpp_define (cpp_reader *pfile, const char *str)
     }
   buf[count] = '\n';
 
+  CPP_OPTION (pfile, suppress_builtin_macro_warnings) = 1;
   run_directive (pfile, T_DEFINE, buf, count);
+  CPP_OPTION (pfile, suppress_builtin_macro_warnings) = 0;
 }
 
 /* Like cpp_define, but does not warn about unused macro.  */
@@ -3124,7 +3184,9 @@ _cpp_define_builtin (cpp_reader *pfile, const char *str)
   char *buf = (char *) alloca (len + 1);
   memcpy (buf, str, len);
   buf[len] = '\n';
+  CPP_OPTION (pfile, suppress_builtin_macro_warnings) = 1;
   run_directive (pfile, T_DEFINE, buf, len);
+  CPP_OPTION (pfile, suppress_builtin_macro_warnings) = 0;
 }
 
 /* Process MACRO as if it appeared as the body of an #undef.  */
@@ -3135,7 +3197,9 @@ cpp_undef (cpp_reader *pfile, const char *macro)
   char *buf = (char *) alloca (len + 1);
   memcpy (buf, macro, len);
   buf[len] = '\n';
+  CPP_OPTION (pfile, suppress_builtin_macro_warnings) = 1;
   run_directive (pfile, T_UNDEF, buf, len);
+  CPP_OPTION (pfile, suppress_builtin_macro_warnings) = 0;
 }
 
 /* Replace a previous definition DEF of the macro STR.  If DEF is NULL,

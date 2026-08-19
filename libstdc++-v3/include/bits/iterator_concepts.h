@@ -1,6 +1,6 @@
 // Concepts and traits for use with iterators -*- C++ -*-
 
-// Copyright (C) 2019-2025 Free Software Foundation, Inc.
+// Copyright (C) 2019-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -38,9 +38,6 @@
 #include <concepts>
 #include <bits/ptr_traits.h>	// to_address
 #include <bits/ranges_cmp.h>	// identity, ranges::less
-
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wpedantic" // __int128
 
 namespace std _GLIBCXX_VISIBILITY(default)
 {
@@ -133,15 +130,22 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  struct __result<_Tp>
 	  { using type = decltype(iter_move(std::declval<_Tp>())); };
 
-	// Otherwise, if *E if an lvalue, use std::move(*E).
+	// Otherwise, if *E is an lvalue, use std::move(*E).
 	template<typename _Tp>
 	  requires (!__adl_imove<_Tp>)
 	    && is_lvalue_reference_v<__iter_ref_t<_Tp>>
 	  struct __result<_Tp>
-	  { using type = remove_reference_t<__iter_ref_t<_Tp>>&&; };
+	  {
+	    // Instead of decltype(std::move(*E)) we define the type as the
+	    // return type of std::move, i.e. remove_reference_t<iter_ref>&&.
+	    // N.B. the use of decltype(declval<X>()) instead of just X&& is
+	    // needed for function reference types, see PR libstdc++/119469.
+	    using type
+	      = decltype(std::declval<remove_reference_t<__iter_ref_t<_Tp>>>());
+	  };
 
 	template<typename _Tp>
-	  static constexpr bool
+	  static consteval bool
 	  _S_noexcept()
 	  {
 	    if constexpr (__adl_imove<_Tp>)
@@ -206,17 +210,6 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       using difference_type
 	= make_signed_t<decltype(std::declval<_Tp>() - std::declval<_Tp>())>;
     };
-
-#if defined __STRICT_ANSI__ && defined __SIZEOF_INT128__
-  // __int128 is incrementable even if !integral<__int128>
-  template<>
-    struct incrementable_traits<__int128>
-    { using difference_type = __int128; };
-
-  template<>
-    struct incrementable_traits<unsigned __int128>
-    { using difference_type = __int128; };
-#endif
 
   namespace __detail
   {
@@ -604,24 +597,6 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     class __max_diff_type;
     class __max_size_type;
 
-    __extension__
-    template<typename _Tp>
-      concept __is_signed_int128
-#if __SIZEOF_INT128__
-	= same_as<_Tp, __int128>;
-#else
-	= false;
-#endif
-
-    __extension__
-    template<typename _Tp>
-      concept __is_unsigned_int128
-#if __SIZEOF_INT128__
-	= same_as<_Tp, unsigned __int128>;
-#else
-	= false;
-#endif
-
     template<typename _Tp>
       concept __cv_bool = same_as<const volatile _Tp, const volatile bool>;
 
@@ -629,16 +604,11 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       concept __integral_nonbool = integral<_Tp> && !__cv_bool<_Tp>;
 
     template<typename _Tp>
-      concept __is_int128 = __is_signed_int128<_Tp> || __is_unsigned_int128<_Tp>;
-
-    template<typename _Tp>
       concept __is_integer_like = __integral_nonbool<_Tp>
-	|| __is_int128<_Tp>
 	|| same_as<_Tp, __max_diff_type> || same_as<_Tp, __max_size_type>;
 
     template<typename _Tp>
       concept __is_signed_integer_like = signed_integral<_Tp>
-	|| __is_signed_int128<_Tp>
 	|| same_as<_Tp, __max_diff_type>;
 
   } // namespace ranges::__detail
@@ -822,11 +792,6 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  using __projected_Proj = _Proj;
 	};
       };
-
-    // Optimize the common case of the projection being std::identity.
-    template<typename _Iter>
-      struct __projected<_Iter, identity>
-      { using __type = _Iter; };
   } // namespace __detail
 
   /// [projected], projected
@@ -916,7 +881,7 @@ namespace ranges
     {
     private:
       template<typename _Tp, typename _Up>
-	static constexpr bool
+	static consteval bool
 	_S_noexcept()
 	{
 	  if constexpr (__adl_iswap<_Tp, _Up>)
@@ -1020,19 +985,10 @@ namespace ranges
   {
     using std::__detail::__class_or_enum;
 
-    struct _Decay_copy final
-    {
-      template<typename _Tp>
-	constexpr decay_t<_Tp>
-	operator()(_Tp&& __t) const
-	noexcept(is_nothrow_convertible_v<_Tp, decay_t<_Tp>>)
-	{ return std::forward<_Tp>(__t); }
-    } inline constexpr __decay_copy{};
-
     template<typename _Tp>
       concept __member_begin = requires(_Tp& __t)
 	{
-	  { __decay_copy(__t.begin()) } -> input_or_output_iterator;
+	  { _GLIBCXX_AUTO_CAST(__t.begin()) } -> input_or_output_iterator;
 	};
 
     // Poison pill so that unqualified lookup doesn't find std::begin.
@@ -1042,14 +998,14 @@ namespace ranges
       concept __adl_begin = __class_or_enum<remove_reference_t<_Tp>>
 	&& requires(_Tp& __t)
 	{
-	  { __decay_copy(begin(__t)) } -> input_or_output_iterator;
+	  { _GLIBCXX_AUTO_CAST(begin(__t)) } -> input_or_output_iterator;
 	};
 
     // Simplified version of std::ranges::begin that only supports lvalues,
     // for use by __range_iter_t below.
     template<typename _Tp>
       requires is_array_v<_Tp> || __member_begin<_Tp&> || __adl_begin<_Tp&>
-      auto
+      constexpr auto
       __begin(_Tp& __t)
       {
 	if constexpr (is_array_v<_Tp>)
@@ -1073,6 +1029,5 @@ namespace ranges
 #endif // C++20 library concepts
 _GLIBCXX_END_NAMESPACE_VERSION
 } // namespace std
-#pragma GCC diagnostic pop
 #endif // C++20
 #endif // _ITERATOR_CONCEPTS_H

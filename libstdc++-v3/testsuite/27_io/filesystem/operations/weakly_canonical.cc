@@ -1,4 +1,4 @@
-// Copyright (C) 2017-2025 Free Software Foundation, Inc.
+// Copyright (C) 2017-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -40,19 +40,33 @@ test01()
   fs::path p;
 
 #ifndef NO_SYMLINKS
-  fs::create_symlink("../bar", foo/"bar");
+  fs::create_directory_symlink(fs::path("..")/"bar", foo/"bar");
+
+  // This fails when under under Wine, see
+  // https://bugs.winehq.org/show_bug.cgi?id=59922
+  p = fs::canonical(dir/"foo//./bar/.");
+  VERIFY( p == dirc/"bar" );
 
   p = fs::weakly_canonical(dir/"foo//./bar///../biz/.");
+#ifndef _GLIBCXX_FILESYSTEM_IS_WINDOWS
   VERIFY( p == dirc/"biz/" );
+#else
+  VERIFY( p == dirc/"foo\\biz\\" );
+#endif
+
   p = fs::weakly_canonical(dir/"foo/.//bar/././baz/.");
-  VERIFY( p == dirc/"bar/baz" );
+  VERIFY( p == dirc/"bar"/"baz" );
   p = fs::weakly_canonical(fs::current_path()/dir/"bar//../foo/bar/baz");
   VERIFY( p == dirc/"bar/baz" );
 
   ec = bad_ec;
   p = fs::weakly_canonical(dir/"foo//./bar///../biz/.", ec);
   VERIFY( !ec );
+#ifndef _GLIBCXX_FILESYSTEM_IS_WINDOWS
   VERIFY( p == dirc/"biz/" );
+#else
+  VERIFY( p == dirc/"foo\\biz\\" );
+#endif
   ec = bad_ec;
   p = fs::weakly_canonical(dir/"foo/.//bar/././baz/.", ec);
   VERIFY( !ec );

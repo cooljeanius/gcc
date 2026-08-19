@@ -6,7 +6,7 @@
  *                                                                          *
  *                          C Implementation File                           *
  *                                                                          *
- *            Copyright (C) 2005-2025, Free Software Foundation, Inc.       *
+ *            Copyright (C) 2005-2026, Free Software Foundation, Inc.       *
  *                                                                          *
  * GNAT is free software;  you can  redistribute it  and/or modify it under *
  * terms of the  GNU General Public License as published  by the Free Soft- *
@@ -99,8 +99,13 @@ __gnat_getenv (char *name, int *len, char **value)
 void
 __gnat_setenv (char *name, char *value)
 {
+/* We use setenv on a few operating systems where we are sure it's available,
+   plus on all platforms that claim to support a POSIX version where setenv is
+   mandatory */
 #if (defined (__vxworks) && (defined (__RTP__) || _WRS_VXWORKS_MAJOR >= 7)) \
-    || defined (__APPLE__)
+    || defined (__APPLE__) \
+    || defined (__linux__) \
+    || _POSIX_VERSION >= 200112L
   setenv (name, value, 1);
 
 #else
@@ -229,7 +234,8 @@ void __gnat_clearenv (void)
    || defined (__CYGWIN__) \
    || defined (__NetBSD__) || defined (__OpenBSD__) || defined (__rtems__) \
    || defined (__DragonFly__) || defined (__DJGPP__)
-  /* On Windows, FreeBSD and MacOS there is no function to clean all the
+  /* On several platforms (e.g. Windows, FreeBSD, MacOS...)
+     there is no function to clean all the
      environment but there is a "clean" way to unset a variable. So go
      through the environ table and call __gnat_unsetenv on all entries */
   char **env = __gnat_environ ();
@@ -253,6 +259,48 @@ void __gnat_clearenv (void)
 #else
   clearenv ();
 #endif
+}
+
+/* It used to be the case that users were required to forward the envp
+   parameter of main to the variable below when using a non-Ada main. The
+   consequences for failing to meet the requirement was improper operation of
+   Ada.Command_Line.Environment.
+
+   Nowadays, users are not required to do anything with gnat_envp and
+   Ada.Command_Line.Environment does not use it anymore. In fact it's not used
+   by anything, but we keep its definition so that programs that obey the old
+   requirement keep linking. */
+char **gnat_envp = NULL;
+
+int
+__gnat_env_count (void)
+{
+  int i;
+  char **envp = __gnat_environ();
+
+  for (i = 0; envp[i]; i++)
+    ;
+  return i;
+}
+
+int
+__gnat_len_env (int env_num)
+{
+  char **envp = __gnat_environ();
+
+  if (envp != NULL)
+    return strlen (envp[env_num]);
+  else
+    return 0;
+}
+
+void
+__gnat_fill_env (char *a, int i)
+{
+  char **envp = __gnat_environ();
+
+  if (envp != NULL)
+    memcpy (a, envp[i], strlen (envp[i]));
 }
 
 #ifdef __cplusplus

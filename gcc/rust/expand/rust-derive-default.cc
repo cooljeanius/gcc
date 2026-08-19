@@ -1,4 +1,4 @@
-// Copyright (C) 2025 Free Software Foundation, Inc.
+// Copyright (C) 2025-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -25,8 +25,8 @@
 namespace Rust {
 namespace AST {
 
-DeriveDefault::DeriveDefault (location_t loc)
-  : DeriveVisitor (loc), expanded (nullptr)
+DeriveDefault::DeriveDefault (location_t loc, Builder::Source item_source)
+  : DeriveVisitor (loc, item_source), expanded (nullptr)
 {}
 
 std::unique_ptr<Item>
@@ -42,7 +42,9 @@ DeriveDefault::go (Item &item)
 std::unique_ptr<Expr>
 DeriveDefault::default_call (std::unique_ptr<Type> &&type)
 {
-  auto default_trait = builder.type_path ({"core", "default", "Default"}, true);
+  auto default_trait
+    = builder.type_path ({builder.get_path_start (), "default", "Default"},
+			 true);
 
   auto default_fn
     = builder.qualified_path_in_expression (std::move (type), default_trait,
@@ -58,8 +60,7 @@ DeriveDefault::default_fn (std::unique_ptr<Expr> &&return_expr)
     = std::unique_ptr<Type> (new TypePath (builder.type_path ("Self")));
 
   auto block = std::unique_ptr<BlockExpr> (
-    new BlockExpr ({}, std::move (return_expr), {}, {},
-		   AST::LoopLabel::error (), loc, loc));
+    new BlockExpr ({}, std::move (return_expr), {}, {}, tl::nullopt, loc, loc));
 
   return builder.function ("default", {}, std::move (self_ty),
 			   std::move (block));
@@ -70,14 +71,18 @@ DeriveDefault::default_impl (
   std::unique_ptr<AssociatedItem> &&default_fn, std::string name,
   const std::vector<std::unique_ptr<GenericParam>> &type_generics)
 {
-  auto default_path = builder.type_path ({"core", "default", "Default"}, true);
+  auto default_path = [this] () {
+    return builder.type_path ({builder.get_path_start (), "default", "Default"},
+			      true);
+  };
 
   auto trait_items = vec (std::move (default_fn));
 
-  auto generics = setup_impl_generics (name, type_generics,
-				       builder.trait_bound (default_path));
+  auto generics = setup_impl_generics (name, type_generics, [&, this] () {
+    return builder.trait_bound (default_path ());
+  });
 
-  return builder.trait_impl (default_path, std::move (generics.self_type),
+  return builder.trait_impl (default_path (), std::move (generics.self_type),
 			     std::move (trait_items),
 			     std::move (generics.impl));
 }
@@ -99,7 +104,8 @@ DeriveDefault::visit_struct (StructStruct &item)
   for (auto &field : item.get_fields ())
     {
       auto name = field.get_field_name ().as_string ();
-      auto expr = default_call (field.get_field_type ().clone_type ());
+      auto type = field.get_field_type ().reconstruct ();
+      auto expr = default_call (std::move (type));
 
       cloned_fields.emplace_back (
 	builder.struct_expr_field (std::move (name), std::move (expr)));
@@ -120,7 +126,7 @@ DeriveDefault::visit_tuple (TupleStruct &tuple_item)
 
   for (auto &field : tuple_item.get_fields ())
     {
-      auto type = field.get_field_type ().clone_type ();
+      auto type = field.get_field_type ().reconstruct ();
 
       defaulted_fields.emplace_back (default_call (std::move (type)));
     }

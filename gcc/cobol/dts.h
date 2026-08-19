@@ -1,5 +1,35 @@
 /*
- * Contributed to the public domain by James K. Lowden
+ *
+ * Copyright (c) 2021-2026 Symas Corporation
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are
+ * met:
+ *
+ * * Redistributions of source code must retain the above copyright
+ *   notice, this list of conditions and the following disclaimer.
+ * * Redistributions in binary form must reproduce the above
+ *   copyright notice, this list of conditions and the following disclaimer
+ *   in the documentation and/or other materials provided with the
+ *   distribution.
+ * * Neither the name of the Symas Corporation nor the names of its
+ *   contributors may be used to endorse or promote products derived from
+ *   this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+/* Contributed by James K. Lowden
  * Tuesday October 17, 2023
  *
  * This stand-in for std::regex was written because the implementation provided
@@ -33,14 +63,15 @@ namespace dts {
       : input(input)
       , first(NULL), second(NULL), matched(false)
     {
-      static regmatch_t empty = { -1, -1 };
-      regmatch_t& self(*this);
+      static regmatch_t empty;
+      empty.rm_so = empty.rm_eo = -1;
+      regmatch_t& self(*this); // cppcheck-suppress constVariableReference
       self = empty;
     }
     csub_match( const char input[], const regmatch_t& m )
       : input(input)
     {
-      regmatch_t& self(*this);
+      regmatch_t& self(*this); // cppcheck-suppress constVariableReference
       self = m;
       matched = rm_so != -1;
       first =   rm_so == -1? NULL : input + rm_so;
@@ -67,7 +98,6 @@ namespace dts {
 #if __cpp_exceptions
         throw std::logic_error(msg);
 #else
-        pattern = NULL;
         cbl_errx("%s", msg);
 #endif
       }
@@ -77,7 +107,7 @@ namespace dts {
     size_t size() const { return nsubexpr; }
     bool ready() const { return pattern != NULL; }
   private:
-    regex( const regex& ) {}
+    regex( const regex& ) = default;
   };
 
   inline bool regex_search( const char input[], const char *eoinput,
@@ -86,24 +116,30 @@ namespace dts {
 #if __cpp_exceptions
       static const char msg[] = "input not NUL-terminated";
       throw std::domain_error( msg );
-#else
-      eoinput = strchr(input, '\0');
 #endif
     }
-    if( eoinput == NULL ) eoinput = strchr(input, '\0');
     auto ncm = re.size();
     cm.resize(ncm);
     std::vector <regmatch_t> cms(ncm);
 
-
     int erc = regexec( &re, input, ncm, cms.data(), 0 );
     if( erc != 0 ) return false;
+#if  __cpp_exceptions
+    // This is not correct at all, but current use depends on current behavior.
+    // The following line is excluded from the GCC build, which is compiled
+    // without __cpp_exceptions.  parse_copy_directive (for one) depends on
+    // regex_search returning true even if the match is beyond eoinput.
+    if( eoinput < cm[0].second ) return false;
+    // Correct behavior would return match only between input and eoinput.
+    // Because regex(3) uses a NUL terminator, it may match text between
+    // eoinput and the NUL.
+#endif
     std::transform( cms.begin(), cms.end(), cm.begin(),
                     [input]( const regmatch_t& m ) {
                       return csub_match( input, m );
                     } );
     return true;
   }
-};
+}
 
 

@@ -1,5 +1,5 @@
 /* Header file for range operator class.
-   Copyright (C) 2017-2025 Free Software Foundation, Inc.
+   Copyright (C) 2017-2026 Free Software Foundation, Inc.
    Contributed by Andrew MacLeod <amacleod@redhat.com>
    and Aldy Hernandez <aldyh@redhat.com>.
 
@@ -86,6 +86,10 @@ public:
 			   const irange &lh,
 			   const irange &rh,
 			   relation_trio = TRIO_VARYING) const;
+  virtual bool fold_range (frange &r, tree type,
+			   const irange &lh,
+			   const frange &rh,
+			   relation_trio = TRIO_VARYING) const;
   virtual bool fold_range (prange &r, tree type,
 			   const prange &lh,
 			   const prange &rh,
@@ -146,7 +150,10 @@ public:
 			  const irange &lhs,
 			  const frange &op2,
 			  relation_trio = TRIO_VARYING) const;
-
+  virtual bool op1_range (irange &r, tree type,
+			  const frange &lhs,
+			  const irange &op2,
+			  relation_trio = TRIO_VARYING) const;
 
   virtual bool op2_range (irange &r, tree type,
 			  const irange &lhs,
@@ -189,6 +196,10 @@ public:
 					  const prange &op1,
 					  const prange &op2,
 					  relation_kind = VREL_VARYING) const;
+  virtual relation_kind lhs_op1_relation (const prange &lhs,
+					  const prange &op1,
+					  const irange &op2,
+					  relation_kind = VREL_VARYING) const;
   virtual relation_kind lhs_op1_relation (const frange &lhs,
 					  const frange &op1,
 					  const frange &op2,
@@ -227,7 +238,7 @@ public:
   virtual bool overflow_free_p (const irange &lh, const irange &rh,
 				relation_trio = TRIO_VARYING) const;
 
-  // Compatability check for operands.
+  // Compatibility check for operands.
   virtual bool operand_check_p (tree, tree, tree) const;
 
 protected:
@@ -293,7 +304,7 @@ public:
   range_op_handler ();
   range_op_handler (unsigned);
   operator bool () const;
-  range_operator *range_op () const;
+  const range_operator *range_op () const;
 
   bool fold_range (vrange &r, tree type,
 		   const vrange &lh,
@@ -327,7 +338,7 @@ protected:
   void discriminator_fail (const vrange &,
 			   const vrange &,
 			   const vrange &) const;
-  range_operator *m_operator;
+  const range_operator *m_operator;
 };
 
 // Cast the range in R to TYPE if R supports TYPE.
@@ -359,7 +370,7 @@ range_cast (value_range &r, tree type)
   varying.set_varying (type);
 
   // Ensure we are in the correct mode for the call to fold.
-  r.set_type (type);
+  r.set_range_class (type);
 
   // Call op_convert, if it fails, the result is varying.
   if (!range_op_handler (CONVERT_EXPR).fold_range (r, type, tmp, varying))
@@ -380,11 +391,12 @@ extern void wi_set_zero_nonzero_bits (tree type,
 // Add them to the end of the tree-code vector, and provide a name for
 // each allowing for easy access when required.
 
-#define OP_WIDEN_MULT_SIGNED	((unsigned) MAX_TREE_CODES)
-#define OP_WIDEN_MULT_UNSIGNED	((unsigned) MAX_TREE_CODES + 1)
-#define OP_WIDEN_PLUS_SIGNED	((unsigned) MAX_TREE_CODES + 2)
-#define OP_WIDEN_PLUS_UNSIGNED	((unsigned) MAX_TREE_CODES + 3)
-#define RANGE_OP_TABLE_SIZE	((unsigned) MAX_TREE_CODES + 4)
+#define OP_WIDEN_MULT_SIGNED		((unsigned) MAX_TREE_CODES)
+#define OP_WIDEN_MULT_UNSIGNED		((unsigned) MAX_TREE_CODES + 1)
+#define OP_WIDEN_MULT_SIGNED_UNSIGNED	((unsigned) MAX_TREE_CODES + 2)
+#define OP_WIDEN_PLUS_SIGNED		((unsigned) MAX_TREE_CODES + 3)
+#define OP_WIDEN_PLUS_UNSIGNED		((unsigned) MAX_TREE_CODES + 4)
+#define RANGE_OP_TABLE_SIZE		((unsigned) MAX_TREE_CODES + 5)
 
 // This implements the range operator tables as local objects.
 
@@ -392,19 +404,19 @@ class range_op_table
 {
 public:
   range_op_table ();
-  inline range_operator *operator[] (unsigned code)
+  inline const range_operator *operator[] (unsigned code) const
     {
       gcc_checking_assert (code < RANGE_OP_TABLE_SIZE);
       return m_range_tree[code];
     }
 protected:
-  inline void set (unsigned code, range_operator &op)
+  inline void set (unsigned code, const range_operator &op)
     {
       gcc_checking_assert (code < RANGE_OP_TABLE_SIZE);
       gcc_checking_assert (m_range_tree[code] == NULL);
       m_range_tree[code] = &op;
     }
-  range_operator *m_range_tree[RANGE_OP_TABLE_SIZE];
+  const range_operator *m_range_tree[RANGE_OP_TABLE_SIZE];
   void initialize_integral_ops ();
   void initialize_pointer_ops ();
   void initialize_float_ops ();

@@ -1,3 +1,5 @@
+/* { dg-additional-options "--param analyzer-max-enodes-per-program-point=50 --param analyzer-supernode-explosion-factor=50" } */
+
 int
 main ()
 {

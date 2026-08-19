@@ -1,5 +1,5 @@
 /* Chains of recurrences.
-   Copyright (C) 2003-2025 Free Software Foundation, Inc.
+   Copyright (C) 2003-2026 Free Software Foundation, Inc.
    Contributed by Sebastian Pop <pop@cri.ensmp.fr>
 
 This file is part of GCC.
@@ -53,7 +53,6 @@ chrec_fold_plus_poly_poly (enum tree_code code,
   tree left, right;
   class loop *loop0 = get_chrec_loop (poly0);
   class loop *loop1 = get_chrec_loop (poly1);
-  tree rtype = code == POINTER_PLUS_EXPR ? chrec_type (poly1) : type;
 
   gcc_assert (poly0);
   gcc_assert (poly1);
@@ -112,6 +111,7 @@ chrec_fold_plus_poly_poly (enum tree_code code,
 
   if (code == PLUS_EXPR || code == POINTER_PLUS_EXPR)
     {
+      tree rtype = code == POINTER_PLUS_EXPR ? chrec_type (poly1) : type;
       left = chrec_fold_plus
 	(type, CHREC_LEFT (poly0), CHREC_LEFT (poly1));
       right = chrec_fold_plus
@@ -127,6 +127,16 @@ chrec_fold_plus_poly_poly (enum tree_code code,
 
   if (chrec_zerop (right))
     return left;
+  /* When we have an evolution in a non-wrapping type and in the process of
+     accumulating CHREC_RIGHT there was overflow this indicates in the
+     association that happened in accumulating the CHRECs clearly involved UB.
+     Avoid this.  When accumulating two CHRECs we basically turn
+     (a + INCR1) + INCR2 into a + (INCR1 + INCR2) which is not always valid.
+     Note this check only catches few invalid cases.  */
+  else if ((INTEGRAL_TYPE_P (type) && ! TYPE_OVERFLOW_WRAPS (type))
+	   && TREE_CODE (right) == INTEGER_CST
+	   && TREE_OVERFLOW (right))
+    return chrec_dont_know;
   else
     return build_polynomial_chrec
       (CHREC_VARIABLE (poly0), left, right);
@@ -1490,7 +1500,7 @@ convert_affine_scev (class loop *loop, tree type,
   new_step = *step;
   if (TYPE_PRECISION (step_type) > TYPE_PRECISION (ct) && TYPE_UNSIGNED (ct))
     {
-      tree signed_ct = build_nonstandard_integer_type (TYPE_PRECISION (ct), 0);
+      tree signed_ct = signed_type_for (ct);
       new_step = chrec_convert (signed_ct, new_step, at_stmt,
                                 use_overflow_semantics);
     }
@@ -1595,6 +1605,31 @@ keep_cast:
 				    fold_convert (utype,
 						  CHREC_LEFT (chrec)),
 				    fold_convert (utype,
+						  CHREC_RIGHT (chrec)));
+      res = chrec_convert_1 (type, res, at_stmt, use_overflow_semantics, from);
+    }
+  /* Similar perform the trick that (unsigned T)(base + step) can be
+     folded to ((unsigned T)x + (unsigned T)step).  */
+  else if (use_overflow_semantics
+	   && TREE_CODE (chrec) == POLYNOMIAL_CHREC
+	   && INTEGRAL_TYPE_P (ct)
+	   && INTEGRAL_TYPE_P (type)
+	   && TYPE_OVERFLOW_UNDEFINED (type)
+	   /* Must be unsigned so we don't introduce any UB.  */
+	   && TYPE_UNSIGNED (type)
+	   /* The outer type must at least as wide than the inner type so we
+		 don't truncate when we fold and must the inner CHREC must be
+		 non-wrapping so we don't change the behavior when folding to
+		 a wider type.  */
+	  && TYPE_PRECISION (type) >= TYPE_PRECISION (ct)
+	  && (!TYPE_UNSIGNED (ct)
+	      || TYPE_PRECISION (type) == TYPE_PRECISION (ct)
+	      || nonwrapping_chrec_p (chrec)))
+    {
+      res = build_polynomial_chrec (CHREC_VARIABLE (chrec),
+				    fold_convert (type,
+						  CHREC_LEFT (chrec)),
+				    fold_convert (type,
 						  CHREC_RIGHT (chrec)));
       res = chrec_convert_1 (type, res, at_stmt, use_overflow_semantics, from);
     }
@@ -1864,7 +1899,7 @@ scev_is_linear_expression (tree scev)
     }
 }
 
-/* Determines whether the expression CHREC contains only interger consts
+/* Determines whether the expression CHREC contains only integer consts
    in the right parts.  */
 
 bool

@@ -1,5 +1,5 @@
 /* Branch prediction routines for the GNU compiler.
-   Copyright (C) 2000-2025 Free Software Foundation, Inc.
+   Copyright (C) 2000-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -245,7 +245,10 @@ unlikely_executed_edge_p (edge e)
 {
   return (e->src->count == profile_count::zero ()
 	  || e->probability == profile_probability::never ())
-	 || (e->flags & (EDGE_EH | EDGE_FAKE));
+	 || (e->flags & EDGE_FAKE)
+	 /* If we read profile and know EH edge is executed, trust it.
+	    Otherwise we consider EH edges never executed.  */
+	 || ((e->flags & EDGE_EH) && !e->probability.reliable_p ());
 }
 
 /* Return true if edge E of function FUN is probably never executed.  */
@@ -830,6 +833,26 @@ unlikely_executed_stmt_p (gimple *stmt)
 {
   if (!is_gimple_call (stmt))
     return false;
+
+  /* Those calls are inserted by optimizers when code is known to be
+     unreachable or undefined.  */
+  if (gimple_call_builtin_p (stmt, BUILT_IN_UNREACHABLE)
+      || gimple_call_builtin_p (stmt, BUILT_IN_UNREACHABLE_TRAP)
+      || gimple_call_builtin_p (stmt, BUILT_IN_TRAP))
+    return true;
+
+  /* Checks below do not need to be fully reliable.  Cold attribute may be
+     misplaced by user and in the presence of comdat we may result in call to
+     function with 0 profile having non-zero profile.
+
+     We later detect that profile is lost and will drop the profile of the
+     comdat.
+
+     So if we think profile count is reliable, do not try to apply these
+     heuristics.  */
+  if (gimple_bb (stmt)->count.reliable_p ()
+      && gimple_bb (stmt)->count.nonzero_p ())
+    return false;
   /* NORETURN attribute alone is not strong enough: exit() may be quite
      likely executed once during program run.  */
   if (gimple_call_fntype (stmt)
@@ -961,7 +984,7 @@ set_even_probabilities (basic_block bb,
 	    if (unlikely_edges != NULL && unlikely_edges->contains (e))
 	      e->probability = profile_probability::very_unlikely ();
 	    else
-	      e->probability = all / scale;
+	      e->probability = (all / scale).guessed ();
 	  }
 	else
 	  e->probability = profile_probability::never ();
@@ -1023,13 +1046,14 @@ combine_predictions_for_insn (rtx_insn *insn, basic_block bb)
 	     + (REG_BR_PROB_BASE - combined_probability)
 	     * (REG_BR_PROB_BASE - probability));
 
-	/* Use FP math to avoid overflows of 32bit integers.  */
+	/* Use int64_t math to avoid overflows of 32bit integers.  */
 	if (d == 0)
 	  /* If one probability is 0% and one 100%, avoid division by zero.  */
 	  combined_probability = REG_BR_PROB_BASE / 2;
 	else
-	  combined_probability = (((double) combined_probability) * probability
-				  * REG_BR_PROB_BASE / d + 0.5);
+	  combined_probability = ((((int64_t) combined_probability)
+				   * probability
+				   * REG_BR_PROB_BASE + (d / 2)) / d);
       }
 
   /* Decide which heuristic to use.  In case we didn't match anything,
@@ -1376,14 +1400,14 @@ combine_predictions_for_bb (basic_block bb, bool dry_run)
 	       + (REG_BR_PROB_BASE - combined_probability)
 	       * (REG_BR_PROB_BASE - probability));
 
-	  /* Use FP math to avoid overflows of 32bit integers.  */
+	  /* Use int64_t math to avoid overflows of 32bit integers.  */
 	  if (d == 0)
 	    /* If one probability is 0% and one 100%, avoid division by zero.  */
 	    combined_probability = REG_BR_PROB_BASE / 2;
 	  else
-	    combined_probability = (((double) combined_probability)
-				    * probability
-		    		    * REG_BR_PROB_BASE / d + 0.5);
+	    combined_probability = ((((int64_t) combined_probability)
+				     * probability
+				     * REG_BR_PROB_BASE + (d / 2)) / d);
 	}
     }
 
@@ -2488,8 +2512,8 @@ expr_expected_value_1 (tree type, tree op0, enum tree_code code,
 	      if (*predictor == predictor2 && p1 == p2)
 		continue;
 	      /* The general case has no precise solution, since we do not
-		 know probabilities of incomming edges, yet.
-		 Still if value is predicted over all incomming edges, we
+		 know probabilities of incoming edges, yet.
+		 Still if value is predicted over all incoming edges, we
 		 can hope it will be indeed the case.  Conservatively
 		 downgrade prediction quality (so first match merging is not
 		 performed) and take least successful prediction.  */
@@ -2694,8 +2718,8 @@ expr_expected_value_1 (tree type, tree op0, enum tree_code code,
 	       example:
 	          op0 * op1
 	       If op0 is 0 with probability p, then we will ignore the
-	       posibility that op0 != 0 and op1 == 0.  It does not seem to be
-	       worthwhile to downgrade prediciton quality for this.  */
+	       possibility that op0 != 0 and op1 == 0.  It does not seem to be
+	       worthwhile to downgrade prediction quality for this.  */
 	    return res;
 	  if (!nop0)
 	    nop0 = op0;
@@ -2968,7 +2992,7 @@ is_exit_with_zero_arg (const gimple *stmt)
       && !gimple_call_builtin_p (stmt, BUILT_IN__EXIT2))
     return false;
 
-  /* Argument is an interger zero. */
+  /* Argument is an integer zero. */
   return integer_zerop (gimple_call_arg (stmt, 0));
 }
 
@@ -3269,7 +3293,8 @@ tree_estimate_probability (bool dry_run)
   calculate_dominance_info (CDI_POST_DOMINATORS);
   /* Decide which edges are known to be unlikely.  This improves later
      branch prediction. */
-  determine_unlikely_bbs ();
+  if (!dry_run)
+    determine_unlikely_bbs ();
 
   bb_predictions = new hash_map<const_basic_block, edge_prediction *>;
   ssa_expected_value = new hash_map<int_hash<unsigned, 0>, expected_value>;
@@ -3397,7 +3422,7 @@ predict_paths_for_bb (basic_block cur, basic_block bb,
 	 using predictor.  Otherwise we need to look for paths
 	 leading to e->src.
 
-	 The second may lead to infinite loop in the case we are predicitng
+	 The second may lead to infinite loop in the case we are predicting
 	 regions that are only reachable by abnormal edges.  We simply
 	 prevent visiting given BB twice.  */
       if (found)
@@ -3825,7 +3850,7 @@ update_max_bb_count (void)
   basic_block bb;
 
   FOR_BB_BETWEEN (bb, ENTRY_BLOCK_PTR_FOR_FN (cfun), NULL, next_bb)
-    true_count_max = true_count_max.max (bb->count);
+    true_count_max = profile_count::max_prefer_initialized (true_count_max, bb->count);
 
   cfun->cfg->count_max = true_count_max;
 
@@ -4099,7 +4124,7 @@ estimate_bb_frequencies ()
 
   /* Scaling frequencies up to maximal profile count may result in
      frequent overflows especially when inlining loops.
-     Small scaling results in unnecesary precision loss.  Stay in
+     Small scaling results in unnecessary precision loss.  Stay in
      the half of the (exponential) range.  */
   freq_max = (sreal (1) << (profile_count::n_bits / 2)) / freq_max;
   if (freq_max < 16)
@@ -4138,7 +4163,9 @@ estimate_bb_frequencies ()
 	 executed, then preserve this info.  */
       if (!(bb->count == profile_count::zero ()))
 	bb->count = count.guessed_local ().combine_with_ipa_count (ipa_count);
-      cfun->cfg->count_max = cfun->cfg->count_max.max (bb->count);
+      cfun->cfg->count_max
+	= profile_count::max_prefer_initialized (cfun->cfg->count_max,
+						 bb->count);
     }
 
   free_aux_for_blocks ();
@@ -4444,12 +4471,17 @@ rebuild_frequencies (void)
   bool inconsistency_found = false;
   bool uninitialized_probablity_found = false;
   bool uninitialized_count_found = false;
+  bool feedback_found = false;
 
   cfun->cfg->count_max = profile_count::uninitialized ();
   FOR_BB_BETWEEN (bb, ENTRY_BLOCK_PTR_FOR_FN (cfun), NULL, next_bb)
     {
-      cfun->cfg->count_max = cfun->cfg->count_max.max (bb->count);
-      /* Uninitialized count may be result of inlining or an omision in an
+      cfun->cfg->count_max
+	      = profile_count::max_prefer_initialized (cfun->cfg->count_max,
+						       bb->count);
+      if (bb->count.nonzero_p () && bb->count.quality () >= AFDO)
+	feedback_found = true;
+      /* Uninitialized count may be result of inlining or an omission in an
          optimization pass.  */
       if (!bb->count.initialized_p ())
 	{
@@ -4469,7 +4501,7 @@ rebuild_frequencies (void)
 	    {
 	      sum += e->count ();
 	      /* Uninitialized probability may be result of inlining or an
-	         omision in an optimization pass.  */
+	         omission in an optimization pass.  */
 	      if (!e->probability.initialized_p ())
 	        {
 		  if (dump_file)
@@ -4482,7 +4514,7 @@ rebuild_frequencies (void)
 	    {
 	      if (dump_file)
 		fprintf (dump_file,
-			 "BB %i has invalid sum of incomming counts\n",
+			 "BB %i has invalid sum of incoming counts\n",
 			 bb->index);
 	      inconsistency_found = true;
 	    }
@@ -4494,12 +4526,15 @@ rebuild_frequencies (void)
       && (!uninitialized_count_found || uninitialized_probablity_found)
       && !cfun->cfg->count_max.very_large_p ())
     {
+      /* Propagating zero counts should be safe and may
+	 help hot/cold splitting.  */
+      determine_unlikely_bbs ();
       if (dump_file)
 	fprintf (dump_file, "Profile is consistent\n");
       return;
     }
   /* Do not re-propagate if we have profile feedback.  Even if the profile is
-     inconsistent from previous transofrmations, it is probably more realistic
+     inconsistent from previous transformations, it is probably more realistic
      for hot part of the program than result of repropagating.
 
      Consider example where we previously has
@@ -4514,11 +4549,13 @@ rebuild_frequencies (void)
      important copy is not the one we look on.
 
      Propagating from probabilities would make profile look consistent, but
-     because probablities after code duplication may not be representative
+     because probabilities after code duplication may not be representative
      for a given run, we would only propagate the error further.  */
-  if (ENTRY_BLOCK_PTR_FOR_FN (cfun)->count.ipa ().nonzero_p ()
-      && !uninitialized_count_found)
+  if (feedback_found && !uninitialized_count_found)
     {
+      /* Propagating zero counts should be safe and may
+	 help hot/cold splitting.  */
+      determine_unlikely_bbs ();
       if (dump_file)
 	fprintf (dump_file,
 	    "Profile is inconsistent but read from profile feedback;"
@@ -4589,7 +4626,7 @@ make_pass_rebuild_frequencies (gcc::context *ctxt)
   return new pass_rebuild_frequencies (ctxt);
 }
 
-/* Perform a dry run of the branch prediction pass and report comparsion of
+/* Perform a dry run of the branch prediction pass and report comparison of
    the predicted and real profile into the dump file.  */
 
 void

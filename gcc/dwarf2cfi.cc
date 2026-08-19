@@ -1,5 +1,5 @@
 /* Dwarf2 Call Frame Information helper routines.
-   Copyright (C) 1992-2025 Free Software Foundation, Inc.
+   Copyright (C) 1992-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -2076,7 +2076,7 @@ dwarf2out_frame_debug_expr (rtx expr)
 
           /* Rule 18: If stack is aligned, we will use FP as a
 	     reference to represent the address of the stored
-	     regiser.  */
+	     register.  */
           if (fde
               && fde->stack_realign
 	      && REG_P (src)

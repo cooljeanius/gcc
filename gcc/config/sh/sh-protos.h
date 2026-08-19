@@ -1,5 +1,5 @@
 /* Definitions of target machine for GNU compiler for Renesas / SuperH SH.
-   Copyright (C) 1993-2025 Free Software Foundation, Inc.
+   Copyright (C) 1993-2026 Free Software Foundation, Inc.
    Contributed by Steve Chamberlain (sac@cygnus.com).
    Improved by Jim Wilson (wilson@cygnus.com).
 
@@ -40,7 +40,6 @@ extern rtx sh_fsca_sf2int (void);
 extern rtx sh_fsca_int2sf (void);
 
 /* Declare functions defined in sh.cc and used in templates.  */
-extern bool sh_lra_p (void);
 
 extern const char *output_branch (int, rtx_insn *, rtx *);
 extern const char *output_ieee_ccmpeq (rtx_insn *, rtx *);
@@ -56,7 +55,6 @@ extern int sh_loop_align (rtx_insn *);
 extern bool fp_zero_operand (rtx);
 extern bool fp_one_operand (rtx);
 extern bool sh_legitimate_index_p (machine_mode, rtx, bool, bool);
-extern bool sh_legitimize_reload_address (rtx *, machine_mode, int, int);
 extern rtx legitimize_pic_address (rtx, machine_mode, rtx);
 extern bool nonpic_symbol_mentioned_p (rtx);
 extern void output_pic_addr_const (FILE *, rtx);
@@ -102,7 +100,8 @@ extern rtx sh_find_equiv_gbr_addr (rtx_insn* cur_insn, rtx mem);
 extern int sh_eval_treg_value (rtx op);
 extern HOST_WIDE_INT sh_disp_addr_displacement (rtx mem_op);
 extern int sh_max_mov_insn_displacement (machine_mode mode, bool consider_sh2a);
-extern bool sh_movsf_ie_ra_split_p (rtx, rtx, rtx);
+extern bool sh_movsf_ie_y_split_p (rtx, rtx);
+extern bool sh_movsf_ie_subreg_multiword_p (rtx, rtx);
 extern void sh_expand_sym_label2reg (rtx, rtx, rtx, bool);
 
 /* Result value of sh_find_set_of_reg.  */
@@ -261,6 +260,7 @@ extern rtx_insn* sh_peephole_emit_move_insn (rtx dst, rtx src);
 
 extern bool sh_in_recog_treg_set_expr (void);
 extern bool sh_recog_treg_set_expr (rtx op, machine_mode mode);
+extern bool sh_recog_treg_set_expr_not_01 (rtx op, machine_mode mode);
 
 /* Result value of sh_split_treg_set_expr.  Contains the first insn emitted
    and the optional trailing nott insn.  */
