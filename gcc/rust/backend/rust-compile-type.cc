@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2025 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -17,11 +17,13 @@
 // <http://www.gnu.org/licenses/>.
 
 #include "rust-compile-type.h"
-#include "rust-compile-expr.h"
 #include "rust-constexpr.h"
-#include "rust-gcc.h"
+#include "rust-compile-base.h"
+#include "rust-type-util.h"
 
+#include "rust-tyty.h"
 #include "tree.h"
+#include "fold-const.h"
 #include "stor-layout.h"
 
 namespace Rust {
@@ -81,13 +83,22 @@ TyTyResolveCompile::get_implicit_enumeral_node_type (TyTy::BaseType *repr)
 }
 
 tree
-TyTyResolveCompile::get_unit_type ()
+TyTyResolveCompile::get_unit_type (Context *ctx)
 {
   static tree unit_type;
   if (unit_type == nullptr)
     {
+      auto cn = ctx->get_mappings ().get_current_crate ();
+      auto &c = ctx->get_mappings ().get_ast_crate (cn);
+      location_t locus = BUILTINS_LOCATION;
+      if (c.items.size () > 0)
+	{
+	  auto &item = c.items[0];
+	  locus = item->get_locus ();
+	}
+
       auto unit_type_node = Backend::struct_type ({});
-      unit_type = Backend::named_type ("()", unit_type_node, BUILTINS_LOCATION);
+      unit_type = Backend::named_type ("()", unit_type_node, locus);
     }
   return unit_type;
 }
@@ -112,6 +123,13 @@ TyTyResolveCompile::visit (const TyTy::InferType &type)
 
   if (orig == lookup)
     {
+      TyTy::BaseType *def = nullptr;
+      if (type.default_type (&def))
+	{
+	  translated = TyTyResolveCompile::compile (ctx, def);
+	  return;
+	}
+
       translated = error_mark_node;
       return;
     }
@@ -120,7 +138,31 @@ TyTyResolveCompile::visit (const TyTy::InferType &type)
 }
 
 void
-TyTyResolveCompile::visit (const TyTy::ParamType &)
+TyTyResolveCompile::visit (const TyTy::ParamType &type)
+{
+  translated = error_mark_node;
+}
+
+void
+TyTyResolveCompile::visit (const TyTy::ConstParamType &type)
+{
+  translated = error_mark_node;
+}
+
+void
+TyTyResolveCompile::visit (const TyTy::ConstValueType &type)
+{
+  translated = error_mark_node;
+}
+
+void
+TyTyResolveCompile::visit (const TyTy::ConstInferType &type)
+{
+  translated = error_mark_node;
+}
+
+void
+TyTyResolveCompile::visit (const TyTy::ConstErrorType &type)
 {
   translated = error_mark_node;
 }
@@ -128,7 +170,19 @@ TyTyResolveCompile::visit (const TyTy::ParamType &)
 void
 TyTyResolveCompile::visit (const TyTy::ProjectionType &type)
 {
-  translated = error_mark_node;
+  // workaround to get around const here
+  TyTy::ProjectionType *projection
+    = static_cast<TyTy::ProjectionType *> (type.clone ());
+  auto normalized
+    = Resolver::normalize_projection (projection, BUILTINS_LOCATION, false,
+				      false);
+  if (normalized == projection)
+    {
+      translated = error_mark_node;
+      return;
+    }
+
+  translated = TyTyResolveCompile::compile (ctx, normalized, false);
 }
 
 void
@@ -164,8 +218,8 @@ TyTyResolveCompile::visit (const TyTy::ClosureType &type)
       // this should be based on the closure move-ability
       tree decl_type = TyTyResolveCompile::compile (ctx, lookup);
       tree capture_type = build_reference_type (decl_type);
-      fields.push_back (Backend::typed_identifier (mappings_name, capture_type,
-						   type.get_ident ().locus));
+      fields.emplace_back (mappings_name, capture_type,
+			   type.get_ident ().locus);
     }
 
   tree type_record = Backend::struct_type (fields);
@@ -180,7 +234,7 @@ TyTyResolveCompile::visit (const TyTy::ClosureType &type)
 void
 TyTyResolveCompile::visit (const TyTy::FnType &type)
 {
-  Backend::typed_identifier receiver;
+  Backend::typed_identifier receiver ("", NULL_TREE, UNKNOWN_LOCATION);
   std::vector<Backend::typed_identifier> parameters;
   std::vector<Backend::typed_identifier> results;
 
@@ -195,8 +249,7 @@ TyTyResolveCompile::visit (const TyTy::FnType &type)
       auto ret = TyTyResolveCompile::compile (ctx, hir_type, trait_object_mode);
       location_t return_type_locus
 	= ctx->get_mappings ().lookup_location (hir_type->get_ref ());
-      results.push_back (
-	Backend::typed_identifier ("_", ret, return_type_locus));
+      results.emplace_back ("_", ret, return_type_locus);
     }
 
   for (auto &param_pair : type.get_params ())
@@ -205,11 +258,10 @@ TyTyResolveCompile::visit (const TyTy::FnType &type)
       auto compiled_param_type
 	= TyTyResolveCompile::compile (ctx, param_tyty, trait_object_mode);
 
-      auto compiled_param = Backend::typed_identifier (
-	param_pair.get_pattern ().as_string (), compiled_param_type,
-	ctx->get_mappings ().lookup_location (param_tyty->get_ref ()));
-
-      parameters.push_back (compiled_param);
+      parameters.emplace_back (param_pair.get_pattern ().to_string (),
+			       compiled_param_type,
+			       ctx->get_mappings ().lookup_location (
+				 param_tyty->get_ref ()));
     }
 
   if (!type.is_variadic ())
@@ -243,7 +295,48 @@ void
 TyTyResolveCompile::visit (const TyTy::ADTType &type)
 {
   tree type_record = error_mark_node;
-  if (!type.is_enum ())
+
+  TyTy::ADTType::ReprOptions repr = type.get_repr_options ();
+  if (repr.repr_kind == TyTy::ADTType::ReprKind::TRANSPARENT)
+    {
+      rust_assert (type.number_of_variants () == 1);
+      TyTy::VariantDef &variant = *type.get_variants ().at (0);
+
+      if (variant.num_fields () == 0)
+	{
+	  // 0-field transparent repr
+	  // Rustonomicon states that transparent structs should have a single
+	  // non-zero-sized field, but rustc compiles one with 0 fields happily
+	  // without errors, so not sure what's the correct treatment.
+	  //
+	  // For now, treat it as a unit struct
+	  type_record = Backend::struct_type ({});
+	}
+      else if (variant.num_fields () == 1)
+	{
+	  // single field transparent repr
+	  const TyTy::StructFieldType *field = variant.get_field_at_index (0);
+	  type_record
+	    = TyTyResolveCompile::compile (ctx, field->get_field_type ());
+	}
+      else
+	{
+	  // more than one field - typechecking already ensures there's only one
+	  // non-zero-sized field, just compile accessor for that
+	  // non-zero-sized.
+	  for (size_t i = 0; i < variant.num_fields (); i++)
+	    {
+	      auto field_ty = variant.get_field_at_index (i)->get_field_type ();
+	      if (!field_ty->is_zero_sized ())
+		{
+		  type_record = TyTyResolveCompile::compile (ctx, field_ty);
+		}
+	    }
+	}
+    }
+
+  // compilation of non-transparent ADTs below
+  else if (!type.is_enum ())
     {
       rust_assert (type.number_of_variants () == 1);
 
@@ -255,10 +348,9 @@ TyTyResolveCompile::visit (const TyTy::ADTType &type)
 	  tree compiled_field_ty
 	    = TyTyResolveCompile::compile (ctx, field->get_field_type ());
 
-	  Backend::typed_identifier f (field->get_name (), compiled_field_ty,
-				       ctx->get_mappings ().lookup_location (
-					 type.get_ty_ref ()));
-	  fields.push_back (std::move (f));
+	  fields.emplace_back (field->get_name (), compiled_field_ty,
+			       ctx->get_mappings ().lookup_location (
+				 type.get_ty_ref ()));
 	}
 
       type_record = type.is_union () ? Backend::union_type (fields, false)
@@ -335,10 +427,9 @@ TyTyResolveCompile::visit (const TyTy::ADTType &type)
 		  == TyTy::VariantDef::VariantType::TUPLE)
 		field_name = "__" + field->get_name ();
 
-	      Backend::typed_identifier f (
-		field_name, compiled_field_ty,
-		ctx->get_mappings ().lookup_location (type.get_ty_ref ()));
-	      fields.push_back (std::move (f));
+	      fields.emplace_back (field_name, compiled_field_ty,
+				   ctx->get_mappings ().lookup_location (
+				     type.get_ty_ref ()));
 	    }
 
 	  tree variant_record = Backend::struct_type (fields);
@@ -360,10 +451,9 @@ TyTyResolveCompile::visit (const TyTy::ADTType &type)
 	  TyTy::VariantDef *variant = type.get_variants ().at (i++);
 	  std::string implicit_variant_name = variant->get_identifier ();
 
-	  Backend::typed_identifier f (implicit_variant_name, variant_record,
-				       ctx->get_mappings ().lookup_location (
-					 type.get_ty_ref ()));
-	  enum_fields.push_back (std::move (f));
+	  enum_fields.emplace_back (implicit_variant_name, variant_record,
+				    ctx->get_mappings ().lookup_location (
+				      type.get_ty_ref ()));
 	}
 
       //
@@ -393,22 +483,24 @@ TyTyResolveCompile::visit (const TyTy::ADTType &type)
   // TODO: "packed" should only narrow type alignment and "align" should only
   // widen it. Do we need to check and enforce this here, or is it taken care of
   // later on in the gcc middle-end?
-  TyTy::ADTType::ReprOptions repr = type.get_repr_options ();
-  if (repr.pack)
+  if (repr.repr_kind != TyTy::ADTType::ReprKind::TRANSPARENT)
     {
-      TYPE_PACKED (type_record) = 1;
-      if (repr.pack > 1)
+      if (repr.pack)
 	{
-	  SET_TYPE_ALIGN (type_record, repr.pack * 8);
+	  TYPE_PACKED (type_record) = 1;
+	  if (repr.pack > 1)
+	    {
+	      SET_TYPE_ALIGN (type_record, repr.pack * 8);
+	      TYPE_USER_ALIGN (type_record) = 1;
+	    }
+	}
+      else if (repr.align)
+	{
+	  SET_TYPE_ALIGN (type_record, repr.align * 8);
 	  TYPE_USER_ALIGN (type_record) = 1;
 	}
+      layout_type (type_record);
     }
-  else if (repr.align)
-    {
-      SET_TYPE_ALIGN (type_record, repr.align * 8);
-      TYPE_USER_ALIGN (type_record) = 1;
-    }
-  layout_type (type_record);
 
   std::string named_struct_str
     = type.get_ident ().path.get () + type.subst_as_string ();
@@ -421,7 +513,7 @@ TyTyResolveCompile::visit (const TyTy::TupleType &type)
 {
   if (type.num_fields () == 0)
     {
-      translated = get_unit_type ();
+      translated = get_unit_type (ctx);
       return;
     }
 
@@ -438,14 +530,13 @@ TyTyResolveCompile::visit (const TyTy::TupleType &type)
       // this, rather than simply emitting the integer, is that this
       // approach makes it simpler to use a C-only debugger, or
       // GDB's C mode, when debugging Rust.
-      Backend::typed_identifier f ("__" + std::to_string (i), compiled_field_ty,
-				   ctx->get_mappings ().lookup_location (
-				     type.get_ty_ref ()));
-      fields.push_back (std::move (f));
+      fields.emplace_back ("__" + std::to_string (i), compiled_field_ty,
+			   ctx->get_mappings ().lookup_location (
+			     type.get_ty_ref ()));
     }
 
   tree struct_type_record = Backend::struct_type (fields);
-  translated = Backend::named_type (type.as_string (), struct_type_record,
+  translated = Backend::named_type (type.get_name (), struct_type_record,
 				    type.get_ident ().locus);
 }
 
@@ -454,14 +545,29 @@ TyTyResolveCompile::visit (const TyTy::ArrayType &type)
 {
   tree element_type
     = TyTyResolveCompile::compile (ctx, type.get_element_type ());
+  auto const_capacity = type.get_capacity ();
 
-  ctx->push_const_context ();
-  tree capacity_expr = CompileExpr::Compile (type.get_capacity_expr (), ctx);
-  ctx->pop_const_context ();
+  // Check if capacity is a const type
+  if (const_capacity->get_kind () != TyTy::TypeKind::CONST)
+    {
+      rust_error_at (type.get_locus (), "array capacity is not a const type");
+      translated = error_mark_node;
+      return;
+    }
 
-  tree folded_capacity_expr = fold_expr (capacity_expr);
+  auto *capacity_const = const_capacity->as_const_type ();
 
-  translated = Backend::array_type (element_type, folded_capacity_expr);
+  rust_assert (capacity_const->const_kind ()
+	       == TyTy::BaseConstType::ConstKind::Value);
+  auto &capacity_value = *static_cast<TyTy::ConstValueType *> (capacity_const);
+  auto folded_capacity_expr = capacity_value.get_value ();
+
+  // build_index_type takes the maximum index, which is one less than
+  // the length.
+  tree index_type_tree = build_index_type (
+    fold_build2 (MINUS_EXPR, sizetype, folded_capacity_expr, size_one_node));
+
+  translated = build_array_type (element_type, index_type_tree, false);
 }
 
 void
@@ -601,6 +707,7 @@ TyTyResolveCompile::visit (const TyTy::ReferenceType &type)
   const TyTy::SliceType *slice = nullptr;
   const TyTy::StrType *str = nullptr;
   const TyTy::DynamicObjectType *dyn = nullptr;
+  const TyTy::ADTType *adt = nullptr;
   if (type.is_dyn_slice_type (&slice))
     {
       tree type_record = create_slice_type_record (*slice);
@@ -635,6 +742,28 @@ TyTyResolveCompile::visit (const TyTy::ReferenceType &type)
 
       return;
     }
+  // Check for CStr, create a specific record for it
+  else if (type.is_dyn_cstr_type (&adt))
+    {
+      // CStr in core crate is defined as the following:
+      //
+      // #[repr(transparent)]
+      // pub struct CStr {
+      //    inner: [u8]
+      // }
+      //
+      // Reuse the c_char (u8) slice fat-pointer layout
+      TyTy::BaseType *u8 = nullptr;
+      ctx->get_tyctx ()->lookup_builtin ("u8", &u8);
+      // Create a synthetic SliceType over u8 and use that record layout
+      TyTy::SliceType synthetic_slice (adt->get_ref (), adt->get_ident ().locus,
+				       TyTy::TyVar (u8->get_ref ()));
+      tree type_record = create_slice_type_record (synthetic_slice);
+      translated
+	= Backend::named_type ("&CStr", type_record, adt->get_ident ().locus);
+
+      return;
+    }
 
   tree base_compiled_type
     = TyTyResolveCompile::compile (ctx, type.get_base (), trait_object_mode);
@@ -644,7 +773,17 @@ TyTyResolveCompile::visit (const TyTy::ReferenceType &type)
     }
   else
     {
-      auto base = Backend::immutable_type (base_compiled_type);
+      // https://doc.rust-lang.org/core/cell/struct.UnsafeCell.html
+      // If you have a reference &T, then normally in Rust the compiler performs
+      // optimizations based on the knowledge that &T points to immutable data.
+      // Mutating that data, for example through an alias or by transmuting a &T
+      // into a &mut T, is considered undefined behavior. UnsafeCell<T> opts-out
+      // of the immutability guarantee for &T: a shared reference &UnsafeCell<T>
+      // may point to data that is being mutated. This is called “interior
+      // mutability”.
+      auto base = type.get_base ()->contains_unsafe_cell ()
+		    ? base_compiled_type
+		    : Backend::immutable_type (base_compiled_type);
       translated = Backend::reference_type (base);
     }
 }
@@ -714,7 +853,7 @@ TyTyResolveCompile::visit (const TyTy::StrType &type)
 void
 TyTyResolveCompile::visit (const TyTy::NeverType &)
 {
-  translated = get_unit_type ();
+  translated = get_unit_type (ctx);
 }
 
 void
@@ -734,30 +873,38 @@ TyTyResolveCompile::visit (const TyTy::DynamicObjectType &type)
 void
 TyTyResolveCompile::visit (const TyTy::OpaqueType &type)
 {
-  translated = error_mark_node;
+  rust_assert (type.can_resolve ());
+  auto underlying = type.resolve ();
+  translated = TyTyResolveCompile::compile (ctx, underlying, trait_object_mode);
 }
 
 tree
 TyTyResolveCompile::create_dyn_obj_record (const TyTy::DynamicObjectType &type)
 {
+  location_t locus = ctx->get_mappings ().lookup_location (type.get_ty_ref ());
   // create implicit struct
-  auto items = type.get_object_items ();
   std::vector<Backend::typed_identifier> fields;
 
-  tree uint = Backend::integer_type (true, Backend::get_pointer_size ());
-  tree uintptr_ty = build_pointer_type (uint);
+  tree voidptr_ty = build_pointer_type (void_type_node);
 
-  Backend::typed_identifier f ("pointer", uintptr_ty,
-			       ctx->get_mappings ().lookup_location (
-				 type.get_ty_ref ()));
-  fields.push_back (std::move (f));
+  fields.emplace_back ("data", voidptr_ty, locus);
 
-  tree vtable_size = build_int_cst (size_type_node, items.size ());
-  tree vtable_type = Backend::array_type (uintptr_ty, vtable_size);
-  Backend::typed_identifier vtf ("vtable", vtable_type,
-				 ctx->get_mappings ().lookup_location (
-				   type.get_ty_ref ()));
-  fields.push_back (std::move (vtf));
+  std::vector<Backend::typed_identifier> vtable_fields;
+
+  // drop_in_place is not implemented yet!
+  vtable_fields.emplace_back ("__drop_in_place", voidptr_ty, locus);
+  vtable_fields.emplace_back ("__size", size_type_node, locus);
+  vtable_fields.emplace_back ("__align", size_type_node, locus);
+
+  size_t items_size = type.get_object_items ().size ();
+  for (size_t method_idx = 0; method_idx < items_size; method_idx++)
+    vtable_fields.emplace_back ("__method_" + std::to_string (method_idx),
+				voidptr_ty, locus);
+
+  tree vtable_record = Backend::struct_type (vtable_fields);
+  tree vtable_ptr_ty = build_pointer_type (vtable_record);
+
+  fields.emplace_back ("vtable", vtable_ptr_ty, locus);
 
   tree record = Backend::struct_type (fields);
   RS_DST_FLAG (record) = 1;

@@ -1,6 +1,6 @@
 // <numbers> -*- C++ -*-
 
-// Copyright (C) 2019-2025 Free Software Foundation, Inc.
+// Copyright (C) 2019-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -222,7 +222,7 @@ __glibcxx_numbers (_Float64, F64);
 __glibcxx_numbers (_Float128, F128);
 #endif
 
-#ifdef __STDCPP_BFLOAT128_T__
+#ifdef __STDCPP_BFLOAT16_T__
 __glibcxx_numbers (__gnu_cxx::__bfloat16_t, BF16);
 #endif
 

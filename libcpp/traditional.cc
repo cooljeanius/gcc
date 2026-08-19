@@ -1,5 +1,5 @@
 /* CPP Library - traditional lexical analysis and macro expansion.
-   Copyright (C) 2002-2025 Free Software Foundation, Inc.
+   Copyright (C) 2002-2026 Free Software Foundation, Inc.
    Contributed by Neil Booth, May 2002
 
 This program is free software; you can redistribute it and/or modify it
@@ -120,7 +120,7 @@ check_output_buffer (cpp_reader *pfile, size_t n)
 /* Skip a C-style block comment in a macro as a result of -CC.
    PFILE->buffer->cur points to the initial asterisk of the comment,
    change it to point to after the '*' and '/' characters that terminate it.
-   Return true if the macro has not been termined, in that case set
+   Return true if the macro has not been terminated, in that case set
    PFILE->buffer->cur to the end of the buffer.  */
 static bool
 skip_macro_block_comment (cpp_reader *pfile)

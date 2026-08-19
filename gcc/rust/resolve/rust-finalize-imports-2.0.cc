@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2024 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -21,108 +21,54 @@
 #include "rust-hir-map.h"
 #include "rust-name-resolution-context.h"
 #include "rust-rib.h"
+#include "rust-system.h"
 #include "rust-toplevel-name-resolver-2.0.h"
 
 namespace Rust {
 namespace Resolver2_0 {
 
 void
-GlobbingVisitor::go (AST::Module *module)
+GlobbingVisitor::go (AST::GlobContainer *container)
 {
-  for (auto &i : module->get_items ())
-    visit (i);
-}
-
-void
-GlobbingVisitor::visit (AST::Module &module)
-{
-  if (module.get_visibility ().is_public ())
-    ctx.insert_globbed (module.get_name (), module.get_node_id (),
-			Namespace::Types);
-}
-
-void
-GlobbingVisitor::visit (AST::MacroRulesDefinition &macro)
-{
-  if (macro.get_visibility ().is_public ())
-    ctx.insert_globbed (macro.get_rule_name (), macro.get_node_id (),
-			Namespace::Macros);
-}
-
-void
-GlobbingVisitor::visit (AST::Function &function)
-{
-  if (function.get_visibility ().is_public ())
-    ctx.insert_globbed (function.get_function_name (), function.get_node_id (),
-			Namespace::Values);
-}
-
-void
-GlobbingVisitor::visit (AST::StaticItem &static_item)
-{
-  if (static_item.get_visibility ().is_public ())
-    ctx.insert_globbed (static_item.get_identifier (),
-			static_item.get_node_id (), Namespace::Values);
-}
-
-void
-GlobbingVisitor::visit (AST::StructStruct &struct_item)
-{
-  if (struct_item.get_visibility ().is_public ())
+  switch (container->get_glob_container_kind ())
     {
-      ctx.insert_globbed (struct_item.get_identifier (),
-			  struct_item.get_node_id (), Namespace::Types);
-      if (struct_item.is_unit_struct ())
-	ctx.insert_globbed (struct_item.get_identifier (),
-			    struct_item.get_node_id (), Namespace::Values);
+    case AST::GlobContainer::Kind::Module:
+      visit_container (static_cast<AST::Module &> (*container).get_node_id ());
+      break;
+    case AST::GlobContainer::Kind::Crate:
+      visit_container (static_cast<AST::Crate &> (*container).get_node_id ());
+      break;
+    case AST::GlobContainer::Kind::Enum:
+      visit_container (static_cast<AST::Enum &> (*container).get_node_id ());
+      break;
+    default:
+      rust_unreachable ();
     }
 }
 
+template <typename T>
 void
-GlobbingVisitor::visit (AST::TupleStruct &tuple_struct)
+GlobbingVisitor::visit_container (T &stack, NodeId nodeid)
 {
-  if (tuple_struct.get_visibility ().is_public ())
-    {
-      ctx.insert_globbed (tuple_struct.get_identifier (),
-			  tuple_struct.get_node_id (), Namespace::Types);
-
-      ctx.insert_globbed (tuple_struct.get_identifier (),
-			  tuple_struct.get_node_id (), Namespace::Values);
-    }
+  auto rib = stack.dfs_rib (stack.root, nodeid);
+  if (rib.has_value ())
+    glob_definitions (stack.peek (), rib.value ());
 }
 
 void
-GlobbingVisitor::visit (AST::Enum &enum_item)
+GlobbingVisitor::visit_container (NodeId nodeid)
 {
-  if (enum_item.get_visibility ().is_public ())
-    ctx.insert_globbed (enum_item.get_identifier (), enum_item.get_node_id (),
-			Namespace::Types);
+  visit_container (ctx.values, nodeid);
+  visit_container (ctx.types, nodeid);
+  visit_container (ctx.macros, nodeid);
+  visit_container (ctx.labels, nodeid);
 }
 
 void
-GlobbingVisitor::visit (AST::Union &union_item)
+GlobbingVisitor::glob_definitions (Rib &dst, Rib &src)
 {
-  if (union_item.get_visibility ().is_public ())
-    ctx.insert_globbed (union_item.get_identifier (), union_item.get_node_id (),
-			Namespace::Values);
-}
-
-void
-GlobbingVisitor::visit (AST::ConstantItem &const_item)
-{
-  if (const_item.get_visibility ().is_public ())
-    ctx.insert_globbed (const_item.get_identifier (), const_item.get_node_id (),
-			Namespace::Values);
-}
-
-void
-GlobbingVisitor::visit (AST::ExternCrate &crate)
-{}
-
-void
-GlobbingVisitor::visit (AST::UseDeclaration &use)
-{
-  // Handle cycles ?
+  for (auto &ent : src.get_values ())
+    dirty |= dst.insert_globbed (ent.first, ent.second);
 }
 
 } // namespace Resolver2_0

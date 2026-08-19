@@ -1,5 +1,5 @@
 /* function_base declaration for RISC-V 'V' Extension for GNU compiler.
-   Copyright (C) 2022-2025 Free Software Foundation, Inc.
+   Copyright (C) 2022-2026 Free Software Foundation, Inc.
    Contributed by Ju-Zhe Zhong (juzhe.zhong@rivai.ai), RiVAI Technologies Ltd.
 
    This file is part of GCC.
@@ -352,6 +352,12 @@ extern const function_base *const vfwcvtbf16_f;
 /* Zvfbfwma */
 extern const function_base *const vfwmaccbf16;
 extern const function_base *const vfwmaccbf16_frm;
+/* Zvabd */
+extern const function_base *const vabs;
+extern const function_base *const vabd;
+extern const function_base *const vabdu;
+extern const function_base *const vwabda;
+extern const function_base *const vwabdau;
 }
 
 } // end namespace riscv_vector

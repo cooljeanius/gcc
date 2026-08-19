@@ -2,7 +2,7 @@
    - prototype declarations for operand predicates (tm-preds.h)
    - function definitions of operand predicates, if defined new-style
      (insn-preds.cc)
-   Copyright (C) 2001-2025 Free Software Foundation, Inc.
+   Copyright (C) 2001-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -678,6 +678,9 @@ public:
   const char *regclass;  /* for register constraints */
   rtx exp;               /* for other constraints */
   const char *filter;    /* the register filter condition, or null if none */
+  /* The operand a dependent filter depends on (references), or -1 if this
+     constraint has no dependent filter.  */
+  int dependent_filter_ref_opno;
   unsigned int is_register	: 1;
   unsigned int is_const_int	: 1;
   unsigned int is_const_dbl	: 1;
@@ -689,6 +692,10 @@ public:
   unsigned int maybe_allows_reg : 1;
   unsigned int maybe_allows_mem : 1;
 };
+
+/* List of dependent filters.  A dependent filter ID is an index of this
+   list.  */
+static vec<class constraint_data *> dependent_filters;
 
 /* Overview of all constraints beginning with a given letter.  */
 
@@ -703,7 +710,7 @@ static class constraint_data **last_constraint_ptr = &first_constraint;
 #define FOR_ALL_CONSTRAINTS(iter_) \
   for (iter_ = first_constraint; iter_; iter_ = iter_->next_textual)
 
-/* Contraint letters that have a special meaning and that cannot be used
+/* Constraint letters that have a special meaning and that cannot be used
    in define*_constraints.  */
 static const char generic_constraint_letters[] = "g";
 
@@ -719,7 +726,6 @@ static const char const_dbl_constraints[] = "GH";
 
 /* Summary data used to decide whether to output various functions and
    macro definitions.  */
-static unsigned int constraint_max_namelen;
 static bool have_register_constraints;
 static bool have_memory_constraints;
 static bool have_special_memory_constraints;
@@ -780,7 +786,7 @@ static void
 add_constraint (const char *name, const char *regclass,
 		rtx exp, bool is_memory, bool is_special_memory,
 		bool is_relaxed_memory, bool is_address, file_location loc,
-		const char *filter = nullptr)
+		const char *filter, int ref_opno)
 {
   class constraint_data *c, **iter, **slot;
   const char *p;
@@ -914,6 +920,9 @@ add_constraint (const char *name, const char *regclass,
   c->regclass = regclass;
   c->exp = exp;
   c->filter = filter;
+  c->dependent_filter_ref_opno = ref_opno;
+  if (ref_opno >= 0)
+    dependent_filters.safe_push (c);
   c->is_register = regclass != 0;
   c->is_const_int = is_const_int;
   c->is_const_dbl = is_const_dbl;
@@ -942,7 +951,6 @@ add_constraint (const char *name, const char *regclass,
   *last_constraint_ptr = c;
   last_constraint_ptr = &c->next_textual;
 
-  constraint_max_namelen = MAX (constraint_max_namelen, strlen (name));
   have_register_constraints |= c->is_register;
   have_const_int_constraints |= c->is_const_int;
   have_extra_constraints |= c->is_extra;
@@ -964,16 +972,44 @@ process_define_constraint (md_rtx_info *info)
 		  GET_CODE (info->def) == DEFINE_SPECIAL_MEMORY_CONSTRAINT,
 		  GET_CODE (info->def) == DEFINE_RELAXED_MEMORY_CONSTRAINT,
 		  GET_CODE (info->def) == DEFINE_ADDRESS_CONSTRAINT,
-		  info->loc);
+		  info->loc, nullptr, -1);
 }
 
 /* Process a DEFINE_REGISTER_CONSTRAINT expression, C.  */
 static void
 process_define_register_constraint (md_rtx_info *info)
 {
+  /* Get the optional reference operand number the filter is
+     dependent on.  */
+  const char *ref_str = XSTR (info->def, 4);
+  int ref_opno = -1;
+
+  if (ref_str && !XSTR (info->def, 3))
+    {
+      error_at (info->loc, "reference operand specified without"
+		" a filter expression");
+      return;
+    }
+
+  /* Parse it.  */
+  if (ref_str)
+    {
+      char *end;
+      long n = strtol (ref_str, &end, 10);
+      /* MAX_RECOG_OPERANDS = 30 is defined in insn-config.h
+	 but is not available here.  */
+      if (*ref_str == '\0' || *end != '\0' || n < 0 || n >= 30)
+	{
+	  error_at (info->loc, "reference operand index '%s' must be a"
+		    " non-negative integer less than 30", ref_str);
+	  return;
+	}
+      ref_opno = (int) n;
+    }
+
   add_constraint (XSTR (info->def, 0), XSTR (info->def, 1),
 		  0, false, false, false, false, info->loc,
-		  XSTR (info->def, 3));
+		  XSTR (info->def, 3), ref_opno);
 }
 
 /* Put the constraints into enum order.  We want to keep constraints
@@ -1150,7 +1186,7 @@ write_insn_constraint_len (void)
   unsigned int i;
 
   puts ("static inline size_t\n"
-	"insn_constraint_len (char fc, const char *str ATTRIBUTE_UNUSED)\n"
+	"insn_constraint_len (char fc, const char *str)\n"
 	"{\n"
 	"  switch (fc)\n"
 	"    {");
@@ -1182,6 +1218,13 @@ write_insn_constraint_len (void)
     }
 
   puts ("    default: break;\n"
+	"    }\n"
+	"  if (str[0] == '{')\n"
+	"    {\n"
+	"      size_t len = 1;\n"
+	"      while (str[len] != '}' && str[len] != '\\0')\n"
+	"        ++len;\n"
+	"      return len + 1;\n"
 	"    }\n"
 	"  return 1;\n"
 	"}\n");
@@ -1451,7 +1494,7 @@ write_get_register_filter ()
 	  register_filters.is_empty () ? "" : " c");
   printf ("{\n");
   FOR_ALL_CONSTRAINTS (c)
-    if (c->is_register && c->filter)
+    if (c->is_register && c->filter && c->dependent_filter_ref_opno < 0)
       {
 	printf ("  if (c == CONSTRAINT_%s)\n", c->c_name);
 	printf ("    return &this_target_constraints->register_filters[%d];\n",
@@ -1476,12 +1519,125 @@ write_get_register_filter_id ()
 	  register_filters.is_empty () ? "" : " c");
   printf ("{\n");
   FOR_ALL_CONSTRAINTS (c)
-    if (c->is_register && c->filter)
+    if (c->is_register && c->filter && c->dependent_filter_ref_opno < 0)
       {
 	printf ("  if (c == CONSTRAINT_%s)\n", c->c_name);
 	printf ("    return %d;\n", get_register_filter_id (c->filter));
       }
   printf ("  return -1;\n"
+	  "}\n");
+}
+
+/* Print the get_dependent_filter_id, get_dependent_filter_ref functions,
+   and a forward declaration for the eval_dependent_filter function.
+   The first function maps a constraint to a dependent filter id or
+   returns -1.
+   The second function returns the referenced opno for a given filter
+   id, and the third function evaluates a dynamic filter
+   (again indexed by id) to true or false for a given regno, mode,
+   referenced regno and referenced mode.  */
+
+static void
+write_dependent_filter_helpers_h ()
+{
+  bool empty_p = dependent_filters.is_empty ();
+
+  printf ("\n"
+	  "static inline int\n"
+	  "get_dependent_filter_id (constraint_num%s)\n"
+	  "{\n",
+	  empty_p ? "" : " c");
+  if (empty_p)
+    printf ("  return -1;\n");
+  else
+    {
+      for (unsigned i = 0; i < dependent_filters.length (); ++i)
+	printf ("  if (c == CONSTRAINT_%s) return %u;\n",
+		dependent_filters[i]->c_name, i);
+      printf ("  return -1;\n");
+    }
+  printf ("}\n");
+
+  printf ("\n"
+	  "static inline int\n"
+	  "get_dependent_filter_ref (int id)\n"
+	  "{\n");
+  if (empty_p)
+    printf ("  (void) id;\n  return -1;\n");
+  else
+    {
+      printf ("  switch (id)\n    {\n");
+      for (unsigned i = 0; i < dependent_filters.length (); ++i)
+	printf ("    case %u: return %d;\n",
+		i, dependent_filters[i]->dependent_filter_ref_opno);
+      printf ("    default: return -1;\n    }\n");
+    }
+  printf ("}\n");
+
+  printf ("\n"
+	  "extern bool\n"
+	  "eval_dependent_filter (int id, unsigned int regno,\n"
+	  "                       machine_mode mode,\n"
+	  "                       unsigned int ref_regno,\n"
+	  "                       machine_mode ref_mode);\n");
+}
+
+/* Print the eval_dependent_filter dispatcher function, and
+   eval_dependent_filter_0, 1,... functions that the dispatcher calls.
+   An eval_dependent_filter_0 calls a target-specified function
+   that determines whether a given regno, mode, referenced regno, and
+   referenced mode combination is valid for this particular constraint,
+   returning true or false.  */
+
+static void
+write_dependent_filter_functions_c ()
+{
+  if (dependent_filters.is_empty ())
+    {
+      printf ("\n"
+	      "bool\n"
+	      "eval_dependent_filter (int, unsigned int, machine_mode,\n"
+	      "                       unsigned int, machine_mode)\n"
+	      "{\n"
+	      "  return true;\n"
+	      "}\n");
+      return;
+    }
+
+  for (unsigned id = 0; id < dependent_filters.length (); ++id)
+    {
+      const char *filter = dependent_filters[id]->filter;
+      printf ("\n"
+	      "/* Dependent filter id=%u.  */\n"
+	      "static inline bool\n"
+	      "dependent_filter_%u (unsigned int regno, machine_mode mode,\n"
+	      "                    unsigned int ref_regno,\n"
+	      "                    machine_mode ref_mode)\n"
+	      "{\n"
+	      "  (void) regno; (void) mode;\n"
+	      "  (void) ref_regno; (void) ref_mode;\n"
+	      "  return ",
+	      id, id);
+      rtx_reader_ptr->print_c_condition (stdout, filter);
+      printf (";\n}\n");
+    }
+
+  printf ("\n"
+	  "bool\n"
+	  "eval_dependent_filter (int id, unsigned int regno,\n"
+	  "                       machine_mode mode, unsigned int ref_regno,\n"
+	  "                       machine_mode ref_mode)\n"
+	  "{\n"
+	  "  switch (id)\n"
+	  "    {\n");
+  for (unsigned id = 0; id < dependent_filters.length (); ++id)
+    printf ("    case %u:\n"
+	    "      return dependent_filter_%u (regno, mode,\n"
+	    "                                  ref_regno, ref_mode);\n",
+	    id, id);
+  printf ("    default:\n"
+	  "      return true;\n"
+	  "    }\n"
 	  "}\n");
 }
 
@@ -1556,133 +1712,125 @@ write_tm_preds_h (void)
 	  "#endif\n"
 	  "\n");
 
-  if (constraint_max_namelen > 0)
-    {
-      write_enum_constraint_num ();
-      puts ("extern enum constraint_num lookup_constraint_1 (const char *);\n"
-	    "extern const unsigned char lookup_constraint_array[];\n"
+  write_enum_constraint_num ();
+  puts ("extern enum constraint_num lookup_constraint_1 (const char *);\n"
+	"extern const unsigned char lookup_constraint_array[];\n"
+	"\n"
+	"/* Return the constraint at the beginning of P, or"
+	" CONSTRAINT__UNKNOWN if it\n"
+	"   isn't recognized.  */\n"
+	"\n"
+	"static inline enum constraint_num\n"
+	"lookup_constraint (const char *p)\n"
+	"{\n"
+	"  unsigned int index = lookup_constraint_array"
+	"[(unsigned char) *p];\n"
+	"  return (index == UCHAR_MAX\n"
+	"          ? lookup_constraint_1 (p)\n"
+	"          : (enum constraint_num) index);\n"
+	"}\n");
+  if (satisfied_start == num_constraints)
+    puts ("/* Return true if X satisfies constraint C.  */\n"
+	  "\n"
+	  "static inline bool\n"
+	  "constraint_satisfied_p (rtx, enum constraint_num)\n"
+	  "{\n"
+	  "  return false;\n"
+	  "}\n");
+  else
+    printf ("extern bool (*constraint_satisfied_p_array[]) (rtx);\n"
 	    "\n"
-	    "/* Return the constraint at the beginning of P, or"
-	    " CONSTRAINT__UNKNOWN if it\n"
-	    "   isn't recognized.  */\n"
+	    "/* Return true if X satisfies constraint C.  */\n"
 	    "\n"
-	    "static inline enum constraint_num\n"
-	    "lookup_constraint (const char *p)\n"
+	    "static inline bool\n"
+	    "constraint_satisfied_p (rtx x, enum constraint_num c)\n"
 	    "{\n"
-	    "  unsigned int index = lookup_constraint_array"
-	    "[(unsigned char) *p];\n"
-	    "  return (index == UCHAR_MAX\n"
-	    "          ? lookup_constraint_1 (p)\n"
-	    "          : (enum constraint_num) index);\n"
-	    "}\n");
-      if (satisfied_start == num_constraints)
-	puts ("/* Return true if X satisfies constraint C.  */\n"
-	      "\n"
-	      "static inline bool\n"
-	      "constraint_satisfied_p (rtx, enum constraint_num)\n"
-	      "{\n"
-	      "  return false;\n"
-	      "}\n");
-      else
-	printf ("extern bool (*constraint_satisfied_p_array[]) (rtx);\n"
-		"\n"
-		"/* Return true if X satisfies constraint C.  */\n"
-		"\n"
-		"static inline bool\n"
-		"constraint_satisfied_p (rtx x, enum constraint_num c)\n"
-		"{\n"
-		"  int i = (int) c - (int) CONSTRAINT_%s;\n"
-		"  return i >= 0 && constraint_satisfied_p_array[i] (x);\n"
-		"}\n"
-		"\n",
-		enum_order[satisfied_start]->name);
+	    "  int i = (int) c - (int) CONSTRAINT_%s;\n"
+	    "  return i >= 0 && constraint_satisfied_p_array[i] (x);\n"
+	    "}\n"
+	    "\n",
+	    enum_order[satisfied_start]->name);
 
-      write_range_function ("insn_extra_register_constraint",
-			    register_start, register_end);
-      write_range_function ("insn_extra_memory_constraint",
-			    memory_start, memory_end);
-      write_range_function ("insn_extra_special_memory_constraint",
-			    special_memory_start, special_memory_end);
-      write_range_function ("insn_extra_relaxed_memory_constraint",
-			    relaxed_memory_start, relaxed_memory_end);
-      write_range_function ("insn_extra_address_constraint",
-			    address_start, address_end);
-      write_allows_reg_mem_function ();
+  write_range_function ("insn_extra_register_constraint",
+			register_start, register_end);
+  write_range_function ("insn_extra_memory_constraint",
+			memory_start, memory_end);
+  write_range_function ("insn_extra_special_memory_constraint",
+			special_memory_start, special_memory_end);
+  write_range_function ("insn_extra_relaxed_memory_constraint",
+			relaxed_memory_start, relaxed_memory_end);
+  write_range_function ("insn_extra_address_constraint",
+			address_start, address_end);
+  write_allows_reg_mem_function ();
 
-      if (constraint_max_namelen > 1)
-        {
-	  write_insn_constraint_len ();
-	  puts ("#define CONSTRAINT_LEN(c_,s_) "
-		"insn_constraint_len (c_,s_)\n");
-	}
-      else
-	puts ("#define CONSTRAINT_LEN(c_,s_) 1\n");
-      if (have_register_constraints)
-	puts ("extern enum reg_class reg_class_for_constraint_1 "
-	      "(enum constraint_num);\n"
-	      "\n"
-	      "static inline enum reg_class\n"
-	      "reg_class_for_constraint (enum constraint_num c)\n"
-	      "{\n"
-	      "  if (insn_extra_register_constraint (c))\n"
-	      "    return reg_class_for_constraint_1 (c);\n"
-	      "  return NO_REGS;\n"
-	      "}\n");
-      else
-	puts ("static inline enum reg_class\n"
-	      "reg_class_for_constraint (enum constraint_num)\n"
-	      "{\n"
-	      "  return NO_REGS;\n"
-	      "}\n");
-      if (have_const_int_constraints)
-	puts ("extern bool insn_const_int_ok_for_constraint "
-	      "(HOST_WIDE_INT, enum constraint_num);\n"
-	      "#define CONST_OK_FOR_CONSTRAINT_P(v_,c_,s_) \\\n"
-	      "    insn_const_int_ok_for_constraint (v_, "
-	      "lookup_constraint (s_))\n");
-      else
-	puts ("static inline bool\n"
-	      "insn_const_int_ok_for_constraint (HOST_WIDE_INT,"
-	      " enum constraint_num)\n"
-	      "{\n"
-	      "  return false;\n"
-	      "}\n");
+  write_insn_constraint_len ();
+  puts ("#define CONSTRAINT_LEN(c_,s_) insn_constraint_len (c_,s_)\n");
+  if (have_register_constraints)
+    puts ("extern enum reg_class reg_class_for_constraint_1 "
+	  "(enum constraint_num);\n"
+	  "\n"
+	  "static inline enum reg_class\n"
+	  "reg_class_for_constraint (enum constraint_num c)\n"
+	  "{\n"
+	  "  if (insn_extra_register_constraint (c))\n"
+	  "    return reg_class_for_constraint_1 (c);\n"
+	  "  return NO_REGS;\n"
+	  "}\n");
+  else
+    puts ("static inline enum reg_class\n"
+	  "reg_class_for_constraint (enum constraint_num)\n"
+	  "{\n"
+	  "  return NO_REGS;\n"
+	  "}\n");
+  if (have_const_int_constraints)
+    puts ("extern bool insn_const_int_ok_for_constraint "
+	  "(HOST_WIDE_INT, enum constraint_num);\n"
+	  "#define CONST_OK_FOR_CONSTRAINT_P(v_,c_,s_) \\\n"
+	  "    insn_const_int_ok_for_constraint (v_, "
+	  "lookup_constraint (s_))\n");
+  else
+    puts ("static inline bool\n"
+	  "insn_const_int_ok_for_constraint (HOST_WIDE_INT,"
+	  " enum constraint_num)\n"
+	  "{\n"
+	  "  return false;\n"
+	  "}\n");
 
-      puts ("enum constraint_type\n"
-	    "{\n"
-	    "  CT_REGISTER,\n"
-	    "  CT_CONST_INT,\n"
-	    "  CT_MEMORY,\n"
-	    "  CT_SPECIAL_MEMORY,\n"
-	    "  CT_RELAXED_MEMORY,\n"
-	    "  CT_ADDRESS,\n"
-	    "  CT_FIXED_FORM\n"
-	    "};\n"
-	    "\n"
-	    "static inline enum constraint_type\n"
-	    "get_constraint_type (enum constraint_num c)\n"
-	    "{");
-      auto_vec <std::pair <unsigned int, const char *>, 4> values;
-      if (const_int_start != const_int_end)
-	values.safe_push (std::make_pair (const_int_start, "CT_CONST_INT"));
-      if (memory_start != memory_end)
-	values.safe_push (std::make_pair (memory_start, "CT_MEMORY"));
-      if (special_memory_start != special_memory_end)
-	values.safe_push (std::make_pair (special_memory_start,
-					  "CT_SPECIAL_MEMORY"));
-      if (relaxed_memory_start != relaxed_memory_end)
-	values.safe_push (std::make_pair (relaxed_memory_start,
-					  "CT_RELAXED_MEMORY"));
-      if (address_start != address_end)
-	values.safe_push (std::make_pair (address_start, "CT_ADDRESS"));
-      if (address_end != num_constraints)
-	values.safe_push (std::make_pair (address_end, "CT_FIXED_FORM"));
-      print_type_tree (values, 0, values.length (), "CT_REGISTER", 2);
-      puts ("}");
+  puts ("enum constraint_type\n"
+	"{\n"
+	"  CT_REGISTER,\n"
+	"  CT_CONST_INT,\n"
+	"  CT_MEMORY,\n"
+	"  CT_SPECIAL_MEMORY,\n"
+	"  CT_RELAXED_MEMORY,\n"
+	"  CT_ADDRESS,\n"
+	"  CT_FIXED_FORM\n"
+	"};\n"
+	"\n"
+	"static inline enum constraint_type\n"
+	"get_constraint_type (enum constraint_num c)\n"
+	"{");
+  auto_vec <std::pair <unsigned int, const char *>, 4> values;
+  if (const_int_start != const_int_end)
+    values.safe_push (std::make_pair (const_int_start, "CT_CONST_INT"));
+  if (memory_start != memory_end)
+    values.safe_push (std::make_pair (memory_start, "CT_MEMORY"));
+  if (special_memory_start != special_memory_end)
+    values.safe_push (std::make_pair (special_memory_start,
+				      "CT_SPECIAL_MEMORY"));
+  if (relaxed_memory_start != relaxed_memory_end)
+    values.safe_push (std::make_pair (relaxed_memory_start,
+				      "CT_RELAXED_MEMORY"));
+  if (address_start != address_end)
+    values.safe_push (std::make_pair (address_start, "CT_ADDRESS"));
+  if (address_end != num_constraints)
+    values.safe_push (std::make_pair (address_end, "CT_FIXED_FORM"));
+  print_type_tree (values, 0, values.length (), "CT_REGISTER", 2);
+  puts ("}");
 
-      write_get_register_filter ();
-      write_get_register_filter_id ();
-    }
+  write_get_register_filter ();
+  write_get_register_filter_id ();
+  write_dependent_filter_helpers_h ();
 
   puts ("#endif /* tm-preds.h */");
 }
@@ -1743,19 +1891,18 @@ write_insn_preds_c (void)
   FOR_ALL_PREDICATES (p)
     write_one_predicate_function (p);
 
-  if (constraint_max_namelen > 0)
-    {
-      write_lookup_constraint_1 ();
-      write_lookup_constraint_array ();
-      if (have_register_constraints)
-	write_reg_class_for_constraint_1 ();
-      write_constraint_satisfied_p_array ();
+  write_lookup_constraint_1 ();
+  write_lookup_constraint_array ();
+  if (have_register_constraints)
+    write_reg_class_for_constraint_1 ();
+  write_constraint_satisfied_p_array ();
 
-      if (have_const_int_constraints)
-	write_insn_const_int_ok_for_constraint ();
-    }
+  if (have_const_int_constraints)
+    write_insn_const_int_ok_for_constraint ();
 
   write_init_reg_class_start_regs ();
+
+  write_dependent_filter_functions_c ();
 }
 
 /* Argument parsing.  */
@@ -1813,6 +1960,8 @@ main (int argc, const char **argv)
       default:
 	break;
       }
+
+  gcc_assert (dependent_filters.length () == num_dependent_filters);
 
   choose_enum_order ();
 

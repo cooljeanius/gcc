@@ -1,5 +1,5 @@
 /* Definitions of floating-point access for GNU compiler.
-   Copyright (C) 1989-2025 Free Software Foundation, Inc.
+   Copyright (C) 1989-2026 Free Software Foundation, Inc.
 
    This file is part of GCC.
 
@@ -223,6 +223,7 @@ public:
 
   bool decimal_p () const { return m_format && m_format->b == 10; }
   bool can_represent_integral_type_p (tree type) const;
+  bool can_represent_range_value_p (const class irange *) const;
 
 private:
   const real_format *m_format;

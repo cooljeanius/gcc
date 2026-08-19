@@ -1,5 +1,5 @@
 ;; Constraint definitions for RISC-V target.
-;; Copyright (C) 2011-2025 Free Software Foundation, Inc.
+;; Copyright (C) 2011-2026 Free Software Foundation, Inc.
 ;; Contributed by Andrew Waterman (andrew@sifive.com).
 ;; Based on MIPS target for GNU compiler.
 ;;
@@ -42,6 +42,10 @@
 
 (define_register_constraint "cf" "TARGET_HARD_FLOAT ? RVC_FP_REGS : (TARGET_ZFINX ? RVC_GR_REGS : NO_REGS)"
   "RVC floating-point registers (f8-f15), if available, reuse GPR as FPR when use zfinx.")
+
+(define_register_constraint "cR" "RVC_GR_REGS"
+  "Even-odd RVC general purpose register (x8-x15)."
+  "regno % 2 == 0")
 
 ;; General constraints
 
@@ -141,6 +145,32 @@
   (and (match_code "mem")
        (match_test "GET_CODE(XEXP(op,0)) == REG")))
 
+(define_constraint "B1"
+  "Memory models that can match with A for load."
+  (and (match_code "const_int")
+       (and (match_test "ival == MEMMODEL_ACQUIRE")
+	    (match_test "TARGET_ZALASR"))))
+
+(define_constraint "B2"
+  "Memory models that can match with m for load."
+  (and (match_code "const_int")
+       (ior (match_test "ival != MEMMODEL_ACQUIRE")
+	    (match_test "!TARGET_ZALASR"))))
+
+(define_constraint "B3"
+  "Memory models that can match with A for store."
+  (and (match_code "const_int")
+       (and (ior (match_test "ival == MEMMODEL_RELEASE")
+		 (match_test "ival == MEMMODEL_SEQ_CST"))
+            (match_test "TARGET_ZALASR"))))
+
+(define_constraint "B4"
+  "Memory models that can match with m for store."
+  (and (match_code "const_int")
+       (ior (and (match_test "ival != MEMMODEL_RELEASE")
+                 (match_test "ival != MEMMODEL_SEQ_CST"))
+            (match_test "!TARGET_ZALASR"))))
+
 (define_constraint "S"
   "A constraint that matches an absolute symbolic address."
   (match_operand 0 "absolute_symbolic_operand"))
@@ -180,6 +210,39 @@
 (define_register_constraint "vm" "TARGET_VECTOR ? VM_REGS : NO_REGS"
   "A vector mask register (if available).")
 
+;; Dependent (dynamic) constraint for widening overlap:
+;; The RVV widening constraints for register overlap, aka dest EEW > src EEW.
+;; Quote from RVV spec 1.0:
+;;
+;; The destination EEW is greater than the source EEW, the source EMUL is at
+;; least 1, and the overlap is in the highest-numbered part of the destination
+;; register group (e.g., when LMUL=8, vzext.vf4 v0, v6 is legal, but a source
+;; of v0, v2, or v4 is not).
+;;
+;; Take vzext.vfN for example, only below cases are valid.
+;; Source EMUL = LMUL * (Source EEW / SEW) = LMUL * SEW / (N * SEW) = LMUL / N
+;;
+;; +-----------+------------+------------+----------+
+;; |           | LMUL = 8   | LMUL = 4   | LMUL = 2 |
+;; +-----------+------------+------------+----------+
+;; | vzext.vf2 | EMUL = 4   | EMUL = 2   | EMUL = 1 |
+;; +-----------+------------+------------+----------+
+;; |           | v0-7, v4-7 | v0-3, v2-3 | v0-1, v1 |
+;; +-----------+------------+------------+----------+
+;; | vzext.vf4 | EMUL = 2   | EMUL = 1   |          |
+;; +-----------+------------+------------+----------+
+;; |           | v0-7, v6-7 | v0-3, v3   |          |
+;; +-----------+------------+------------+----------+
+;; | vzext.vf8 | EMUL = 1   |            |          |
+;; +-----------+------------+------------+----------+
+;; |           | v0-7, v7   |            |          |
+;; +-----------+------------+------------+----------+
+;;
+(define_register_constraint "Wvr" "TARGET_VECTOR ? V_REGS : NO_REGS"
+  "Widening vector reg constraint"
+  "riscv_vector::riscv_v_widen_constraint_ok (regno, mode, ref_regno, ref_mode)"
+  "0")
+
 ;; This constraint is used to match instruction "csrr %0, vlenb" which is generated in "mov<mode>".
 ;; VLENB is a run-time constant which represent the vector register length in bytes.
 ;; BYTES_PER_RISCV_VECTOR represent runtime invariant of vector register length in bytes.
@@ -190,7 +253,7 @@
        (match_test "known_eq (rtx_to_poly_int64 (op), BYTES_PER_RISCV_VECTOR)")))
 
 (define_constraint "vu"
-  "A undefined vector value."
+  "An undefined vector value."
   (and (match_code "unspec")
        (match_test "XINT (op, 1) == UNSPEC_VUNDEF")))
 
@@ -233,10 +296,11 @@
  (and (match_code "const_vector")
       (match_test "rtx_equal_p (op, riscv_vector::gen_scalar_move_mask (GET_MODE (op)))")))
 
-(define_memory_constraint "Wdm"
+(define_constraint "Wdm"
   "Vector duplicate memory operand"
-  (and (match_code "mem")
-       (match_code "reg" "0")))
+  (and (match_test "strided_load_broadcast_p ()")
+       (and (match_code "mem")
+	    (match_code "reg" "0"))))
 
 ;; Vendor ISA extension constraints.
 
@@ -311,3 +375,31 @@
   "Shifting immediate for SIMD shufflei3."
   (and (match_code "const_int")
        (match_test "IN_RANGE (ival, -64, -1)")))
+
+(define_constraint "Ou01"
+  "A 1-bit unsigned immediate."
+  (and (match_code "const_int")
+       (match_test "IN_RANGE (ival, 0, 1)")))
+
+(define_constraint "Ou02"
+  "A 2-bit unsigned immediate."
+  (and (match_code "const_int")
+       (match_test "IN_RANGE (ival, 0, 3)")))
+
+(define_constraint "Q"
+  "An address operand that is valid for a prefetch instruction"
+  (match_operand 0 "prefetch_operand"))
+
+(define_address_constraint "ZD"
+  "An address operand that is valid for a mips prefetch instruction"
+  (match_test "TARGET_XMIPSCBOP && riscv_prefetch_offset_address_p (op, mode)"))
+
+(define_constraint "Ou07"
+  "A 7-bit unsigned immediate."
+  (and (match_code "const_int")
+       (match_test "IN_RANGE (ival, 0, 127)")))
+
+(define_constraint "ads_Bext"
+  "Sequence bit extract."
+  (and (match_code "const_int")
+       (match_test "(ival & (ival + 1)) == 0")))

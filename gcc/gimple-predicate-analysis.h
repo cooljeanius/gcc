@@ -1,6 +1,6 @@
 /* Support for simple predicate analysis.
 
-   Copyright (C) 2021-2025 Free Software Foundation, Inc.
+   Copyright (C) 2021-2026 Free Software Foundation, Inc.
    Contributed by Martin Sebor <msebor@redhat.com>
 
    This file is part of GCC.
@@ -91,6 +91,8 @@ class predicate
 
   bool superset_of (const predicate &) const;
 
+  bool drop_conjuncts_implied_by (const vec<pred_info> &);
+
 private:
 
   bool includes (const pred_chain &) const;
@@ -125,7 +127,7 @@ class uninit_analysis
 
     /* Return a bitset of PHI arguments of interest.  By default returns
        bitset with a bit set for each argument.  Should be called in
-       the overriden function first and, if nonzero, the result then
+       the overridden function first and, if nonzero, the result then
        refined as appropriate.  */
     virtual phi_arg_set_t phi_arg_set (gphi *);
 
@@ -152,7 +154,7 @@ private:
   bool is_use_guarded (gimple *, basic_block, gphi *, unsigned,
 		       hash_set<gphi *> *);
   bool prune_phi_opnds (gphi *, unsigned, gphi *, tree, tree_code,
-			hash_set<gphi *> *, bitmap *);
+			hash_set<gphi *> *, bitmap *, unsigned &);
   bool overlap (gphi *, unsigned, hash_set<gphi *> *, const predicate &);
 
   void collect_phi_def_edges (gphi *, basic_block, vec<edge> *,

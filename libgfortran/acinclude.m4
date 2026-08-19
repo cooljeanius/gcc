@@ -31,21 +31,6 @@ AC_DEFUN([AC_LIBTOOL_DLOPEN])
 AC_DEFUN([AC_PROG_LD])
 ])
 
-dnl Check whether the target supports hidden visibility.
-AC_DEFUN([LIBGFOR_CHECK_ATTRIBUTE_VISIBILITY], [
-  AC_CACHE_CHECK([whether the target supports hidden visibility],
-		 libgfor_cv_have_attribute_visibility, [
-  save_CFLAGS="$CFLAGS"
-  CFLAGS="$CFLAGS -Werror"
-  AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[void __attribute__((visibility("hidden"))) foo(void) { }]], [])],
-		    libgfor_cv_have_attribute_visibility=yes,
-		    libgfor_cv_have_attribute_visibility=no)
-  CFLAGS="$save_CFLAGS"])
-  if test $libgfor_cv_have_attribute_visibility = yes; then
-    AC_DEFINE(HAVE_ATTRIBUTE_VISIBILITY, 1,
-      [Define to 1 if the target supports __attribute__((visibility(...))).])
-  fi])
-
 dnl Check whether the target supports symbol aliases.
 AC_DEFUN([LIBGFOR_CHECK_ATTRIBUTE_ALIAS], [
   AC_CACHE_CHECK([whether the target supports symbol aliases],
@@ -274,6 +259,10 @@ AC_DEFUN([LIBGFOR_CHECK_FLOAT128], [
   AC_CACHE_CHECK([whether we have a usable _Float128 type],
                  libgfor_cv_have_float128, [
    GCC_TRY_COMPILE_OR_LINK([
+    #ifdef __loongarch__
+    #error On LoongArch we should use long double instead; __float128 is only for porting existing code easier.
+    #endif
+
     _Float128 foo (_Float128 x)
     {
      _Complex _Float128 z1, z2;
@@ -418,10 +407,10 @@ AC_DEFUN([LIBGFOR_CHECK_STRERROR_R], [
   dnl Check for three-argument POSIX version of strerror_r
   ac_save_CFLAGS="$CFLAGS"
   CFLAGS="-Wimplicit-function-declaration -Werror"
-  AC_TRY_COMPILE([#define _GNU_SOURCE 1
+  AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#define _GNU_SOURCE 1
 	     	  #include <string.h>
-		  #include <locale.h>],
-		  [char s[128]; strerror_r(5, s, 128);],
+		  #include <locale.h>]],
+		  [[char s[128]; strerror_r(5, s, 128);]])],
 		  AC_DEFINE(HAVE_STRERROR_R, 1,
 		  [Define if strerror_r is available in <string.h>.]),)
   CFLAGS="$ac_save_CFLAGS"
@@ -429,10 +418,10 @@ AC_DEFUN([LIBGFOR_CHECK_STRERROR_R], [
   dnl Check for two-argument version of strerror_r (e.g. for VxWorks)
   ac_save_CFLAGS="$CFLAGS"
   CFLAGS="-Wimplicit-function-declaration -Werror"
-  AC_TRY_COMPILE([#define _GNU_SOURCE 1
+  AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#define _GNU_SOURCE 1
 	     	  #include <string.h>
-		  #include <locale.h>],
-		  [char s[128]; strerror_r(5, s);],
+		  #include <locale.h>]],
+		  [[char s[128]; strerror_r(5, s);]])],
 		  AC_DEFINE(HAVE_STRERROR_R_2ARGS, 1,
 		  [Define if strerror_r takes two arguments and is available in <string.h>.]),)
   CFLAGS="$ac_save_CFLAGS"
@@ -574,3 +563,4 @@ main ()
                        [Define to 1 if you have the `$1' function.])
   fi
 ])
+

@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2025 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -172,6 +172,40 @@ Rib::insert (std::string name, Definition def)
     return def.ids_non_shadowable.back ();
   rust_assert (!def.ids_globbed.empty ());
   return def.ids_globbed.back ();
+}
+
+bool
+Rib::insert_globbed (std::string name, const Definition &def)
+{
+  bool dirty = false;
+
+  const std::vector<NodeId> *ids_src;
+
+  if (!def.ids_shadowable.empty ())
+    ids_src = &def.ids_shadowable;
+  else if (!def.ids_non_shadowable.empty ())
+    ids_src = &def.ids_non_shadowable;
+  else
+    ids_src = &def.ids_globbed;
+
+  auto it = values.find (name);
+  if (it == values.end ())
+    {
+      values[name].ids_globbed = *ids_src;
+      return true;
+    }
+
+  for (NodeId id : *ids_src)
+    {
+      auto &ids_dst = it->second.ids_globbed;
+      if (std::find (ids_dst.cbegin (), ids_dst.cend (), id) == ids_dst.cend ())
+	{
+	  dirty = true;
+	  ids_dst.push_back (id);
+	}
+    }
+
+  return dirty;
 }
 
 tl::optional<Rib::Definition>

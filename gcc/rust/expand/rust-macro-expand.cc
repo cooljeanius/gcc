@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2025 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -19,6 +19,7 @@
 #include "rust-macro-expand.h"
 #include "optional.h"
 #include "rust-ast-fragment.h"
+#include "rust-macro-builtins.h"
 #include "rust-macro-substitute-ctx.h"
 #include "rust-ast-full.h"
 #include "rust-ast-visitor.h"
@@ -26,8 +27,9 @@
 #include "rust-macro.h"
 #include "rust-parse.h"
 #include "rust-cfg-strip.h"
-#include "rust-early-name-resolver.h"
 #include "rust-proc-macro.h"
+#include "rust-token-tree-desugar.h"
+#include "rust-session-manager.h"
 
 namespace Rust {
 
@@ -78,7 +80,10 @@ MacroExpander::expand_decl_macro (location_t invoc_locus,
    * trees.
    */
 
-  AST::DelimTokenTree &invoc_token_tree = invoc.get_delim_tok_tree ();
+  AST::DelimTokenTree &invoc_token_tree_sugar = invoc.get_delim_tok_tree ();
+
+  // We must first desugar doc comments into proper attributes
+  auto invoc_token_tree = AST::TokenTreeDesugar ().go (invoc_token_tree_sugar);
 
   // find matching arm
   AST::MacroRule *matched_rule = nullptr;
@@ -108,9 +113,13 @@ MacroExpander::expand_decl_macro (location_t invoc_locus,
 
   if (matched_rule == nullptr)
     {
-      rich_location r (line_table, invoc_locus);
-      r.add_range (rules_def.get_locus ());
-      rust_error_at (r, "Failed to match any rule within macro");
+      if (!had_duplicate_error)
+	{
+	  rich_location r (line_table, invoc_locus);
+	  r.add_range (rules_def.get_locus ());
+	  rust_error_at (r, "Failed to match any rule within macro");
+	}
+      had_duplicate_error = false;
       return AST::Fragment::create_error ();
     }
 
@@ -169,17 +178,18 @@ MacroExpander::expand_eager_invocations (AST::MacroInvocation &invoc)
 
   // we need to create a clone of the delimited token tree as the lexer
   // expects ownership of the tokens
-  std::vector<std::unique_ptr<Rust::AST::Token>> dtt_clone;
+  std::vector<const_TokenPtr> dtt_clone;
   for (auto &tok : stream)
-    dtt_clone.emplace_back (tok->clone_token ());
+    dtt_clone.emplace_back (tok->get_tok_ptr ());
 
   MacroInvocLexer lex (std::move (dtt_clone));
   Parser<MacroInvocLexer> parser (lex);
 
   // we want to build a substitution map - basically, associating a `start` and
   // `end` index for each of the pending macro invocations
-  std::map<std::pair<size_t, size_t>, std::unique_ptr<AST::MacroInvocation> &>
-    substitution_map;
+  std::map<std::pair<size_t, size_t>, AST::MacroInvocation *> substitution_map;
+
+  auto &pending = invoc.get_pending_eager_invocations ();
 
   for (size_t i = 0; i < stream.size (); i++)
     {
@@ -191,20 +201,29 @@ MacroExpander::expand_eager_invocations (AST::MacroInvocation &invoc)
       // offset and store them in the substitution map. Otherwise, we skip one
       // token and try parsing again
       if (invocation)
-	substitution_map.insert (
-	  {{i, parser.get_token_source ().get_offs ()},
-	   invoc.get_pending_eager_invocations ()[current_pending++]});
+	substitution_map.insert ({{i, parser.get_token_source ().get_offs ()},
+				  pending[current_pending++].get ()});
       else
 	parser.skip_token (stream[i]->get_id ());
     }
 
+  auto pending_it = pending.begin ();
   size_t current_idx = 0;
   for (auto kv : substitution_map)
     {
-      auto &to_expand = kv.second;
+      AST::MacroInvocation *to_expand = kv.second;
       expand_invoc (*to_expand, AST::InvocKind::Expr);
 
       auto fragment = take_expanded_fragment ();
+
+      if (fragment.is_error ())
+	{
+	  // skip expansion of this macro
+	  // leave current_idx as-is, and continue
+	  pending_it++;
+	  continue;
+	}
+
       auto &new_tokens = fragment.get_tokens ();
 
       auto start = kv.first.first;
@@ -225,6 +244,7 @@ MacroExpander::expand_eager_invocations (AST::MacroInvocation &invoc)
 	new_stream.emplace_back (tok->clone_token ());
 
       current_idx = end;
+      pending_it = pending.erase (pending_it);
     }
 
   // Once all of that is done, we copy the last remaining tokens from the
@@ -235,7 +255,6 @@ MacroExpander::expand_eager_invocations (AST::MacroInvocation &invoc)
   auto new_dtt
     = AST::DelimTokenTree (dtt.get_delim_type (), std::move (new_stream));
 
-  invoc.get_pending_eager_invocations ().clear ();
   invoc.get_invoc_data ().set_delim_tok_tree (new_dtt);
 }
 
@@ -255,6 +274,13 @@ MacroExpander::expand_invoc (AST::MacroInvocation &invoc,
       push_context (ContextType::EXPR);
       expand_eager_invocations (invoc);
       pop_context ();
+
+      // if we have pending eager invocations still, don't expand
+      if (!invoc.get_pending_eager_invocations ().empty ())
+	{
+	  set_expanded_fragment (AST::Fragment::create_error ());
+	  return;
+	}
     }
 
   AST::MacroInvocData &invoc_data = invoc.get_invoc_data ();
@@ -283,10 +309,52 @@ MacroExpander::expand_invoc (AST::MacroInvocation &invoc,
   // lookup the rules
   auto rules_def = mappings.lookup_macro_invocation (invoc);
 
+  // We special case the `offset_of!()` macro if the flag is here and manually
+  // resolve to the builtin transcriber we have specified
+  auto assume_builtin_offset_of
+    = Session::get_instance ().should_support_offset_of ()
+      && (invoc.get_invoc_data ().get_path ().as_string () == "offset_of")
+      && !rules_def;
+
+  // TODO: This is *massive hack* which should be removed as we progress to
+  // Rust 1.71 when offset_of gets added to core
+  if (assume_builtin_offset_of)
+    {
+      fragment = MacroBuiltin::offset_of_handler (invoc.get_locus (),
+						  invoc_data, semicolon)
+		   .value_or (AST::Fragment::create_empty ());
+
+      set_expanded_fragment (std::move (fragment));
+
+      return;
+    }
+
+  // TODO: Also remove code below as we progress to Rust 1.90, when cfg_select
+  // gets added to nightly.
+  auto assume_builtin_cfg_select
+    = Session::get_instance ().should_support_cfg_select ()
+      && (invoc.get_invoc_data ().get_path ().as_string () == "cfg_select")
+      && !rules_def;
+
+  if (assume_builtin_cfg_select)
+    {
+      fragment = MacroBuiltin::cfg_select_handler (invoc.get_locus (),
+						   invoc_data, semicolon)
+		   .value_or (AST::Fragment::create_empty ());
+
+      set_expanded_fragment (std::move (fragment));
+
+      return;
+    }
+
   // If there's no rule associated with the invocation, we can simply return
   // early. The early name resolver will have already emitted an error.
   if (!rules_def)
-    return;
+    {
+      // error fragment
+      set_expanded_fragment (std::move (fragment));
+      return;
+    }
 
   auto rdef = rules_def.value ();
 
@@ -310,9 +378,6 @@ MacroExpander::expand_invoc (AST::MacroInvocation &invoc,
 void
 MacroExpander::expand_crate ()
 {
-  NodeId scope_node_id = crate.get_node_id ();
-  resolver->get_macro_scope ().push (scope_node_id);
-
   /* fill macro/decorator map from init list? not sure where init list comes
    * from? */
 
@@ -403,7 +468,7 @@ MacroExpander::match_fragment (Parser<MacroInvocLexer> &parser,
       break;
 
     case AST::MacroFragSpec::LITERAL:
-      parser.parse_literal_expr ();
+      std::ignore = parser.parse_literal_expr ();
       break;
 
     case AST::MacroFragSpec::ITEM:
@@ -426,7 +491,8 @@ MacroExpander::match_fragment (Parser<MacroInvocLexer> &parser,
       parser.parse_visibility ();
       break;
 
-      case AST::MacroFragSpec::STMT: {
+    case AST::MacroFragSpec::STMT:
+      {
 	auto restrictions = ParseRestrictions ();
 	restrictions.consume_semi = false;
 	parser.parse_stmt (restrictions);
@@ -476,19 +542,22 @@ MacroExpander::match_matcher (Parser<MacroInvocLexer> &parser,
   // this is used so we can check that we delimit the stream correctly.
   switch (delimiter->get_id ())
     {
-      case LEFT_PAREN: {
+    case LEFT_PAREN:
+      {
 	if (!check_delim (AST::DelimType::PARENS))
 	  return false;
       }
       break;
 
-      case LEFT_SQUARE: {
+    case LEFT_SQUARE:
+      {
 	if (!check_delim (AST::DelimType::SQUARE))
 	  return false;
       }
       break;
 
-      case LEFT_CURLY: {
+    case LEFT_CURLY:
+      {
 	if (!check_delim (AST::DelimType::CURLY))
 	  return false;
       }
@@ -500,17 +569,35 @@ MacroExpander::match_matcher (Parser<MacroInvocLexer> &parser,
 
   const MacroInvocLexer &source = parser.get_token_source ();
 
+  std::unordered_map<std::string, location_t> duplicate_check;
+
   for (auto &match : matcher.get_matches ())
     {
       size_t offs_begin = source.get_offs ();
 
       switch (match->get_macro_match_type ())
 	{
-	  case AST::MacroMatch::MacroMatchType::Fragment: {
+	case AST::MacroMatch::MacroMatchType::Fragment:
+	  {
 	    AST::MacroMatchFragment *fragment
 	      = static_cast<AST::MacroMatchFragment *> (match.get ());
 	    if (!match_fragment (parser, *fragment))
 	      return false;
+
+	    auto duplicate_result = duplicate_check.insert (
+	      std::make_pair (fragment->get_ident ().as_string (),
+			      fragment->get_ident ().get_locus ()));
+
+	    if (!duplicate_result.second)
+	      {
+		// TODO: add range labels?
+		rich_location r (line_table,
+				 fragment->get_ident ().get_locus ());
+		r.add_range (duplicate_result.first->second);
+		rust_error_at (r, "duplicate matcher binding");
+		had_duplicate_error = true;
+		return false;
+	      }
 
 	    // matched fragment get the offset in the token stream
 	    size_t offs_end = source.get_offs ();
@@ -520,14 +607,16 @@ MacroExpander::match_matcher (Parser<MacroInvocLexer> &parser,
 	  }
 	  break;
 
-	  case AST::MacroMatch::MacroMatchType::Tok: {
+	case AST::MacroMatch::MacroMatchType::Tok:
+	  {
 	    AST::Token *tok = static_cast<AST::Token *> (match.get ());
 	    if (!match_token (parser, *tok))
 	      return false;
 	  }
 	  break;
 
-	  case AST::MacroMatch::MacroMatchType::Repetition: {
+	case AST::MacroMatch::MacroMatchType::Repetition:
+	  {
 	    AST::MacroMatchRepetition *rep
 	      = static_cast<AST::MacroMatchRepetition *> (match.get ());
 	    if (!match_repetition (parser, *rep))
@@ -535,7 +624,8 @@ MacroExpander::match_matcher (Parser<MacroInvocLexer> &parser,
 	  }
 	  break;
 
-	  case AST::MacroMatch::MacroMatchType::Matcher: {
+	case AST::MacroMatch::MacroMatchType::Matcher:
+	  {
 	    AST::MacroMatcher *m
 	      = static_cast<AST::MacroMatcher *> (match.get ());
 	    expansion_depth++;
@@ -552,19 +642,22 @@ MacroExpander::match_matcher (Parser<MacroInvocLexer> &parser,
 
   switch (delimiter->get_id ())
     {
-      case LEFT_PAREN: {
+    case LEFT_PAREN:
+      {
 	if (!parser.skip_token (RIGHT_PAREN))
 	  return false;
       }
       break;
 
-      case LEFT_SQUARE: {
+    case LEFT_SQUARE:
+      {
 	if (!parser.skip_token (RIGHT_SQUARE))
 	  return false;
       }
       break;
 
-      case LEFT_CURLY: {
+    case LEFT_CURLY:
+      {
 	if (!parser.skip_token (RIGHT_CURLY))
 	  return false;
       }
@@ -613,7 +706,8 @@ MacroExpander::match_n_matches (Parser<MacroInvocLexer> &parser,
 	  size_t offs_begin = source.get_offs ();
 	  switch (match->get_macro_match_type ())
 	    {
-	      case AST::MacroMatch::MacroMatchType::Fragment: {
+	    case AST::MacroMatch::MacroMatchType::Fragment:
+	      {
 		AST::MacroMatchFragment *fragment
 		  = static_cast<AST::MacroMatchFragment *> (match.get ());
 		valid_current_match = match_fragment (parser, *fragment);
@@ -621,26 +715,30 @@ MacroExpander::match_n_matches (Parser<MacroInvocLexer> &parser,
 		// matched fragment get the offset in the token stream
 		size_t offs_end = source.get_offs ();
 
-		sub_stack.insert_metavar (
-		  MatchedFragment (fragment->get_ident ().as_string (),
-				   offs_begin, offs_end));
+		if (valid_current_match)
+		  sub_stack.insert_metavar (
+		    MatchedFragment (fragment->get_ident ().as_string (),
+				     offs_begin, offs_end));
 	      }
 	      break;
 
-	      case AST::MacroMatch::MacroMatchType::Tok: {
+	    case AST::MacroMatch::MacroMatchType::Tok:
+	      {
 		AST::Token *tok = static_cast<AST::Token *> (match.get ());
 		valid_current_match = match_token (parser, *tok);
 	      }
 	      break;
 
-	      case AST::MacroMatch::MacroMatchType::Repetition: {
+	    case AST::MacroMatch::MacroMatchType::Repetition:
+	      {
 		AST::MacroMatchRepetition *rep
 		  = static_cast<AST::MacroMatchRepetition *> (match.get ());
 		valid_current_match = match_repetition (parser, *rep);
 	      }
 	      break;
 
-	      case AST::MacroMatch::MacroMatchType::Matcher: {
+	    case AST::MacroMatch::MacroMatchType::Matcher:
+	      {
 		AST::MacroMatcher *m
 		  = static_cast<AST::MacroMatcher *> (match.get ());
 		valid_current_match = match_matcher (parser, *m, true);
@@ -650,14 +748,14 @@ MacroExpander::match_n_matches (Parser<MacroInvocLexer> &parser,
 	}
       auto old_stack = sub_stack.pop ();
 
-      // nest metavars into repetitions
-      for (auto &ent : old_stack)
-	sub_stack.append_fragment (ent.first, std::move (ent.second));
-
       // If we've encountered an error once, stop trying to match more
       // repetitions
       if (!valid_current_match)
 	break;
+
+      // nest metavars into repetitions
+      for (auto &ent : old_stack)
+	sub_stack.append_fragment (ent.first, std::move (ent.second));
 
       match_amount++;
 
@@ -818,7 +916,9 @@ transcribe_many_items (Parser<MacroInvocLexer> &parser, TokenId &delimiter)
 {
   return parse_many (parser, delimiter, [&parser] () {
     auto item = parser.parse_item (true);
-    return AST::SingleASTNode (std::move (item));
+    if (!item)
+      return AST::SingleASTNode (std::unique_ptr<AST::Item> (nullptr));
+    return AST::SingleASTNode (std::move (item.value ()));
   });
 }
 
@@ -920,22 +1020,31 @@ transcribe_expression (Parser<MacroInvocLexer> &parser)
   auto &lexer = parser.get_token_source ();
   auto start = lexer.get_offs ();
 
-  auto expr = parser.parse_expr ();
-  if (expr == nullptr)
+  auto attrs = parser.parse_outer_attributes ();
+  auto expr = parser.parse_expr (std::move (attrs));
+  for (auto error : parser.get_errors ())
+    error.emit ();
+  if (!expr)
     return AST::Fragment::create_error ();
 
   // FIXME: make this an error for some edititons
   if (parser.peek_current_token ()->get_id () == SEMICOLON)
     {
-      rust_warning_at (
-	parser.peek_current_token ()->get_locus (), 0,
-	"trailing semicolon in macro used in expression context");
+      // TODO bandaid for now, make this a member for MacroExpander instead in
+      // the future
+      static std::unordered_set<location_t> warned_loc;
+      auto locus = parser.peek_current_token ()->get_locus ();
+      if (warned_loc.insert (locus).second)
+	rust_warning_at (
+	  parser.peek_current_token ()->get_locus (), 0,
+	  "trailing semicolon in macro used in expression context");
       parser.skip_token ();
     }
 
   auto end = lexer.get_offs ();
 
-  return AST::Fragment ({std::move (expr)}, lexer.get_token_slice (start, end));
+  return AST::Fragment ({std::move (expr.value ())},
+			lexer.get_token_slice (start, end));
 }
 
 /**
@@ -952,10 +1061,36 @@ transcribe_type (Parser<MacroInvocLexer> &parser)
   auto type = parser.parse_type (true);
   for (auto err : parser.get_errors ())
     err.emit ();
+  if (!type)
+    return AST::Fragment::create_error ();
 
   auto end = lexer.get_offs ();
 
   return AST::Fragment ({std::move (type)}, lexer.get_token_slice (start, end));
+}
+
+/**
+ * Transcribe one pattern from a macro invocation
+ *
+ * @param parser Parser to extract statements from
+ */
+static AST::Fragment
+transcribe_pattern (Parser<MacroInvocLexer> &parser)
+{
+  auto &lexer = parser.get_token_source ();
+  auto start = lexer.get_offs ();
+
+  auto pattern = parser.parse_pattern ();
+  for (auto err : parser.get_errors ())
+    err.emit ();
+
+  if (!pattern)
+    return AST::Fragment::create_error ();
+
+  auto end = lexer.get_offs ();
+
+  return AST::Fragment ({std::move (pattern)},
+			lexer.get_token_slice (start, end));
 }
 
 static AST::Fragment
@@ -970,6 +1105,7 @@ transcribe_context (MacroExpander::ContextType ctx,
   //     -- Trait --> parser.parse_trait_item();
   //     -- Impl --> parser.parse_impl_item();
   //     -- Extern --> parser.parse_extern_item();
+  //     -- Pattern --> parser.parse_pattern();
   //     -- None --> [has semicolon?]
   //                 -- Yes --> parser.parse_stmt();
   //                 -- No --> [switch invocation.delimiter()]
@@ -998,6 +1134,8 @@ transcribe_context (MacroExpander::ContextType ctx,
       break;
     case MacroExpander::ContextType::TYPE:
       return transcribe_type (parser);
+    case MacroExpander::ContextType::PATTERN:
+      return transcribe_pattern (parser);
       break;
     case MacroExpander::ContextType::STMT:
       return transcribe_many_stmts (parser, last_token_id, semicolon);
@@ -1039,8 +1177,9 @@ MacroExpander::transcribe_rule (
   auto invoc_stream = invoc_token_tree.to_token_stream ();
   auto macro_rule_tokens = transcribe_tree.to_token_stream ();
 
-  auto substitute_context = SubstituteCtx (invoc_stream, macro_rule_tokens,
-					   matched_fragments, definition);
+  auto substitute_context
+    = SubstituteCtx (invoc_stream, macro_rule_tokens, matched_fragments,
+		     definition, invoc_token_tree.get_locus ());
   std::vector<std::unique_ptr<AST::Token>> substituted_tokens
     = substitute_context.substitute_tokens ();
 
@@ -1087,11 +1226,7 @@ MacroExpander::transcribe_rule (
 
   // emit any errors
   if (parser.has_errors ())
-    {
-      for (auto &err : parser.get_errors ())
-	rust_error_at (err.locus, "%s", err.message.c_str ());
-      return AST::Fragment::create_error ();
-    }
+    return AST::Fragment::create_error ();
 
   // are all the tokens used?
   bool did_delimit = parser.skip_token (last_token_id);
@@ -1112,8 +1247,8 @@ MacroExpander::transcribe_rule (
 AST::Fragment
 MacroExpander::parse_proc_macro_output (ProcMacro::TokenStream ts)
 {
-  ProcMacroInvocLexer lex (convert (ts));
-  Parser<ProcMacroInvocLexer> parser (lex);
+  MacroInvocLexer lex (convert (ts));
+  Parser<MacroInvocLexer> parser (lex);
 
   std::vector<AST::SingleASTNode> nodes;
   switch (peek_context ())
@@ -1122,9 +1257,9 @@ MacroExpander::parse_proc_macro_output (ProcMacro::TokenStream ts)
       while (lex.peek_token ()->get_id () != END_OF_FILE)
 	{
 	  auto result = parser.parse_item (false);
-	  if (result == nullptr)
+	  if (!result)
 	    break;
-	  nodes.push_back ({std::move (result)});
+	  nodes.emplace_back (std::move (result.value ()));
 	}
       break;
     case ContextType::STMT:
@@ -1133,7 +1268,7 @@ MacroExpander::parse_proc_macro_output (ProcMacro::TokenStream ts)
 	  auto result = parser.parse_stmt ();
 	  if (result == nullptr)
 	    break;
-	  nodes.push_back ({std::move (result)});
+	  nodes.emplace_back (std::move (result));
 	}
       break;
     case ContextType::TRAIT:

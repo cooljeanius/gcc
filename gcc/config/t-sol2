@@ -1,4 +1,4 @@
-# Copyright (C) 2004-2025 Free Software Foundation, Inc.
+# Copyright (C) 2004-2026 Free Software Foundation, Inc.
 #
 # This file is part of GCC.
 #
@@ -50,5 +50,5 @@ sol2.o: $(srcdir)/config/sol2.cc
 install: install-clearcap-map
 
 # Ignore failures: file only exists if linker supports it.
-install-clearcap-map:
-	-$(INSTALL_DATA) clearcap.map $(DESTDIR)$(libdir)
+install-clearcap-map: $(srcdir)/config/sol2-clearcap.map
+	-$(INSTALL_DATA) $< $(DESTDIR)$(libdir)/clearcap.map

@@ -257,7 +257,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	    auto& __pi = _M_smart._M_refcount._M_pi;
 
 	    if (_Sp __ptr = _M_smart.get())
-	      static_cast<_Scd*>(__pi)->_M_impl._M_ptr = __ptr;
+	      static_cast<_Scd*>(__pi)->_M_ptr = __ptr;
 	    else // Destroy the control block manually without invoking deleter.
 	      std::__exchange(__pi, nullptr)->_M_destroy();
 	  }
@@ -396,8 +396,8 @@ namespace __detail
   /**
    * @tparam _Pointer The type of pointer to convert to.
    * @param __s The pointer that should take ownership of the result.
-   * @param __args... Arguments to use when resetting the smart pointer.
-   * @return A std::inout_ptr_t referring to `__s`.
+   * @param __args Pack of arguments to use when resetting the smart pointer.
+   * @return A `std::out_ptr_t` referring to `__s`.
    * @since C++23
    * @headerfile <memory>
    */
@@ -417,8 +417,8 @@ namespace __detail
   /**
    * @tparam _Pointer The type of pointer to convert to.
    * @param __s The pointer that should take ownership of the result.
-   * @param __args... Arguments to use when resetting the smart pointer.
-   * @return A std::inout_ptr_t referring to `__s`.
+   * @param __args Pack of arguments to use when resetting the smart pointer.
+   * @return A `std::inout_ptr_t` referring to `__s`.
    * @since C++23
    * @headerfile <memory>
    */

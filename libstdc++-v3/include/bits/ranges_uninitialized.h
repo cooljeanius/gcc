@@ -1,6 +1,6 @@
 // Raw memory manipulators -*- C++ -*-
 
-// Copyright (C) 2020-2025 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -285,10 +285,10 @@ namespace ranges
 		      && is_trivially_assignable_v<_OutType&,
 						 iter_reference_t<_Iter>>)
 	  {
-	    auto __d1 = __ilast - __ifirst;
-	    auto __d2 = __olast - __ofirst;
-	    return ranges::copy_n(std::move(__ifirst), std::min(__d1, __d2),
-				  __ofirst);
+	    auto __d = __ilast - __ifirst;
+	    if (auto __d2 = __olast - __ofirst; __d2 < __d)
+	      __d = static_cast<iter_difference_t<_Iter>>(__d2);
+	    return ranges::copy_n(std::move(__ifirst), __d, __ofirst);
 	  }
 	else
 	  {
@@ -336,9 +336,9 @@ namespace ranges
 		      && is_trivially_assignable_v<_OutType&,
 						 iter_reference_t<_Iter>>)
 	  {
-	    auto __d = __olast - __ofirst;
-	    return ranges::copy_n(std::move(__ifirst), std::min(__n, __d),
-				  __ofirst);
+	    if (auto __d = __olast - __ofirst; __d < __n)
+	      __n = static_cast<iter_difference_t<_Iter>>(__d);
+	    return ranges::copy_n(std::move(__ifirst), __n, __ofirst);
 	  }
 	else
 	  {
@@ -377,11 +377,12 @@ namespace ranges
 		      && is_trivially_assignable_v<_OutType&,
 						 iter_rvalue_reference_t<_Iter>>)
 	  {
-	    auto __d1 = __ilast - __ifirst;
-	    auto __d2 = __olast - __ofirst;
+	    auto __d = __ilast - __ifirst;
+	    if (auto __d2 = __olast - __ofirst; __d2 < __d)
+	      __d = static_cast<iter_difference_t<_Iter>>(__d2);
 	    auto [__in, __out]
 	      = ranges::copy_n(std::make_move_iterator(std::move(__ifirst)),
-			       std::min(__d1, __d2), __ofirst);
+			       __d, __ofirst);
 	    return {std::move(__in).base(), __out};
 	  }
 	else
@@ -432,10 +433,11 @@ namespace ranges
 		      && is_trivially_assignable_v<_OutType&,
 						 iter_rvalue_reference_t<_Iter>>)
 	  {
-	    auto __d = __olast - __ofirst;
+	    if (auto __d = __olast - __ofirst; __d < __n)
+	      __n = static_cast<iter_difference_t<_Iter>>(__d);
 	    auto [__in, __out]
 	      = ranges::copy_n(std::make_move_iterator(std::move(__ifirst)),
-			       std::min(__n, __d), __ofirst);
+			       __n, __ofirst);
 	    return {std::move(__in).base(), __out};
 	  }
 	else
@@ -456,7 +458,8 @@ namespace ranges
   struct __uninitialized_fill_fn
   {
     template<__detail::__nothrow_forward_iterator _Iter,
-	     __detail::__nothrow_sentinel<_Iter> _Sent, typename _Tp>
+	     __detail::__nothrow_sentinel<_Iter> _Sent,
+	     typename _Tp _GLIBCXX26_DEF_VAL_T(iter_value_t<_Iter>)>
       requires constructible_from<iter_value_t<_Iter>, const _Tp&>
       _GLIBCXX26_CONSTEXPR
       _Iter
@@ -476,7 +479,8 @@ namespace ranges
 	  }
       }
 
-    template<__detail::__nothrow_forward_range _Range, typename _Tp>
+    template<__detail::__nothrow_forward_range _Range,
+	     typename _Tp _GLIBCXX26_DEF_VAL_T(range_value_t<_Range>)>
       requires constructible_from<range_value_t<_Range>, const _Tp&>
       _GLIBCXX26_CONSTEXPR
       borrowed_iterator_t<_Range>
@@ -490,7 +494,8 @@ namespace ranges
 
   struct __uninitialized_fill_n_fn
   {
-    template<__detail::__nothrow_forward_iterator _Iter, typename _Tp>
+    template<__detail::__nothrow_forward_iterator _Iter,
+	     typename _Tp _GLIBCXX26_DEF_VAL_T(iter_value_t<_Iter>)>
       requires constructible_from<iter_value_t<_Iter>, const _Tp&>
       _GLIBCXX26_CONSTEXPR
       _Iter
@@ -554,13 +559,12 @@ namespace ranges
     __destroy_fn::operator()(_Iter __first, _Sent __last) const noexcept
     {
       if constexpr (is_trivially_destructible_v<iter_value_t<_Iter>>)
-	return ranges::next(std::move(__first), __last);
-      else
-	{
-	  for (; __first != __last; ++__first)
-	    ranges::destroy_at(std::__addressof(*__first));
-	  return __first;
-	}
+	if (!is_constant_evaluated())
+	  return ranges::next(std::move(__first), __last);
+
+      for (; __first != __last; ++__first)
+	ranges::destroy_at(std::__addressof(*__first));
+      return __first;
     }
 
   template<__detail::__nothrow_input_range _Range>
@@ -579,13 +583,12 @@ namespace ranges
       operator()(_Iter __first, iter_difference_t<_Iter> __n) const noexcept
       {
 	if constexpr (is_trivially_destructible_v<iter_value_t<_Iter>>)
-	  return ranges::next(std::move(__first), __n);
-	else
-	  {
-	    for (; __n > 0; ++__first, (void)--__n)
-	      ranges::destroy_at(std::__addressof(*__first));
-	    return __first;
-	  }
+	  if (!is_constant_evaluated())
+	    return ranges::next(std::move(__first), __n);
+
+	for (; __n > 0; ++__first, (void)--__n)
+	  ranges::destroy_at(std::__addressof(*__first));
+	return __first;
       }
   };
 

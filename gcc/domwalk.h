@@ -1,5 +1,5 @@
 /* Generic dominator tree walker
-   Copyright (C) 2003-2025 Free Software Foundation, Inc.
+   Copyright (C) 2003-2026 Free Software Foundation, Inc.
    Contributed by Diego Novillo <dnovillo@redhat.com>
 
 This file is part of GCC.
@@ -93,8 +93,8 @@ private:
      if it is set to CDI_DOMINATORS, then we walk the dominator tree,
      if it is set to CDI_POST_DOMINATORS, then we walk the post
      dominator tree.  */
-  const ENUM_BITFIELD (cdi_direction) m_dom_direction : 2;
-  const ENUM_BITFIELD (reachability) m_reachability : 2;
+  const enum cdi_direction m_dom_direction : 2;
+  const enum reachability m_reachability : 2;
   bool m_user_bb_to_rpo;
   basic_block m_unreachable_dom;
   int *m_bb_to_rpo;

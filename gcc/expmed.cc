@@ -1,6 +1,6 @@
 /* Medium-level subroutines: convert bit-field store and extract
    and shifts, multiplies and divides to rtl instructions.
-   Copyright (C) 1987-2025 Free Software Foundation, Inc.
+   Copyright (C) 1987-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -285,7 +285,7 @@ init_expmed (void)
   for (speed = 0; speed < 2; speed++)
     {
       crtl->maybe_hot_insn_p = speed;
-      set_zero_cost (speed, set_src_cost (const0_rtx, mode, speed));
+      set_zero_cost (speed, set_src_cost (const0_rtx, QImode, speed));
 
       for (mode = MIN_MODE_INT; mode <= MAX_MODE_INT;
 	   mode = (machine_mode)(mode + 1))
@@ -663,7 +663,7 @@ store_bit_field_using_insv (const extraction_insn *insv, rtx op0,
   /* There are similar overflow check at the start of store_bit_field_1,
      but that only check the situation where the field lies completely
      outside the register, while there do have situation where the field
-     lies partialy in the register, we need to adjust bitsize for this
+     lies partially in the register, we need to adjust bitsize for this
      partial overflow situation.  Without this fix, pr48335-2.c on big-endian
      will broken on those arch support bit insert instruction, like arm, aarch64
      etc.  */
@@ -1064,9 +1064,21 @@ store_integral_bit_field (rtx op0, opt_scalar_int_mode op0_mode,
 				 value, value_mode, reverse);
 	  return true;
 	}
-      op0 = simplify_gen_subreg (word_mode, op0, op0_mode.require (),
-				 bitnum / BITS_PER_WORD * UNITS_PER_WORD);
-      gcc_assert (op0);
+      rtx new_op0
+	= simplify_gen_subreg (word_mode, op0, op0_mode.require (),
+			       bitnum / BITS_PER_WORD * UNITS_PER_WORD);
+      if (!new_op0)
+	{
+	  /* No valid word-mode SUBREG of op0 at this offset.  Defer to
+	     store_split_bit_field, which addresses op0 a word at a time.  */
+	  if (!fallback_p)
+	    return false;
+	  store_split_bit_field (op0, op0_mode, bitsize, bitnum,
+				 bitregion_start, bitregion_end,
+				 value, value_mode, reverse);
+	  return true;
+	}
+      op0 = new_op0;
       op0_mode = word_mode;
       bitnum %= BITS_PER_WORD;
     }
@@ -2962,6 +2974,30 @@ synth_mult (struct algorithm *alg_out, unsigned HOST_WIDE_INT t,
 		}
 	    }
 	}
+      else if (2 * BITS_PER_WORD <= HOST_BITS_PER_WIDE_INT
+	       && GET_MODE_BITSIZE (imode) == 2 * BITS_PER_WORD
+	       && m >= BITS_PER_WORD
+	       && imode == mode)
+	{
+	  q = t >> m;
+	  int op1_cost = shift_cost (speed, mode, m - BITS_PER_WORD);
+	  int op2_cost = zero_cost (speed);
+	  op_latency = MAX (op1_cost, op2_cost);
+	  op_cost = op1_cost + op2_cost;
+
+	  new_limit.cost = best_cost.cost - op_cost;
+	  new_limit.latency = best_cost.latency - op_latency;
+	  synth_mult (alg_in, q, &new_limit, mode);
+	  alg_in->cost.cost += op_cost;
+	  alg_in->cost.latency += op_latency;
+	  if (CHEAPER_MULT_COST (&alg_in->cost, &best_cost))
+	    {
+	      best_cost = alg_in->cost;
+	      std::swap (alg_in, best_alg);
+	      best_alg->log[best_alg->ops] = m;
+	      best_alg->op[best_alg->ops] = alg_shift;
+	    }
+	}
       if (cache_hit)
 	goto done;
     }
@@ -3521,7 +3557,7 @@ expand_mult (machine_mode mode, rtx op0, rtx op1, rtx target,
 
       /* If mode is integer vector mode, check if the backend supports
 	 vector lshift (by scalar or vector) at all.  If not, we can't use
-	 synthetized multiply.  */
+	 synthesized multiply.  */
       if (GET_MODE_CLASS (mode) == MODE_VECTOR_INT
 	  && optab_handler (vashl_optab, mode) == CODE_FOR_nothing
 	  && optab_handler (ashl_optab, mode) == CODE_FOR_nothing)
@@ -3802,9 +3838,9 @@ invert_mod2n (unsigned HOST_WIDE_INT x, int n)
 {
   gcc_assert ((x & 1) == 1);
 
-  /* The algorithm notes that the choice Y = Z satisfies X*Y == 1 mod 2^3,
-     since X is odd.  Then each iteration doubles the number of bits of
-     significance in Y.  */
+  /* The algorithm notes that the choice Y = X satisfies X*Y == 1 mod 2^3,
+     since X is odd.  Then each Newton-Raphson iteration doubles the number
+     of bits of significance in Y (Hensel's lemma).  */
 
   const unsigned HOST_WIDE_INT mask
     = (n == HOST_BITS_PER_WIDE_INT
@@ -3938,8 +3974,7 @@ expmed_mult_highpart_optab (scalar_int_mode mode, rtx op0, rtx op1,
       wop1 = convert_modes (wider_mode, mode, op1, unsignedp);
       tem = expand_binop (wider_mode, smul_optab, wop0, wop1, 0,
 			  unsignedp, OPTAB_WIDEN);
-      insns = get_insns ();
-      end_sequence ();
+      insns = end_sequence ();
 
       if (tem)
 	{
@@ -4182,8 +4217,7 @@ expand_sdiv_pow2 (scalar_int_mode mode, rtx op0, HOST_WIDE_INT d)
 				     temp, temp2, mode, 0);
       if (temp2)
 	{
-	  rtx_insn *seq = get_insns ();
-	  end_sequence ();
+	  rtx_insn *seq = end_sequence ();
 	  emit_insn (seq);
 	  return expand_shift (RSHIFT_EXPR, mode, temp2, logd, NULL_RTX, 0);
 	}
@@ -4259,6 +4293,69 @@ expand_sdiv_pow2 (scalar_int_mode mode, rtx op0, HOST_WIDE_INT d)
    E.g. if x is an unsigned 32 bit number:
    (x mod 12) == (((x & 1023) + ((x >> 8) & ~3)) * 0x15555558 >> 2 * 3) >> 28
    */
+
+/* Helper for expand_divmod's unsigned constant division.  For OP0 in
+   INT_MODE divided by a constant needing a (SIZE+1)-bit multiplier ML
+   with right shift POST_SHIFT (the mh != 0 case), try to obtain
+   the quotient from the high part of a single multiply in a mode twice
+   as wide as INT_MODE.  Return the quotient in INT_MODE, having emitted
+   the insns, or NULL_RTX when the transformation is unavailable or not
+   cheaper than the classic sub/shift/add sequence.  EXTRA_COST is the
+   cost of that sequence's follow-up ops, MAX_COST bounds the multiply
+   and SPEED selects the cost model.
+
+   The magic constant occupies at most 2*SIZE bits and so must fit in a
+   HOST_WIDE_INT (always 64 bits today; checked below).  A wider INT_MODE
+   such as DImode -- which would need a 128-bit magic and a single-word
+   high-part multiply in a 2x-wide mode that common targets lack -- is
+   therefore excluded.  */
+
+static rtx
+expand_wide_mulh_udiv (scalar_int_mode int_mode, rtx op0,
+		       unsigned HOST_WIDE_INT ml, int size, int post_shift,
+		       int extra_cost, int max_cost, bool speed)
+{
+  scalar_int_mode wide_mode;
+
+  /* We need POST_SHIFT >= 1, a wider integer mode that still fits in a
+     word, and the pre-shifted magic constant to fit in a HOST_WIDE_INT.  */
+  if (post_shift < 1
+      || !GET_MODE_2XWIDER_MODE (int_mode).exists (&wide_mode)
+      || GET_MODE_BITSIZE (wide_mode) > BITS_PER_WORD
+      || GET_MODE_BITSIZE (wide_mode) > HOST_BITS_PER_WIDE_INT)
+    return NULL_RTX;
+
+  /* The caller obtained ML and POST_SHIFT from choose_multiplier, which
+     guarantees POST_SHIFT <= ceil (log2 (d)) <= SIZE for a SIZE-bit
+     divisor d, so the shift count below is non-negative.  */
+  gcc_checking_assert (post_shift <= size);
+
+  /* Pre-shift the (SIZE+1)-bit magic constant (2^SIZE + ML) by
+     (SIZE - POST_SHIFT) so that the quotient ends up in the high part
+     of the widened product.  Since ML < 2^SIZE and POST_SHIFT >= 1, the
+     result is below 2^(2*SIZE) and thus fits in both WIDE_MODE and an
+     unsigned HOST_WIDE_INT (2*SIZE <= HOST_BITS_PER_WIDE_INT was
+     checked above).  */
+  unsigned HOST_WIDE_INT magic
+    = ((HOST_WIDE_INT_1U << size) + ml) << (size - post_shift);
+
+  start_sequence ();
+  rtx x_wide = convert_to_mode (wide_mode, op0, 1);
+  rtx hi = expmed_mult_highpart (wide_mode, x_wide,
+				 gen_int_mode (magic, wide_mode),
+				 NULL_RTX, 1, max_cost);
+  rtx quotient = hi ? convert_to_mode (int_mode, hi, 1) : NULL_RTX;
+  rtx_insn *insns = end_sequence ();
+
+  /* Use the widened multiply only when it is no more expensive than
+     the classic sub/shift/add sequence.  */
+  unsigned classic_cost = mul_highpart_cost (speed, int_mode) + extra_cost;
+  if (quotient == NULL_RTX || seq_cost (insns, speed) > classic_cost)
+    return NULL_RTX;
+
+  emit_insn (insns);
+  return quotient;
+}
 
 rtx
 expand_divmod (int rem_flag, enum tree_code code, machine_mode mode,
@@ -4534,22 +4631,32 @@ expand_divmod (int rem_flag, enum tree_code code, machine_mode mode,
 			      = (shift_cost (speed, int_mode, post_shift - 1)
 				 + shift_cost (speed, int_mode, 1)
 				 + 2 * add_cost (speed, int_mode));
-			    t1 = expmed_mult_highpart
-			      (int_mode, op0, gen_int_mode (ml, int_mode),
-			       NULL_RTX, 1, max_cost - extra_cost);
-			    if (t1 == 0)
-			      goto fail1;
-			    t2 = force_operand (gen_rtx_MINUS (int_mode,
-							       op0, t1),
-						NULL_RTX);
-			    t3 = expand_shift (RSHIFT_EXPR, int_mode,
-					       t2, 1, NULL_RTX, 1);
-			    t4 = force_operand (gen_rtx_PLUS (int_mode,
-							      t1, t3),
-						NULL_RTX);
-			    quotient = expand_shift
-			      (RSHIFT_EXPR, int_mode, t4,
-			       post_shift - 1, tquotient, 1);
+
+			    /* Try a single widened multiply first; use it when
+			       it is no more expensive.  */
+			    quotient
+			      = expand_wide_mulh_udiv (int_mode, op0, ml, size,
+						       post_shift, extra_cost,
+						       max_cost, speed);
+			    if (quotient == NULL_RTX)
+			      {
+				t1 = expmed_mult_highpart
+				  (int_mode, op0, gen_int_mode (ml, int_mode),
+				   NULL_RTX, 1, max_cost - extra_cost);
+				if (t1 == 0)
+				  goto fail1;
+				t2 = force_operand (gen_rtx_MINUS (int_mode,
+								   op0, t1),
+						    NULL_RTX);
+				t3 = expand_shift (RSHIFT_EXPR, int_mode,
+						   t2, 1, NULL_RTX, 1);
+				t4 = force_operand (gen_rtx_PLUS (int_mode,
+								  t1, t3),
+						    NULL_RTX);
+				quotient = expand_shift
+				  (RSHIFT_EXPR, int_mode, t4,
+				   post_shift - 1, tquotient, 1);
+			      }
 			  }
 			else
 			  {
@@ -5395,6 +5502,9 @@ make_tree (tree type, rtx x)
       t = wide_int_to_tree (type, rtx_mode_t (x, TYPE_MODE (type)));
       return t;
 
+    case CONST_POLY_INT:
+      return wide_int_to_tree (type, const_poly_int_value (x));
+
     case CONST_DOUBLE:
       STATIC_ASSERT (HOST_BITS_PER_WIDE_INT * 2 <= MAX_BITSIZE_MODE_ANY_INT);
       if (TARGET_SUPPORTS_WIDE_INT == 0 && GET_MODE (x) == VOIDmode)
@@ -5486,9 +5596,6 @@ make_tree (tree type, rtx x)
       /* fall through.  */
 
     default:
-      if (CONST_POLY_INT_P (x))
-	return wide_int_to_tree (t, const_poly_int_value (x));
-
       t = build_decl (RTL_LOCATION (x), VAR_DECL, NULL_TREE, type);
 
       /* If TYPE is a POINTER_TYPE, we might need to convert X from
@@ -6287,7 +6394,7 @@ emit_store_flag_force (rtx target, enum rtx_code code, rtx op0, rtx op1,
 }
 
 /* Expand a vector (left) rotate of MODE of X by an immediate AMT as a vector
-   permute operation.  Emit code to put the result in DST if successfull and
+   permute operation.  Emit code to put the result in DST if successful and
    return it.  Otherwise return NULL.  This is intended to implement vector
    rotates by byte amounts using vector permutes when the target does not offer
    native vector rotate operations.  */
@@ -6326,7 +6433,8 @@ expand_rotate_as_vec_perm (machine_mode mode, rtx dst, rtx x, rtx amt)
 			     qimode, perm_dst);
   if (!res)
     return NULL_RTX;
-  emit_move_insn (dst, lowpart_subreg (mode, res, qimode));
+  if (!rtx_equal_p (res, perm_dst))
+    emit_move_insn (dst, lowpart_subreg (mode, res, qimode));
   return dst;
 }
 
@@ -6361,7 +6469,7 @@ equivalent_cmp_code (enum rtx_code code)
     }
 }
 
-/* Choose the more appropiate immediate in scalar integer comparisons.  The
+/* Choose the more appropriate immediate in scalar integer comparisons.  The
    purpose of this is to end up with an immediate which can be loaded into a
    register in fewer moves, if possible.
 
@@ -6410,18 +6518,25 @@ canonicalize_comparison (machine_mode mode, enum rtx_code *code, rtx *imm)
   if (overflow)
     return;
 
-  /* The following creates a pseudo; if we cannot do that, bail out.  */
-  if (!can_create_pseudo_p ())
-    return;
-
-  rtx reg = gen_rtx_REG (mode, LAST_VIRTUAL_REGISTER + 1);
   rtx new_imm = immed_wide_int_const (imm_modif, mode);
 
-  rtx_insn *old_rtx = gen_move_insn (reg, *imm);
-  rtx_insn *new_rtx = gen_move_insn (reg, new_imm);
+  int old_cost = rtx_cost (*imm, mode, COMPARE, 0, true);
+  int new_cost = rtx_cost (new_imm, mode, COMPARE, 0, true);
+
+  if (dump_file && (dump_flags & TDF_DETAILS))
+    {
+      fprintf (dump_file, ";; cmp: %s, old cst: ",
+	       GET_RTX_NAME (*code));
+      print_rtl (dump_file, *imm);
+      fprintf (dump_file, " new cst: ");
+      print_rtl (dump_file, new_imm);
+      fprintf (dump_file, "\n");
+      fprintf (dump_file, ";; old cst cost: %d, new cst cost: %d\n",
+	       old_cost, new_cost);
+    }
 
   /* Update the immediate and the code.  */
-  if (insn_cost (old_rtx, true) > insn_cost (new_rtx, true))
+  if (old_cost > new_cost)
     {
       *code = equivalent_cmp_code (*code);
       *imm = new_imm;

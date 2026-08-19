@@ -1,4 +1,4 @@
-/* Copyright (C) 2011-2025 Free Software Foundation, Inc.
+/* Copyright (C) 2011-2026 Free Software Foundation, Inc.
    Contributed by Richard Henderson <rth@redhat.com>.
 
    This file is part of the GNU Transactional Memory Library (libitm).
@@ -22,7 +22,7 @@
    see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
    <http://www.gnu.org/licenses/>.  */
 
-/* Provide target-independant access to the futex system call.  */
+/* Provide target-independent access to the futex system call.  */
 
 /* Note for ARM:
    There are two styles of syscall, and in the eabi style the syscall

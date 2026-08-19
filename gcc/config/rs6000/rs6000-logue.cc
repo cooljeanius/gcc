@@ -1,6 +1,6 @@
 /* Subroutines used to generate function prologues and epilogues
    on IBM RS/6000.
-   Copyright (C) 1991-2025 Free Software Foundation, Inc.
+   Copyright (C) 1991-2026 Free Software Foundation, Inc.
 
    This file is part of GCC.
 
@@ -282,7 +282,7 @@ is_altivec_return_reg (rtx reg, void *xyes)
 }
 
 
-/* Return whether REG is a global user reg or has been specifed by
+/* Return whether REG is a global user reg or has been specified by
    -ffixed-REG.  We should not restore these, and so cannot use
    lmw or out-of-line restore functions if there are any.  We also
    can't save them (well, emit frame notes for them), because frame
@@ -4069,7 +4069,7 @@ rs6000_output_function_prologue (FILE *file)
       asm_fprintf (file, "\tmflr %s\n", reg_names[0]);
 
       /* In the ELFv2 ABI we have no compiler stack word.  It must be
-	 the resposibility of _mcount to preserve the static chain
+	 the responsibility of _mcount to preserve the static chain
 	 register if required.  */
       if (DEFAULT_ABI != ABI_ELFv2
 	  && cfun->static_chain_decl != NULL)
@@ -5332,18 +5332,18 @@ rs6000_output_function_epilogue (FILE *file)
       /* Tbtab format type.  Use format type 0.  */
       fputs ("\t.byte 0,", file);
 
-      /* Language type.  Unfortunately, there does not seem to be any
-	 official way to discover the language being compiled, so we
-	 use language_string.
-	 C is 0.  Fortran is 1.  Ada is 3.  Modula-2 is 8.  C++ is 9.
-	 Java is 13.  Objective-C is 14.  Objective-C++ isn't assigned
-	 a number, so for now use 9.  LTO, Go, D, and JIT aren't assigned
-	 numbers either, so for now use 0.  */
+      /* Language type.  Unfortunately, there does not seem to be any official
+	 way to discover the language being compiled, so we use
+	 language_string.  C is 0.  Fortran is 1.  Ada is 3.  Modula-2 is 8.
+	 C++ is 9.  Java is 13.  Objective-C is 14.  Objective-C++ isn't
+	 assigned a number, so for now use 9.  LTO, Go, D, Algol 68 and JIT
+	 aren't assigned numbers either, so for now use 0.  */
       if (lang_GNU_C ()
 	  || ! strcmp (language_string, "GNU GIMPLE")
 	  || ! strcmp (language_string, "GNU Go")
 	  || ! strcmp (language_string, "GNU D")
 	  || ! strcmp (language_string, "GNU Rust")
+	  || ! strcmp (language_string, "GNU Algol 68")
 	  || ! strcmp (language_string, "libgccjit"))
 	i = 0;
       else if (! strcmp (language_string, "GNU F77")
@@ -5351,6 +5351,8 @@ rs6000_output_function_epilogue (FILE *file)
 	i = 1;
       else if (! strcmp (language_string, "GNU Ada"))
 	i = 3;
+      else if (! strcmp (language_string, "GCC COBOL"))
+	i = 7;
       else if (! strcmp (language_string, "GNU Modula-2"))
 	i = 8;
       else if (lang_GNU_CXX ()

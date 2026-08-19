@@ -1,6 +1,6 @@
 // { dg-do compile { target c++11 } }
 
-// Copyright (C) 2012-2025 Free Software Foundation, Inc.
+// Copyright (C) 2012-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -96,8 +96,13 @@ static_assert(!std::is_nothrow_destructible<TD2>::value, "Error");
 static_assert(!std::is_nothrow_destructible<Aggr2>::value, "Error");
 static_assert(!std::is_nothrow_destructible<Aggr2[1]>::value, "Error");
 static_assert(!std::is_nothrow_destructible<TD1[1][2]>::value, "Error");
+#if __cpp_trivial_union >= 202502L
+static_assert(std::is_nothrow_destructible<Ut>::value, "Error");
+static_assert(std::is_nothrow_destructible<Ut[3]>::value, "Error");
+#else
 static_assert(!std::is_nothrow_destructible<Ut>::value, "Error");
 static_assert(!std::is_nothrow_destructible<Ut[3]>::value, "Error");
+#endif
 static_assert(!std::is_nothrow_destructible<AbstractDelDtor>::value, "Error");
 static_assert(!std::is_nothrow_destructible<Abstract2>::value, "Error");
 static_assert(!std::is_nothrow_destructible<Abstract3>::value, "Error");

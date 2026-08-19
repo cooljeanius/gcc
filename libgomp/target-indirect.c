@@ -1,4 +1,4 @@
-/* Copyright (C) 2023-2025 Free Software Foundation, Inc.
+/* Copyright (C) 2023-2026 Free Software Foundation, Inc.
 
    Contributed by Siemens.
 
@@ -23,6 +23,8 @@
    a copy of the GCC Runtime Library Exception along with this program;
    see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
    <http://www.gnu.org/licenses/>.  */
+
+#include "libgomp.h"
 
 void *
 GOMP_target_map_indirect_ptr (void *ptr)

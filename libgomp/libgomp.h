@@ -1,4 +1,4 @@
-/* Copyright (C) 2005-2025 Free Software Foundation, Inc.
+/* Copyright (C) 2005-2026 Free Software Foundation, Inc.
    Contributed by Richard Henderson <rth@redhat.com>.
 
    This file is part of the GNU Offloading and Multi Processing Library
@@ -613,7 +613,10 @@ extern int gomp_debug_var;
 extern bool gomp_display_affinity_var;
 extern char *gomp_affinity_format_var;
 extern size_t gomp_affinity_format_len;
+extern int gomp_get_current_numa_node ();
+extern int gomp_get_numa_distance (int, int);
 extern uintptr_t gomp_def_allocator;
+extern const size_t gomp_omp_allocator_data_size;
 extern const struct gomp_default_icv gomp_default_icv_values;
 extern struct gomp_icv_list *gomp_initial_icv_list;
 extern struct gomp_offload_icv_list *gomp_offload_icv_list;
@@ -772,8 +775,31 @@ struct gomp_target_task
   struct gomp_team *team;
   /* Device-specific target arguments.  */
   void **args;
+  /* Pointer to the offload session for this task.  */
+  struct gomp_offload_session *offload_session;
   void *hostaddrs[];
 };
+
+#ifdef __AMDGCN__
+/* Parameters needed to kick off new threads on AMD GCN.  They correspond to
+   various fields in gomp_thread.  This struct, and all its contents, should
+   only be modified by gomp_team_start, and stay untouched until the threads
+   of a team reach the final barrier.  */
+
+struct gomp_thread_start_data
+{
+  /* Team the new thread is part of.  */
+  struct gomp_team *team;
+  /* Active nesting level.  */
+  unsigned level, active_level;
+  /* Parent task.  */
+  struct gomp_task *parent_task;
+  /* Previous ICVs.  */
+  struct gomp_task_icv prev_icvs;
+  /* Task group for the new threads implicit task.  */
+  struct gomp_taskgroup *taskgroup;
+};
+#endif
 
 /* This structure describes a "team" of threads.  These are the threads
    that are spawned by a PARALLEL constructs, as well as the work sharing
@@ -857,6 +883,11 @@ struct gomp_team
   /* Number of tasks waiting for their completion event to be fulfilled.  */
   unsigned int task_detach_count;
 
+#ifdef __AMDGCN__
+  /* Used on AMD GCN to inform threads how to launch in a team.  */
+  struct gomp_thread_start_data thr_start_data;
+#endif
+
   /* This array contains structures for implicit tasks.  */
   struct gomp_task implicit_task[];
 };
@@ -869,6 +900,11 @@ struct gomp_thread
   /* This is the function that the thread should run upon launch.  */
   void (*fn) (void *data);
   void *data;
+
+#ifdef __AMDGCN__
+  /* And these are the parameters it should set.  */
+  struct gomp_thread_start_data *start_data;
+#endif
 
   /* This is the current team state for this thread.  The ts.team member
      is NULL only if the thread is idle.  */
@@ -1135,6 +1171,10 @@ extern int gomp_get_num_devices (void);
 extern bool gomp_target_task_fn (void *);
 extern void gomp_target_rev (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t,
 			     int, struct goacc_asyncqueue *);
+extern void *gomp_managed_alloc (size_t size);
+extern void gomp_managed_free (void *device_ptr);
+extern bool gomp_page_locked_host_alloc (void **, size_t);
+extern void gomp_page_locked_host_free (void *);
 
 /* Splay tree definitions.  */
 typedef struct splay_tree_node_s *splay_tree_node;
@@ -1313,7 +1353,7 @@ struct target_mem_desc {
   reverse_splay_tree_node rev_array;
   /* Start of the target region.  */
   uintptr_t tgt_start;
-  /* End of the targer region.  */
+  /* End of the target region.  */
   uintptr_t tgt_end;
   /* Handle to free.  */
   void *to_free;
@@ -1360,6 +1400,7 @@ typedef struct acc_dispatch_t
     __typeof (GOMP_OFFLOAD_openacc_async_exec) *exec_func;
     __typeof (GOMP_OFFLOAD_openacc_async_dev2host) *dev2host_func;
     __typeof (GOMP_OFFLOAD_openacc_async_host2dev) *host2dev_func;
+    __typeof (GOMP_OFFLOAD_openacc_async_dev2dev) *dev2dev_func;
   } async;
 
   __typeof (GOMP_OFFLOAD_openacc_get_property) *get_property_func;
@@ -1408,7 +1449,11 @@ struct gomp_device_descr
   /* Function handlers.  */
   __typeof (GOMP_OFFLOAD_get_name) *get_name_func;
   __typeof (GOMP_OFFLOAD_get_uid) *get_uid_func;
+  __typeof (GOMP_OFFLOAD_get_numa_node) *get_numa_node_func;
+  __typeof (GOMP_OFFLOAD_supported_teams_dim) *supported_teams_dim_func;
+  __typeof (GOMP_OFFLOAD_supported_threads_dim) *supported_threads_dim_func;
   __typeof (GOMP_OFFLOAD_get_caps) *get_caps_func;
+  __typeof (GOMP_OFFLOAD_get_dev_caps) *get_dev_caps_func;
   __typeof (GOMP_OFFLOAD_get_type) *get_type_func;
   __typeof (GOMP_OFFLOAD_get_num_devices) *get_num_devices_func;
   __typeof (GOMP_OFFLOAD_init_device) *init_device_func;
@@ -1418,11 +1463,27 @@ struct gomp_device_descr
   __typeof (GOMP_OFFLOAD_unload_image) *unload_image_func;
   __typeof (GOMP_OFFLOAD_alloc) *alloc_func;
   __typeof (GOMP_OFFLOAD_free) *free_func;
+  __typeof (GOMP_OFFLOAD_managed_alloc) *managed_alloc_func;
+  __typeof (GOMP_OFFLOAD_managed_free) *managed_free_func;
+  __typeof (GOMP_OFFLOAD_is_accessible_ptr) *is_accessible_ptr_func;
+  __typeof (GOMP_OFFLOAD_page_locked_host_alloc) *page_locked_host_alloc_func;
+  __typeof (GOMP_OFFLOAD_page_locked_host_free) *page_locked_host_free_func;
   __typeof (GOMP_OFFLOAD_dev2host) *dev2host_func;
   __typeof (GOMP_OFFLOAD_host2dev) *host2dev_func;
+  __typeof (GOMP_OFFLOAD_dev2dev) *dev2dev_func;
   __typeof (GOMP_OFFLOAD_memcpy2d) *memcpy2d_func;
   __typeof (GOMP_OFFLOAD_memcpy3d) *memcpy3d_func;
-  __typeof (GOMP_OFFLOAD_dev2dev) *dev2dev_func;
+  __typeof (GOMP_OFFLOAD_memset) *memset_func;
+  __typeof (GOMP_OFFLOAD_memspace_validate) *memspace_validate_func;
+  struct {
+    __typeof (GOMP_OFFLOAD_session_start) *start_func;
+    __typeof (GOMP_OFFLOAD_session_allocate_target_var_table) *alloc_tvt_func;
+    __typeof (GOMP_OFFLOAD_session_set_target_var_table) *set_tvt_func;
+
+    /* Size of a single gomp_offload_session object, as returned by
+       GOMP_OFFLOAD_session_size.  */
+    size_t size;
+  } session;
   __typeof (GOMP_OFFLOAD_can_run) *can_run_func;
   __typeof (GOMP_OFFLOAD_run) *run_func;
   __typeof (GOMP_OFFLOAD_async_run) *async_run_func;
@@ -1449,6 +1510,16 @@ struct gomp_device_descr
   acc_dispatch_t openacc;
 };
 
+/* Allocate an offload session for the gomp_device_descr DEVICEP using ALLOC,
+   and initialize it.  Provided as a macro, so that 'alloca' can be used as
+   ALLOC. */
+#define gomp_offload_session_new(devicep, alloc)		\
+  ({								\
+    void *session = alloc (devicep->session.size);	\
+    devicep->session.start_func (session, devicep->target_id);	\
+    session;							\
+  })
+
 /* Kind of the pragma, for which gomp_map_vars () is called.  */
 enum gomp_map_vars_kind
 {
@@ -1467,11 +1538,14 @@ extern void gomp_copy_host2dev (struct gomp_device_descr *,
 extern void gomp_copy_dev2host (struct gomp_device_descr *,
 				struct goacc_asyncqueue *, void *, const void *,
 				size_t);
+extern void gomp_copy_dev2dev (struct gomp_device_descr *,
+			       struct goacc_asyncqueue *, void *, const void *,
+			       size_t);
 extern uintptr_t gomp_map_val (struct target_mem_desc *, void **, size_t);
-extern void gomp_attach_pointer (struct gomp_device_descr *,
+extern bool gomp_attach_pointer (struct gomp_device_descr *,
 				 struct goacc_asyncqueue *, splay_tree,
 				 splay_tree_key, uintptr_t, size_t,
-				 struct gomp_coalesce_buf *, bool);
+				 struct gomp_coalesce_buf *, bool, bool);
 extern void gomp_detach_pointer (struct gomp_device_descr *,
 				 struct goacc_asyncqueue *, splay_tree_key,
 				 uintptr_t, bool, struct gomp_coalesce_buf *);
@@ -1479,7 +1553,8 @@ extern struct target_mem_desc *goacc_map_vars (struct gomp_device_descr *,
 					       struct goacc_asyncqueue *,
 					       size_t, void **, void **,
 					       size_t *, void *, bool,
-					       enum gomp_map_vars_kind);
+					       enum gomp_map_vars_kind,
+					       struct gomp_offload_session *);
 extern void goacc_unmap_vars (struct target_mem_desc *, bool,
 			      struct goacc_asyncqueue *);
 extern void gomp_init_device (struct gomp_device_descr *);
@@ -1488,6 +1563,13 @@ extern void gomp_unload_device (struct gomp_device_descr *);
 extern bool gomp_remove_var (struct gomp_device_descr *, splay_tree_key);
 extern void gomp_remove_var_async (struct gomp_device_descr *, splay_tree_key,
 				   struct goacc_asyncqueue *);
+
+/* allocator.c */
+
+extern uintptr_t gomp_map_omp_init_allocator (struct gomp_device_descr *,
+					      struct goacc_asyncqueue *,
+					      struct gomp_coalesce_buf *,
+					      void *, void *);
 
 /* work.c */
 
@@ -1662,5 +1744,8 @@ gomp_thread_to_pthread_t (struct gomp_thread *thr)
   return gomp_thread_self ();
 }
 #endif
+
+/* simple-allocator.c has its prototypes in libgomp-plugin.h so it's
+   accessible from both.  */
 
 #endif /* LIBGOMP_H */

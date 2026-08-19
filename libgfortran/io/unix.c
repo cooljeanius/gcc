@@ -1,4 +1,4 @@
-/* Copyright (C) 2002-2025 Free Software Foundation, Inc.
+/* Copyright (C) 2002-2026 Free Software Foundation, Inc.
    Contributed by Andy Vaught
    F2003 I/O support contributed by Jerry DeLisle
 
@@ -773,7 +773,7 @@ buf_init (unix_stream *s, bool unformatted)
 
   /* Try to guess a good value for the buffer size.  For formatted
      I/O, we use so many CPU cycles converting the data that there is
-     more sense in converving memory and especially cache.  For
+     more sense in conserving memory and especially cache.  For
      unformatted, a bigger block can have a large impact in some
      environments.  */
 
@@ -908,7 +908,7 @@ mem_read (stream *s, void *buf, ssize_t nbytes)
 }
 
 
-/* Stream read function for chracter(kind=4) internal units.  */
+/* Stream read function for character(kind=4) internal units.  */
 
 static ssize_t
 mem_read4 (stream *s, void *buf, ssize_t nbytes)
@@ -1791,11 +1791,11 @@ retry:
   RWUNLOCK (&unit_rwlock);
   if (u != NULL)
     {
-      LOCK (&u->lock);
+      LOCK_UNIT (u);
       if (u->closed)
 	{
 	  RDLOCK (&unit_rwlock);
-	  UNLOCK (&u->lock);
+	  UNLOCK_UNIT (u);
 	  if (predec_waiting_locked (u) == 0)
 	    free (u);
 	  goto retry;
@@ -1825,7 +1825,7 @@ flush_all_units_1 (gfc_unit *u, int min_unit)
 	    return u;
 	  if (u->s)
 	    sflush (u->s);
-	  UNLOCK (&u->lock);
+	  UNLOCK_UNIT (u);
 	}
       u = u->right;
     }
@@ -1848,7 +1848,7 @@ flush_all_units (void)
       if (u == NULL)
 	return;
 
-      LOCK (&u->lock);
+      LOCK_UNIT (u);
 
       min_unit = u->unit_number + 1;
 
@@ -1856,13 +1856,13 @@ flush_all_units (void)
 	{
 	  sflush (u->s);
 	  WRLOCK (&unit_rwlock);
-	  UNLOCK (&u->lock);
+	  UNLOCK_UNIT (u);
 	  (void) predec_waiting_locked (u);
 	}
       else
 	{
 	  WRLOCK (&unit_rwlock);
-	  UNLOCK (&u->lock);
+	  UNLOCK_UNIT (u);
 	  if (predec_waiting_locked (u) == 0)
 	    free (u);
 	}
@@ -2046,7 +2046,7 @@ inquire_access (const char *string, gfc_charlen_type len, int mode)
   int res = access (path, mode);
   free (path);
   if (res == -1)
-    return no;
+    return unknown;
 
   return yes;
 }

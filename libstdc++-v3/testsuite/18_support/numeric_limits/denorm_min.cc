@@ -2,7 +2,7 @@
 
 // 1999-08-23 bkoz
 
-// Copyright (C) 1999-2025 Free Software Foundation, Inc.
+// Copyright (C) 1999-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -43,6 +43,8 @@ test_denorm_min()
 
   VERIFY (test);
 }
+// { dg-warning "has_denorm' is deprecated" "" { target c++23 } 36 }
+// { dg-warning "denorm_present' is deprecated" "" { target c++23 } 36 }
 
 int main()
 {

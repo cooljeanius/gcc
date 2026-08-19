@@ -1,5 +1,5 @@
 /* Utilities for ipa analysis.
-   Copyright (C) 2004-2025 Free Software Foundation, Inc.
+   Copyright (C) 2004-2026 Free Software Foundation, Inc.
    Contributed by Kenneth Zadeck <zadeck@naturalbridge.com>
 
 This file is part of GCC.
@@ -134,8 +134,11 @@ possible_polymorphic_call_targets (struct cgraph_edge *e,
 {
   ipa_polymorphic_call_context context(e);
 
-  return possible_polymorphic_call_targets (e->indirect_info->otr_type,
-					    e->indirect_info->otr_token,
+  cgraph_polymorphic_indirect_info *pii
+    = as_a <cgraph_polymorphic_indirect_info *> (e->indirect_info);
+  gcc_checking_assert (pii->usable_p ());
+  return possible_polymorphic_call_targets (pii->otr_type,
+					    pii->otr_token,
 					    context,
 					    completep, cache_token,
 					    speculative);
@@ -166,8 +169,12 @@ dump_possible_polymorphic_call_targets (FILE *f, struct cgraph_edge *e,
 {
   ipa_polymorphic_call_context context(e);
 
-  dump_possible_polymorphic_call_targets (f, e->indirect_info->otr_type,
-					  e->indirect_info->otr_token,
+  cgraph_polymorphic_indirect_info *pii
+    = as_a <cgraph_polymorphic_indirect_info *> (e->indirect_info);
+  if (!pii->usable_p ())
+    return;
+  dump_possible_polymorphic_call_targets (f, pii->otr_type,
+					  pii->otr_token,
 					  context, verbose);
 }
 
@@ -180,8 +187,12 @@ possible_polymorphic_call_target_p (struct cgraph_edge *e,
 {
   ipa_polymorphic_call_context context(e);
 
-  return possible_polymorphic_call_target_p (e->indirect_info->otr_type,
-					     e->indirect_info->otr_token,
+  cgraph_polymorphic_indirect_info *pii
+    = as_a <cgraph_polymorphic_indirect_info *> (e->indirect_info);
+  if (!pii->usable_p ())
+    return true;
+  return possible_polymorphic_call_target_p (pii->otr_type,
+					     pii->otr_token,
 					     context, n);
 }
 
@@ -209,7 +220,7 @@ type_with_linkage_p (const_tree t)
   if (!TYPE_NAME (t) || TREE_CODE (TYPE_NAME (t)) != TYPE_DECL)
     return false;
 
-  /* After free_lang_data was run we can recongize
+  /* After free_lang_data was run we can recognize
      types with linkage by presence of mangled name.  */
   if (DECL_ASSEMBLER_NAME_SET_P (TYPE_NAME (t)))
     return true;
@@ -284,7 +295,7 @@ get_odr_name_for_type (tree type)
 inline bool
 lto_streaming_expected_p ()
 {
-  /* Compilation before LTO stremaing.  */
+  /* Compilation before LTO streaming.  */
   if (flag_lto && !in_lto_p && symtab->state < IPA_SSA_AFTER_INLINING)
     return true;
   /* WPA or incremental link.  */

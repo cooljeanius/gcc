@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2025 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -110,13 +110,23 @@ bool
 is_whitespace (uint32_t character)
 {
   // https://doc.rust-lang.org/reference/whitespace.html
-  return character == '\t' || character == '\n' || character == '\v'
-	 || character == '\f' || character == '\r' || character == ' '
-	 || character == 0x0085	 // next line
-	 || character == 0x200e	 // left-to-right mark
-	 || character == 0x200f	 // right-to-left mark
-	 || character == 0x2028	 // line separator
-	 || character == 0x2029; // pragraph separator
+  switch (character)
+    {
+    case '\t':
+    case '\n':
+    case '\v':
+    case '\f':
+    case '\r':
+    case ' ':
+    case 0x0085: // next line
+    case 0x200e: // left-to-right mark
+    case 0x200f: // right-to-left mark
+    case 0x2028: // line separator
+    case 0x2029: // paragraph separator
+      return true;
+    default:
+      return false;
+    }
 }
 
 bool
@@ -236,10 +246,11 @@ Lexer::dump_and_skip (int n)
 
 	  out << "<id=";
 	  out << tok->token_id_to_str ();
-	  out << (tok->has_str () ? (std::string (", text=") + tok->get_str ()
-				     + std::string (", typehint=")
-				     + std::string (tok->get_type_hint_str ()))
-				  : "")
+	  out << (tok->should_have_str ()
+		    ? (std::string (", text=") + tok->get_str ()
+		       + std::string (", typehint=")
+		       + std::string (tok->get_type_hint_str ()))
+		    : "")
 	      << " ";
 	  out << Linemap::location_to_string (loc) << '\n';
 	}
@@ -1052,6 +1063,10 @@ Lexer::build_token ()
 	    return parse_raw_byte_string (loc);
 	}
 
+      // C-style strings
+      else if (current_char == 'c' && peek_input () == '"')
+	return parse_c_string (loc);
+
       // raw identifiers and raw strings
       if (current_char == 'r')
 	{
@@ -1128,12 +1143,11 @@ Lexer::build_token ()
     }
 }
 
-// Parses in a type suffix.
-std::pair<PrimitiveCoreType, int>
-Lexer::parse_in_type_suffix ()
+// Parses in a suffix
+std::pair<std::string, int>
+Lexer::parse_in_suffix ()
 {
   std::string suffix;
-  suffix.reserve (5);
 
   int additional_length_offset = 0;
 
@@ -1141,17 +1155,6 @@ Lexer::parse_in_type_suffix ()
   while (ISALPHA (current_char.value) || ISDIGIT (current_char.value)
 	 || current_char == '_')
     {
-      if (current_char == '_')
-	{
-	  // don't add _ to suffix
-	  skip_input ();
-	  current_char = peek_input ();
-
-	  additional_length_offset++;
-
-	  continue;
-	}
-
       additional_length_offset++;
 
       suffix += current_char;
@@ -1159,74 +1162,7 @@ Lexer::parse_in_type_suffix ()
       current_char = peek_input ();
     }
 
-  if (suffix.empty ())
-    {
-      // no type suffix: do nothing but also no error
-      return std::make_pair (CORETYPE_UNKNOWN, additional_length_offset);
-    }
-  else if (suffix == "f32")
-    {
-      return std::make_pair (CORETYPE_F32, additional_length_offset);
-    }
-  else if (suffix == "f64")
-    {
-      return std::make_pair (CORETYPE_F64, additional_length_offset);
-    }
-  else if (suffix == "i8")
-    {
-      return std::make_pair (CORETYPE_I8, additional_length_offset);
-    }
-  else if (suffix == "i16")
-    {
-      return std::make_pair (CORETYPE_I16, additional_length_offset);
-    }
-  else if (suffix == "i32")
-    {
-      return std::make_pair (CORETYPE_I32, additional_length_offset);
-    }
-  else if (suffix == "i64")
-    {
-      return std::make_pair (CORETYPE_I64, additional_length_offset);
-    }
-  else if (suffix == "i128")
-    {
-      return std::make_pair (CORETYPE_I128, additional_length_offset);
-    }
-  else if (suffix == "isize")
-    {
-      return std::make_pair (CORETYPE_ISIZE, additional_length_offset);
-    }
-  else if (suffix == "u8")
-    {
-      return std::make_pair (CORETYPE_U8, additional_length_offset);
-    }
-  else if (suffix == "u16")
-    {
-      return std::make_pair (CORETYPE_U16, additional_length_offset);
-    }
-  else if (suffix == "u32")
-    {
-      return std::make_pair (CORETYPE_U32, additional_length_offset);
-    }
-  else if (suffix == "u64")
-    {
-      return std::make_pair (CORETYPE_U64, additional_length_offset);
-    }
-  else if (suffix == "u128")
-    {
-      return std::make_pair (CORETYPE_U128, additional_length_offset);
-    }
-  else if (suffix == "usize")
-    {
-      return std::make_pair (CORETYPE_USIZE, additional_length_offset);
-    }
-  else
-    {
-      rust_error_at (get_current_location (), "unknown number suffix %qs",
-		     suffix.c_str ());
-
-      return std::make_pair (CORETYPE_UNKNOWN, additional_length_offset);
-    }
+  return std::make_pair (std::move (suffix), additional_length_offset);
 }
 
 // Parses in the exponent part (if any) of a float literal.
@@ -1245,18 +1181,10 @@ Lexer::parse_in_exponent_part ()
       additional_length_offset++;
 
       // special - and + handling
-      if (current_char == '-')
+      if (current_char == '-' || current_char == '+')
 	{
-	  str += '-';
+	  str += current_char;
 
-	  skip_input ();
-	  current_char = peek_input ();
-
-	  additional_length_offset++;
-	}
-      else if (current_char == '+')
-	{
-	  // don't add + but still skip input
 	  skip_input ();
 	  current_char = peek_input ();
 
@@ -1284,15 +1212,7 @@ Lexer::parse_in_decimal ()
       if (current_char == '_')
 	{
 	  pure_decimal = false;
-	  // don't add _ to number
-	  skip_input ();
-	  current_char = peek_input ();
-
-	  additional_length_offset++;
-
-	  continue;
 	}
-
       additional_length_offset++;
 
       str += current_char;
@@ -1317,7 +1237,8 @@ Lexer::parse_escape (char opening_char)
 
   switch (current_char.value)
     {
-      case 'x': {
+    case 'x':
+      {
 	auto hex_escape_pair = parse_partial_hex_escape ();
 	long hexLong = hex_escape_pair.first;
 	additional_length_offset += hex_escape_pair.second;
@@ -1400,7 +1321,8 @@ Lexer::parse_utf8_escape ()
 
   switch (current_char.value)
     {
-      case 'x': {
+    case 'x':
+      {
 	auto hex_escape_pair = parse_partial_hex_escape ();
 	long hexLong = hex_escape_pair.first;
 	additional_length_offset += hex_escape_pair.second;
@@ -1438,7 +1360,8 @@ Lexer::parse_utf8_escape ()
     case '"':
       output_char = '"';
       break;
-      case 'u': {
+    case 'u':
+      {
 	auto unicode_escape_pair = parse_partial_unicode_escape ();
 	output_char = unicode_escape_pair.first;
 	additional_length_offset += unicode_escape_pair.second;
@@ -1830,6 +1753,82 @@ Lexer::parse_byte_string (location_t loc)
   return Token::make_byte_string (loc, std::move (str));
 }
 
+// Parses a C-style string.
+TokenPtr
+Lexer::parse_c_string (location_t loc)
+{
+  skip_input ();
+  current_column++;
+
+  // Mostly same code copied from parse_string...
+
+  std::string str;
+  str.reserve (16); // some sensible default
+
+  current_char = peek_input ();
+
+  const location_t string_begin_locus = get_current_location ();
+
+  while (current_char.value != '"' && !current_char.is_eof ())
+    {
+      if (current_char.value == '\\')
+	{
+	  int length = 1;
+
+	  auto escape_pair = parse_escape ('"');
+	  current_char = std::get<0> (escape_pair);
+
+	  if (current_char == Codepoint (0) && std::get<2> (escape_pair))
+	    length = std::get<1> (escape_pair) - 1;
+	  else
+	    length += std::get<1> (escape_pair);
+
+	  if (current_char != Codepoint (0) || !std::get<2> (escape_pair))
+	    str += current_char.as_string ();
+
+	  current_column += length;
+
+	  // FIXME: parse_escape does not update current_char correctly.
+	  current_char = peek_input ();
+	  continue;
+	}
+
+      current_column++;
+      if (current_char.value == '\n')
+	{
+	  current_line++;
+	  current_column = 1;
+	  // tell line_table that new line starts
+	  start_line (current_line, max_column_hint);
+	}
+
+      str += current_char;
+      skip_input ();
+      current_char = peek_input ();
+    }
+
+  if (current_char.value == '"')
+    {
+      current_column++;
+
+      skip_input ();
+      current_char = peek_input ();
+    }
+  else if (current_char.is_eof ())
+    {
+      rust_error_at (string_begin_locus, "unended C string literal");
+      return Token::make (END_OF_FILE, get_current_location ());
+    }
+  else
+    {
+      rust_unreachable ();
+    }
+
+  str.shrink_to_fit ();
+
+  return Token::make_c_string (loc, std::move (str));
+}
+
 // Parses a raw byte string.
 TokenPtr
 Lexer::parse_raw_byte_string (location_t loc)
@@ -1894,17 +1893,17 @@ Lexer::parse_raw_byte_string (location_t loc)
 	      break;
 	    }
 	}
+      else if (current_char.is_eof ())
+	{
+	  rust_error_at (string_begin_locus, "unended raw byte string literal");
+	  return Token::make (END_OF_FILE, get_current_location ());
+	}
       else if (current_char.value > 127)
 	{
 	  rust_error_at (get_current_location (),
 			 "character %qs in raw byte string out of range",
 			 current_char.as_string ().c_str ());
 	  current_char = 0;
-	}
-      else if (current_char.is_eof ())
-	{
-	  rust_error_at (string_begin_locus, "unended raw byte string literal");
-	  return Token::make (END_OF_FILE, get_current_location ());
 	}
 
       length++;
@@ -2225,93 +2224,79 @@ Lexer::parse_raw_string (location_t loc, int initial_hash_count)
 template <typename IsDigitFunc>
 TokenPtr
 Lexer::parse_non_decimal_int_literal (location_t loc, IsDigitFunc is_digit_func,
-				      std::string existent_str, int base)
+				      IntegerLiteralBase base)
 {
-  int length = 1;
-
+  std::string raw_str = "0";
+  raw_str += current_char; // x, o, b
   skip_input ();
+
+  int length = 2;
+  bool has_valid_digit = false;
+
   current_char = peek_input ();
 
-  length++;
-
   // loop through to add entire number to string
-  while (is_digit_func (current_char.value) || current_char == '_')
+  while (true)
     {
-      if (current_char == '_')
+      if (is_digit_func (current_char.value))
 	{
-	  // don't add _ to number
-	  skip_input ();
-	  current_char = peek_input ();
-
-	  length++;
-
-	  continue;
+	  has_valid_digit = true;
 	}
-
+      else if (current_char != '_')
+	{
+	  break;
+	}
       length++;
 
-      // add raw numbers
-      existent_str += current_char;
+      raw_str += current_char;
       skip_input ();
       current_char = peek_input ();
     }
 
-  // convert value to decimal representation
-  long dec_num = std::strtol (existent_str.c_str (), nullptr, base);
+  int suffix_start = raw_str.length ();
 
-  existent_str = std::to_string (dec_num);
-
-  // parse in type suffix if it exists
-  auto type_suffix_pair = parse_in_type_suffix ();
-  PrimitiveCoreType type_hint = type_suffix_pair.first;
-  length += type_suffix_pair.second;
+  // parse in suffix if it exists
+  auto suffix_pair = parse_in_suffix ();
+  PrimitiveCoreType type_hint = CORETYPE_UNKNOWN;
+  raw_str += suffix_pair.first;
+  length += suffix_pair.second;
 
   current_column += length;
 
-  if (type_hint == CORETYPE_F32 || type_hint == CORETYPE_F64)
+  if (!has_valid_digit)
     {
-      rust_error_at (get_current_location (),
-		     "invalid type suffix %qs for integer (%s) literal",
-		     get_type_hint_string (type_hint),
-		     base == 16
-		       ? "hex"
-		       : (base == 8 ? "octal"
-				    : (base == 2 ? "binary"
-						 : "<insert unknown base>")));
-      return nullptr;
+      rust_error_at (loc, ErrorCode::E0768, "no valid digits found for number");
     }
 
   loc += length - 1;
 
-  return Token::make_int (loc, std::move (existent_str), type_hint);
+  return Token::make_int (loc, std::move (raw_str), suffix_start, base,
+			  type_hint);
 }
 
 // Parses a hex, binary or octal int literal.
 TokenPtr
 Lexer::parse_non_decimal_int_literals (location_t loc)
 {
-  std::string str;
-  str.reserve (16); // some sensible default
-  str += current_char;
-
   current_char = peek_input ();
 
   if (current_char == 'x')
     {
       // hex (integer only)
-      return parse_non_decimal_int_literal (loc, is_x_digit, str + "x", 16);
+      return parse_non_decimal_int_literal (loc, is_x_digit,
+					    IntegerLiteralBase::Hex);
     }
   else if (current_char == 'o')
     {
       // octal (integer only)
       return parse_non_decimal_int_literal (loc, is_octal_digit,
-					    std::move (str), 8);
+					    IntegerLiteralBase::Octal);
     }
   else if (current_char == 'b')
     {
       // binary (integer only)
-      return parse_non_decimal_int_literal (loc, is_bin_digit, std::move (str),
-					    2);
+      return parse_non_decimal_int_literal (loc, is_bin_digit,
+					    IntegerLiteralBase::Binary);
     }
   else
     {
@@ -2368,27 +2353,20 @@ Lexer::parse_decimal_int_or_float (location_t loc)
       str += exponent_pair.first;
       length += exponent_pair.second;
 
-      // parse in type suffix if it exists
-      auto type_suffix_pair = parse_in_type_suffix ();
-      PrimitiveCoreType type_hint = type_suffix_pair.first;
-      length += type_suffix_pair.second;
+      int suffix_start = str.length ();
 
-      if (type_hint != CORETYPE_F32 && type_hint != CORETYPE_F64
-	  && type_hint != CORETYPE_UNKNOWN)
-	{
-	  rust_error_at (get_current_location (),
-			 "invalid type suffix %qs for floating-point literal",
-			 get_type_hint_string (type_hint));
-	  // ignore invalid type suffix as everything else seems fine
-	  type_hint = CORETYPE_UNKNOWN;
-	}
+      // parse in type suffix if it exists
+      auto suffix_pair = parse_in_suffix ();
+      PrimitiveCoreType type_hint = CORETYPE_UNKNOWN;
+      str += suffix_pair.first;
+      length += suffix_pair.second;
 
       current_column += length;
 
       loc += length - 1;
 
       str.shrink_to_fit ();
-      return Token::make_float (loc, std::move (str), type_hint);
+      return Token::make_float (loc, std::move (str), suffix_start, type_hint);
     }
   else if (current_char == '.'
 	   && check_valid_float_dot_end (peek_input (1).value))
@@ -2408,7 +2386,9 @@ Lexer::parse_decimal_int_or_float (location_t loc)
       loc += length - 1;
 
       str.shrink_to_fit ();
-      return Token::make_float (loc, std::move (str), CORETYPE_UNKNOWN);
+      auto suffix_start = str.length ();
+      return Token::make_float (loc, std::move (str), suffix_start,
+				CORETYPE_UNKNOWN);
     }
   else if (current_char == 'E' || current_char == 'e')
     {
@@ -2419,50 +2399,48 @@ Lexer::parse_decimal_int_or_float (location_t loc)
       str += exponent_pair.first;
       length += exponent_pair.second;
 
-      // parse in type suffix if it exists
-      auto type_suffix_pair = parse_in_type_suffix ();
-      PrimitiveCoreType type_hint = type_suffix_pair.first;
-      length += type_suffix_pair.second;
+      int suffix_start = str.length ();
 
-      if (type_hint != CORETYPE_F32 && type_hint != CORETYPE_F64
-	  && type_hint != CORETYPE_UNKNOWN)
-	{
-	  rust_error_at (get_current_location (),
-			 "invalid type suffix %qs for floating-point literal",
-			 get_type_hint_string (type_hint));
-	  // ignore invalid type suffix as everything else seems fine
-	  type_hint = CORETYPE_UNKNOWN;
-	}
+      // parse in type suffix if it exists
+      auto suffix_pair = parse_in_suffix ();
+      PrimitiveCoreType type_hint = CORETYPE_UNKNOWN;
+      str += suffix_pair.first;
+      length += suffix_pair.second;
 
       current_column += length;
 
       loc += length - 1;
 
       str.shrink_to_fit ();
-      return Token::make_float (loc, std::move (str), type_hint);
+      return Token::make_float (loc, std::move (str), suffix_start, type_hint);
     }
   else
     {
       // is an integer
 
+      int suffix_start = str.length ();
+
       // parse in type suffix if it exists
-      auto type_suffix_pair = parse_in_type_suffix ();
-      PrimitiveCoreType type_hint = type_suffix_pair.first;
+      auto suffix_pair = parse_in_suffix ();
+      str += suffix_pair.first;
+
+      PrimitiveCoreType type_hint = CORETYPE_UNKNOWN;
+
       /* A "real" pure decimal doesn't have a suffix and no zero prefix.  */
-      if (type_hint == CORETYPE_UNKNOWN)
-	{
-	  bool pure_decimal = std::get<2> (initial_decimal);
-	  if (pure_decimal && (!first_zero || str.size () == 1))
-	    type_hint = CORETYPE_PURE_DECIMAL;
-	}
-      length += type_suffix_pair.second;
+      bool pure_decimal = std::get<2> (initial_decimal);
+      if (pure_decimal && (!first_zero || suffix_start == 1)
+	  && suffix_pair.first.empty ())
+	type_hint = CORETYPE_PURE_DECIMAL;
+
+      length += suffix_pair.second;
 
       current_column += length;
 
       loc += length - 1;
 
       str.shrink_to_fit ();
-      return Token::make_int (loc, std::move (str), type_hint);
+      return Token::make_int (loc, std::move (str), suffix_start,
+			      IntegerLiteralBase::Decimal, type_hint);
     }
 }
 
@@ -2635,37 +2613,37 @@ void
 rust_input_source_test ()
 {
   // ASCII
-  std::string src = u8"_abcde\tXYZ\v\f";
-  std::vector<uint32_t> expected
-    = {'_', 'a', 'b', 'c', 'd', 'e', '\t', 'X', 'Y', 'Z', '\v', '\f'};
+  std::string src = (const char *) u8"_abcde\tXYZ\v\f";
+  std::vector<uint32_t> expected = {u'_',  u'a', u'b', u'c', u'd',  u'e',
+				    u'\t', u'X', u'Y', u'Z', u'\v', u'\f'};
   test_buffer_input_source (src, expected);
 
   // BOM
-  src = u8"\xef\xbb\xbfOK";
-  expected = {'O', 'K'};
+  src = (const char *) u8"\xef\xbb\xbfOK";
+  expected = {u'O', u'K'};
   test_buffer_input_source (src, expected);
 
   // Russian
-  src = u8"приве́т";
-  expected = {L'п',
-	      L'р',
-	      L'и',
-	      L'в',
+  src = (const char *) u8"приве́т";
+  expected = {u'п',
+	      u'р',
+	      u'и',
+	      u'в',
 	      0x0435 /* CYRILLIC SMALL LETTER IE е */,
 	      0x301 /* COMBINING ACUTE ACCENT ́ */,
-	      L'т'};
+	      u'т'};
   test_buffer_input_source (src, expected);
 
-  src = u8"❤️🦀";
+  src = (const char *) u8"❤️🦀";
   expected = {0x2764 /* HEAVY BLACK HEART */,
-	      0xfe0f /* VARIATION SELECTOR-16 */, L'🦀'};
+	      0xfe0f /* VARIATION SELECTOR-16 */, U'🦀'};
   test_buffer_input_source (src, expected);
 
-  src = u8"こんにちは";
-  expected = {L'こ', L'ん', L'に', L'ち', L'は'};
+  src = (const char *) u8"こんにちは";
+  expected = {u'こ', u'ん', u'に', u'ち', u'は'};
   test_file_input_source (src, expected);
 
-  src = u8"👮‍♂👩‍⚕";
+  src = (const char *) u8"👮‍♂👩‍⚕";
   expected
     = {0x1f46e /* POLICE OFFICER */,   0x200d /* ZERO WIDTH JOINER */,
        0x2642 /* MALE SIGN */,	       0x1f469 /* WOMAN */,

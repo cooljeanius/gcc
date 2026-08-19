@@ -45,6 +45,7 @@ GNAT Reference Manual
    gnat_rm/implementation_defined_attributes
    gnat_rm/standard_and_implementation_defined_restrictions
    gnat_rm/implementation_advice
+   gnat_rm/gnat_implementation_mode
    gnat_rm/implementation_defined_characteristics
    gnat_rm/intrinsic_subprograms
    gnat_rm/representation_clauses_and_pragmas
@@ -54,7 +55,7 @@ GNAT Reference Manual
    gnat_rm/interfacing_to_other_languages
    gnat_rm/specialized_needs_annexes
    gnat_rm/implementation_of_specific_ada_features
-   gnat_rm/implementation_of_ada_2012_features
+   gnat_rm/implementation_of_ada_2022_features
    gnat_rm/gnat_language_extensions
    gnat_rm/security_hardening_features
    gnat_rm/obsolescent_features

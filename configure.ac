@@ -24,6 +24,7 @@ m4_include(config/override.m4)
 m4_include(config/proginstall.m4)
 m4_include(config/elf.m4)
 m4_include(config/ax_cxx_compile_stdcxx.m4)
+m4_include(config/clang-plugin.m4)
 m4_include(config/gcc-plugin.m4)
 m4_include([libtool.m4])
 m4_include([ltoptions.m4])
@@ -32,7 +33,8 @@ m4_include([ltversion.m4])
 m4_include([lt~obsolete.m4])
 m4_include([config/isl.m4])
 
-AC_INIT(move-if-change)
+AC_INIT
+AC_CONFIG_SRCDIR([move-if-change])
 AC_DISABLE_OPTION_CHECKING
 
 progname=$0
@@ -70,14 +72,14 @@ ACX_NONCANONICAL_TARGET
 
 dnl Autoconf 2.5x and later will set a default program prefix if
 dnl --target was used, even if it was the same as --host.  Disable
-dnl that behavior.  This must be done before AC_CANONICAL_SYSTEM
+dnl that behavior.  This must be done before AC_CANONICAL_TARGET
 dnl to take effect.
 test "$host_noncanonical" = "$target_noncanonical" &&
   test "$program_prefix$program_suffix$program_transform_name" = \
     NONENONEs,x,x, &&
   program_transform_name=s,y,y,
 
-AC_CANONICAL_SYSTEM
+AC_CANONICAL_TARGET
 AC_ARG_PROGRAM
 
 m4_pattern_allow([^AS_FOR_TARGET$])dnl
@@ -164,6 +166,7 @@ target_libraries="target-libgcc \
 		target-libgcobol \
 		target-libada \
 		target-libgm2 \
+                target-libga68 \
 		target-libgo \
 		target-libgrust \
 		target-libphobos \
@@ -512,6 +515,11 @@ if test "${ENABLE_LIBGM2}" != "yes" ; then
   noconfigdirs="$noconfigdirs gm2tools"
 fi
 
+AC_ARG_ENABLE(libga68,
+[AS_HELP_STRING([--enable-libga68], [build libga68 directory])],
+ENABLE_LIBGA68=$enableval,
+ENABLE_LIBGA68=yes)
+
 AC_ARG_ENABLE(libssp,
 [AS_HELP_STRING([--enable-libssp], [build libssp directory])],
 ENABLE_LIBSSP=$enableval,
@@ -620,6 +628,13 @@ case "${target}" in
     noconfigdirs="$noconfigdirs target-libquadmath"
     ;;
 esac
+
+cpu_type=`echo ${host} | sed 's/-.*$//'`
+# Special case cpu_type for x86_64 as it shares AUTO_PROFILE from i386.
+if test "${cpu_type}" = "x86_64" ; then
+  cpu_type="i386"
+fi
+AC_SUBST(cpu_type)
 
 # Disable libssp for some systems.
 case "${target}" in
@@ -791,31 +806,28 @@ case ,${enable_languages}, in
   *,cobol,*)
     case ,${enable_languages}, in
       *,c++,*)
-      ;;
+        ;;
       *)
         # We have an explicit cobol, but no c++.  We need c++, because cobol
         # requires libstdc++
         enable_languages="$enable_languages,c++"
-      ;;
+        ;;
     esac
     ;;
   *)
     case "${target}" in
-      *-*-darwin*)
+      aarch64-*-linux*|x86_64-*-linux*)
+        ;;
+      *-*-*)
         unsupported_languages="$unsupported_languages cobol"
         ;;
-      x86_64-*-*|aarch64-*-*)
-        ;;
-      *-*-*)
-    unsupported_languages="$unsupported_languages cobol"
-    ;;
     esac
     case "${host}" in
-      x86_64-*-*|aarch64-*-*)
+      aarch64-*-linux*|x86_64-*-linux*)
         ;;
       *-*-*)
-    unsupported_languages="$unsupported_languages cobol"
-    ;;
+        unsupported_languages="$unsupported_languages cobol"
+        ;;
     esac
     ;;
 esac
@@ -1102,6 +1114,7 @@ case "${target}" in
     noconfigdirs="$noconfigdirs sim target-rda"
     ;;
   amdgcn*-*-*)
+    noconfigdirs="$noconfigdirs ld gas"
     ;;
   arm-*-darwin*)
     noconfigdirs="$noconfigdirs ld gas gdb gprof"
@@ -1315,10 +1328,6 @@ case "${target}" in
     # always build newlib.
     skipdirs=`echo " ${skipdirs} " | sed -e 's/ target-newlib / /'`
     ;;
-    # This is temporary until we can link against shared libraries
-  powerpcle-*-solaris*)
-    noconfigdirs="$noconfigdirs gdb sim tcl tk itcl"
-    ;;
   powerpc-*-beos*)
     noconfigdirs="$noconfigdirs gdb"
     ;;
@@ -1444,34 +1453,38 @@ if test "${build}" != "${host}" ; then
   AR_FOR_BUILD=${AR_FOR_BUILD-ar}
   AS_FOR_BUILD=${AS_FOR_BUILD-as}
   CC_FOR_BUILD=${CC_FOR_BUILD-gcc}
-  CPP_FOR_BUILD="${CPP_FOR_BUILD-\$(CC_FOR_BUILD) -E}"
   CXX_FOR_BUILD=${CXX_FOR_BUILD-g++}
+  DLLTOOL_FOR_BUILD=${DLLTOOL_FOR_BUILD-dlltool}
   DSYMUTIL_FOR_BUILD=${DSYMUTIL_FOR_BUILD-dsymutil}
   GFORTRAN_FOR_BUILD=${GFORTRAN_FOR_BUILD-gfortran}
+  A68_FOR_BUILD=${A68_FOR_BUILD-ga68}
   GOC_FOR_BUILD=${GOC_FOR_BUILD-gccgo}
   GDC_FOR_BUILD=${GDC_FOR_BUILD-gdc}
-  DLLTOOL_FOR_BUILD=${DLLTOOL_FOR_BUILD-dlltool}
+  GNATMAKE_FOR_BUILD=${GNATMAKE_FOR_BUILD-gnatmake}
   LD_FOR_BUILD=${LD_FOR_BUILD-ld}
   NM_FOR_BUILD=${NM_FOR_BUILD-nm}
   RANLIB_FOR_BUILD=${RANLIB_FOR_BUILD-ranlib}
   WINDRES_FOR_BUILD=${WINDRES_FOR_BUILD-windres}
   WINDMC_FOR_BUILD=${WINDMC_FOR_BUILD-windmc}
 else
-  AR_FOR_BUILD="\$(AR)"
-  AS_FOR_BUILD="\$(AS)"
-  CC_FOR_BUILD="\$(CC)"
-  CXX_FOR_BUILD="\$(CXX)"
-  DSYMUTIL_FOR_BUILD="\$(DSYMUTIL)"
-  GFORTRAN_FOR_BUILD="\$(GFORTRAN)"
-  GOC_FOR_BUILD="\$(GOC)"
-  GDC_FOR_BUILD="\$(GDC)"
-  DLLTOOL_FOR_BUILD="\$(DLLTOOL)"
-  LD_FOR_BUILD="\$(LD)"
-  NM_FOR_BUILD="\$(NM)"
-  RANLIB_FOR_BUILD="\$(RANLIB)"
-  WINDRES_FOR_BUILD="\$(WINDRES)"
-  WINDMC_FOR_BUILD="\$(WINDMC)"
+  AR_FOR_BUILD="${AR_FOR_BUILD-\$(AR)}"
+  AS_FOR_BUILD="${AS_FOR_BUILD-\$(AS)}"
+  CC_FOR_BUILD="${CC_FOR_BUILD-\$(CC)}"
+  CXX_FOR_BUILD="${CXX_FOR_BUILD-\$(CXX)}"
+  DLLTOOL_FOR_BUILD="${DLLTOOL_FOR_BUILD-\$(DLLTOOL)}"
+  DSYMUTIL_FOR_BUILD="${DSYMUTIL_FOR_BUILD-\$(DSYMUTIL)}"
+  GFORTRAN_FOR_BUILD="${GFORTRAN_FOR_BUILD-\$(GFORTRAN)}"
+  A68_FOR_BUILD="${A68_FOR_BUILD-\$(A68)}"
+  GOC_FOR_BUILD="${GOC_FOR_BUILD-\$(GOC)}"
+  GDC_FOR_BUILD="${GDC_FOR_BUILD-\$(GDC)}"
+  GNATMAKE_FOR_BUILD="${GNATMAKE_FOR_BUILD-\$(GNATMAKE)}"
+  LD_FOR_BUILD="${LD_FOR_BUILD-\$(LD)}"
+  NM_FOR_BUILD="${NM_FOR_BUILD-\$(NM)}"
+  RANLIB_FOR_BUILD="${RANLIB_FOR_BUILD-\$(RANLIB)}"
+  WINDRES_FOR_BUILD="${WINDRES_FOR_BUILD-\$(WINDRES)}"
+  WINDMC_FOR_BUILD="${WINDMC_FOR_BUILD-\$(WINDMC)}"
 fi
+CPP_FOR_BUILD="${CPP_FOR_BUILD-\$(CC_FOR_BUILD) -E}"
 
 AC_PROG_CC_C99
 AC_PROG_CXX
@@ -1516,6 +1529,7 @@ int main() {}])],
 fi
 
 ACX_PROG_GNAT
+ACX_PROG_A68
 ACX_PROG_GDC
 ACX_PROG_CARGO
 ACX_PROG_CMP_IGNORE_INITIAL
@@ -1775,36 +1789,36 @@ if test "x$require_gmp" = xyes && test "x$have_gmp" = xno; then
   CFLAGS="$CFLAGS $gmpinc"
   # Check for the recommended and required versions of GMP.
   AC_MSG_CHECKING([for the correct version of gmp.h])
-  AC_TRY_COMPILE([#include "gmp.h"],[
+  AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#include "gmp.h"]], [[
   #define GCC_GMP_VERSION_NUM(a,b,c) (((a) << 16L) | ((b) << 8) | (c))
   #define GCC_GMP_VERSION GCC_GMP_VERSION_NUM(__GNU_MP_VERSION,__GNU_MP_VERSION_MINOR,__GNU_MP_VERSION_PATCHLEVEL)
   #if GCC_GMP_VERSION < GCC_GMP_VERSION_NUM(4,2,3)
   choke me
   #endif
-  ], [AC_TRY_COMPILE([#include <gmp.h>],[
+  ]])], [AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#include <gmp.h>]], [[
   #define GCC_GMP_VERSION_NUM(a,b,c) (((a) << 16L) | ((b) << 8) | (c))
   #define GCC_GMP_VERSION GCC_GMP_VERSION_NUM(__GNU_MP_VERSION,__GNU_MP_VERSION_MINOR,__GNU_MP_VERSION_PATCHLEVEL)
   #if GCC_GMP_VERSION < GCC_GMP_VERSION_NUM(4,3,2)
   choke me
   #endif
-  ], [AC_MSG_RESULT([yes])], [AC_MSG_RESULT([buggy but acceptable])])],
+  ]])], [AC_MSG_RESULT([yes])], [AC_MSG_RESULT([buggy but acceptable])])],
    [AC_MSG_RESULT([no]); have_gmp=no])
 
   # If we have GMP, check the MPFR version.
   if test x"$have_gmp" = xyes; then
     # Check for the recommended and required versions of MPFR.
     AC_MSG_CHECKING([for the correct version of mpfr.h])
-    AC_TRY_COMPILE([#include <gmp.h>
-    #include <mpfr.h>],[
+    AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#include <gmp.h>
+    #include <mpfr.h>]],[[
     #if MPFR_VERSION < MPFR_VERSION_NUM(3,1,0)
     choke me
     #endif
-    ], [AC_TRY_COMPILE([#include <gmp.h>
-    #include <mpfr.h>],[
+    ]])], [AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#include <gmp.h>
+    #include <mpfr.h>]],[[
     #if MPFR_VERSION < MPFR_VERSION_NUM(3,1,6)
     choke me
     #endif
-    ], [AC_MSG_RESULT([yes])], [AC_MSG_RESULT([buggy but acceptable])])],
+    ]])], [AC_MSG_RESULT([yes])], [AC_MSG_RESULT([buggy but acceptable])])],
      [AC_MSG_RESULT([no]); have_gmp=no])
   fi
 
@@ -1812,15 +1826,15 @@ if test "x$require_gmp" = xyes && test "x$have_gmp" = xno; then
   if test "x$require_mpc" = xyes && test x"$have_gmp" = xyes ; then
     # Check for the recommended and required versions of MPC.
     AC_MSG_CHECKING([for the correct version of mpc.h])
-    AC_TRY_COMPILE([#include <mpc.h>],[
+    AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#include <mpc.h>]], [[
     #if MPC_VERSION < MPC_VERSION_NUM(0,8,0)
     choke me
     #endif
-    ], [AC_TRY_COMPILE([#include <mpc.h>],[
+    ]])], [AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#include <mpc.h>]], [[
     #if MPC_VERSION < MPC_VERSION_NUM(0,8,1)
     choke me
     #endif
-    ], [AC_MSG_RESULT([yes])], [AC_MSG_RESULT([buggy but acceptable])])],
+    ]])], [AC_MSG_RESULT([yes])], [AC_MSG_RESULT([buggy but acceptable])])],
      [AC_MSG_RESULT([no]); have_gmp=no])
   fi
 
@@ -1829,7 +1843,7 @@ if test "x$require_gmp" = xyes && test "x$have_gmp" = xno; then
     saved_LIBS="$LIBS"
     LIBS="$LIBS $gmplibs"
     AC_MSG_CHECKING([for the correct version of the gmp/mpfr libraries])
-    AC_TRY_LINK([#include <mpfr.h>],[
+    AC_LINK_IFELSE([AC_LANG_PROGRAM([[#include <mpfr.h>]], [[
     mpfr_t n;
     mpfr_t x;
     int t;
@@ -1840,7 +1854,7 @@ if test "x$require_gmp" = xyes && test "x$have_gmp" = xno; then
     mpfr_subnormalize (x, t, MPFR_RNDN);
     mpfr_clear(n);
     mpfr_clear(x);
-    ], [AC_MSG_RESULT([yes])], [AC_MSG_RESULT([no]); have_gmp=no])
+    ]])], [AC_MSG_RESULT([yes])], [AC_MSG_RESULT([no]); have_gmp=no])
     LIBS="$saved_LIBS"
   fi
 
@@ -1849,7 +1863,7 @@ if test "x$require_gmp" = xyes && test "x$have_gmp" = xno; then
     saved_LIBS="$LIBS"
     LIBS="$LIBS $gmplibs"
     AC_MSG_CHECKING([for the correct version of the mpc libraries])
-    AC_TRY_LINK([#include <mpc.h>],[
+    AC_LINK_IFELSE([AC_LANG_PROGRAM([[#include <mpc.h>]], [[
     mpc_t c;
     mpc_init2 (c, 53);
     mpc_set_ui_ui (c, 1, 1, MPC_RNDNN);
@@ -1857,7 +1871,7 @@ if test "x$require_gmp" = xyes && test "x$have_gmp" = xno; then
     mpc_pow (c, c, c, MPC_RNDNN);
     mpc_acosh (c, c, MPC_RNDNN);
     mpc_clear (c);
-    ], [AC_MSG_RESULT([yes])], [AC_MSG_RESULT([no]); have_gmp=no])
+    ]])], [AC_MSG_RESULT([yes])], [AC_MSG_RESULT([no]); have_gmp=no])
     LIBS="$saved_LIBS"
   fi
 
@@ -2242,16 +2256,40 @@ if test -d ${srcdir}/gcc; then
   # 'f95' is the old name for the 'fortran' language. We issue a warning
   # and make the substitution.
   case ,${enable_languages}, in
-    *,f95,*)
+    *,f95,* | *,^f95,*)
       echo configure.ac: warning: 'f95' as language name is deprecated, use 'fortran' instead 1>&2
       enable_languages=`echo "${enable_languages}" | sed -e 's/f95/fortran/g'`
       ;;
   esac
 
+  # Extract the language disable requests.  N.B. some non-GNU sed, e.g. on SunOS,
+  # will ignore a line without a trailing newline.
+  disable_languages=`echo "$enable_languages" | tr , "$as_nl" | grep '^\^' | (tr "$as_nl" , ; echo) | sed -e 's/\^//g' -e 's/,$//'`
+  new_enable_languages=
+  for lang in `echo "$enable_languages" | tr , ' '`; do
+    case "${lang}:,${disable_languages}," in
+      ^default:* | ^all:*)
+        AC_MSG_ERROR([only specific individual languages may be disabled, not "$lang"])
+        ;;
+      ^lto:*)
+	AC_MSG_ERROR([LTO should be disabled with the "--disable-lto" argument, not via "--enable-languages=^lto"])
+	;;
+      ^c:*)
+	AC_MSG_ERROR([language "c" cannot be disabled])
+	;;
+      ^* | ${lang}:*,${lang},*) ;;
+      *) new_enable_languages="${new_enable_languages}${lang}," ;;
+    esac
+  done
+  enable_languages=`echo "$new_enable_languages" | sed -e 's/,$//'`
+
   # If bootstrapping, C++ must be enabled.
-  case ",$enable_languages,:$enable_bootstrap" in
-    *,c++,*:*) ;;
-    *:yes)
+  case ",${enable_languages},:${enable_bootstrap}:,${disable_languages}," in
+    *:yes:*,c++,*)
+      AC_MSG_ERROR([c++ cannot be disabled for a bootstrap build])
+      ;;
+    *,c++,*:*:*) ;;
+    *:yes:*)
       if test -f ${srcdir}/gcc/cp/config-lang.in; then
         enable_languages="${enable_languages},c++"
       else
@@ -2260,9 +2298,9 @@ if test -d ${srcdir}/gcc; then
       ;;
   esac
 
-  # First scan to see if an enabled language requires some other language.
-  # We assume that a given config-lang.in will list all the language
-  # front ends it requires, even if some are required indirectly.
+  # Collect the list of default languages; keep it prefixed and suffixed with
+  # commas for later convenience.
+  default_languages=,
   for lang_frag in ${srcdir}/gcc/*/config-lang.in .. ; do
     case ${lang_frag} in
       ..) ;;
@@ -2270,28 +2308,85 @@ if test -d ${srcdir}/gcc; then
       # an apparent bug in bash 1.12 on linux.
       ${srcdir}/gcc/[[*]]/config-lang.in) ;;
       *)
-        # From the config-lang.in, get $language, $lang_requires, and
-        # $lang_requires_boot_languages.
+        # From the config-lang.in, get $language and $build_by_default.
         language=
-        lang_requires=
-        lang_requires_boot_languages=
-        # set srcdir during sourcing lang_frag to the gcc dir.
-        # Sadly overriding srcdir on the . line doesn't work in plain sh as it
-        # pollutes this shell
+        build_by_default=yes
+        # See note below about saving srcdir.
         saved_srcdir=${srcdir}
         srcdir=${srcdir}/gcc . ${lang_frag}
         srcdir=${saved_srcdir}
-        for other in ${lang_requires} ${lang_requires_boot_languages}; do
-          case ,${enable_languages}, in
-	    *,$other,*) ;;
-	    *,default,*) ;;
-	    *,all,*) ;;
-	    *,$language,*)
-	      echo " \`$other' language required by \`$language'; enabling" 1>&2
-	      enable_languages="${enable_languages},${other}"
+        if test x"$build_by_default" = xyes; then
+          default_languages="${default_languages}${language},"
+        fi
+        ;;
+    esac
+  done
+
+  # First scan to see if an enabled language requires some other language.
+  # We assume that a given config-lang.in will list all the language
+  # front ends it requires, even if some are required indirectly.
+  delayed_error_languages=,
+  for lang_frag in ${srcdir}/gcc/*/config-lang.in .. ; do
+    case ${lang_frag} in
+      ..) ;;
+      # The odd quoting in the next line works around
+      # an apparent bug in bash 1.12 on linux.
+      ${srcdir}/gcc/[[*]]/config-lang.in) ;;
+      *)
+	# From the config-lang.in, get $language, $lang_requires, and
+	# $lang_requires_boot_languages.
+	language=
+	lang_requires=
+	lang_requires_boot_languages=
+	# set srcdir during sourcing lang_frag to the gcc dir.
+	# Sadly overriding srcdir on the . line doesn't work in plain sh as it
+	# pollutes this shell
+	saved_srcdir=${srcdir}
+	srcdir=${srcdir}/gcc . ${lang_frag}
+	srcdir=${saved_srcdir}
+
+	# Determine if this language was requested; if not, don't bring in its
+	# dependencies.  To match historical behavior, do bring in the dependencies
+	# for unsupported languages that were not explicitly disabled.
+	case ,${disable_languages}, in
+	  *,${language},*) continue ;;
+	esac
+	case ,${enable_languages}, in
+	  *,${language},* | *,all,*) ;;
+	  *,default,*)
+            case ${default_languages} in
+              *,${language},*) ;;
+              *) continue ;;
+            esac
+            ;;
+	  *) continue ;;
+	esac
+
+	# This language was indeed requested; make sure all dependencies are
+	# also enabled.
+	for other in ${lang_requires} ${lang_requires_boot_languages}; do
+	  need_to_add=0
+	  case ,${enable_languages},:,${disable_languages}, in
+            *:*,${other},*)
+	      # This language cannot be built because one of its dependencies
+	      # was explicitly disabled.  Don't complain just yet, though; other
+	      # checks later may decide the language won't be built anyway.
+	      delayed_error_languages="${delayed_error_languages}${language}:${other},"
+              ;;
+            *,${other},*:* | *,all,*:*) ;;
+            *,default,*:*)
+	      case ${default_languages} in
+		*,${other},*) ;;
+		*) need_to_add=1 ;;
+	      esac
 	      ;;
+	    *) need_to_add=1 ;;
 	  esac
-        done
+	  if test $need_to_add = 1; then
+	    echo " \`$other' language required by \`$language'; enabling" 1>&2
+	    enable_languages="${enable_languages},${other}"
+	  fi
+	done
 	for other in ${lang_requires_boot_languages} ; do
 	  if test "$other" != "c"; then
 	    case ,${enable_stage1_languages}, in
@@ -2299,17 +2394,13 @@ if test -d ${srcdir}/gcc; then
 	      *,default,*) ;;
 	      *,all,*) ;;
 	      *)
-		case ,${enable_languages}, in
-		  *,$language,*)
-		    echo " '$other' language required by '$language' in stage 1; enabling" 1>&2
-		    enable_stage1_languages="$enable_stage1_languages,${other}"
-		    ;;
-		esac
+		echo " '$other' language required by '$language' in stage 1; enabling" 1>&2
+		enable_stage1_languages="$enable_stage1_languages,${other}"
 		;;
 	    esac
-          fi
-        done
-        ;;
+	  fi
+	done
+	;;
     esac
   done
 
@@ -2348,13 +2439,12 @@ if test -d ${srcdir}/gcc; then
       ${srcdir}/gcc/[[*]]/config-lang.in) ;;
       *)
         # From the config-lang.in, get $language, $target_libs, 
-        # $lang_dirs, $boot_language, and $build_by_default
+        # $lang_dirs, and $boot_language.
         language=
         target_libs=
         lang_dirs=
         subdir_requires=
         boot_language=no
-        build_by_default=yes
         # set srcdir during sourcing.  See above about save & restore
         saved_srcdir=${srcdir}
         srcdir=${srcdir}/gcc . ${lang_frag}
@@ -2370,21 +2460,29 @@ if test -d ${srcdir}/gcc; then
 
         add_this_lang=no
         # C is always enabled, so no need to add it again
-        if test "$language" != "c"; then
-          case ,${enable_languages}, in
-            *,${language},*)
-              # Language was explicitly selected; include it
-	      add_this_lang=yes
-              ;;
-	    *,all,*)
-	      # All languages are enabled
-	      add_this_lang=all
-              ;;
-            *,default,*)
-              # 'default' was selected, select it if it is a default language
-	      add_this_lang=${build_by_default}
-              ;;
-          esac
+	if test "$language" != "c"; then
+	    # Determine if this language was requested.
+	    case ,${disable_languages}, in
+	      *,${language},* ) ;;
+	      *)
+		case ,${enable_languages}, in
+		  *,${language},*)
+		    # Language was explicitly selected; include it
+		    add_this_lang=yes
+		    ;;
+		  *,all,*)
+		    # All languages are enabled, and this one not excluded.
+		    add_this_lang=all
+		    ;;
+		  *,default,*)
+		    # 'default' was selected, select it if it is a default language
+		    case ${default_languages} in
+		      *,${language},*) add_this_lang=yes ;;
+		    esac
+		    ;;
+		esac
+		;;
+	    esac
         fi
 
         # Disable languages that need other directories if these aren't available.
@@ -2485,7 +2583,7 @@ directories, to avoid imposing the performance cost of
               # Silently disable.
               add_this_lang=unsupported
               ;;
-	        esac
+	  esac
           ;;
         esac
 
@@ -2541,6 +2639,11 @@ directories, to avoid imposing the performance cost of
             potential_languages="${potential_languages}${language},"
 	    ;;
           all|yes)
+	    case "$delayed_error_languages" in
+	      *,${language}:*,*)
+		AC_MSG_ERROR([invalid configuration for language "${language}"; at least one of the dependencies "$delayed_error_languages" was explicitly disabled])
+		;;
+	    esac
 	    new_enable_languages="${new_enable_languages}${language},"
             potential_languages="${potential_languages}${language},"
 	    missing_languages=`echo "$missing_languages" | sed "s/,$language,/,/"`
@@ -2640,6 +2743,10 @@ AC_ARG_ENABLE(objc-gc,
 [AS_HELP_STRING([--enable-objc-gc],
 		[enable use of Boehm's garbage collector with the
 		 GNU Objective-C runtime])])
+AC_ARG_ENABLE(algol68-gc,
+[AS_HELP_STRING([--enable-algol68-gc],
+                [enable use of Boehm's garbage collector with the
+                 GNU Algol runtime])])
 AC_ARG_WITH([target-bdw-gc],
 [AS_HELP_STRING([--with-target-bdw-gc=PATHLIST],
 		[specify prefix directory for installed bdw-gc package.
@@ -2652,21 +2759,22 @@ AC_ARG_WITH([target-bdw-gc-lib],
 [AS_HELP_STRING([--with-target-bdw-gc-lib=PATHLIST],
 		[specify directories for installed bdw-gc library])])
 		  
-case ,${enable_languages},:${enable_objc_gc} in *,objc,*:yes|*,objc,*:auto)
-  AC_MSG_CHECKING([for bdw garbage collector])
-  if test "x$with_target_bdw_gc$with_target_bdw_gc_include$with_target_bdw_gc_lib" = x; then
-    dnl no bdw-gw options, assume default locations
-    AC_MSG_RESULT([using bdw-gc in default locations])
-  else
-    dnl bdw-gw options, first error checking, complete checking in libobjc
-    if test "x$with_target_bdw_gc_include" = x && test "x$with_target_bdw_gc_lib" != x; then
-      AC_MSG_ERROR([found --with-target-bdw-gc-lib but --with-target-bdw-gc-include missing])
-    elif test "x$with_target_bdw_gc_include" != x && test "x$with_target_bdw_gc_lib" = x; then
-      AC_MSG_ERROR([found --with-target-bdw-gc-include but --with-target-bdw-gc-lib missing])
+case ,${enable_languages},:${enable_objc_gc}:${enable_algol68_gc} in
+  *,objc,*:yes:*|*,objc,*:auto:*|*,algol68,*:*:yes|*,algol68,*:*:auto)
+    AC_MSG_CHECKING([for bdw garbage collector])
+    if test "x$with_target_bdw_gc$with_target_bdw_gc_include$with_target_bdw_gc_lib" = x; then
+      dnl no bdw-gw options, assume default locations
+      AC_MSG_RESULT([using bdw-gc in default locations])
     else
-      AC_MSG_RESULT([using paths configured with --with-target-bdw-gc options])
+      dnl bdw-gw options, first error checking, complete checking in libobjc and libga68
+      if test "x$with_target_bdw_gc_include" = x && test "x$with_target_bdw_gc_lib" != x; then
+        AC_MSG_ERROR([found --with-target-bdw-gc-lib but --with-target-bdw-gc-include missing])
+      elif test "x$with_target_bdw_gc_include" != x && test "x$with_target_bdw_gc_lib" = x; then
+        AC_MSG_ERROR([found --with-target-bdw-gc-include but --with-target-bdw-gc-lib missing])
+      else
+        AC_MSG_RESULT([using paths configured with --with-target-bdw-gc options])
+      fi
     fi
-  fi
 esac
 
 # Disable libitm, libsanitizer, libvtv if we're not building C++
@@ -3045,8 +3153,7 @@ case "${target}" in
     md_exec_prefix=/dev/env/DJDIR/bin
     ;;
   *-*-hpux* | \
-  *-*-nto-qnx* | \
-  *-*-solaris2*)
+  *-*-nto-qnx*)
     md_exec_prefix=/usr/ccs/bin
     ;;
 esac
@@ -3245,6 +3352,11 @@ bootstrap_fixincludes=no
 # If we are building libgomp, bootstrap it.
 if echo " ${target_configdirs} " | grep " libgomp " > /dev/null 2>&1 ; then
   bootstrap_target_libs=${bootstrap_target_libs}target-libgomp,
+fi
+
+# If we are building libatomic, bootstrap it.
+if echo " ${target_configdirs} " | grep " libatomic " > /dev/null 2>&1 ; then
+  bootstrap_target_libs=${bootstrap_target_libs}target-libatomic,
 fi
 
 # If we are building libsanitizer and $BUILD_CONFIG contains bootstrap-asan
@@ -3719,6 +3831,21 @@ if test x${enable_multilib} = x ; then
   target_configargs="--enable-multilib ${target_configargs}"
 fi
 
+# Source target-specific configuration fragment for GCC
+if test -d ${srcdir}/gcc; then
+  . ${srcdir}/gcc/configure.tgt
+fi
+
+# Pass through with_multi_buildlist to host and target.  'gcc' needs it for the
+# fixed includes which are multilib'd and target libraries need it as they use
+# config-ml.in.
+if test x${with_multi_buildlist} != x ; then
+  target_configargs="--with-multi-buildlist=${with_multi_buildlist} \
+  ${target_configargs}"
+  host_configargs="--with-multi-buildlist=${with_multi_buildlist} \
+  ${host_configargs}"
+fi
+
 # Pass --with-newlib if appropriate.  Note that target_configdirs has
 # changed from the earlier setting of with_newlib.
 if test x${with_newlib} != xno && echo " ${target_configdirs} " | grep " newlib " > /dev/null 2>&1 && test -d ${srcdir}/newlib ; then
@@ -3825,13 +3952,17 @@ if test x"${build}" = x"${host}" ; then
   LDFLAGS_FOR_BUILD=${LDFLAGS_FOR_BUILD-${LDFLAGS}}
 fi
 
-# On Canadian crosses, we'll be searching the right directories for
-# the previously-installed cross compiler, so don't bother to add
-# flags for directories within the install tree of the compiler
-# being built; programs in there won't even run.
-if test "${build}" = "${host}" && test -d ${srcdir}/gcc; then
+if test -d ${srcdir}/gcc; then
+  # On Canadian crosses, we'll be searching the right directories for the
+  # previously-installed cross compiler, so don't bother to add flags for
+  # executable directories within the install tree of the compiler being built;
+  # programs in there won't even run.
+  if test "${build}" = "${host}"; then
+    FLAGS_FOR_TARGET=$FLAGS_FOR_TARGET' -B$(build_tooldir)/bin/ -B$(build_tooldir)/lib/'
+  fi
+
   # Search for pre-installed headers if nothing else fits.
-  FLAGS_FOR_TARGET=$FLAGS_FOR_TARGET' -B$(build_tooldir)/bin/ -B$(build_tooldir)/lib/ -isystem $(build_tooldir)/include -isystem $(build_tooldir)/sys-include'
+  FLAGS_FOR_TARGET=$FLAGS_FOR_TARGET' -isystem $(build_tooldir)/include -isystem $(build_tooldir)/sys-include'
 fi
 
 if test "x${use_gnu_ld}" = x &&
@@ -3905,8 +4036,10 @@ AC_SUBST(CXX_FOR_BUILD)
 AC_SUBST(DLLTOOL_FOR_BUILD)
 AC_SUBST(DSYMUTIL_FOR_BUILD)
 AC_SUBST(GFORTRAN_FOR_BUILD)
+AC_SUBST(A68_FOR_BUILD)
 AC_SUBST(GOC_FOR_BUILD)
 AC_SUBST(GDC_FOR_BUILD)
+AC_SUBST(GNATMAKE_FOR_BUILD)
 AC_SUBST(LDFLAGS_FOR_BUILD)
 AC_SUBST(LD_FOR_BUILD)
 AC_SUBST(NM_FOR_BUILD)
@@ -3999,23 +4132,38 @@ AC_SUBST(CC)
 AC_SUBST(CXX)
 AC_SUBST(CFLAGS)
 AC_SUBST(CXXFLAGS)
+AC_SUBST(A68)
+AC_SUBST(A68FLAGS)
+A68FLAGS=${A68FLAGS-${CFLAGS}}
 AC_SUBST(GDC)
 AC_SUBST(GDCFLAGS)
 GDCFLAGS=${GDCFLAGS-${CFLAGS}}
 AC_SUBST(PKG_CONFIG_PATH)
 
-GCC_PLUGIN_OPTION(PLUGIN_OPTION)
+# Try CLANG_PLUGIN_FILE first since GCC_PLUGIN_OPTION may return the
+# wrong PLUGIN_OPTION with clang.
+CLANG_PLUGIN_FILE(PLUGIN_FILE)
+if test -n "$PLUGIN_FILE"; then
+  PLUGIN_OPTION="--plugin $PLUGIN_FILE"
+else
+  GCC_PLUGIN_OPTION(PLUGIN_OPTION)
+fi
 AR_PLUGIN_OPTION=
+NM_PLUGIN_OPTION=
 RANLIB_PLUGIN_OPTION=
 if test -n "$PLUGIN_OPTION"; then
   if $AR --help 2>&1 | grep -q "\--plugin"; then
     AR_PLUGIN_OPTION="$PLUGIN_OPTION"
+  fi
+  if $NM --help 2>&1 | grep -q "\--plugin"; then
+    NM_PLUGIN_OPTION="$PLUGIN_OPTION"
   fi
   if $RANLIB --help 2>&1 | grep -q "\--plugin"; then
     RANLIB_PLUGIN_OPTION="$PLUGIN_OPTION"
   fi
 fi
 AC_SUBST(AR_PLUGIN_OPTION)
+AC_SUBST(NM_PLUGIN_OPTION)
 AC_SUBST(RANLIB_PLUGIN_OPTION)
 
 # Target tools.
@@ -4035,6 +4183,7 @@ NCN_STRICT_CHECK_TARGET_TOOLS(CC_FOR_TARGET, cc gcc)
 NCN_STRICT_CHECK_TARGET_TOOLS(CXX_FOR_TARGET, c++ g++ cxx gxx)
 NCN_STRICT_CHECK_TARGET_TOOLS(GCC_FOR_TARGET, gcc, ${CC_FOR_TARGET})
 NCN_STRICT_CHECK_TARGET_TOOLS(GFORTRAN_FOR_TARGET, gfortran)
+NCN_STRICT_CHECK_TARGET_TOOLS(A68_FOR_TARGET, ga68)
 NCN_STRICT_CHECK_TARGET_TOOLS(GOC_FOR_TARGET, gccgo)
 NCN_STRICT_CHECK_TARGET_TOOLS(GDC_FOR_TARGET, gdc)
 NCN_STRICT_CHECK_TARGET_TOOLS(GM2_FOR_TARGET, gm2)
@@ -4061,12 +4210,24 @@ GCC_TARGET_TOOL(ar, AR_FOR_TARGET, AR, [binutils/ar])
 GCC_TARGET_TOOL(as, AS_FOR_TARGET, AS, [gas/as-new])
 GCC_TARGET_TOOL(cc, CC_FOR_TARGET, CC, [gcc/xgcc -B$$r/$(HOST_SUBDIR)/gcc/])
 dnl see comments for CXX_FOR_TARGET_FLAG_TO_PASS
-GCC_TARGET_TOOL(c++, CXX_FOR_TARGET, CXX,
+case $target in
+  *-*-darwin*)
+    GCC_TARGET_TOOL(c++, CXX_FOR_TARGET, CXX,
+		[gcc/xg++ -B$$r/$(HOST_SUBDIR)/gcc/ -nostdinc++ `if test -f $$r/$(TARGET_SUBDIR)/libstdc++-v3/scripts/testsuite_flags; then $(SHELL) $$r/$(TARGET_SUBDIR)/libstdc++-v3/scripts/testsuite_flags --build-includes; else echo -funconfigured-libstdc++-v3 ; fi` -B$$r/$(TARGET_SUBDIR)/libstdc++-v3/src -B$$r/$(TARGET_SUBDIR)/libstdc++-v3/src/.libs -B$$r/$(TARGET_SUBDIR)/libstdc++-v3/libsupc++/.libs],
+		c++)
+    GCC_TARGET_TOOL(c++ for libstdc++, RAW_CXX_FOR_TARGET, CXX,
+		[gcc/xgcc -shared-libgcc -B$$r/$(HOST_SUBDIR)/gcc -nostdinc++ -B$$r/$(TARGET_SUBDIR)/libstdc++-v3/src -B$$r/$(TARGET_SUBDIR)/libstdc++-v3/src/.libs -B$$r/$(TARGET_SUBDIR)/libstdc++-v3/libsupc++/.libs],
+		c++)
+  ;;
+  *)
+    GCC_TARGET_TOOL(c++, CXX_FOR_TARGET, CXX,
 		[gcc/xg++ -B$$r/$(HOST_SUBDIR)/gcc/ -nostdinc++ `if test -f $$r/$(TARGET_SUBDIR)/libstdc++-v3/scripts/testsuite_flags; then $(SHELL) $$r/$(TARGET_SUBDIR)/libstdc++-v3/scripts/testsuite_flags --build-includes; else echo -funconfigured-libstdc++-v3 ; fi` -L$$r/$(TARGET_SUBDIR)/libstdc++-v3/src -L$$r/$(TARGET_SUBDIR)/libstdc++-v3/src/.libs -L$$r/$(TARGET_SUBDIR)/libstdc++-v3/libsupc++/.libs],
 		c++)
-GCC_TARGET_TOOL(c++ for libstdc++, RAW_CXX_FOR_TARGET, CXX,
+    GCC_TARGET_TOOL(c++ for libstdc++, RAW_CXX_FOR_TARGET, CXX,
 		[gcc/xgcc -shared-libgcc -B$$r/$(HOST_SUBDIR)/gcc -nostdinc++ -L$$r/$(TARGET_SUBDIR)/libstdc++-v3/src -L$$r/$(TARGET_SUBDIR)/libstdc++-v3/src/.libs -L$$r/$(TARGET_SUBDIR)/libstdc++-v3/libsupc++/.libs],
 		c++)
+  ;;
+esac
 GCC_TARGET_TOOL(dlltool, DLLTOOL_FOR_TARGET, DLLTOOL, [binutils/dlltool])
 GCC_TARGET_TOOL(dsymutil, DSYMUTIL_FOR_TARGET, DSYMUTIL)
 GCC_TARGET_TOOL(gcc, GCC_FOR_TARGET, , [gcc/xgcc -B$$r/$(HOST_SUBDIR)/gcc/])
@@ -4074,6 +4235,8 @@ GCC_TARGET_TOOL(gfortran, GFORTRAN_FOR_TARGET, GFORTRAN,
 		[gcc/gfortran -B$$r/$(HOST_SUBDIR)/gcc/], fortran)
 GCC_TARGET_TOOL(gccgo, GOC_FOR_TARGET, GOC,
 		[gcc/gccgo -B$$r/$(HOST_SUBDIR)/gcc/], go)
+GCC_TARGET_TOOL(ga68, A68_FOR_TARGET, A68,
+                [gcc/ga68 -B$$r/$(HOST_SUBDIR)/gcc/], algol68)
 GCC_TARGET_TOOL(gdc, GDC_FOR_TARGET, GDC,
 		[gcc/gdc -B$$r/$(HOST_SUBDIR)/gcc/], d)
 GCC_TARGET_TOOL(gm2, GM2_FOR_TARGET, GM2,
@@ -4097,6 +4260,27 @@ AC_SUBST(RAW_CXX_FOR_TARGET)
 AR_FOR_TARGET=${AR_FOR_TARGET}${extra_arflags_for_target}
 RANLIB_FOR_TARGET=${RANLIB_FOR_TARGET}${extra_ranlibflags_for_target}
 NM_FOR_TARGET=${NM_FOR_TARGET}${extra_nmflags_for_target}
+
+# Try CLANG_PLUGIN_FILE_FOR_TARGET first since GCC_PLUGIN_OPTION_FOR_TARGET
+# may return the wrong PLUGIN_OPTION_FOR_TARGET with clang.
+CLANG_PLUGIN_FILE_FOR_TARGET(PLUGIN_FILE_FOR_TARGET)
+if test -n "$PLUGIN_FILE_FOR_TARGET"; then
+  PLUGIN_OPTION_FOR_TARGET="--plugin $PLUGIN_FILE_FOR_TARGET"
+else
+  GCC_PLUGIN_OPTION_FOR_TARGET(PLUGIN_OPTION_FOR_TARGET)
+fi
+if test -n "$PLUGIN_OPTION_FOR_TARGET"; then
+  AR_PLUGIN_OPTION_FOR_TARGET="$PLUGIN_OPTION_FOR_TARGET"
+  NM_PLUGIN_OPTION_FOR_TARGET="$PLUGIN_OPTION_FOR_TARGET"
+  RANLIB_PLUGIN_OPTION_FOR_TARGET="$PLUGIN_OPTION_FOR_TARGET"
+else
+  AR_PLUGIN_OPTION_FOR_TARGET=
+  NM_PLUGIN_OPTION_FOR_TARGET=
+  RANLIB_PLUGIN_OPTION_FOR_TARGET=
+fi
+AC_SUBST(AR_PLUGIN_OPTION_FOR_TARGET)
+AC_SUBST(NM_PLUGIN_OPTION_FOR_TARGET)
+AC_SUBST(RANLIB_PLUGIN_OPTION_FOR_TARGET)
 
 # When building target libraries, except in a Canadian cross, we use
 # the same toolchain as the compiler we just built.
@@ -4207,6 +4391,7 @@ compare_exclusions="gcc/cc*-checksum\$(objext) | gcc/ada/*tools/*"
 compare_exclusions="$compare_exclusions | gcc/m2/gm2-compiler-boot/M2Version*"
 compare_exclusions="$compare_exclusions | gcc/m2/gm2-compiler-boot/SYSTEM*"
 compare_exclusions="$compare_exclusions | gcc/m2/gm2version*"
+compare_exclusions="$compare_exclusions | gcc/cobol/parse\$(objext)"
 case "$target" in
   hppa*64*-*-hpux*) ;;
   powerpc*-ibm-aix*) compare_exclusions="$compare_exclusions | *libgomp*\$(objext)" ;;

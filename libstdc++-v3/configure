@@ -802,6 +802,7 @@ OTOOL
 LIPO
 NMEDIT
 DSYMUTIL
+LLVM_CONFIG
 OBJDUMP
 NM
 ac_ct_DUMPBIN
@@ -921,6 +922,7 @@ enable_largefile
 with_target_subdir
 with_cross_host
 with_newlib
+with_picolibc
 enable_maintainer_mode
 enable_shared
 enable_static
@@ -1697,6 +1699,7 @@ Optional Packages:
                           configuring in a subdirectory
   --with-cross-host=HOST  configuring with a cross compiler
   --with-newlib           assume newlib as a system C library
+  --with-picolibc         assume picolibc as a system C library
   --with-pic              try to use only PIC/non-PIC objects [default=use
                           both]
   --with-gnu-ld           assume the C compiler uses GNU ld [default=no]
@@ -2731,63 +2734,6 @@ $as_echo "$ac_res" >&6; }
   eval $as_lineno_stack; ${as_lineno_stack:+:} unset as_lineno
 
 } # ac_fn_c_check_decl
-
-# ac_fn_c_check_member LINENO AGGR MEMBER VAR INCLUDES
-# ----------------------------------------------------
-# Tries to find if the field MEMBER exists in type AGGR, after including
-# INCLUDES, setting cache variable VAR accordingly.
-ac_fn_c_check_member ()
-{
-  as_lineno=${as_lineno-"$1"} as_lineno_stack=as_lineno_stack=$as_lineno_stack
-  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for $2.$3" >&5
-$as_echo_n "checking for $2.$3... " >&6; }
-if eval \${$4+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
-$5
-int
-main ()
-{
-static $2 ac_aggr;
-if (ac_aggr.$3)
-return 0;
-  ;
-  return 0;
-}
-_ACEOF
-if ac_fn_c_try_compile "$LINENO"; then :
-  eval "$4=yes"
-else
-  cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
-$5
-int
-main ()
-{
-static $2 ac_aggr;
-if (sizeof ac_aggr.$3)
-return 0;
-  ;
-  return 0;
-}
-_ACEOF
-if ac_fn_c_try_compile "$LINENO"; then :
-  eval "$4=yes"
-else
-  eval "$4=no"
-fi
-rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
-fi
-rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
-fi
-eval ac_res=\$$4
-	       { $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_res" >&5
-$as_echo "$ac_res" >&6; }
-  eval $as_lineno_stack; ${as_lineno_stack:+:} unset as_lineno
-
-} # ac_fn_c_check_member
 cat >config.log <<_ACEOF
 This file contains any messages produced by compilers while
 running configure, to aid debugging if configure makes a mistake.
@@ -5628,6 +5574,13 @@ if test "${with_newlib+set}" = set; then :
 fi
 
 
+
+# Check whether --with-picolibc was given.
+if test "${with_picolibc+set}" = set; then :
+  withval=$with_picolibc;
+fi
+
+
   # Will set LN_S to either 'ln -s', 'ln', or 'cp -p' (if linking isn't
   # available).  Uncomment the next line to force a particular method.
   { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether ln -s works" >&5
@@ -6000,6 +5953,7 @@ $as_echo "$as_me: OS config directory is $os_include_dir" >&6;}
 
 # Libtool setup.
 if test "x${with_newlib}" != "xyes" &&
+    test "x${with_picolibc}" != "xyes" &&
     test "x${with_avrlibc}" != "xyes" &&
     test "x$with_headers" != "xno"; then
   enable_dlopen=yes
@@ -7146,8 +7100,360 @@ test -z "$deplibs_check_method" && deplibs_check_method=unknown
 
 
 
-plugin_option=
+
+# Try CLANG_PLUGIN_FILE first since GCC_PLUGIN_OPTION may return the
+# wrong plugin_option with clang.
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for clang" >&5
+$as_echo_n "checking for clang... " >&6; }
+if ${clang_cv_is_clang+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+
+    cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+#ifdef __clang__
+  yes
+#endif
+
+_ACEOF
+if (eval "$ac_cpp conftest.$ac_ext") 2>&5 |
+  $EGREP "yes" >/dev/null 2>&1; then :
+  clang_cv_is_clang=yes
+else
+  clang_cv_is_clang=no
+fi
+rm -f conftest*
+
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $clang_cv_is_clang" >&5
+$as_echo "$clang_cv_is_clang" >&6; }
+  if test -n "$ac_tool_prefix"; then
+  # Extract the first word of "${ac_tool_prefix}llvm-config", so it can be a program name with args.
+set dummy ${ac_tool_prefix}llvm-config; ac_word=$2
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
+$as_echo_n "checking for $ac_word... " >&6; }
+if ${ac_cv_prog_LLVM_CONFIG+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  if test -n "$LLVM_CONFIG"; then
+  ac_cv_prog_LLVM_CONFIG="$LLVM_CONFIG" # Let the user override the test.
+else
+as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
+for as_dir in $PATH
+do
+  IFS=$as_save_IFS
+  test -z "$as_dir" && as_dir=.
+    for ac_exec_ext in '' $ac_executable_extensions; do
+  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
+    ac_cv_prog_LLVM_CONFIG="${ac_tool_prefix}llvm-config"
+    $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+    break 2
+  fi
+done
+  done
+IFS=$as_save_IFS
+
+fi
+fi
+LLVM_CONFIG=$ac_cv_prog_LLVM_CONFIG
+if test -n "$LLVM_CONFIG"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $LLVM_CONFIG" >&5
+$as_echo "$LLVM_CONFIG" >&6; }
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+fi
+
+
+fi
+if test -z "$ac_cv_prog_LLVM_CONFIG"; then
+  ac_ct_LLVM_CONFIG=$LLVM_CONFIG
+  # Extract the first word of "llvm-config", so it can be a program name with args.
+set dummy llvm-config; ac_word=$2
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
+$as_echo_n "checking for $ac_word... " >&6; }
+if ${ac_cv_prog_ac_ct_LLVM_CONFIG+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  if test -n "$ac_ct_LLVM_CONFIG"; then
+  ac_cv_prog_ac_ct_LLVM_CONFIG="$ac_ct_LLVM_CONFIG" # Let the user override the test.
+else
+as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
+for as_dir in $PATH
+do
+  IFS=$as_save_IFS
+  test -z "$as_dir" && as_dir=.
+    for ac_exec_ext in '' $ac_executable_extensions; do
+  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
+    ac_cv_prog_ac_ct_LLVM_CONFIG="llvm-config"
+    $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+    break 2
+  fi
+done
+  done
+IFS=$as_save_IFS
+
+fi
+fi
+ac_ct_LLVM_CONFIG=$ac_cv_prog_ac_ct_LLVM_CONFIG
+if test -n "$ac_ct_LLVM_CONFIG"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_ct_LLVM_CONFIG" >&5
+$as_echo "$ac_ct_LLVM_CONFIG" >&6; }
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+fi
+
+  if test "x$ac_ct_LLVM_CONFIG" = x; then
+    LLVM_CONFIG=""
+  else
+    case $cross_compiling:$ac_tool_warned in
+yes:)
+{ $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: using cross tools not prefixed with host triplet" >&5
+$as_echo "$as_me: WARNING: using cross tools not prefixed with host triplet" >&2;}
+ac_tool_warned=yes ;;
+esac
+    LLVM_CONFIG=$ac_ct_LLVM_CONFIG
+  fi
+else
+  LLVM_CONFIG="$ac_cv_prog_LLVM_CONFIG"
+fi
+
+  plugin_file=
+  if test $clang_cv_is_clang = yes; then
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for clang plugin file" >&5
+$as_echo_n "checking for clang plugin file... " >&6; }
+    plugin_names="LLVMgold.so"
+    for plugin in $plugin_names; do
+      plugin_file=`${CC} ${CFLAGS} --print-file-name $plugin`
+      if test "$plugin_file" != "$plugin"; then
+	break;
+      fi
+      if test -n "${LLVM_CONFIG}"; then
+	plugin_file=`${LLVM_CONFIG} --libdir`/$plugin
+	if test -f "$plugin_file"; then
+	  break;
+	fi
+      fi
+      plugin_file=
+    done
+    if test -z "$plugin_file"; then
+      { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+    else
+      { $as_echo "$as_me:${as_lineno-$LINENO}: result: $plugin_file" >&5
+$as_echo "$plugin_file" >&6; }
+            if test -n "$ac_tool_prefix"; then
+  # Extract the first word of "${ac_tool_prefix}ar", so it can be a program name with args.
+set dummy ${ac_tool_prefix}ar; ac_word=$2
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
+$as_echo_n "checking for $ac_word... " >&6; }
+if ${ac_cv_prog_AR+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  if test -n "$AR"; then
+  ac_cv_prog_AR="$AR" # Let the user override the test.
+else
+as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
+for as_dir in $PATH
+do
+  IFS=$as_save_IFS
+  test -z "$as_dir" && as_dir=.
+    for ac_exec_ext in '' $ac_executable_extensions; do
+  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
+    ac_cv_prog_AR="${ac_tool_prefix}ar"
+    $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+    break 2
+  fi
+done
+  done
+IFS=$as_save_IFS
+
+fi
+fi
+AR=$ac_cv_prog_AR
+if test -n "$AR"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $AR" >&5
+$as_echo "$AR" >&6; }
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+fi
+
+
+fi
+if test -z "$ac_cv_prog_AR"; then
+  ac_ct_AR=$AR
+  # Extract the first word of "ar", so it can be a program name with args.
+set dummy ar; ac_word=$2
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
+$as_echo_n "checking for $ac_word... " >&6; }
+if ${ac_cv_prog_ac_ct_AR+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  if test -n "$ac_ct_AR"; then
+  ac_cv_prog_ac_ct_AR="$ac_ct_AR" # Let the user override the test.
+else
+as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
+for as_dir in $PATH
+do
+  IFS=$as_save_IFS
+  test -z "$as_dir" && as_dir=.
+    for ac_exec_ext in '' $ac_executable_extensions; do
+  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
+    ac_cv_prog_ac_ct_AR="ar"
+    $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+    break 2
+  fi
+done
+  done
+IFS=$as_save_IFS
+
+fi
+fi
+ac_ct_AR=$ac_cv_prog_ac_ct_AR
+if test -n "$ac_ct_AR"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_ct_AR" >&5
+$as_echo "$ac_ct_AR" >&6; }
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+fi
+
+  if test "x$ac_ct_AR" = x; then
+    AR=""
+  else
+    case $cross_compiling:$ac_tool_warned in
+yes:)
+{ $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: using cross tools not prefixed with host triplet" >&5
+$as_echo "$as_me: WARNING: using cross tools not prefixed with host triplet" >&2;}
+ac_tool_warned=yes ;;
+esac
+    AR=$ac_ct_AR
+  fi
+else
+  AR="$ac_cv_prog_AR"
+fi
+
+      if test -z "${AR}"; then
+	as_fn_error $? "Required archive tool 'ar' not found on PATH." "$LINENO" 5
+      fi
+      plugin_option="--plugin $plugin_file"
+      touch conftest.c
+      ${AR} $plugin_option rc conftest.a conftest.c
+      if test "$?" != 0; then
+	{ $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: Failed: $AR $plugin_option rc" >&5
+$as_echo "$as_me: WARNING: Failed: $AR $plugin_option rc" >&2;}
+	plugin_file=
+      fi
+      rm -f conftest.*
+    fi
+  fi
+  plugin_file="$plugin_file"
+
+if test -n "$plugin_file"; then
+  plugin_option="--plugin $plugin_file"
+else
+  if test -n "$ac_tool_prefix"; then
+  # Extract the first word of "${ac_tool_prefix}ar", so it can be a program name with args.
+set dummy ${ac_tool_prefix}ar; ac_word=$2
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
+$as_echo_n "checking for $ac_word... " >&6; }
+if ${ac_cv_prog_AR+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  if test -n "$AR"; then
+  ac_cv_prog_AR="$AR" # Let the user override the test.
+else
+as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
+for as_dir in $PATH
+do
+  IFS=$as_save_IFS
+  test -z "$as_dir" && as_dir=.
+    for ac_exec_ext in '' $ac_executable_extensions; do
+  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
+    ac_cv_prog_AR="${ac_tool_prefix}ar"
+    $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+    break 2
+  fi
+done
+  done
+IFS=$as_save_IFS
+
+fi
+fi
+AR=$ac_cv_prog_AR
+if test -n "$AR"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $AR" >&5
+$as_echo "$AR" >&6; }
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+fi
+
+
+fi
+if test -z "$ac_cv_prog_AR"; then
+  ac_ct_AR=$AR
+  # Extract the first word of "ar", so it can be a program name with args.
+set dummy ar; ac_word=$2
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
+$as_echo_n "checking for $ac_word... " >&6; }
+if ${ac_cv_prog_ac_ct_AR+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  if test -n "$ac_ct_AR"; then
+  ac_cv_prog_ac_ct_AR="$ac_ct_AR" # Let the user override the test.
+else
+as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
+for as_dir in $PATH
+do
+  IFS=$as_save_IFS
+  test -z "$as_dir" && as_dir=.
+    for ac_exec_ext in '' $ac_executable_extensions; do
+  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
+    ac_cv_prog_ac_ct_AR="ar"
+    $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+    break 2
+  fi
+done
+  done
+IFS=$as_save_IFS
+
+fi
+fi
+ac_ct_AR=$ac_cv_prog_ac_ct_AR
+if test -n "$ac_ct_AR"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_ct_AR" >&5
+$as_echo "$ac_ct_AR" >&6; }
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+fi
+
+  if test "x$ac_ct_AR" = x; then
+    AR=""
+  else
+    case $cross_compiling:$ac_tool_warned in
+yes:)
+{ $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: using cross tools not prefixed with host triplet" >&5
+$as_echo "$as_me: WARNING: using cross tools not prefixed with host triplet" >&2;}
+ac_tool_warned=yes ;;
+esac
+    AR=$ac_ct_AR
+  fi
+else
+  AR="$ac_cv_prog_AR"
+fi
+
+if test -z "${AR}"; then
+  as_fn_error $? "Required archive tool 'ar' not found on PATH." "$LINENO" 5
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for -plugin option" >&5
+$as_echo_n "checking for -plugin option... " >&6; }
 plugin_names="liblto_plugin.so liblto_plugin-0.dll cyglto_plugin-0.dll"
+plugin_option=
 for plugin in $plugin_names; do
   plugin_so=`${CC} ${CFLAGS} --print-prog-name $plugin`
   if test x$plugin_so = x$plugin; then
@@ -7158,7 +7464,24 @@ for plugin in $plugin_names; do
     break
   fi
 done
+if test -z "$plugin_option"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $plugin_option" >&5
+$as_echo "$plugin_option" >&6; }
+    touch conftest.c
+  ${AR} $plugin_option rc conftest.a conftest.c
+  if test "$?" != 0; then
+    { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: Failed: $AR $plugin_option rc" >&5
+$as_echo "$as_me: WARNING: Failed: $AR $plugin_option rc" >&2;}
+    plugin_option=
+  fi
+  rm -f conftest.*
+fi
+plugin_option="$plugin_option"
 
+fi
 if test -n "$ac_tool_prefix"; then
   # Extract the first word of "${ac_tool_prefix}ar", so it can be a program name with args.
 set dummy ${ac_tool_prefix}ar; ac_word=$2
@@ -7253,17 +7576,15 @@ fi
 
 test -z "$AR" && AR=ar
 if test -n "$plugin_option"; then
-  if $AR --help 2>&1 | grep -q "\--plugin"; then
-    touch conftest.c
-    $AR $plugin_option rc conftest.a conftest.c
-    if test "$?" != 0; then
-      { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: Failed: $AR $plugin_option rc" >&5
-$as_echo "$as_me: WARNING: Failed: $AR $plugin_option rc" >&2;}
-    else
+  case "$AR" in
+  *"$plugin_option"*)
+    ;;
+  *)
+    if $AR --help 2>&1 | grep -q "\--plugin"; then
       AR="$AR $plugin_option"
     fi
-    rm -f conftest.*
-  fi
+    ;;
+  esac
 fi
 test -z "$AR_FLAGS" && AR_FLAGS=cru
 
@@ -7470,9 +7791,15 @@ fi
 
 test -z "$RANLIB" && RANLIB=:
 if test -n "$plugin_option" && test "$RANLIB" != ":"; then
-  if $RANLIB --help 2>&1 | grep -q "\--plugin"; then
-    RANLIB="$RANLIB $plugin_option"
-  fi
+  case "$RANLIB" in
+  *"$plugin_option"*)
+    ;;
+  *)
+    if $RANLIB --help 2>&1 | grep -q "\--plugin"; then
+      RANLIB="$RANLIB $plugin_option"
+    fi
+    ;;
+  esac
 fi
 
 
@@ -7983,7 +8310,9 @@ $as_echo "$lt_cv_cc_needs_belf" >&6; }
     CFLAGS="$SAVE_CFLAGS"
   fi
   ;;
-sparc*-*solaris*)
+*-*solaris*)
+  # Find out what ABI is being produced by ac_compile, and set linker
+  # options accordingly.
   # Find out which ABI we are using.
   echo 'int i;' > conftest.$ac_ext
   if { { eval echo "\"\$as_me\":${as_lineno-$LINENO}: \"$ac_compile\""; } >&5
@@ -7994,7 +8323,20 @@ sparc*-*solaris*)
     case `/usr/bin/file conftest.o` in
     *64-bit*)
       case $lt_cv_prog_gnu_ld in
-      yes*) LD="${LD-ld} -m elf64_sparc" ;;
+      yes*)
+        case $host in
+        i?86-*-solaris*|x86_64-*-solaris*)
+          LD="${LD-ld} -m elf_x86_64"
+          ;;
+        sparc*-*-solaris*)
+          LD="${LD-ld} -m elf64_sparc"
+          ;;
+        esac
+        # GNU ld 2.21 introduced _sol2 emulations.  Use them if available.
+        if ${LD-ld} -V | grep _sol2 >/dev/null 2>&1; then
+          LD=${LD-ld}_sol2
+        fi
+        ;;
       *)
 	if ${LD-ld} -64 -r -o conftest2.o conftest.o >/dev/null 2>&1; then
 	  LD="${LD-ld} -64"
@@ -12337,7 +12679,7 @@ else
   lt_dlunknown=0; lt_dlno_uscore=1; lt_dlneed_uscore=2
   lt_status=$lt_dlunknown
   cat > conftest.$ac_ext <<_LT_EOF
-#line 12340 "configure"
+#line 12682 "configure"
 #include "confdefs.h"
 
 #if HAVE_DLFCN_H
@@ -12443,7 +12785,7 @@ else
   lt_dlunknown=0; lt_dlno_uscore=1; lt_dlneed_uscore=2
   lt_status=$lt_dlunknown
   cat > conftest.$ac_ext <<_LT_EOF
-#line 12446 "configure"
+#line 12788 "configure"
 #include "confdefs.h"
 
 #if HAVE_DLFCN_H
@@ -15850,7 +16192,7 @@ fi
 
 
 # Override the libtool's pic_flag and pic_mode.
-# Do this step after AM_PROG_LIBTOOL, but before AC_OUTPUT.
+# Do this step after LT_INIT, but before AC_OUTPUT.
 # NB: this impacts --with-pic and --without-pic.
 lt_prog_compiler_pic_CXX="$glibcxx_compiler_pic_flag $glibcxx_compiler_shared_flag"
 pic_mode='default'
@@ -15859,7 +16201,7 @@ pic_mode='default'
 postdeps_CXX=`echo " $postdeps_CXX " | sed 's, -lstdc++ ,,g'`
 
 # Possibly disable most of the library.
-## TODO: Consider skipping unncessary tests altogether in this case, rather
+## TODO: Consider skipping unnecessary tests altogether in this case, rather
 ## than just ignoring the results.  Faster /and/ more correct, win win.
 
   # Check whether --enable-hosted-libstdcxx was given.
@@ -15966,7 +16308,6 @@ if ${glibcxx_cv_prog_CXX_pch+:} false; then :
 else
   ac_save_CXXFLAGS="$CXXFLAGS"
        CXXFLAGS="$CXXFLAGS -Werror -Winvalid-pch -Wno-deprecated"
-
        ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -16013,11 +16354,29 @@ $as_echo "$enable_libstdcxx_pch" >&6; }
 
 
 
-  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for thread model used by GCC" >&5
-$as_echo_n "checking for thread model used by GCC... " >&6; }
-  target_thread_file=`$CXX -v 2>&1 | sed -n 's/^Thread model: //p'`
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $target_thread_file" >&5
-$as_echo "$target_thread_file" >&6; }
+# Specify the threading model for this GCC runtime library
+# Pass with no value to take from compiler's metadata
+# Pass with a value to specify a thread package
+# 'single' means single threaded -- without threads.
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for the threading model used by GCC" >&5
+$as_echo_n "checking for the threading model used by GCC... " >&6; }
+if ${gcc_cv_target_thread_file+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+
+  # Set new cache variable
+  gcc_cv_target_thread_file=`$CC -v 2>&1 | sed -n 's/^Thread model: //p'`
+
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $gcc_cv_target_thread_file" >&5
+$as_echo "$gcc_cv_target_thread_file" >&6; }
+# Set variable name (not prefixed enough to be a good cache variable
+# name) traditionally used for this purpose, to avoid having to change
+# a bunch of configure scripts.
+target_thread_file="$gcc_cv_target_thread_file"
+
+
+
 
 case $target_thread_file in
     aix)	thread_header=config/rs6000/gthr-aix.h ;;
@@ -16032,8 +16391,10 @@ case $target_thread_file in
     vxworks)	thread_header=config/gthr-vxworks.h ;;
     win32)	thread_header=config/i386/gthr-win32.h ;;
     mcf)	thread_header=config/i386/gthr-mcf.h ;;
+    *)
+        as_fn_error $? "No known header for threading model '$target_thread_file'." "$LINENO" 5
+        ;;
 esac
-
 
 
 
@@ -16046,7 +16407,7 @@ ac_compiler_gnu=$ac_cv_cxx_compiler_gnu
 
   old_CXXFLAGS="$CXXFLAGS"
 
-  # Do link tests if possible, instead asm tests, limited to some platforms
+  # Do link tests if possible, otherwise asm tests. Limited to some platforms
   # see discussion in PR target/40134, PR libstdc++/40133 and the thread
   # starting at http://gcc.gnu.org/ml/gcc-patches/2009-07/msg00322.html
   atomic_builtins_link_tests=no
@@ -16059,327 +16420,89 @@ ac_compiler_gnu=$ac_cv_cxx_compiler_gnu
     esac
   fi
 
-  if test x$atomic_builtins_link_tests = xyes; then
+  # The $glibcxx_builddir/include/$target/bits/atomic_word.h header is created
+  # by include/Makefile so isn't available during configure. Copy it from the
+  # source dir to $PWD so that we don't include it using an absolute path,
+  # which does not work for win32 native builds (PR libstdc++/125312).
+  if ! $LN_S "${glibcxx_srcdir}/config/${atomic_word_dir}/atomic_word.h" ./
+  then
+    as_fn_error $? "cannot create ./atomic_word.h" "$LINENO" 5
+  fi
 
-  # Do link tests.
+  if test "$atomic_builtins_link_tests" = yes; then
 
-  CXXFLAGS="$CXXFLAGS -fno-exceptions"
+    # Do link tests.
 
-  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for atomic builtins for bool" >&5
-$as_echo_n "checking for atomic builtins for bool... " >&6; }
-if ${glibcxx_cv_atomic_bool+:} false; then :
+    CXXFLAGS="$CXXFLAGS -fno-exceptions"
+
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for atomic builtins for _Atomic_word" >&5
+$as_echo_n "checking for atomic builtins for _Atomic_word... " >&6; }
+if ${glibcxx_cv_atomic_word+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
-    if test x$gcc_no_link = xyes; then
+  if test x$gcc_no_link = xyes; then
   as_fn_error $? "Link tests are not allowed after GCC_NO_EXECUTABLES." "$LINENO" 5
 fi
 cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
-
+#include "atomic_word.h"
 int
 main ()
 {
-typedef bool atomic_type;
-       atomic_type c1;
-       atomic_type c2;
-       atomic_type c3(0);
-       // N.B. __atomic_fetch_add is not supported for bool.
-       __atomic_compare_exchange_n(&c1, &c2, c3, true, __ATOMIC_ACQ_REL,
-				   __ATOMIC_RELAXED);
-       __atomic_test_and_set(&c1, __ATOMIC_RELAXED);
-       __atomic_load_n(&c1, __ATOMIC_RELAXED);
-
+_Atomic_word a = 0, b;
+		      b = __atomic_fetch_add(&a, 1, __ATOMIC_ACQ_REL);
   ;
   return 0;
 }
 _ACEOF
 if ac_fn_cxx_try_link "$LINENO"; then :
-  glibcxx_cv_atomic_bool=yes
+  glibcxx_cv_atomic_word=yes
 else
-  glibcxx_cv_atomic_bool=no
+  glibcxx_cv_atomic_word=no
 fi
 rm -f core conftest.err conftest.$ac_objext \
     conftest$ac_exeext conftest.$ac_ext
-
 fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $glibcxx_cv_atomic_bool" >&5
-$as_echo "$glibcxx_cv_atomic_bool" >&6; }
-
-  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for atomic builtins for short" >&5
-$as_echo_n "checking for atomic builtins for short... " >&6; }
-if ${glibcxx_cv_atomic_short+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-
-    if test x$gcc_no_link = xyes; then
-  as_fn_error $? "Link tests are not allowed after GCC_NO_EXECUTABLES." "$LINENO" 5
-fi
-cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
-
-int
-main ()
-{
-typedef short atomic_type;
-       atomic_type c1;
-       atomic_type c2;
-       atomic_type c3(0);
-       __atomic_fetch_add(&c1, c2, __ATOMIC_RELAXED);
-       __atomic_compare_exchange_n(&c1, &c2, c3, true, __ATOMIC_ACQ_REL,
-				   __ATOMIC_RELAXED);
-       __atomic_test_and_set(&c1, __ATOMIC_RELAXED);
-       __atomic_load_n(&c1, __ATOMIC_RELAXED);
-
-  ;
-  return 0;
-}
-_ACEOF
-if ac_fn_cxx_try_link "$LINENO"; then :
-  glibcxx_cv_atomic_short=yes
-else
-  glibcxx_cv_atomic_short=no
-fi
-rm -f core conftest.err conftest.$ac_objext \
-    conftest$ac_exeext conftest.$ac_ext
-
-fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $glibcxx_cv_atomic_short" >&5
-$as_echo "$glibcxx_cv_atomic_short" >&6; }
-
-  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for atomic builtins for int" >&5
-$as_echo_n "checking for atomic builtins for int... " >&6; }
-if ${glibcxx_cv_atomic_int+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-
-    if test x$gcc_no_link = xyes; then
-  as_fn_error $? "Link tests are not allowed after GCC_NO_EXECUTABLES." "$LINENO" 5
-fi
-cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
-
-int
-main ()
-{
-typedef int atomic_type;
-       atomic_type c1;
-       atomic_type c2;
-       atomic_type c3(0);
-       __atomic_fetch_add(&c1, c2, __ATOMIC_RELAXED);
-       __atomic_compare_exchange_n(&c1, &c2, c3, true, __ATOMIC_ACQ_REL,
-				   __ATOMIC_RELAXED);
-       __atomic_test_and_set(&c1, __ATOMIC_RELAXED);
-       __atomic_load_n(&c1, __ATOMIC_RELAXED);
-
-  ;
-  return 0;
-}
-_ACEOF
-if ac_fn_cxx_try_link "$LINENO"; then :
-  glibcxx_cv_atomic_int=yes
-else
-  glibcxx_cv_atomic_int=no
-fi
-rm -f core conftest.err conftest.$ac_objext \
-    conftest$ac_exeext conftest.$ac_ext
-
-fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $glibcxx_cv_atomic_int" >&5
-$as_echo "$glibcxx_cv_atomic_int" >&6; }
-
-  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for atomic builtins for long long" >&5
-$as_echo_n "checking for atomic builtins for long long... " >&6; }
-if ${glibcxx_cv_atomic_long_long+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-
-    if test x$gcc_no_link = xyes; then
-  as_fn_error $? "Link tests are not allowed after GCC_NO_EXECUTABLES." "$LINENO" 5
-fi
-cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
-
-int
-main ()
-{
-typedef long long atomic_type;
-       atomic_type c1;
-       atomic_type c2;
-       atomic_type c3(0);
-       __atomic_fetch_add(&c1, c2, __ATOMIC_RELAXED);
-       __atomic_compare_exchange_n(&c1, &c2, c3, true, __ATOMIC_ACQ_REL,
-				   __ATOMIC_RELAXED);
-       __atomic_test_and_set(&c1, __ATOMIC_RELAXED);
-       __atomic_load_n(&c1, __ATOMIC_RELAXED);
-
-  ;
-  return 0;
-}
-_ACEOF
-if ac_fn_cxx_try_link "$LINENO"; then :
-  glibcxx_cv_atomic_long_long=yes
-else
-  glibcxx_cv_atomic_long_long=no
-fi
-rm -f core conftest.err conftest.$ac_objext \
-    conftest$ac_exeext conftest.$ac_ext
-
-fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $glibcxx_cv_atomic_long_long" >&5
-$as_echo "$glibcxx_cv_atomic_long_long" >&6; }
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $glibcxx_cv_atomic_word" >&5
+$as_echo "$glibcxx_cv_atomic_word" >&6; }
 
   else
+    # Do asm tests.
 
-  # Do asm tests.
+    # Compile unoptimized.
+    CXXFLAGS='-O0 -S'
 
-  # Compile unoptimized.
-  CXXFLAGS='-O0 -S'
-
-  # Fake what AC_TRY_COMPILE does.
+    # Fake what AC_COMPILE_IFELSE does.
 
     cat > conftest.$ac_ext << EOF
-#line 16242 "configure"
+#line 16478 "configure"
+#include "atomic_word.h"
 int main()
 {
-  typedef bool atomic_type;
-  atomic_type c1;
-  atomic_type c2;
-  atomic_type c3(0);
-  // N.B. __atomic_fetch_add is not supported for bool.
-  __atomic_compare_exchange_n(&c1, &c2, c3, true, __ATOMIC_ACQ_REL,
-			      __ATOMIC_RELAXED);
-  __atomic_test_and_set(&c1, __ATOMIC_RELAXED);
-  __atomic_load_n(&c1, __ATOMIC_RELAXED);
-
-  return 0;
+  _Atomic_word a = 0, b;
+  b = __atomic_fetch_add(&a, 1, __ATOMIC_ACQ_REL);
 }
 EOF
 
-    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for atomic builtins for bool" >&5
-$as_echo_n "checking for atomic builtins for bool... " >&6; }
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for atomic builtins for _Atomic_word" >&5
+$as_echo_n "checking for atomic builtins for _Atomic_word... " >&6; }
     if { { eval echo "\"\$as_me\":${as_lineno-$LINENO}: \"$ac_compile\""; } >&5
   (eval $ac_compile) 2>&5
   ac_status=$?
   $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
   test $ac_status = 0; }; then
       if grep __atomic_ conftest.s >/dev/null 2>&1 ; then
-	glibcxx_cv_atomic_bool=no
+	glibcxx_cv_atomic_word=no
       else
-	glibcxx_cv_atomic_bool=yes
+	glibcxx_cv_atomic_word=yes
       fi
     fi
-    { $as_echo "$as_me:${as_lineno-$LINENO}: result: $glibcxx_cv_atomic_bool" >&5
-$as_echo "$glibcxx_cv_atomic_bool" >&6; }
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: $glibcxx_cv_atomic_word" >&5
+$as_echo "$glibcxx_cv_atomic_word" >&6; }
     rm -f conftest*
-
-    cat > conftest.$ac_ext << EOF
-#line 16277 "configure"
-int main()
-{
-  typedef short atomic_type;
-  atomic_type c1;
-  atomic_type c2;
-  atomic_type c3(0);
-  __atomic_fetch_add(&c1, c2, __ATOMIC_RELAXED);
-  __atomic_compare_exchange_n(&c1, &c2, c3, true, __ATOMIC_ACQ_REL,
-			      __ATOMIC_RELAXED);
-  __atomic_test_and_set(&c1, __ATOMIC_RELAXED);
-  __atomic_load_n(&c1, __ATOMIC_RELAXED);
-
-  return 0;
-}
-EOF
-
-    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for atomic builtins for short" >&5
-$as_echo_n "checking for atomic builtins for short... " >&6; }
-    if { { eval echo "\"\$as_me\":${as_lineno-$LINENO}: \"$ac_compile\""; } >&5
-  (eval $ac_compile) 2>&5
-  ac_status=$?
-  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
-  test $ac_status = 0; }; then
-      if grep __atomic_ conftest.s >/dev/null 2>&1 ; then
-	glibcxx_cv_atomic_short=no
-      else
-	glibcxx_cv_atomic_short=yes
-      fi
-    fi
-    { $as_echo "$as_me:${as_lineno-$LINENO}: result: $glibcxx_cv_atomic_short" >&5
-$as_echo "$glibcxx_cv_atomic_short" >&6; }
-    rm -f conftest*
-
-    cat > conftest.$ac_ext << EOF
-#line 16312 "configure"
-int main()
-{
-  // NB: _Atomic_word not necessarily int.
-  typedef int atomic_type;
-  atomic_type c1;
-  atomic_type c2;
-  atomic_type c3(0);
-  __atomic_fetch_add(&c1, c2, __ATOMIC_RELAXED);
-  __atomic_compare_exchange_n(&c1, &c2, c3, true, __ATOMIC_ACQ_REL,
-			      __ATOMIC_RELAXED);
-  __atomic_test_and_set(&c1, __ATOMIC_RELAXED);
-  __atomic_load_n(&c1, __ATOMIC_RELAXED);
-
-  return 0;
-}
-EOF
-
-    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for atomic builtins for int" >&5
-$as_echo_n "checking for atomic builtins for int... " >&6; }
-    if { { eval echo "\"\$as_me\":${as_lineno-$LINENO}: \"$ac_compile\""; } >&5
-  (eval $ac_compile) 2>&5
-  ac_status=$?
-  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
-  test $ac_status = 0; }; then
-      if grep __atomic_ conftest.s >/dev/null 2>&1 ; then
-	glibcxx_cv_atomic_int=no
-      else
-	glibcxx_cv_atomic_int=yes
-      fi
-    fi
-    { $as_echo "$as_me:${as_lineno-$LINENO}: result: $glibcxx_cv_atomic_int" >&5
-$as_echo "$glibcxx_cv_atomic_int" >&6; }
-    rm -f conftest*
-
-    cat > conftest.$ac_ext << EOF
-#line 16348 "configure"
-int main()
-{
-  typedef long long atomic_type;
-  atomic_type c1;
-  atomic_type c2;
-  atomic_type c3(0);
-  __atomic_fetch_add(&c1, c2, __ATOMIC_RELAXED);
-  __atomic_compare_exchange_n(&c1, &c2, c3, true, __ATOMIC_ACQ_REL,
-			      __ATOMIC_RELAXED);
-  __atomic_test_and_set(&c1, __ATOMIC_RELAXED);
-  __atomic_load_n(&c1, __ATOMIC_RELAXED);
-
-  return 0;
-}
-EOF
-
-    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for atomic builtins for long long" >&5
-$as_echo_n "checking for atomic builtins for long long... " >&6; }
-    if { { eval echo "\"\$as_me\":${as_lineno-$LINENO}: \"$ac_compile\""; } >&5
-  (eval $ac_compile) 2>&5
-  ac_status=$?
-  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
-  test $ac_status = 0; }; then
-      if grep __atomic_ conftest.s >/dev/null 2>&1 ; then
-	glibcxx_cv_atomic_long_long=no
-      else
-	glibcxx_cv_atomic_long_long=yes
-      fi
-    fi
-    { $as_echo "$as_me:${as_lineno-$LINENO}: result: $glibcxx_cv_atomic_long_long" >&5
-$as_echo "$glibcxx_cv_atomic_long_long" >&6; }
-    rm -f conftest*
-
   fi
+
+  rm -f ./atomic_word.h
 
   CXXFLAGS="$old_CXXFLAGS"
   ac_ext=c
@@ -16389,14 +16512,12 @@ ac_link='$CC -o conftest$ac_exeext $CFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $
 ac_compiler_gnu=$ac_cv_c_compiler_gnu
 
 
-  # Set atomicity_dir to builtins if all but the long long test above passes,
+  # Set atomicity_dir to builtins if the test above passes,
   # or if the builtins were already chosen (e.g. by configure.host).
-  if { test "$glibcxx_cv_atomic_bool" = yes \
-     && test "$glibcxx_cv_atomic_short" = yes \
-     && test "$glibcxx_cv_atomic_int" = yes; } \
+  if test "$glibcxx_cv_atomic_word" = yes \
      || test "$atomicity_dir" = "cpu/generic/atomicity_builtins"; then
 
-$as_echo "#define _GLIBCXX_ATOMIC_BUILTINS 1" >>confdefs.h
+$as_echo "#define _GLIBCXX_ATOMIC_WORD_BUILTINS 1" >>confdefs.h
 
     atomicity_dir=cpu/generic/atomicity_builtins
   fi
@@ -16439,7 +16560,6 @@ fi
 $as_echo_n "checking for lock policy for shared_ptr reference counts... " >&6; }
 
   if test x"$libstdcxx_atomic_lock_policy" = x"auto"; then
-
     ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -16451,10 +16571,11 @@ ac_compiler_gnu=$ac_cv_cxx_compiler_gnu
                 cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 
-    #if defined __riscv
+    #if defined __AMDGCN__ || defined __nvptx__
+    /* Yes, please.  */
+    #elif defined __riscv
     # error "Defaulting to mutex-based locks for ABI compatibility"
-    #endif
-    #if ! defined __GCC_HAVE_SYNC_COMPARE_AND_SWAP_2
+    #elif ! defined __GCC_HAVE_SYNC_COMPARE_AND_SWAP_2
     # error "No 2-byte compare-and-swap"
     #elif ! defined __GCC_HAVE_SYNC_COMPARE_AND_SWAP_4
     # error "No 4-byte compare-and-swap"
@@ -16497,11 +16618,11 @@ $as_echo "mutex" >&6; }
 
 
 
-  # Fake what AC_TRY_COMPILE does, without linking as this is
+  # Fake what AC_COMPILE_IFELSE does, without linking as this is
   # unnecessary for this test.
 
     cat > conftest.$ac_ext << EOF
-#line 16504 "configure"
+#line 16625 "configure"
 int main()
 {
   _Decimal32 d1;
@@ -16531,7 +16652,6 @@ $as_echo "$enable_dfp" >&6; }
 
 
 
-
   ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -16539,11 +16659,11 @@ ac_link='$CXX -o conftest$ac_exeext $CXXFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ex
 ac_compiler_gnu=$ac_cv_cxx_compiler_gnu
 
 
-  # Fake what AC_TRY_COMPILE does, without linking as this is
+  # Fake what AC_COMPILE_IFELSE does, without linking as this is
   # unnecessary for this test.
 
   cat > conftest.$ac_ext << EOF
-#line 16546 "configure"
+#line 16666 "configure"
 template<typename T1, typename T2>
   struct same
   { typedef T2 type; };
@@ -16590,7 +16710,6 @@ fi
   # All these tests are for C++; save the language and the compiler flags.
   # The CXXFLAGS thing is suspicious, but based on similar bits previously
   # found in GLIBCXX_CONFIGURE.
-
   ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -17339,7 +17458,6 @@ done
 
   if test x"$enable_wchar_t" = x"yes"; then
 
-
     ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -17467,7 +17585,6 @@ fi
 
 
   if test x"$enable_c99" = x"yes"; then
-
     ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -18142,7 +18259,6 @@ ac_cpp='$CPP $CPPFLAGS'
 ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
 ac_link='$CC -o conftest$ac_exeext $CFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS >&5'
 ac_compiler_gnu=$ac_cv_c_compiler_gnu
-
 
 
     ac_ext=cpp
@@ -19670,7 +19786,6 @@ fi
 # Checks for operating systems support that doesn't require linking.
 
 
-
   ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -19720,7 +19835,6 @@ ac_cpp='$CPP $CPPFLAGS'
 ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
 ac_link='$CC -o conftest$ac_exeext $CFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS >&5'
 ac_compiler_gnu=$ac_cv_c_compiler_gnu
-
 
 
 
@@ -19939,7 +20053,6 @@ fi
 done
 
 
-
   ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -20080,7 +20193,6 @@ ac_compiler_gnu=$ac_cv_c_compiler_gnu
 
 
 # For LFS support.
-
 
   ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -20255,7 +20367,6 @@ done
 
 
 
-
   ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -20332,7 +20443,6 @@ ac_cpp='$CPP $CPPFLAGS'
 ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
 ac_link='$CC -o conftest$ac_exeext $CFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS >&5'
 ac_compiler_gnu=$ac_cv_c_compiler_gnu
-
 
 
 
@@ -20491,7 +20601,6 @@ done
 
 
 
-
   ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -20588,7 +20697,6 @@ done
 
 
 # For C99 support to TR1.
-
 
 
   ac_ext=cpp
@@ -21221,7 +21329,6 @@ fi
   { $as_echo "$as_me:${as_lineno-$LINENO}: checking for gettimeofday" >&5
 $as_echo_n "checking for gettimeofday... " >&6; }
 
-
   ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -21327,7 +21434,6 @@ fi
 
 
 
-
   ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -21360,7 +21466,10 @@ ac_compiler_gnu=$ac_cv_cxx_compiler_gnu
       # VxWorks has nanosleep as soon as the kernel is configured with
       # INCLUDE_POSIX_TIMERS, which is normally/most-often the case.
       vxworks*)
+        ac_has_clock_monotonic=yes
+        ac_has_clock_realtime=yes
         ac_has_nanosleep=yes
+        ac_has_sched_yield=yes
         ;;
       gnu* | linux* | kfreebsd*-gnu | knetbsd*-gnu)
         # Don't use link test for freestanding library, in case gcc_no_link=yes
@@ -21965,7 +22074,6 @@ ac_compiler_gnu=$ac_cv_c_compiler_gnu
 
 
 # Check for tmpnam which is obsolescent in POSIX.1-2008
-
   ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -22039,7 +22147,6 @@ ac_compiler_gnu=$ac_cv_c_compiler_gnu
 
 
 # For pthread_cond_clockwait
-
 
 
   ac_ext=cpp
@@ -22123,7 +22230,6 @@ ac_compiler_gnu=$ac_cv_c_compiler_gnu
 # For pthread_mutex_clocklock
 
 
-
   ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -22188,7 +22294,7 @@ fi
 $as_echo "$glibcxx_cv_PTHREAD_MUTEX_CLOCKLOCK" >&6; }
   if test $glibcxx_cv_PTHREAD_MUTEX_CLOCKLOCK = yes; then
 
-$as_echo "#define _GLIBCXX_USE_PTHREAD_MUTEX_CLOCKLOCK (_GLIBCXX_TSAN==0)" >>confdefs.h
+$as_echo "#define _GLIBCXX_USE_PTHREAD_MUTEX_CLOCKLOCK 1" >>confdefs.h
 
   fi
 
@@ -22203,7 +22309,6 @@ ac_compiler_gnu=$ac_cv_c_compiler_gnu
 
 
 # For pthread_rwlock_clockrdlock and pthread_rwlock_clockwrlock
-
 
 
   ac_ext=cpp
@@ -22343,7 +22448,6 @@ done
 
 
 
-
   ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -22432,7 +22536,6 @@ done
 
 
 
-
   ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -22505,7 +22608,6 @@ ac_cpp='$CPP $CPPFLAGS'
 ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
 ac_link='$CC -o conftest$ac_exeext $CFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS >&5'
 ac_compiler_gnu=$ac_cv_c_compiler_gnu
-
 
 
 
@@ -22586,7 +22688,6 @@ ac_compiler_gnu=$ac_cv_c_compiler_gnu
 
 
 
-
   ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -22659,7 +22760,6 @@ ac_cpp='$CPP $CPPFLAGS'
 ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
 ac_link='$CC -o conftest$ac_exeext $CFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS >&5'
 ac_compiler_gnu=$ac_cv_c_compiler_gnu
-
 
 
 
@@ -22758,7 +22858,6 @@ ac_compiler_gnu=$ac_cv_c_compiler_gnu
   # Note that this test has to be run with the C language.
   # Otherwise, sdt.h will try to include some headers from
   # libstdc++ itself.
-
   ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
 ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -23001,6 +23100,7 @@ with_gnu_ld=$lt_cv_prog_gnu_ld
   # does some of this, but throws away the result.
   glibcxx_ld_is_gold=no
   glibcxx_ld_is_mold=no
+  glibcxx_ld_is_wild=no
   if test x"$with_gnu_ld" = x"yes"; then
     { $as_echo "$as_me:${as_lineno-$LINENO}: checking for ld version" >&5
 $as_echo_n "checking for ld version... " >&6; }
@@ -23009,6 +23109,8 @@ $as_echo_n "checking for ld version... " >&6; }
       glibcxx_ld_is_gold=yes
     elif $LD --version 2>/dev/null | grep 'mold' >/dev/null 2>&1; then
       glibcxx_ld_is_mold=yes
+    elif $LD --version 2>/dev/null | grep 'Wild' >/dev/null 2>&1; then
+      glibcxx_ld_is_wild=yes
     fi
     ldver=`$LD --version 2>/dev/null |
 	   sed -e 's/[. ][0-9]\{8\}$//;s/.* \([^ ]\{1,\}\)$/\1/; q'`
@@ -23021,7 +23123,7 @@ $as_echo "$glibcxx_gnu_ld_version" >&6; }
 
   # Set --gc-sections.
   glibcxx_have_gc_sections=no
-  if test "$glibcxx_ld_is_gold" = "yes" || test "$glibcxx_ld_is_mold" = "yes" ; then
+  if test "$glibcxx_ld_is_gold" = "yes" || test "$glibcxx_ld_is_mold" = "yes" || test "$glibcxx_ld_is_wild" = "yes" ; then
     if $LD --help 2>/dev/null | grep gc-sections >/dev/null 2>&1; then
       glibcxx_have_gc_sections=yes
     fi
@@ -23071,8 +23173,8 @@ rm -f core conftest.err conftest.$ac_objext \
       rm -f conftest.c
       touch conftest.c
       if $CC -c conftest.c; then
-	if $LD --gc-sections -o conftest conftest.o 2>&1 | \
-	   grep "Warning: gc-sections option ignored" > /dev/null; then
+	if LC_ALL=C $LD --gc-sections -o conftest conftest.o 2>&1 | \
+	   grep "[Ww]arning: gc-sections option ignored" > /dev/null; then
 	  ac_gcsections=no
 	fi
       fi
@@ -23184,7 +23286,6 @@ $as_echo_n "checking for isinf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -23247,7 +23348,6 @@ $as_echo_n "checking for isnan declaration... " >&6; }
     if ${glibcxx_cv_func_isnan_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -23312,7 +23412,6 @@ $as_echo_n "checking for finite declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -23376,7 +23475,6 @@ $as_echo_n "checking for sincos declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -23435,7 +23533,6 @@ $as_echo_n "checking for fpclass declaration... " >&6; }
     if ${glibcxx_cv_func_fpclass_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -23500,7 +23597,6 @@ $as_echo_n "checking for qfpclass declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -23564,7 +23660,6 @@ $as_echo_n "checking for hypot declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -23623,7 +23718,6 @@ $as_echo_n "checking for float trig functions... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
     ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -23679,7 +23773,6 @@ $as_echo_n "checking for float round functions... " >&6; }
   if ${glibcxx_cv_func_float_round_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
     ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -23738,7 +23831,6 @@ $as_echo_n "checking for expf declaration... " >&6; }
     if ${glibcxx_cv_func_expf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -23803,7 +23895,6 @@ $as_echo_n "checking for isnanf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -23866,7 +23957,6 @@ $as_echo_n "checking for isinff declaration... " >&6; }
     if ${glibcxx_cv_func_isinff_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -23931,7 +24021,6 @@ $as_echo_n "checking for atan2f declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -23990,7 +24079,6 @@ $as_echo_n "checking for fabsf declaration... " >&6; }
     if ${glibcxx_cv_func_fabsf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -24055,7 +24143,6 @@ $as_echo_n "checking for fmodf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -24114,7 +24201,6 @@ $as_echo_n "checking for frexpf declaration... " >&6; }
     if ${glibcxx_cv_func_frexpf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -24175,7 +24261,6 @@ $as_echo_n "checking for hypotf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -24235,7 +24320,6 @@ $as_echo_n "checking for ldexpf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -24294,7 +24378,6 @@ $as_echo_n "checking for logf declaration... " >&6; }
     if ${glibcxx_cv_func_logf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -24359,7 +24442,6 @@ $as_echo_n "checking for log10f declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -24423,7 +24505,6 @@ $as_echo_n "checking for modff declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -24482,7 +24563,6 @@ $as_echo_n "checking for modf declaration... " >&6; }
     if ${glibcxx_cv_func_modf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -24543,7 +24623,6 @@ $as_echo_n "checking for powf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -24602,7 +24681,6 @@ $as_echo_n "checking for sqrtf declaration... " >&6; }
     if ${glibcxx_cv_func_sqrtf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -24667,7 +24745,6 @@ $as_echo_n "checking for sincosf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -24726,7 +24803,6 @@ $as_echo_n "checking for finitef declaration... " >&6; }
     if ${glibcxx_cv_func_finitef_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -24790,7 +24866,6 @@ $as_echo_n "checking for long double trig functions... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
     ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -24846,7 +24921,6 @@ $as_echo_n "checking for long double round functions... " >&6; }
   if ${glibcxx_cv_func_long_double_round_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
     ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -24905,7 +24979,6 @@ $as_echo_n "checking for isnanl declaration... " >&6; }
     if ${glibcxx_cv_func_isnanl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -24970,7 +25043,6 @@ $as_echo_n "checking for isinfl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -25034,7 +25106,6 @@ $as_echo_n "checking for atan2l declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -25093,7 +25164,6 @@ $as_echo_n "checking for expl declaration... " >&6; }
     if ${glibcxx_cv_func_expl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -25158,7 +25228,6 @@ $as_echo_n "checking for fabsl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -25222,7 +25291,6 @@ $as_echo_n "checking for fmodl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -25281,7 +25349,6 @@ $as_echo_n "checking for frexpl declaration... " >&6; }
     if ${glibcxx_cv_func_frexpl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -25342,7 +25409,6 @@ $as_echo_n "checking for hypotl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -25402,7 +25468,6 @@ $as_echo_n "checking for ldexpl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -25461,7 +25526,6 @@ $as_echo_n "checking for logl declaration... " >&6; }
     if ${glibcxx_cv_func_logl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -25526,7 +25590,6 @@ $as_echo_n "checking for log10l declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -25590,7 +25653,6 @@ $as_echo_n "checking for modfl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -25650,7 +25712,6 @@ $as_echo_n "checking for powl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -25709,7 +25770,6 @@ $as_echo_n "checking for sqrtl declaration... " >&6; }
     if ${glibcxx_cv_func_sqrtl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -25774,7 +25834,6 @@ $as_echo_n "checking for sincosl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -25833,7 +25892,6 @@ $as_echo_n "checking for finitel declaration... " >&6; }
     if ${glibcxx_cv_func_finitel_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -25906,7 +25964,6 @@ $as_echo_n "checking for at_quick_exit declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -25963,7 +26020,6 @@ $as_echo_n "checking for quick_exit declaration... " >&6; }
     if ${glibcxx_cv_func_quick_exit_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -26022,7 +26078,6 @@ $as_echo_n "checking for strtold declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -26079,7 +26134,6 @@ $as_echo_n "checking for strtof declaration... " >&6; }
     if ${glibcxx_cv_func_strtof_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -26622,6 +26676,7 @@ if test "${enable_rpath+set}" = set; then :
 else
   enable_rpath=yes
 fi
+
 
 
 
@@ -27462,7 +27517,6 @@ if ${glibcxx_cv_func_acosl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
 ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -27512,7 +27566,6 @@ $as_echo_n "checking for asinl declaration... " >&6; }
 if ${glibcxx_cv_func_asinl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
@@ -27564,7 +27617,6 @@ if ${glibcxx_cv_func_atan2l_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
 ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -27614,7 +27666,6 @@ $as_echo_n "checking for atanl declaration... " >&6; }
 if ${glibcxx_cv_func_atanl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
@@ -27666,7 +27717,6 @@ if ${glibcxx_cv_func_ceill_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
 ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -27716,7 +27766,6 @@ $as_echo_n "checking for coshl declaration... " >&6; }
 if ${glibcxx_cv_func_coshl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
@@ -27768,7 +27817,6 @@ if ${glibcxx_cv_func_cosl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
 ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -27818,7 +27866,6 @@ $as_echo_n "checking for expl declaration... " >&6; }
 if ${glibcxx_cv_func_expl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
@@ -27870,7 +27917,6 @@ if ${glibcxx_cv_func_fabsl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
 ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -27920,7 +27966,6 @@ $as_echo_n "checking for floorl declaration... " >&6; }
 if ${glibcxx_cv_func_floorl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
@@ -27972,7 +28017,6 @@ if ${glibcxx_cv_func_fmodl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
 ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -28022,7 +28066,6 @@ $as_echo_n "checking for frexpl declaration... " >&6; }
 if ${glibcxx_cv_func_frexpl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
@@ -28074,7 +28117,6 @@ if ${glibcxx_cv_func_hypotl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
 ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -28124,7 +28166,6 @@ $as_echo_n "checking for ldexpl declaration... " >&6; }
 if ${glibcxx_cv_func_ldexpl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
@@ -28176,7 +28217,6 @@ if ${glibcxx_cv_func_log10l_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
 ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -28226,7 +28266,6 @@ $as_echo_n "checking for logl declaration... " >&6; }
 if ${glibcxx_cv_func_logl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
@@ -28278,7 +28317,6 @@ if ${glibcxx_cv_func_modfl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
 ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -28328,7 +28366,6 @@ $as_echo_n "checking for powl declaration... " >&6; }
 if ${glibcxx_cv_func_powl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
@@ -28380,7 +28417,6 @@ if ${glibcxx_cv_func_sinhl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
 ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -28430,7 +28466,6 @@ $as_echo_n "checking for sinl declaration... " >&6; }
 if ${glibcxx_cv_func_sinl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
@@ -28482,7 +28517,6 @@ if ${glibcxx_cv_func_sqrtl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
 ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -28533,7 +28567,6 @@ if ${glibcxx_cv_func_tanhl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
 ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -28583,7 +28616,6 @@ $as_echo_n "checking for tanl declaration... " >&6; }
 if ${glibcxx_cv_func_tanl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
@@ -28675,6 +28707,10 @@ rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
 
         $as_echo "#define HAVE_LINK 1" >>confdefs.h
 
+        $as_echo "#define HAVE_SYS_STAT_H 1" >>confdefs.h
+
+        $as_echo "#define HAVE_SYS_TYPES_H 1" >>confdefs.h
+
         $as_echo "#define HAVE_QUICK_EXIT 1" >>confdefs.h
 
         $as_echo "#define HAVE_READLINK 1" >>confdefs.h
@@ -28689,7 +28725,25 @@ rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
 
         $as_echo "#define HAVE_SYMLINK 1" >>confdefs.h
 
+        $as_echo "#define HAVE_S_ISREG 1" >>confdefs.h
+
         $as_echo "#define HAVE_TRUNCATE 1" >>confdefs.h
+
+        $as_echo "#define HAVE_UNISTD_H 1" >>confdefs.h
+
+        $as_echo "#define HAVE_UNLINKAT 1" >>confdefs.h
+
+        $as_echo "#define HAVE_USLEEP 1" >>confdefs.h
+
+        $as_echo "#define _GLIBCXX_USE_CHMOD 1" >>confdefs.h
+
+        $as_echo "#define _GLIBCXX_USE_MKDIR 1" >>confdefs.h
+
+        $as_echo "#define _GLIBCXX_USE_CHDIR 1" >>confdefs.h
+
+        $as_echo "#define _GLIBCXX_USE_GETCWD 1" >>confdefs.h
+
+        $as_echo "#define _GLIBCXX_USE_UTIME 1" >>confdefs.h
 
         $as_echo "#define HAVE_USLEEP 1" >>confdefs.h
 
@@ -28702,6 +28756,136 @@ rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
         glibcxx_cv_mkdir=yes
         ;;
     esac
+  elif test "x${with_picolibc}" = "xyes"; then
+    os_include_dir="os/picolibc"
+    $as_echo "#define HAVE_HYPOT 1" >>confdefs.h
+
+
+    # GLIBCXX_CHECK_STDLIB_SUPPORT
+    $as_echo "#define HAVE_STRTOF 1" >>confdefs.h
+
+
+    $as_echo "#define HAVE_ACOSF 1" >>confdefs.h
+
+    $as_echo "#define HAVE_ASINF 1" >>confdefs.h
+
+    $as_echo "#define HAVE_ATAN2F 1" >>confdefs.h
+
+    $as_echo "#define HAVE_ATANF 1" >>confdefs.h
+
+    $as_echo "#define HAVE_CEILF 1" >>confdefs.h
+
+    $as_echo "#define HAVE_COSF 1" >>confdefs.h
+
+    $as_echo "#define HAVE_COSHF 1" >>confdefs.h
+
+    $as_echo "#define HAVE_EXPF 1" >>confdefs.h
+
+    $as_echo "#define HAVE_FABSF 1" >>confdefs.h
+
+    $as_echo "#define HAVE_FLOORF 1" >>confdefs.h
+
+    $as_echo "#define HAVE_FMODF 1" >>confdefs.h
+
+    $as_echo "#define HAVE_FREXPF 1" >>confdefs.h
+
+    $as_echo "#define HAVE_HYPOTF 1" >>confdefs.h
+
+    $as_echo "#define HAVE_LDEXPF 1" >>confdefs.h
+
+    $as_echo "#define HAVE_LOG10F 1" >>confdefs.h
+
+    $as_echo "#define HAVE_LOGF 1" >>confdefs.h
+
+    $as_echo "#define HAVE_MODFF 1" >>confdefs.h
+
+    $as_echo "#define HAVE_POWF 1" >>confdefs.h
+
+    $as_echo "#define HAVE_SINF 1" >>confdefs.h
+
+    $as_echo "#define HAVE_SINHF 1" >>confdefs.h
+
+    $as_echo "#define HAVE_SQRTF 1" >>confdefs.h
+
+    $as_echo "#define HAVE_TANF 1" >>confdefs.h
+
+    $as_echo "#define HAVE_TANHF 1" >>confdefs.h
+
+
+    # Support for iconv in picolibc is configurable.
+    cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+#include <picolibc.h>
+int
+main ()
+{
+
+      #ifndef _ICONV_ENABLED
+      #error
+      #endif
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_compile "$LINENO"; then :
+  ac_picolibc_iconv_enabled=yes
+else
+  ac_picolibc_iconv_enabled=no
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+    if test "$ac_picolibc_iconv_enabled" = yes; then
+      $as_echo "#define HAVE_ICONV 1" >>confdefs.h
+
+    fi
+
+    $as_echo "#define HAVE_MEMALIGN 1" >>confdefs.h
+
+
+    # Check for TLS
+    cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+#include <picolibc.h>
+int
+main ()
+{
+
+      #ifndef __THREAD_LOCAL_STORAGE
+      #error
+      #endif
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_compile "$LINENO"; then :
+  ac_picolibc_tls_enabled=yes
+else
+  ac_picolibc_tls_enabled=no
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+    if test "$ac_picolibc_tls_enabled" = yes; then
+      $as_echo "#define HAVE_TLS 1" >>confdefs.h
+
+    fi
+
+    $as_echo "#define HAVE_ALIGNED_ALLOC 1" >>confdefs.h
+
+    $as_echo "#define HAVE_AT_QUICK_EXIT 1" >>confdefs.h
+
+    $as_echo "#define HAVE_LINK 1" >>confdefs.h
+
+    $as_echo "#define HAVE_SYS_STAT_H 1" >>confdefs.h
+
+    $as_echo "#define HAVE_SYS_TYPES_H 1" >>confdefs.h
+
+    $as_echo "#define HAVE_SETENV 1" >>confdefs.h
+
+    $as_echo "#define HAVE_STRERROR_L 1" >>confdefs.h
+
+    $as_echo "#define HAVE_S_ISREG 1" >>confdefs.h
+
+    $as_echo "#define HAVE_UNISTD_H 1" >>confdefs.h
+
+
   elif test "x$with_headers" != "xno"; then
 
 # Base decisions on target environment.
@@ -28767,7 +28951,6 @@ case "${host}" in
   # All these tests are for C++; save the language and the compiler flags.
   # The CXXFLAGS thing is suspicious, but based on similar bits previously
   # found in GLIBCXX_CONFIGURE.
-
   ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -28846,6 +29029,7 @@ ac_compiler_gnu=$ac_cv_c_compiler_gnu
   # does some of this, but throws away the result.
   glibcxx_ld_is_gold=no
   glibcxx_ld_is_mold=no
+  glibcxx_ld_is_wild=no
   if test x"$with_gnu_ld" = x"yes"; then
     { $as_echo "$as_me:${as_lineno-$LINENO}: checking for ld version" >&5
 $as_echo_n "checking for ld version... " >&6; }
@@ -28854,6 +29038,8 @@ $as_echo_n "checking for ld version... " >&6; }
       glibcxx_ld_is_gold=yes
     elif $LD --version 2>/dev/null | grep 'mold' >/dev/null 2>&1; then
       glibcxx_ld_is_mold=yes
+    elif $LD --version 2>/dev/null | grep 'Wild' >/dev/null 2>&1; then
+      glibcxx_ld_is_wild=yes
     fi
     ldver=`$LD --version 2>/dev/null |
 	   sed -e 's/[. ][0-9]\{8\}$//;s/.* \([^ ]\{1,\}\)$/\1/; q'`
@@ -28866,7 +29052,7 @@ $as_echo "$glibcxx_gnu_ld_version" >&6; }
 
   # Set --gc-sections.
   glibcxx_have_gc_sections=no
-  if test "$glibcxx_ld_is_gold" = "yes" || test "$glibcxx_ld_is_mold" = "yes" ; then
+  if test "$glibcxx_ld_is_gold" = "yes" || test "$glibcxx_ld_is_mold" = "yes" || test "$glibcxx_ld_is_wild" = "yes" ; then
     if $LD --help 2>/dev/null | grep gc-sections >/dev/null 2>&1; then
       glibcxx_have_gc_sections=yes
     fi
@@ -28916,8 +29102,8 @@ rm -f core conftest.err conftest.$ac_objext \
       rm -f conftest.c
       touch conftest.c
       if $CC -c conftest.c; then
-	if $LD --gc-sections -o conftest conftest.o 2>&1 | \
-	   grep "Warning: gc-sections option ignored" > /dev/null; then
+	if LC_ALL=C $LD --gc-sections -o conftest conftest.o 2>&1 | \
+	   grep "[Ww]arning: gc-sections option ignored" > /dev/null; then
 	  ac_gcsections=no
 	fi
       fi
@@ -29029,7 +29215,6 @@ $as_echo_n "checking for isinf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -29092,7 +29277,6 @@ $as_echo_n "checking for isnan declaration... " >&6; }
     if ${glibcxx_cv_func_isnan_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -29157,7 +29341,6 @@ $as_echo_n "checking for finite declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -29221,7 +29404,6 @@ $as_echo_n "checking for sincos declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -29280,7 +29462,6 @@ $as_echo_n "checking for fpclass declaration... " >&6; }
     if ${glibcxx_cv_func_fpclass_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -29345,7 +29526,6 @@ $as_echo_n "checking for qfpclass declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -29409,7 +29589,6 @@ $as_echo_n "checking for hypot declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -29468,7 +29647,6 @@ $as_echo_n "checking for float trig functions... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
     ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -29524,7 +29702,6 @@ $as_echo_n "checking for float round functions... " >&6; }
   if ${glibcxx_cv_func_float_round_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
     ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -29583,7 +29760,6 @@ $as_echo_n "checking for expf declaration... " >&6; }
     if ${glibcxx_cv_func_expf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -29648,7 +29824,6 @@ $as_echo_n "checking for isnanf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -29711,7 +29886,6 @@ $as_echo_n "checking for isinff declaration... " >&6; }
     if ${glibcxx_cv_func_isinff_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -29776,7 +29950,6 @@ $as_echo_n "checking for atan2f declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -29835,7 +30008,6 @@ $as_echo_n "checking for fabsf declaration... " >&6; }
     if ${glibcxx_cv_func_fabsf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -29900,7 +30072,6 @@ $as_echo_n "checking for fmodf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -29959,7 +30130,6 @@ $as_echo_n "checking for frexpf declaration... " >&6; }
     if ${glibcxx_cv_func_frexpf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -30020,7 +30190,6 @@ $as_echo_n "checking for hypotf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -30080,7 +30249,6 @@ $as_echo_n "checking for ldexpf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -30139,7 +30307,6 @@ $as_echo_n "checking for logf declaration... " >&6; }
     if ${glibcxx_cv_func_logf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -30204,7 +30371,6 @@ $as_echo_n "checking for log10f declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -30268,7 +30434,6 @@ $as_echo_n "checking for modff declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -30327,7 +30492,6 @@ $as_echo_n "checking for modf declaration... " >&6; }
     if ${glibcxx_cv_func_modf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -30388,7 +30552,6 @@ $as_echo_n "checking for powf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -30447,7 +30610,6 @@ $as_echo_n "checking for sqrtf declaration... " >&6; }
     if ${glibcxx_cv_func_sqrtf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -30512,7 +30674,6 @@ $as_echo_n "checking for sincosf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -30571,7 +30732,6 @@ $as_echo_n "checking for finitef declaration... " >&6; }
     if ${glibcxx_cv_func_finitef_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -30635,7 +30795,6 @@ $as_echo_n "checking for long double trig functions... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
     ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -30691,7 +30850,6 @@ $as_echo_n "checking for long double round functions... " >&6; }
   if ${glibcxx_cv_func_long_double_round_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
     ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -30750,7 +30908,6 @@ $as_echo_n "checking for isnanl declaration... " >&6; }
     if ${glibcxx_cv_func_isnanl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -30815,7 +30972,6 @@ $as_echo_n "checking for isinfl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -30879,7 +31035,6 @@ $as_echo_n "checking for atan2l declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -30938,7 +31093,6 @@ $as_echo_n "checking for expl declaration... " >&6; }
     if ${glibcxx_cv_func_expl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -31003,7 +31157,6 @@ $as_echo_n "checking for fabsl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -31067,7 +31220,6 @@ $as_echo_n "checking for fmodl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -31126,7 +31278,6 @@ $as_echo_n "checking for frexpl declaration... " >&6; }
     if ${glibcxx_cv_func_frexpl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -31187,7 +31338,6 @@ $as_echo_n "checking for hypotl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -31247,7 +31397,6 @@ $as_echo_n "checking for ldexpl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -31306,7 +31455,6 @@ $as_echo_n "checking for logl declaration... " >&6; }
     if ${glibcxx_cv_func_logl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -31371,7 +31519,6 @@ $as_echo_n "checking for log10l declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -31435,7 +31582,6 @@ $as_echo_n "checking for modfl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -31495,7 +31641,6 @@ $as_echo_n "checking for powl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -31554,7 +31699,6 @@ $as_echo_n "checking for sqrtl declaration... " >&6; }
     if ${glibcxx_cv_func_sqrtl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -31619,7 +31763,6 @@ $as_echo_n "checking for sincosl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -31678,7 +31821,6 @@ $as_echo_n "checking for finitel declaration... " >&6; }
     if ${glibcxx_cv_func_finitel_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -31751,7 +31893,6 @@ $as_echo_n "checking for at_quick_exit declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -31808,7 +31949,6 @@ $as_echo_n "checking for quick_exit declaration... " >&6; }
     if ${glibcxx_cv_func_quick_exit_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -31867,7 +32007,6 @@ $as_echo_n "checking for strtold declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -31924,7 +32063,6 @@ $as_echo_n "checking for strtof declaration... " >&6; }
     if ${glibcxx_cv_func_strtof_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -32025,6 +32163,7 @@ done
   # does some of this, but throws away the result.
   glibcxx_ld_is_gold=no
   glibcxx_ld_is_mold=no
+  glibcxx_ld_is_wild=no
   if test x"$with_gnu_ld" = x"yes"; then
     { $as_echo "$as_me:${as_lineno-$LINENO}: checking for ld version" >&5
 $as_echo_n "checking for ld version... " >&6; }
@@ -32033,6 +32172,8 @@ $as_echo_n "checking for ld version... " >&6; }
       glibcxx_ld_is_gold=yes
     elif $LD --version 2>/dev/null | grep 'mold' >/dev/null 2>&1; then
       glibcxx_ld_is_mold=yes
+    elif $LD --version 2>/dev/null | grep 'Wild' >/dev/null 2>&1; then
+      glibcxx_ld_is_wild=yes
     fi
     ldver=`$LD --version 2>/dev/null |
 	   sed -e 's/[. ][0-9]\{8\}$//;s/.* \([^ ]\{1,\}\)$/\1/; q'`
@@ -32045,7 +32186,7 @@ $as_echo "$glibcxx_gnu_ld_version" >&6; }
 
   # Set --gc-sections.
   glibcxx_have_gc_sections=no
-  if test "$glibcxx_ld_is_gold" = "yes" || test "$glibcxx_ld_is_mold" = "yes" ; then
+  if test "$glibcxx_ld_is_gold" = "yes" || test "$glibcxx_ld_is_mold" = "yes" || test "$glibcxx_ld_is_wild" = "yes" ; then
     if $LD --help 2>/dev/null | grep gc-sections >/dev/null 2>&1; then
       glibcxx_have_gc_sections=yes
     fi
@@ -32095,8 +32236,8 @@ rm -f core conftest.err conftest.$ac_objext \
       rm -f conftest.c
       touch conftest.c
       if $CC -c conftest.c; then
-	if $LD --gc-sections -o conftest conftest.o 2>&1 | \
-	   grep "Warning: gc-sections option ignored" > /dev/null; then
+	if LC_ALL=C $LD --gc-sections -o conftest conftest.o 2>&1 | \
+	   grep "[Ww]arning: gc-sections option ignored" > /dev/null; then
 	  ac_gcsections=no
 	fi
       fi
@@ -32208,7 +32349,6 @@ $as_echo_n "checking for isinf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -32271,7 +32411,6 @@ $as_echo_n "checking for isnan declaration... " >&6; }
     if ${glibcxx_cv_func_isnan_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -32336,7 +32475,6 @@ $as_echo_n "checking for finite declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -32400,7 +32538,6 @@ $as_echo_n "checking for sincos declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -32459,7 +32596,6 @@ $as_echo_n "checking for fpclass declaration... " >&6; }
     if ${glibcxx_cv_func_fpclass_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -32524,7 +32660,6 @@ $as_echo_n "checking for qfpclass declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -32588,7 +32723,6 @@ $as_echo_n "checking for hypot declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -32647,7 +32781,6 @@ $as_echo_n "checking for float trig functions... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
     ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -32703,7 +32836,6 @@ $as_echo_n "checking for float round functions... " >&6; }
   if ${glibcxx_cv_func_float_round_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
     ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -32762,7 +32894,6 @@ $as_echo_n "checking for expf declaration... " >&6; }
     if ${glibcxx_cv_func_expf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -32827,7 +32958,6 @@ $as_echo_n "checking for isnanf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -32890,7 +33020,6 @@ $as_echo_n "checking for isinff declaration... " >&6; }
     if ${glibcxx_cv_func_isinff_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -32955,7 +33084,6 @@ $as_echo_n "checking for atan2f declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -33014,7 +33142,6 @@ $as_echo_n "checking for fabsf declaration... " >&6; }
     if ${glibcxx_cv_func_fabsf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -33079,7 +33206,6 @@ $as_echo_n "checking for fmodf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -33138,7 +33264,6 @@ $as_echo_n "checking for frexpf declaration... " >&6; }
     if ${glibcxx_cv_func_frexpf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -33199,7 +33324,6 @@ $as_echo_n "checking for hypotf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -33259,7 +33383,6 @@ $as_echo_n "checking for ldexpf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -33318,7 +33441,6 @@ $as_echo_n "checking for logf declaration... " >&6; }
     if ${glibcxx_cv_func_logf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -33383,7 +33505,6 @@ $as_echo_n "checking for log10f declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -33447,7 +33568,6 @@ $as_echo_n "checking for modff declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -33506,7 +33626,6 @@ $as_echo_n "checking for modf declaration... " >&6; }
     if ${glibcxx_cv_func_modf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -33567,7 +33686,6 @@ $as_echo_n "checking for powf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -33626,7 +33744,6 @@ $as_echo_n "checking for sqrtf declaration... " >&6; }
     if ${glibcxx_cv_func_sqrtf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -33691,7 +33808,6 @@ $as_echo_n "checking for sincosf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -33750,7 +33866,6 @@ $as_echo_n "checking for finitef declaration... " >&6; }
     if ${glibcxx_cv_func_finitef_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -33814,7 +33929,6 @@ $as_echo_n "checking for long double trig functions... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
     ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -33870,7 +33984,6 @@ $as_echo_n "checking for long double round functions... " >&6; }
   if ${glibcxx_cv_func_long_double_round_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
     ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -33929,7 +34042,6 @@ $as_echo_n "checking for isnanl declaration... " >&6; }
     if ${glibcxx_cv_func_isnanl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -33994,7 +34106,6 @@ $as_echo_n "checking for isinfl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -34058,7 +34169,6 @@ $as_echo_n "checking for atan2l declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -34117,7 +34227,6 @@ $as_echo_n "checking for expl declaration... " >&6; }
     if ${glibcxx_cv_func_expl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -34182,7 +34291,6 @@ $as_echo_n "checking for fabsl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -34246,7 +34354,6 @@ $as_echo_n "checking for fmodl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -34305,7 +34412,6 @@ $as_echo_n "checking for frexpl declaration... " >&6; }
     if ${glibcxx_cv_func_frexpl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -34366,7 +34472,6 @@ $as_echo_n "checking for hypotl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -34426,7 +34531,6 @@ $as_echo_n "checking for ldexpl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -34485,7 +34589,6 @@ $as_echo_n "checking for logl declaration... " >&6; }
     if ${glibcxx_cv_func_logl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -34550,7 +34653,6 @@ $as_echo_n "checking for log10l declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -34614,7 +34716,6 @@ $as_echo_n "checking for modfl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -34674,7 +34775,6 @@ $as_echo_n "checking for powl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -34733,7 +34833,6 @@ $as_echo_n "checking for sqrtl declaration... " >&6; }
     if ${glibcxx_cv_func_sqrtl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -34798,7 +34897,6 @@ $as_echo_n "checking for sincosl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -34857,7 +34955,6 @@ $as_echo_n "checking for finitel declaration... " >&6; }
     if ${glibcxx_cv_func_finitel_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -34930,7 +35027,6 @@ $as_echo_n "checking for at_quick_exit declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -34987,7 +35083,6 @@ $as_echo_n "checking for quick_exit declaration... " >&6; }
     if ${glibcxx_cv_func_quick_exit_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -35046,7 +35141,6 @@ $as_echo_n "checking for strtold declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -35103,7 +35197,6 @@ $as_echo_n "checking for strtof declaration... " >&6; }
     if ${glibcxx_cv_func_strtof_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -35235,7 +35328,6 @@ $as_echo_n "checking for isinf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -35298,7 +35390,6 @@ $as_echo_n "checking for isnan declaration... " >&6; }
     if ${glibcxx_cv_func_isnan_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -35363,7 +35454,6 @@ $as_echo_n "checking for finite declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -35427,7 +35517,6 @@ $as_echo_n "checking for sincos declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -35486,7 +35575,6 @@ $as_echo_n "checking for fpclass declaration... " >&6; }
     if ${glibcxx_cv_func_fpclass_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -35551,7 +35639,6 @@ $as_echo_n "checking for qfpclass declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -35615,7 +35702,6 @@ $as_echo_n "checking for hypot declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -35674,7 +35760,6 @@ $as_echo_n "checking for float trig functions... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
     ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -35730,7 +35815,6 @@ $as_echo_n "checking for float round functions... " >&6; }
   if ${glibcxx_cv_func_float_round_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
     ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -35789,7 +35873,6 @@ $as_echo_n "checking for expf declaration... " >&6; }
     if ${glibcxx_cv_func_expf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -35854,7 +35937,6 @@ $as_echo_n "checking for isnanf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -35917,7 +35999,6 @@ $as_echo_n "checking for isinff declaration... " >&6; }
     if ${glibcxx_cv_func_isinff_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -35982,7 +36063,6 @@ $as_echo_n "checking for atan2f declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -36041,7 +36121,6 @@ $as_echo_n "checking for fabsf declaration... " >&6; }
     if ${glibcxx_cv_func_fabsf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -36106,7 +36185,6 @@ $as_echo_n "checking for fmodf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -36165,7 +36243,6 @@ $as_echo_n "checking for frexpf declaration... " >&6; }
     if ${glibcxx_cv_func_frexpf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -36226,7 +36303,6 @@ $as_echo_n "checking for hypotf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -36286,7 +36362,6 @@ $as_echo_n "checking for ldexpf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -36345,7 +36420,6 @@ $as_echo_n "checking for logf declaration... " >&6; }
     if ${glibcxx_cv_func_logf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -36410,7 +36484,6 @@ $as_echo_n "checking for log10f declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -36474,7 +36547,6 @@ $as_echo_n "checking for modff declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -36533,7 +36605,6 @@ $as_echo_n "checking for modf declaration... " >&6; }
     if ${glibcxx_cv_func_modf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -36594,7 +36665,6 @@ $as_echo_n "checking for powf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -36653,7 +36723,6 @@ $as_echo_n "checking for sqrtf declaration... " >&6; }
     if ${glibcxx_cv_func_sqrtf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -36718,7 +36787,6 @@ $as_echo_n "checking for sincosf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -36777,7 +36845,6 @@ $as_echo_n "checking for finitef declaration... " >&6; }
     if ${glibcxx_cv_func_finitef_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -36841,7 +36908,6 @@ $as_echo_n "checking for long double trig functions... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
     ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -36897,7 +36963,6 @@ $as_echo_n "checking for long double round functions... " >&6; }
   if ${glibcxx_cv_func_long_double_round_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
     ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -36956,7 +37021,6 @@ $as_echo_n "checking for isnanl declaration... " >&6; }
     if ${glibcxx_cv_func_isnanl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -37021,7 +37085,6 @@ $as_echo_n "checking for isinfl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -37085,7 +37148,6 @@ $as_echo_n "checking for atan2l declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -37144,7 +37206,6 @@ $as_echo_n "checking for expl declaration... " >&6; }
     if ${glibcxx_cv_func_expl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -37209,7 +37270,6 @@ $as_echo_n "checking for fabsl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -37273,7 +37333,6 @@ $as_echo_n "checking for fmodl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -37332,7 +37391,6 @@ $as_echo_n "checking for frexpl declaration... " >&6; }
     if ${glibcxx_cv_func_frexpl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -37393,7 +37451,6 @@ $as_echo_n "checking for hypotl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -37453,7 +37510,6 @@ $as_echo_n "checking for ldexpl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -37512,7 +37568,6 @@ $as_echo_n "checking for logl declaration... " >&6; }
     if ${glibcxx_cv_func_logl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -37577,7 +37632,6 @@ $as_echo_n "checking for log10l declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -37641,7 +37695,6 @@ $as_echo_n "checking for modfl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -37701,7 +37754,6 @@ $as_echo_n "checking for powl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -37760,7 +37812,6 @@ $as_echo_n "checking for sqrtl declaration... " >&6; }
     if ${glibcxx_cv_func_sqrtl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -37825,7 +37876,6 @@ $as_echo_n "checking for sincosl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -37884,7 +37934,6 @@ $as_echo_n "checking for finitel declaration... " >&6; }
     if ${glibcxx_cv_func_finitel_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -37957,7 +38006,6 @@ $as_echo_n "checking for at_quick_exit declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -38014,7 +38062,6 @@ $as_echo_n "checking for quick_exit declaration... " >&6; }
     if ${glibcxx_cv_func_quick_exit_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -38073,7 +38120,6 @@ $as_echo_n "checking for strtold declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -38130,7 +38176,6 @@ $as_echo_n "checking for strtof declaration... " >&6; }
     if ${glibcxx_cv_func_strtof_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -38243,6 +38288,7 @@ done
   # does some of this, but throws away the result.
   glibcxx_ld_is_gold=no
   glibcxx_ld_is_mold=no
+  glibcxx_ld_is_wild=no
   if test x"$with_gnu_ld" = x"yes"; then
     { $as_echo "$as_me:${as_lineno-$LINENO}: checking for ld version" >&5
 $as_echo_n "checking for ld version... " >&6; }
@@ -38251,6 +38297,8 @@ $as_echo_n "checking for ld version... " >&6; }
       glibcxx_ld_is_gold=yes
     elif $LD --version 2>/dev/null | grep 'mold' >/dev/null 2>&1; then
       glibcxx_ld_is_mold=yes
+    elif $LD --version 2>/dev/null | grep 'Wild' >/dev/null 2>&1; then
+      glibcxx_ld_is_wild=yes
     fi
     ldver=`$LD --version 2>/dev/null |
 	   sed -e 's/[. ][0-9]\{8\}$//;s/.* \([^ ]\{1,\}\)$/\1/; q'`
@@ -38263,7 +38311,7 @@ $as_echo "$glibcxx_gnu_ld_version" >&6; }
 
   # Set --gc-sections.
   glibcxx_have_gc_sections=no
-  if test "$glibcxx_ld_is_gold" = "yes" || test "$glibcxx_ld_is_mold" = "yes" ; then
+  if test "$glibcxx_ld_is_gold" = "yes" || test "$glibcxx_ld_is_mold" = "yes" || test "$glibcxx_ld_is_wild" = "yes" ; then
     if $LD --help 2>/dev/null | grep gc-sections >/dev/null 2>&1; then
       glibcxx_have_gc_sections=yes
     fi
@@ -38313,8 +38361,8 @@ rm -f core conftest.err conftest.$ac_objext \
       rm -f conftest.c
       touch conftest.c
       if $CC -c conftest.c; then
-	if $LD --gc-sections -o conftest conftest.o 2>&1 | \
-	   grep "Warning: gc-sections option ignored" > /dev/null; then
+	if LC_ALL=C $LD --gc-sections -o conftest conftest.o 2>&1 | \
+	   grep "[Ww]arning: gc-sections option ignored" > /dev/null; then
 	  ac_gcsections=no
 	fi
       fi
@@ -38531,6 +38579,7 @@ done
   # does some of this, but throws away the result.
   glibcxx_ld_is_gold=no
   glibcxx_ld_is_mold=no
+  glibcxx_ld_is_wild=no
   if test x"$with_gnu_ld" = x"yes"; then
     { $as_echo "$as_me:${as_lineno-$LINENO}: checking for ld version" >&5
 $as_echo_n "checking for ld version... " >&6; }
@@ -38539,6 +38588,8 @@ $as_echo_n "checking for ld version... " >&6; }
       glibcxx_ld_is_gold=yes
     elif $LD --version 2>/dev/null | grep 'mold' >/dev/null 2>&1; then
       glibcxx_ld_is_mold=yes
+    elif $LD --version 2>/dev/null | grep 'Wild' >/dev/null 2>&1; then
+      glibcxx_ld_is_wild=yes
     fi
     ldver=`$LD --version 2>/dev/null |
 	   sed -e 's/[. ][0-9]\{8\}$//;s/.* \([^ ]\{1,\}\)$/\1/; q'`
@@ -38551,7 +38602,7 @@ $as_echo "$glibcxx_gnu_ld_version" >&6; }
 
   # Set --gc-sections.
   glibcxx_have_gc_sections=no
-  if test "$glibcxx_ld_is_gold" = "yes" || test "$glibcxx_ld_is_mold" = "yes" ; then
+  if test "$glibcxx_ld_is_gold" = "yes" || test "$glibcxx_ld_is_mold" = "yes" || test "$glibcxx_ld_is_wild" = "yes" ; then
     if $LD --help 2>/dev/null | grep gc-sections >/dev/null 2>&1; then
       glibcxx_have_gc_sections=yes
     fi
@@ -38601,8 +38652,8 @@ rm -f core conftest.err conftest.$ac_objext \
       rm -f conftest.c
       touch conftest.c
       if $CC -c conftest.c; then
-	if $LD --gc-sections -o conftest conftest.o 2>&1 | \
-	   grep "Warning: gc-sections option ignored" > /dev/null; then
+	if LC_ALL=C $LD --gc-sections -o conftest conftest.o 2>&1 | \
+	   grep "[Ww]arning: gc-sections option ignored" > /dev/null; then
 	  ac_gcsections=no
 	fi
       fi
@@ -38917,7 +38968,6 @@ $as_echo "#define HAVE_TLS 1" >>confdefs.h
   # All these tests are for C++; save the language and the compiler flags.
   # The CXXFLAGS thing is suspicious, but based on similar bits previously
   # found in GLIBCXX_CONFIGURE.
-
   ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -38996,6 +39046,7 @@ ac_compiler_gnu=$ac_cv_c_compiler_gnu
   # does some of this, but throws away the result.
   glibcxx_ld_is_gold=no
   glibcxx_ld_is_mold=no
+  glibcxx_ld_is_wild=no
   if test x"$with_gnu_ld" = x"yes"; then
     { $as_echo "$as_me:${as_lineno-$LINENO}: checking for ld version" >&5
 $as_echo_n "checking for ld version... " >&6; }
@@ -39004,6 +39055,8 @@ $as_echo_n "checking for ld version... " >&6; }
       glibcxx_ld_is_gold=yes
     elif $LD --version 2>/dev/null | grep 'mold' >/dev/null 2>&1; then
       glibcxx_ld_is_mold=yes
+    elif $LD --version 2>/dev/null | grep 'Wild' >/dev/null 2>&1; then
+      glibcxx_ld_is_wild=yes
     fi
     ldver=`$LD --version 2>/dev/null |
 	   sed -e 's/[. ][0-9]\{8\}$//;s/.* \([^ ]\{1,\}\)$/\1/; q'`
@@ -39016,7 +39069,7 @@ $as_echo "$glibcxx_gnu_ld_version" >&6; }
 
   # Set --gc-sections.
   glibcxx_have_gc_sections=no
-  if test "$glibcxx_ld_is_gold" = "yes" || test "$glibcxx_ld_is_mold" = "yes" ; then
+  if test "$glibcxx_ld_is_gold" = "yes" || test "$glibcxx_ld_is_mold" = "yes" || test "$glibcxx_ld_is_wild" = "yes" ; then
     if $LD --help 2>/dev/null | grep gc-sections >/dev/null 2>&1; then
       glibcxx_have_gc_sections=yes
     fi
@@ -39066,8 +39119,8 @@ rm -f core conftest.err conftest.$ac_objext \
       rm -f conftest.c
       touch conftest.c
       if $CC -c conftest.c; then
-	if $LD --gc-sections -o conftest conftest.o 2>&1 | \
-	   grep "Warning: gc-sections option ignored" > /dev/null; then
+	if LC_ALL=C $LD --gc-sections -o conftest conftest.o 2>&1 | \
+	   grep "[Ww]arning: gc-sections option ignored" > /dev/null; then
 	  ac_gcsections=no
 	fi
       fi
@@ -39179,7 +39232,6 @@ $as_echo_n "checking for isinf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -39242,7 +39294,6 @@ $as_echo_n "checking for isnan declaration... " >&6; }
     if ${glibcxx_cv_func_isnan_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -39307,7 +39358,6 @@ $as_echo_n "checking for finite declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -39371,7 +39421,6 @@ $as_echo_n "checking for sincos declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -39430,7 +39479,6 @@ $as_echo_n "checking for fpclass declaration... " >&6; }
     if ${glibcxx_cv_func_fpclass_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -39495,7 +39543,6 @@ $as_echo_n "checking for qfpclass declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -39559,7 +39606,6 @@ $as_echo_n "checking for hypot declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -39618,7 +39664,6 @@ $as_echo_n "checking for float trig functions... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
     ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -39674,7 +39719,6 @@ $as_echo_n "checking for float round functions... " >&6; }
   if ${glibcxx_cv_func_float_round_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
     ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -39733,7 +39777,6 @@ $as_echo_n "checking for expf declaration... " >&6; }
     if ${glibcxx_cv_func_expf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -39798,7 +39841,6 @@ $as_echo_n "checking for isnanf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -39861,7 +39903,6 @@ $as_echo_n "checking for isinff declaration... " >&6; }
     if ${glibcxx_cv_func_isinff_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -39926,7 +39967,6 @@ $as_echo_n "checking for atan2f declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -39985,7 +40025,6 @@ $as_echo_n "checking for fabsf declaration... " >&6; }
     if ${glibcxx_cv_func_fabsf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -40050,7 +40089,6 @@ $as_echo_n "checking for fmodf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -40109,7 +40147,6 @@ $as_echo_n "checking for frexpf declaration... " >&6; }
     if ${glibcxx_cv_func_frexpf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -40170,7 +40207,6 @@ $as_echo_n "checking for hypotf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -40230,7 +40266,6 @@ $as_echo_n "checking for ldexpf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -40289,7 +40324,6 @@ $as_echo_n "checking for logf declaration... " >&6; }
     if ${glibcxx_cv_func_logf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -40354,7 +40388,6 @@ $as_echo_n "checking for log10f declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -40418,7 +40451,6 @@ $as_echo_n "checking for modff declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -40477,7 +40509,6 @@ $as_echo_n "checking for modf declaration... " >&6; }
     if ${glibcxx_cv_func_modf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -40538,7 +40569,6 @@ $as_echo_n "checking for powf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -40597,7 +40627,6 @@ $as_echo_n "checking for sqrtf declaration... " >&6; }
     if ${glibcxx_cv_func_sqrtf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -40662,7 +40691,6 @@ $as_echo_n "checking for sincosf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -40721,7 +40749,6 @@ $as_echo_n "checking for finitef declaration... " >&6; }
     if ${glibcxx_cv_func_finitef_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -40785,7 +40812,6 @@ $as_echo_n "checking for long double trig functions... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
     ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -40841,7 +40867,6 @@ $as_echo_n "checking for long double round functions... " >&6; }
   if ${glibcxx_cv_func_long_double_round_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
     ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -40900,7 +40925,6 @@ $as_echo_n "checking for isnanl declaration... " >&6; }
     if ${glibcxx_cv_func_isnanl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -40965,7 +40989,6 @@ $as_echo_n "checking for isinfl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -41029,7 +41052,6 @@ $as_echo_n "checking for atan2l declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -41088,7 +41110,6 @@ $as_echo_n "checking for expl declaration... " >&6; }
     if ${glibcxx_cv_func_expl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -41153,7 +41174,6 @@ $as_echo_n "checking for fabsl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -41217,7 +41237,6 @@ $as_echo_n "checking for fmodl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -41276,7 +41295,6 @@ $as_echo_n "checking for frexpl declaration... " >&6; }
     if ${glibcxx_cv_func_frexpl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -41337,7 +41355,6 @@ $as_echo_n "checking for hypotl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -41397,7 +41414,6 @@ $as_echo_n "checking for ldexpl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -41456,7 +41472,6 @@ $as_echo_n "checking for logl declaration... " >&6; }
     if ${glibcxx_cv_func_logl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -41521,7 +41536,6 @@ $as_echo_n "checking for log10l declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -41585,7 +41599,6 @@ $as_echo_n "checking for modfl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -41645,7 +41658,6 @@ $as_echo_n "checking for powl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -41704,7 +41716,6 @@ $as_echo_n "checking for sqrtl declaration... " >&6; }
     if ${glibcxx_cv_func_sqrtl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -41769,7 +41780,6 @@ $as_echo_n "checking for sincosl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -41828,7 +41838,6 @@ $as_echo_n "checking for finitel declaration... " >&6; }
     if ${glibcxx_cv_func_finitel_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -41901,7 +41910,6 @@ $as_echo_n "checking for at_quick_exit declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -41958,7 +41966,6 @@ $as_echo_n "checking for quick_exit declaration... " >&6; }
     if ${glibcxx_cv_func_quick_exit_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -42017,7 +42024,6 @@ $as_echo_n "checking for strtold declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -42074,7 +42080,6 @@ $as_echo_n "checking for strtof declaration... " >&6; }
     if ${glibcxx_cv_func_strtof_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -42438,6 +42443,7 @@ done
   # does some of this, but throws away the result.
   glibcxx_ld_is_gold=no
   glibcxx_ld_is_mold=no
+  glibcxx_ld_is_wild=no
   if test x"$with_gnu_ld" = x"yes"; then
     { $as_echo "$as_me:${as_lineno-$LINENO}: checking for ld version" >&5
 $as_echo_n "checking for ld version... " >&6; }
@@ -42446,6 +42452,8 @@ $as_echo_n "checking for ld version... " >&6; }
       glibcxx_ld_is_gold=yes
     elif $LD --version 2>/dev/null | grep 'mold' >/dev/null 2>&1; then
       glibcxx_ld_is_mold=yes
+    elif $LD --version 2>/dev/null | grep 'Wild' >/dev/null 2>&1; then
+      glibcxx_ld_is_wild=yes
     fi
     ldver=`$LD --version 2>/dev/null |
 	   sed -e 's/[. ][0-9]\{8\}$//;s/.* \([^ ]\{1,\}\)$/\1/; q'`
@@ -42458,7 +42466,7 @@ $as_echo "$glibcxx_gnu_ld_version" >&6; }
 
   # Set --gc-sections.
   glibcxx_have_gc_sections=no
-  if test "$glibcxx_ld_is_gold" = "yes" || test "$glibcxx_ld_is_mold" = "yes" ; then
+  if test "$glibcxx_ld_is_gold" = "yes" || test "$glibcxx_ld_is_mold" = "yes" || test "$glibcxx_ld_is_wild" = "yes" ; then
     if $LD --help 2>/dev/null | grep gc-sections >/dev/null 2>&1; then
       glibcxx_have_gc_sections=yes
     fi
@@ -42508,8 +42516,8 @@ rm -f core conftest.err conftest.$ac_objext \
       rm -f conftest.c
       touch conftest.c
       if $CC -c conftest.c; then
-	if $LD --gc-sections -o conftest conftest.o 2>&1 | \
-	   grep "Warning: gc-sections option ignored" > /dev/null; then
+	if LC_ALL=C $LD --gc-sections -o conftest conftest.o 2>&1 | \
+	   grep "[Ww]arning: gc-sections option ignored" > /dev/null; then
 	  ac_gcsections=no
 	fi
       fi
@@ -42621,7 +42629,6 @@ $as_echo_n "checking for isinf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -42684,7 +42691,6 @@ $as_echo_n "checking for isnan declaration... " >&6; }
     if ${glibcxx_cv_func_isnan_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -42749,7 +42755,6 @@ $as_echo_n "checking for finite declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -42813,7 +42818,6 @@ $as_echo_n "checking for sincos declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -42872,7 +42876,6 @@ $as_echo_n "checking for fpclass declaration... " >&6; }
     if ${glibcxx_cv_func_fpclass_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -42937,7 +42940,6 @@ $as_echo_n "checking for qfpclass declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -43001,7 +43003,6 @@ $as_echo_n "checking for hypot declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -43060,7 +43061,6 @@ $as_echo_n "checking for float trig functions... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
     ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -43116,7 +43116,6 @@ $as_echo_n "checking for float round functions... " >&6; }
   if ${glibcxx_cv_func_float_round_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
     ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -43175,7 +43174,6 @@ $as_echo_n "checking for expf declaration... " >&6; }
     if ${glibcxx_cv_func_expf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -43240,7 +43238,6 @@ $as_echo_n "checking for isnanf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -43303,7 +43300,6 @@ $as_echo_n "checking for isinff declaration... " >&6; }
     if ${glibcxx_cv_func_isinff_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -43368,7 +43364,6 @@ $as_echo_n "checking for atan2f declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -43427,7 +43422,6 @@ $as_echo_n "checking for fabsf declaration... " >&6; }
     if ${glibcxx_cv_func_fabsf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -43492,7 +43486,6 @@ $as_echo_n "checking for fmodf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -43551,7 +43544,6 @@ $as_echo_n "checking for frexpf declaration... " >&6; }
     if ${glibcxx_cv_func_frexpf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -43612,7 +43604,6 @@ $as_echo_n "checking for hypotf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -43672,7 +43663,6 @@ $as_echo_n "checking for ldexpf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -43731,7 +43721,6 @@ $as_echo_n "checking for logf declaration... " >&6; }
     if ${glibcxx_cv_func_logf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -43796,7 +43785,6 @@ $as_echo_n "checking for log10f declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -43860,7 +43848,6 @@ $as_echo_n "checking for modff declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -43919,7 +43906,6 @@ $as_echo_n "checking for modf declaration... " >&6; }
     if ${glibcxx_cv_func_modf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -43980,7 +43966,6 @@ $as_echo_n "checking for powf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -44039,7 +44024,6 @@ $as_echo_n "checking for sqrtf declaration... " >&6; }
     if ${glibcxx_cv_func_sqrtf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -44104,7 +44088,6 @@ $as_echo_n "checking for sincosf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -44163,7 +44146,6 @@ $as_echo_n "checking for finitef declaration... " >&6; }
     if ${glibcxx_cv_func_finitef_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -44227,7 +44209,6 @@ $as_echo_n "checking for long double trig functions... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
     ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -44283,7 +44264,6 @@ $as_echo_n "checking for long double round functions... " >&6; }
   if ${glibcxx_cv_func_long_double_round_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
     ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -44342,7 +44322,6 @@ $as_echo_n "checking for isnanl declaration... " >&6; }
     if ${glibcxx_cv_func_isnanl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -44407,7 +44386,6 @@ $as_echo_n "checking for isinfl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -44471,7 +44449,6 @@ $as_echo_n "checking for atan2l declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -44530,7 +44507,6 @@ $as_echo_n "checking for expl declaration... " >&6; }
     if ${glibcxx_cv_func_expl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -44595,7 +44571,6 @@ $as_echo_n "checking for fabsl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -44659,7 +44634,6 @@ $as_echo_n "checking for fmodl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -44718,7 +44692,6 @@ $as_echo_n "checking for frexpl declaration... " >&6; }
     if ${glibcxx_cv_func_frexpl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -44779,7 +44752,6 @@ $as_echo_n "checking for hypotl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -44839,7 +44811,6 @@ $as_echo_n "checking for ldexpl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -44898,7 +44869,6 @@ $as_echo_n "checking for logl declaration... " >&6; }
     if ${glibcxx_cv_func_logl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -44963,7 +44933,6 @@ $as_echo_n "checking for log10l declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -45027,7 +44996,6 @@ $as_echo_n "checking for modfl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -45087,7 +45055,6 @@ $as_echo_n "checking for powl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -45146,7 +45113,6 @@ $as_echo_n "checking for sqrtl declaration... " >&6; }
     if ${glibcxx_cv_func_sqrtl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -45211,7 +45177,6 @@ $as_echo_n "checking for sincosl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -45270,7 +45235,6 @@ $as_echo_n "checking for finitel declaration... " >&6; }
     if ${glibcxx_cv_func_finitel_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -45343,7 +45307,6 @@ $as_echo_n "checking for at_quick_exit declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -45400,7 +45363,6 @@ $as_echo_n "checking for quick_exit declaration... " >&6; }
     if ${glibcxx_cv_func_quick_exit_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -45459,7 +45421,6 @@ $as_echo_n "checking for strtold declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -45516,7 +45477,6 @@ $as_echo_n "checking for strtof declaration... " >&6; }
     if ${glibcxx_cv_func_strtof_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -45833,6 +45793,7 @@ $as_echo "#define HAVE_TLS 1" >>confdefs.h
   # does some of this, but throws away the result.
   glibcxx_ld_is_gold=no
   glibcxx_ld_is_mold=no
+  glibcxx_ld_is_wild=no
   if test x"$with_gnu_ld" = x"yes"; then
     { $as_echo "$as_me:${as_lineno-$LINENO}: checking for ld version" >&5
 $as_echo_n "checking for ld version... " >&6; }
@@ -45841,6 +45802,8 @@ $as_echo_n "checking for ld version... " >&6; }
       glibcxx_ld_is_gold=yes
     elif $LD --version 2>/dev/null | grep 'mold' >/dev/null 2>&1; then
       glibcxx_ld_is_mold=yes
+    elif $LD --version 2>/dev/null | grep 'Wild' >/dev/null 2>&1; then
+      glibcxx_ld_is_wild=yes
     fi
     ldver=`$LD --version 2>/dev/null |
 	   sed -e 's/[. ][0-9]\{8\}$//;s/.* \([^ ]\{1,\}\)$/\1/; q'`
@@ -45853,7 +45816,7 @@ $as_echo "$glibcxx_gnu_ld_version" >&6; }
 
   # Set --gc-sections.
   glibcxx_have_gc_sections=no
-  if test "$glibcxx_ld_is_gold" = "yes" || test "$glibcxx_ld_is_mold" = "yes" ; then
+  if test "$glibcxx_ld_is_gold" = "yes" || test "$glibcxx_ld_is_mold" = "yes" || test "$glibcxx_ld_is_wild" = "yes" ; then
     if $LD --help 2>/dev/null | grep gc-sections >/dev/null 2>&1; then
       glibcxx_have_gc_sections=yes
     fi
@@ -45903,8 +45866,8 @@ rm -f core conftest.err conftest.$ac_objext \
       rm -f conftest.c
       touch conftest.c
       if $CC -c conftest.c; then
-	if $LD --gc-sections -o conftest conftest.o 2>&1 | \
-	   grep "Warning: gc-sections option ignored" > /dev/null; then
+	if LC_ALL=C $LD --gc-sections -o conftest conftest.o 2>&1 | \
+	   grep "[Ww]arning: gc-sections option ignored" > /dev/null; then
 	  ac_gcsections=no
 	fi
       fi
@@ -46046,6 +46009,7 @@ done
   # does some of this, but throws away the result.
   glibcxx_ld_is_gold=no
   glibcxx_ld_is_mold=no
+  glibcxx_ld_is_wild=no
   if test x"$with_gnu_ld" = x"yes"; then
     { $as_echo "$as_me:${as_lineno-$LINENO}: checking for ld version" >&5
 $as_echo_n "checking for ld version... " >&6; }
@@ -46054,6 +46018,8 @@ $as_echo_n "checking for ld version... " >&6; }
       glibcxx_ld_is_gold=yes
     elif $LD --version 2>/dev/null | grep 'mold' >/dev/null 2>&1; then
       glibcxx_ld_is_mold=yes
+    elif $LD --version 2>/dev/null | grep 'Wild' >/dev/null 2>&1; then
+      glibcxx_ld_is_wild=yes
     fi
     ldver=`$LD --version 2>/dev/null |
 	   sed -e 's/[. ][0-9]\{8\}$//;s/.* \([^ ]\{1,\}\)$/\1/; q'`
@@ -46066,7 +46032,7 @@ $as_echo "$glibcxx_gnu_ld_version" >&6; }
 
   # Set --gc-sections.
   glibcxx_have_gc_sections=no
-  if test "$glibcxx_ld_is_gold" = "yes" || test "$glibcxx_ld_is_mold" = "yes" ; then
+  if test "$glibcxx_ld_is_gold" = "yes" || test "$glibcxx_ld_is_mold" = "yes" || test "$glibcxx_ld_is_wild" = "yes" ; then
     if $LD --help 2>/dev/null | grep gc-sections >/dev/null 2>&1; then
       glibcxx_have_gc_sections=yes
     fi
@@ -46116,8 +46082,8 @@ rm -f core conftest.err conftest.$ac_objext \
       rm -f conftest.c
       touch conftest.c
       if $CC -c conftest.c; then
-	if $LD --gc-sections -o conftest conftest.o 2>&1 | \
-	   grep "Warning: gc-sections option ignored" > /dev/null; then
+	if LC_ALL=C $LD --gc-sections -o conftest conftest.o 2>&1 | \
+	   grep "[Ww]arning: gc-sections option ignored" > /dev/null; then
 	  ac_gcsections=no
 	fi
       fi
@@ -46292,7 +46258,6 @@ $as_echo_n "checking for isinf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -46355,7 +46320,6 @@ $as_echo_n "checking for isnan declaration... " >&6; }
     if ${glibcxx_cv_func_isnan_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -46420,7 +46384,6 @@ $as_echo_n "checking for finite declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -46484,7 +46447,6 @@ $as_echo_n "checking for sincos declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -46543,7 +46505,6 @@ $as_echo_n "checking for fpclass declaration... " >&6; }
     if ${glibcxx_cv_func_fpclass_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -46608,7 +46569,6 @@ $as_echo_n "checking for qfpclass declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -46672,7 +46632,6 @@ $as_echo_n "checking for hypot declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -46731,7 +46690,6 @@ $as_echo_n "checking for float trig functions... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
     ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -46787,7 +46745,6 @@ $as_echo_n "checking for float round functions... " >&6; }
   if ${glibcxx_cv_func_float_round_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
     ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -46846,7 +46803,6 @@ $as_echo_n "checking for expf declaration... " >&6; }
     if ${glibcxx_cv_func_expf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -46911,7 +46867,6 @@ $as_echo_n "checking for isnanf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -46974,7 +46929,6 @@ $as_echo_n "checking for isinff declaration... " >&6; }
     if ${glibcxx_cv_func_isinff_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -47039,7 +46993,6 @@ $as_echo_n "checking for atan2f declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -47098,7 +47051,6 @@ $as_echo_n "checking for fabsf declaration... " >&6; }
     if ${glibcxx_cv_func_fabsf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -47163,7 +47115,6 @@ $as_echo_n "checking for fmodf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -47222,7 +47173,6 @@ $as_echo_n "checking for frexpf declaration... " >&6; }
     if ${glibcxx_cv_func_frexpf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -47283,7 +47233,6 @@ $as_echo_n "checking for hypotf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -47343,7 +47292,6 @@ $as_echo_n "checking for ldexpf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -47402,7 +47350,6 @@ $as_echo_n "checking for logf declaration... " >&6; }
     if ${glibcxx_cv_func_logf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -47467,7 +47414,6 @@ $as_echo_n "checking for log10f declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -47531,7 +47477,6 @@ $as_echo_n "checking for modff declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -47590,7 +47535,6 @@ $as_echo_n "checking for modf declaration... " >&6; }
     if ${glibcxx_cv_func_modf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -47651,7 +47595,6 @@ $as_echo_n "checking for powf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -47710,7 +47653,6 @@ $as_echo_n "checking for sqrtf declaration... " >&6; }
     if ${glibcxx_cv_func_sqrtf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -47775,7 +47717,6 @@ $as_echo_n "checking for sincosf declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -47834,7 +47775,6 @@ $as_echo_n "checking for finitef declaration... " >&6; }
     if ${glibcxx_cv_func_finitef_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -47898,7 +47838,6 @@ $as_echo_n "checking for long double trig functions... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
     ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -47954,7 +47893,6 @@ $as_echo_n "checking for long double round functions... " >&6; }
   if ${glibcxx_cv_func_long_double_round_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
     ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -48013,7 +47951,6 @@ $as_echo_n "checking for isnanl declaration... " >&6; }
     if ${glibcxx_cv_func_isnanl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -48078,7 +48015,6 @@ $as_echo_n "checking for isinfl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -48142,7 +48078,6 @@ $as_echo_n "checking for atan2l declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -48201,7 +48136,6 @@ $as_echo_n "checking for expl declaration... " >&6; }
     if ${glibcxx_cv_func_expl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -48266,7 +48200,6 @@ $as_echo_n "checking for fabsl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -48330,7 +48263,6 @@ $as_echo_n "checking for fmodl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -48389,7 +48321,6 @@ $as_echo_n "checking for frexpl declaration... " >&6; }
     if ${glibcxx_cv_func_frexpl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -48450,7 +48381,6 @@ $as_echo_n "checking for hypotl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -48510,7 +48440,6 @@ $as_echo_n "checking for ldexpl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -48569,7 +48498,6 @@ $as_echo_n "checking for logl declaration... " >&6; }
     if ${glibcxx_cv_func_logl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -48634,7 +48562,6 @@ $as_echo_n "checking for log10l declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -48698,7 +48625,6 @@ $as_echo_n "checking for modfl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -48758,7 +48684,6 @@ $as_echo_n "checking for powl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -48817,7 +48742,6 @@ $as_echo_n "checking for sqrtl declaration... " >&6; }
     if ${glibcxx_cv_func_sqrtl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -48882,7 +48806,6 @@ $as_echo_n "checking for sincosl declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -48941,7 +48864,6 @@ $as_echo_n "checking for finitel declaration... " >&6; }
     if ${glibcxx_cv_func_finitel_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -49014,7 +48936,6 @@ $as_echo_n "checking for at_quick_exit declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -49071,7 +48992,6 @@ $as_echo_n "checking for quick_exit declaration... " >&6; }
     if ${glibcxx_cv_func_quick_exit_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -49130,7 +49050,6 @@ $as_echo_n "checking for strtold declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -49187,7 +49106,6 @@ $as_echo_n "checking for strtof declaration... " >&6; }
     if ${glibcxx_cv_func_strtof_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -49293,7 +49211,6 @@ if ${glibcxx_cv_func_acosl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
 ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -49343,7 +49260,6 @@ $as_echo_n "checking for asinl declaration... " >&6; }
 if ${glibcxx_cv_func_asinl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
@@ -49395,7 +49311,6 @@ if ${glibcxx_cv_func_atan2l_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
 ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -49445,7 +49360,6 @@ $as_echo_n "checking for atanl declaration... " >&6; }
 if ${glibcxx_cv_func_atanl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
@@ -49497,7 +49411,6 @@ if ${glibcxx_cv_func_ceill_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
 ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -49547,7 +49460,6 @@ $as_echo_n "checking for cosl declaration... " >&6; }
 if ${glibcxx_cv_func_cosl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
@@ -49599,7 +49511,6 @@ if ${glibcxx_cv_func_coshl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
 ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -49649,7 +49560,6 @@ $as_echo_n "checking for expl declaration... " >&6; }
 if ${glibcxx_cv_func_expl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
@@ -49701,7 +49611,6 @@ if ${glibcxx_cv_func_fabsl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
 ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -49751,7 +49660,6 @@ $as_echo_n "checking for floorl declaration... " >&6; }
 if ${glibcxx_cv_func_floorl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
@@ -49803,7 +49711,6 @@ if ${glibcxx_cv_func_fmodl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
 ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -49853,7 +49760,6 @@ $as_echo_n "checking for frexpl declaration... " >&6; }
 if ${glibcxx_cv_func_frexpl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
@@ -49905,7 +49811,6 @@ if ${glibcxx_cv_func_ldexpl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
 ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -49955,7 +49860,6 @@ $as_echo_n "checking for log10l declaration... " >&6; }
 if ${glibcxx_cv_func_log10l_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
@@ -50007,7 +49911,6 @@ if ${glibcxx_cv_func_logl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
 ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -50057,7 +49960,6 @@ $as_echo_n "checking for modfl declaration... " >&6; }
 if ${glibcxx_cv_func_modfl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
@@ -50109,7 +50011,6 @@ if ${glibcxx_cv_func_powl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
 ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -50159,7 +50060,6 @@ $as_echo_n "checking for sinl declaration... " >&6; }
 if ${glibcxx_cv_func_sinl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
@@ -50211,7 +50111,6 @@ if ${glibcxx_cv_func_sinhl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
 ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -50261,7 +50160,6 @@ $as_echo_n "checking for sqrtl declaration... " >&6; }
 if ${glibcxx_cv_func_sqrtl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
@@ -50313,7 +50211,6 @@ if ${glibcxx_cv_func_tanl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
 ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -50363,7 +50260,6 @@ $as_echo_n "checking for tanhl declaration... " >&6; }
 if ${glibcxx_cv_func_tanhl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
@@ -50415,7 +50311,6 @@ if ${glibcxx_cv_func_hypotl_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
 ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -50465,7 +50360,6 @@ $as_echo_n "checking for ldexpf declaration... " >&6; }
 if ${glibcxx_cv_func_ldexpf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
@@ -50517,7 +50411,6 @@ if ${glibcxx_cv_func_modff_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
 ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -50568,7 +50461,6 @@ if ${glibcxx_cv_func_hypotf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
 ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -50618,7 +50510,6 @@ $as_echo_n "checking for frexpf declaration... " >&6; }
 if ${glibcxx_cv_func_frexpf_use+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
 
       ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
@@ -51002,8 +50893,8 @@ if test x$enable_symvers = xsun ; then
       # Unlikely to work.
       { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: === You have requested Sun symbol versioning, but" >&5
 $as_echo "$as_me: WARNING: === You have requested Sun symbol versioning, but" >&2;}
-      { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: === you are not targetting Solaris 2." >&5
-$as_echo "$as_me: WARNING: === you are not targetting Solaris 2." >&2;}
+      { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: === you are not targeting Solaris 2." >&5
+$as_echo "$as_me: WARNING: === you are not targeting Solaris 2." >&2;}
       { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: === Symbol versioning will be disabled." >&5
 $as_echo "$as_me: WARNING: === Symbol versioning will be disabled." >&2;}
       enable_symvers=no
@@ -51106,6 +50997,8 @@ $as_echo "$as_me: WARNING: === Symbol versioning will be disabled." >&2;}
     : All versions of gold support symbol versioning.
   elif test $glibcxx_ld_is_mold = yes ; then
     : All versions of mold support symbol versioning.
+  elif test $glibcxx_ld_is_wild = yes ; then
+    : All versions of Wild support symbol versioning.
   elif test $glibcxx_gnu_ld_version -lt $glibcxx_min_gnu_ld_version ; then
     # The right tools, the right setup, but too old.  Fallbacks?
     { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: === Linker version $glibcxx_gnu_ld_version is too old for" >&5
@@ -51123,7 +51016,7 @@ $as_echo "$as_me: WARNING: === Symbol versioning will be disabled." >&2;}
 fi
 
 # For libtool versioning info, format is CURRENT:REVISION:AGE
-libtool_VERSION=6:34:0
+libtool_VERSION=6:37:0
 
 # Everything parsed; figure out what files and settings to use.
 case $enable_symvers in
@@ -51662,7 +51555,6 @@ $as_echo "#define _GLIBCXX_X86_RDSEED 1" >>confdefs.h
 # Check for other random number APIs
 
 
-
   ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -51733,7 +51625,6 @@ ac_cpp='$CPP $CPPFLAGS'
 ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
 ac_link='$CC -o conftest$ac_exeext $CFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS >&5'
 ac_compiler_gnu=$ac_cv_c_compiler_gnu
-
 
 
 
@@ -51812,7 +51703,6 @@ ac_compiler_gnu=$ac_cv_c_compiler_gnu
 # This depends on GLIBCXX_ENABLE_SYMVERS and GLIBCXX_IS_NATIVE.
 
   # Do checks for resource limit functions.
-
 
   ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -52058,7 +51948,6 @@ $as_echo_n "checking for setenv declaration... " >&6; }
   $as_echo_n "(cached) " >&6
 else
 
-
       ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -52133,6 +52022,7 @@ done
 
 # For gthread support.  Depends on GLIBCXX_ENABLE_SYMVERS.
 
+
    # Check whether --enable-libstdcxx-threads was given.
 if test "${enable_libstdcxx_threads+set}" = set; then :
   enableval=$enable_libstdcxx_threads;
@@ -52150,7 +52040,6 @@ fi
   if test x$enable_libstdcxx_threads = xauto ||
      test x$enable_libstdcxx_threads = xyes; then
 
-
   ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -52162,7 +52051,6 @@ ac_compiler_gnu=$ac_cv_cxx_compiler_gnu
   CXXFLAGS="$CXXFLAGS -fno-exceptions \
 	-I${toplevel_srcdir}/libgcc -I${toplevel_builddir}/libgcc"
 
-  target_thread_file=`$CXX -v 2>&1 | sed -n 's/^Thread model: //p'`
   case $target_thread_file in
     posix)
       CXXFLAGS="$CXXFLAGS -DSUPPORTS_WEAK -DGTHREAD_USE_WEAK -D_PTHREADS"
@@ -52297,64 +52185,6 @@ fi
     fi
   fi
 
-  ac_fn_cxx_check_header_mongrel "$LINENO" "semaphore.h" "ac_cv_header_semaphore_h" "$ac_includes_default"
-if test "x$ac_cv_header_semaphore_h" = xyes; then :
-
-    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for POSIX Semaphores and sem_timedwait" >&5
-$as_echo_n "checking for POSIX Semaphores and sem_timedwait... " >&6; }
-    cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
-
-	#include <unistd.h>
-	#include <semaphore.h>
-	#include <limits.h>
-
-int
-main ()
-{
-
-	#if !defined _POSIX_TIMEOUTS || _POSIX_TIMEOUTS <= 0
-	# error "POSIX Timeouts option not supported"
-	#elif !defined _POSIX_SEMAPHORES || _POSIX_SEMAPHORES <= 0
-	# error "POSIX Semaphores option not supported"
-	#else
-	#if defined SEM_VALUE_MAX
-	constexpr int sem_value_max = SEM_VALUE_MAX;
-	#elif defined _POSIX_SEM_VALUE_MAX
-	constexpr int sem_value_max = _POSIX_SEM_VALUE_MAX;
-	#else
-	# error "SEM_VALUE_MAX not available"
-	#endif
-	sem_t sem;
-	sem_init(&sem, 0, sem_value_max);
-	struct timespec ts = { 0 };
-	sem_timedwait(&sem, &ts);
-	#endif
-
-  ;
-  return 0;
-}
-_ACEOF
-if ac_fn_cxx_try_compile "$LINENO"; then :
-  ac_have_posix_semaphore=yes
-else
-  ac_have_posix_semaphore=no
-fi
-rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
-else
-  ac_have_posix_semaphore=no
-fi
-
-
-
-  if test $ac_have_posix_semaphore = yes ; then
-
-$as_echo "#define HAVE_POSIX_SEMAPHORE 1" >>confdefs.h
-
-  fi
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_have_posix_semaphore" >&5
-$as_echo "$ac_have_posix_semaphore" >&6; }
-
   CXXFLAGS="$ac_save_CXXFLAGS"
   ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
@@ -52422,7 +52252,6 @@ $as_echo_n "checking whether to build Filesystem TS support... " >&6; }
   fi
   { $as_echo "$as_me:${as_lineno-$LINENO}: result: $enable_libstdcxx_filesystem_ts" >&5
 $as_echo "$enable_libstdcxx_filesystem_ts" >&6; }
-
 
 
   ac_ext=cpp
@@ -53844,8 +53673,117 @@ fi
 
   BACKTRACE_CPPFLAGS="-D_GNU_SOURCE"
 
-  # libbacktrace only needs atomics for int, which we've already tested
-  if test "$glibcxx_cv_atomic_int" = "yes"; then
+  ac_ext=cpp
+ac_cpp='$CXXCPP $CPPFLAGS'
+ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
+ac_link='$CXX -o conftest$ac_exeext $CXXFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS >&5'
+ac_compiler_gnu=$ac_cv_cxx_compiler_gnu
+
+  old_CXXFLAGS="$CXXFLAGS"
+
+  # libbacktrace's own configure.ac only tests atomics for int,
+  # but the code actually uses atomics for size_t and pointers as well.
+  if test "$atomic_builtins_link_tests" = yes; then
+
+    CXXFLAGS='-O0'
+
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for atomic builtins for libbacktrace" >&5
+$as_echo_n "checking for atomic builtins for libbacktrace... " >&6; }
+if ${glibcxx_cv_libbacktrace_atomics+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  if test x$gcc_no_link = xyes; then
+  as_fn_error $? "Link tests are not allowed after GCC_NO_EXECUTABLES." "$LINENO" 5
+fi
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+int
+main ()
+{
+
+	    int i = 0;
+	    int* p = &i;
+	    __SIZE_TYPE__ s = 0;
+	    // backtrace_atomic_load_pointer
+	    void* vp = __atomic_load_n(&p, __ATOMIC_ACQUIRE);
+	    // backtrace_atomic_load_int
+	    int i2 = __atomic_load_n(&i, __ATOMIC_ACQUIRE);
+	    // backtrace_atomic_store_pointer
+	    __atomic_store_n(&p, &i, __ATOMIC_RELEASE);
+	    // backtrace_atomic_store_size_t
+	    __atomic_store_n(&s, s, __ATOMIC_RELEASE);
+	    // backtrace_atomic_store_int
+	    __atomic_store_n(&i, i, __ATOMIC_RELEASE);
+
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_cxx_try_link "$LINENO"; then :
+  glibcxx_cv_libbacktrace_atomics=yes
+else
+  glibcxx_cv_libbacktrace_atomics=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $glibcxx_cv_libbacktrace_atomics" >&5
+$as_echo "$glibcxx_cv_libbacktrace_atomics" >&6; }
+
+  else
+    # Do asm tests.
+
+    CXXFLAGS='-O0 -S'
+
+    cat > conftest.$ac_ext << EOF
+#line 53740 "configure"
+#include <stddef.h>
+int main()
+{
+  int i = 0;
+  int* p = &i;
+  __SIZE_TYPE__ s = 0;
+  // backtrace_atomic_load_pointer
+  void* vp = __atomic_load_n(&p, __ATOMIC_ACQUIRE);
+  // backtrace_atomic_load_int
+  int i2 = __atomic_load_n(&i, __ATOMIC_ACQUIRE);
+  // backtrace_atomic_store_pointer
+  __atomic_store_n(&p, &i, __ATOMIC_RELEASE);
+  // backtrace_atomic_store_size_t
+  __atomic_store_n(&s, s, __ATOMIC_RELEASE);
+  // backtrace_atomic_store_int
+  __atomic_store_n(&i, i, __ATOMIC_RELEASE);
+}
+EOF
+
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for atomic builtins for libbacktrace" >&5
+$as_echo_n "checking for atomic builtins for libbacktrace... " >&6; }
+    if { { eval echo "\"\$as_me\":${as_lineno-$LINENO}: \"$ac_compile\""; } >&5
+  (eval $ac_compile) 2>&5
+  ac_status=$?
+  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }; then
+      if grep -E '__atomic_|__sync_' conftest.s >/dev/null 2>&1 ; then
+	glibcxx_cv_libbacktrace_atomics=no
+      else
+	glibcxx_cv_libbacktrace_atomics=yes
+      fi
+    fi
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: $glibcxx_cv_libbacktrace_atomics" >&5
+$as_echo "$glibcxx_cv_libbacktrace_atomics" >&6; }
+    rm -f conftest*
+  fi
+
+  CXXFLAGS="$old_CXXFLAGS"
+  ac_ext=c
+ac_cpp='$CPP $CPPFLAGS'
+ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
+ac_link='$CC -o conftest$ac_exeext $CFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS >&5'
+ac_compiler_gnu=$ac_cv_c_compiler_gnu
+
+
+  if test "$glibcxx_cv_libbacktrace_atomics" = yes; then
     BACKTRACE_CPPFLAGS="$BACKTRACE_CPPFLAGS -DHAVE_ATOMIC_FUNCTIONS=1"
   fi
 
@@ -54204,8 +54142,7 @@ $as_echo_n "checking how size_t is mangled... " >&6; }
 if ${glibcxx_cv_size_t_mangling+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-
-    cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+  cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 
 int
@@ -54219,8 +54156,7 @@ _ACEOF
 if ac_fn_c_try_compile "$LINENO"; then :
   glibcxx_cv_size_t_mangling=m
 else
-
-      cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+  cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 
 int
@@ -54234,8 +54170,7 @@ _ACEOF
 if ac_fn_c_try_compile "$LINENO"; then :
   glibcxx_cv_size_t_mangling=j
 else
-
-        cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+  cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 
 int
@@ -54249,8 +54184,7 @@ _ACEOF
 if ac_fn_c_try_compile "$LINENO"; then :
   glibcxx_cv_size_t_mangling=y
 else
-
-          cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+  cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 
 int
@@ -54264,8 +54198,7 @@ _ACEOF
 if ac_fn_c_try_compile "$LINENO"; then :
   glibcxx_cv_size_t_mangling=t
 else
-
-            cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+  cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 
 int
@@ -54482,8 +54415,64 @@ _ACEOF
   fi
 
 
-# For src/c++11/shared_ptr.cc alignment.
+# For std::chrono formatters to use tm::tm_zone
 
+  ac_ext=cpp
+ac_cpp='$CXXCPP $CPPFLAGS'
+ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
+ac_link='$CXX -o conftest$ac_exeext $CXXFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS >&5'
+ac_compiler_gnu=$ac_cv_cxx_compiler_gnu
+
+  ac_save_CXXFLAGS="$CXXFLAGS"
+  CXXFLAGS="$CXXFLAGS -std=c++20"
+
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for tm_zone member of struct tm" >&5
+$as_echo_n "checking for tm_zone member of struct tm... " >&6; }
+if ${glibcxx_cv_tm_zone+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+
+    cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+#include <time.h>
+
+int
+main ()
+{
+struct tm t{}; t.tm_zone = (char*)0;
+
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_cxx_try_compile "$LINENO"; then :
+  glibcxx_cv_tm_zone=yes
+else
+  glibcxx_cv_tm_zone=no
+
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $glibcxx_cv_tm_zone" >&5
+$as_echo "$glibcxx_cv_tm_zone" >&6; }
+
+  if test $glibcxx_cv_tm_zone = yes; then
+
+$as_echo "#define _GLIBCXX_USE_STRUCT_TM_TM_ZONE 1" >>confdefs.h
+
+  fi
+
+  CXXFLAGS="$ac_save_CXXFLAGS"
+  ac_ext=c
+ac_cpp='$CPP $CPPFLAGS'
+ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
+ac_link='$CC -o conftest$ac_exeext $CFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS >&5'
+ac_compiler_gnu=$ac_cv_c_compiler_gnu
+
+
+
+# For src/c++11/shared_ptr.cc alignment.
 
   ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -54532,7 +54521,6 @@ ac_compiler_gnu=$ac_cv_c_compiler_gnu
 
 
 # For using init_priority in ios_init.cc
-
 
   ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -54583,7 +54571,6 @@ ac_compiler_gnu=$ac_cv_c_compiler_gnu
 
 
 # For __basic_file::native_handle()
-
 
   ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
@@ -54642,7 +54629,6 @@ ac_compiler_gnu=$ac_cv_c_compiler_gnu
 
 # For std::text_encoding
 
-
   ac_ext=cpp
 ac_cpp='$CXXCPP $CPPFLAGS'
 ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -54697,110 +54683,230 @@ ac_compiler_gnu=$ac_cv_c_compiler_gnu
 
 
 
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether struct tm is in sys/time.h or time.h" >&5
-$as_echo_n "checking whether struct tm is in sys/time.h or time.h... " >&6; }
-if ${ac_cv_struct_tm+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
+# For std::is_debugger_present
+
+  ac_ext=cpp
+ac_cpp='$CXXCPP $CPPFLAGS'
+ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
+ac_link='$CXX -o conftest$ac_exeext $CXXFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS >&5'
+ac_compiler_gnu=$ac_cv_cxx_compiler_gnu
+
+
+  for ac_header in sys/ptrace.h debugapi.h
+do :
+  as_ac_Header=`$as_echo "ac_cv_header_$ac_header" | $as_tr_sh`
+ac_fn_cxx_check_header_mongrel "$LINENO" "$ac_header" "$as_ac_Header" "$ac_includes_default"
+if eval test \"x\$"$as_ac_Header"\" = x"yes"; then :
+  cat >>confdefs.h <<_ACEOF
+#define `$as_echo "HAVE_$ac_header" | $as_tr_cpp` 1
+_ACEOF
+
+fi
+
+done
+
+
+  case "$target_os" in
+    linux*)
+
+$as_echo "#define _GLIBCXX_USE_PROC_SELF_STATUS 1" >>confdefs.h
+
+      ;;
+  esac
+
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether ptrace(int, pid_t, int, int) is in <sys/ptrace.h>" >&5
+$as_echo_n "checking whether ptrace(int, pid_t, int, int) is in <sys/ptrace.h>... " >&6; }
   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
-#include <sys/types.h>
-#include <time.h>
+
+  #include <sys/ptrace.h>
 
 int
 main ()
 {
-struct tm tm;
-				     int *p = &tm.tm_sec;
-				     return !p;
+
+    int i = ptrace(PTRACE_TRACEME, (pid_t)0, 1, 0);
+
   ;
   return 0;
 }
 _ACEOF
-if ac_fn_c_try_compile "$LINENO"; then :
-  ac_cv_struct_tm=time.h
+if ac_fn_cxx_try_compile "$LINENO"; then :
+  ac_ptrace=yes
 else
-  ac_cv_struct_tm=sys/time.h
+  ac_ptrace=no
 fi
 rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
-fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_struct_tm" >&5
-$as_echo "$ac_cv_struct_tm" >&6; }
-if test $ac_cv_struct_tm = sys/time.h; then
-
-$as_echo "#define TM_IN_SYS_TIME 1" >>confdefs.h
-
-fi
-
-ac_fn_c_check_member "$LINENO" "struct tm" "tm_zone" "ac_cv_member_struct_tm_tm_zone" "#include <sys/types.h>
-#include <$ac_cv_struct_tm>
-
-"
-if test "x$ac_cv_member_struct_tm_tm_zone" = xyes; then :
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_ptrace" >&5
+$as_echo "$ac_ptrace" >&6; }
+  if test "$ac_ptrace" = yes; then
 
 cat >>confdefs.h <<_ACEOF
-#define HAVE_STRUCT_TM_TM_ZONE 1
+#define _GLIBCXX_USE_PTRACE 1
 _ACEOF
 
+  fi
 
-fi
+  ac_ext=c
+ac_cpp='$CPP $CPPFLAGS'
+ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
+ac_link='$CC -o conftest$ac_exeext $CFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS >&5'
+ac_compiler_gnu=$ac_cv_c_compiler_gnu
 
-if test "$ac_cv_member_struct_tm_tm_zone" = yes; then
 
-$as_echo "#define HAVE_TM_ZONE 1" >>confdefs.h
 
-else
-  ac_fn_c_check_decl "$LINENO" "tzname" "ac_cv_have_decl_tzname" "#include <time.h>
-"
-if test "x$ac_cv_have_decl_tzname" = xyes; then :
-  ac_have_decl=1
-else
-  ac_have_decl=0
-fi
+# For std::print
 
-cat >>confdefs.h <<_ACEOF
-#define HAVE_DECL_TZNAME $ac_have_decl
-_ACEOF
+  ac_ext=cpp
+ac_cpp='$CXXCPP $CPPFLAGS'
+ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
+ac_link='$CXX -o conftest$ac_exeext $CXXFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS >&5'
+ac_compiler_gnu=$ac_cv_cxx_compiler_gnu
 
-  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for tzname" >&5
-$as_echo_n "checking for tzname... " >&6; }
-if ${ac_cv_var_tzname+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  if test x$gcc_no_link = xyes; then
-  as_fn_error $? "Link tests are not allowed after GCC_NO_EXECUTABLES." "$LINENO" 5
-fi
-cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether flockfile and putc_unlocked are defined in <stdio.h>" >&5
+$as_echo_n "checking whether flockfile and putc_unlocked are defined in <stdio.h>... " >&6; }
+  cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
-#include <time.h>
-#if !HAVE_DECL_TZNAME
-extern char *tzname[];
-#endif
+
+  #include <stdio.h>
+  #if __has_include(<newlib.h>)
+  # ifdef __CYGWIN__
+    // Cygwin has working flockfile
+  # else
+  #  error No usable flockfile on most newlib targets
+  # endif
+  #endif
 
 int
 main ()
 {
-return tzname[0][0];
+
+    FILE* f = ::fopen("", "");
+    ::flockfile(f);
+    ::putc_unlocked(' ', f);
+    ::funlockfile(f);
+    ::fclose(f);
+
   ;
   return 0;
 }
 _ACEOF
-if ac_fn_c_try_link "$LINENO"; then :
-  ac_cv_var_tzname=yes
+if ac_fn_cxx_try_compile "$LINENO"; then :
+  ac_stdio_locking=yes
 else
-  ac_cv_var_tzname=no
+  ac_stdio_locking=no
 fi
-rm -f core conftest.err conftest.$ac_objext \
-    conftest$ac_exeext conftest.$ac_ext
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_stdio_locking" >&5
+$as_echo "$ac_stdio_locking" >&6; }
+
+  if test "$ac_stdio_locking" = yes; then
+
+cat >>confdefs.h <<_ACEOF
+#define _GLIBCXX_USE_STDIO_LOCKING 1
+_ACEOF
+
+
+    # This is not defined in POSIX, but is present in glibc, musl, and Solaris.
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether fwrite_unlocked is defined in <stdio.h>" >&5
+$as_echo_n "checking whether fwrite_unlocked is defined in <stdio.h>... " >&6; }
+    cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+    #include <stdio.h>
+
+int
+main ()
+{
+
+      FILE* f = ::fopen("", "");
+      ::flockfile(f);
+      ::fwrite_unlocked("", 1, 1, f);
+      ::funlockfile(f);
+      ::fclose(f);
+
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_cxx_try_compile "$LINENO"; then :
+  ac_fwrite_unlocked=yes
+else
+  ac_fwrite_unlocked=no
 fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_var_tzname" >&5
-$as_echo "$ac_cv_var_tzname" >&6; }
-  if test $ac_cv_var_tzname = yes; then
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_fwrite_unlocked" >&5
+$as_echo "$ac_fwrite_unlocked" >&6; }
+    if test "$ac_fwrite_unlocked" = yes; then
 
-$as_echo "#define HAVE_TZNAME 1" >>confdefs.h
+$as_echo "#define HAVE_FWRITE_UNLOCKED 1" >>confdefs.h
 
+
+      # Check for Glibc-specific FILE members and <stdio_ext.h> extensions.
+      case "${target_os}" in
+	gnu* | linux* | kfreebsd*-gnu | knetbsd*-gnu)
+	  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for FILE::_IO_write_ptr and <stdio_ext.h>" >&5
+$as_echo_n "checking for FILE::_IO_write_ptr and <stdio_ext.h>... " >&6; }
+	  cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+	  #include <stdio.h>
+	  #include <stdio_ext.h>
+	  extern "C" {
+	   using f1_type = int (*)(FILE*) noexcept;
+	   using f2_type = size_t (*)(FILE*) noexcept;
+	  }
+
+int
+main ()
+{
+
+	  f1_type twritable = &::__fwritable;
+	  f1_type tblk = &::__flbf;
+	  f2_type pbufsize = &::__fbufsize;
+	  FILE* f = ::fopen("", "");
+	  int i = ::__overflow(f, EOF);
+	  bool writeable = ::__fwritable(f);
+	  bool line_buffered = ::__flbf(f);
+	  size_t bufsz = ::__fbufsize(f);
+	  char*& pptr = f->_IO_write_ptr;
+	  char*& epptr = f->_IO_buf_end;
+	  ::fflush_unlocked(f);
+	  ::fclose(f);
+
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_cxx_try_compile "$LINENO"; then :
+  ac_glibc_stdio=yes
+else
+  ac_glibc_stdio=no
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+	  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_glibc_stdio" >&5
+$as_echo "$ac_glibc_stdio" >&6; }
+	  if test "$ac_glibc_stdio" = yes; then
+
+cat >>confdefs.h <<_ACEOF
+#define _GLIBCXX_USE_GLIBC_STDIO_EXT 1
+_ACEOF
+
+	  fi
+	  ;;
+	*)
+	  ;;
+      esac
+    fi
   fi
-fi
+
+  ac_ext=c
+ac_cpp='$CPP $CPPFLAGS'
+ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
+ac_link='$CC -o conftest$ac_exeext $CFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS >&5'
+ac_compiler_gnu=$ac_cv_c_compiler_gnu
+
 
 
 # Define documentation rules conditionally.

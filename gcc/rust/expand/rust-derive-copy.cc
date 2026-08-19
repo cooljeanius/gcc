@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2025 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -23,8 +23,8 @@
 namespace Rust {
 namespace AST {
 
-DeriveCopy::DeriveCopy (location_t loc)
-  : DeriveVisitor (loc), expanded (nullptr)
+DeriveCopy::DeriveCopy (location_t loc, Builder::Source item_source)
+  : DeriveVisitor (loc, item_source), expanded (nullptr)
 {}
 
 std::unique_ptr<AST::Item>
@@ -42,15 +42,14 @@ DeriveCopy::copy_impl (
   std::string name,
   const std::vector<std::unique_ptr<GenericParam>> &type_generics)
 {
-  // we should have two of these, so we don't run into issues with
-  // two paths sharing a node id
-  auto copy_bound = builder.type_path (LangItem::Kind::COPY);
-  auto copy_trait_path = builder.type_path (LangItem::Kind::COPY);
+  auto copy_trait_path
+    = [this] () { return builder.type_path (LangItem::Kind::COPY); };
 
-  auto generics = setup_impl_generics (name, type_generics,
-				       builder.trait_bound (copy_bound));
+  auto generics = setup_impl_generics (name, type_generics, [&, this] () {
+    return builder.trait_bound (copy_trait_path ());
+  });
 
-  return builder.trait_impl (copy_trait_path, std::move (generics.self_type),
+  return builder.trait_impl (copy_trait_path (), std::move (generics.self_type),
 			     {}, std::move (generics.impl));
 }
 

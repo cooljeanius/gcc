@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2025 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -19,11 +19,14 @@
 #include "optional.h"
 #include "rust-ast-full.h"
 #include "rust-diagnostics.h"
+#include "rust-expr.h"
 #include "rust-hir-map.h"
 #include "rust-late-name-resolver-2.0.h"
 #include "rust-default-resolver.h"
 #include "rust-name-resolution-context.h"
+#include "rust-resolve-builtins.h"
 #include "rust-path.h"
+#include "rust-rib.h"
 #include "rust-system.h"
 #include "rust-tyty.h"
 #include "rust-hir-type-check.h"
@@ -33,89 +36,16 @@
 namespace Rust {
 namespace Resolver2_0 {
 
-Late::Late (NameResolutionContext &ctx) : DefaultResolver (ctx) {}
-
-static NodeId
-next_node_id ()
-{
-  return Analysis::Mappings::get ().get_next_node_id ();
-};
-
-static HirId
-next_hir_id ()
-{
-  return Analysis::Mappings::get ().get_next_hir_id ();
-};
-
-void
-Late::setup_builtin_types ()
-{
-  // access the global type context to setup the TyTys
-  auto &ty_ctx = *Resolver::TypeCheckContext::get ();
-
-  // Late builtin type struct helper
-  struct LType
-  {
-    std::string name;
-    NodeId node_id;
-    NodeId hir_id;
-    TyTy::BaseType *type;
-
-    explicit LType (std::string name, TyTy::BaseType *type)
-      : name (name), node_id (next_node_id ()), hir_id (type->get_ref ()),
-	type (type)
-    {}
-  };
-
-  static const LType builtins[] = {
-    {LType ("bool", new TyTy::BoolType (next_hir_id ()))},
-    {LType ("u8", new TyTy::UintType (next_hir_id (), TyTy::UintType::U8))},
-    {LType ("u16", new TyTy::UintType (next_hir_id (), TyTy::UintType::U16))},
-    {LType ("u32", new TyTy::UintType (next_hir_id (), TyTy::UintType::U32))},
-    {LType ("u64", new TyTy::UintType (next_hir_id (), TyTy::UintType::U64))},
-    {LType ("u128", new TyTy::UintType (next_hir_id (), TyTy::UintType::U128))},
-    {LType ("i8", new TyTy::IntType (next_hir_id (), TyTy::IntType::I8))},
-    {LType ("i16", new TyTy::IntType (next_hir_id (), TyTy::IntType::I16))},
-    {LType ("i32", new TyTy::IntType (next_hir_id (), TyTy::IntType::I32))},
-    {LType ("i64", new TyTy::IntType (next_hir_id (), TyTy::IntType::I64))},
-    {LType ("i128", new TyTy::IntType (next_hir_id (), TyTy::IntType::I128))},
-    {LType ("f32", new TyTy::FloatType (next_hir_id (), TyTy::FloatType::F32))},
-    {LType ("f64", new TyTy::FloatType (next_hir_id (), TyTy::FloatType::F64))},
-    {LType ("usize", new TyTy::USizeType (next_hir_id ()))},
-    {LType ("isize", new TyTy::ISizeType (next_hir_id ()))},
-    {LType ("char", new TyTy::CharType (next_hir_id ()))},
-    {LType ("str", new TyTy::StrType (next_hir_id ()))},
-    {LType ("!", new TyTy::NeverType (next_hir_id ()))},
-
-    // the unit type `()` does not play a part in name-resolution - so we only
-    // insert it in the type context...
-  };
-
-  // There's a special Rib for putting prelude items, since prelude items need
-  // to satisfy certain special rules.
-  ctx.scoped (Rib::Kind::Prelude, 0, [this, &ty_ctx] (void) -> void {
-    for (const auto &builtin : builtins)
-      {
-	auto ok = ctx.types.insert (builtin.name, builtin.node_id);
-	rust_assert (ok);
-
-	ctx.mappings.insert_node_to_hir (builtin.node_id, builtin.hir_id);
-	ty_ctx.insert_builtin (builtin.hir_id, builtin.node_id, builtin.type);
-      }
-  });
-
-  // ...here!
-  auto *unit_type = TyTy::TupleType::get_unit_type ();
-  ty_ctx.insert_builtin (unit_type->get_ref (), next_node_id (), unit_type);
-}
+Late::Late (NameResolutionContext &ctx)
+  : DefaultResolver (ctx), funny_error (false), block_big_self (false)
+{}
 
 void
 Late::go (AST::Crate &crate)
 {
-  setup_builtin_types ();
+  Builtins::setup_type_ctx ();
 
-  for (auto &item : crate.items)
-    item->accept_vis (*this);
+  visit (crate);
 }
 
 void
@@ -129,6 +59,50 @@ Late::new_label (Identifier name, NodeId id)
 }
 
 void
+Late::visit (AST::ForLoopExpr &expr)
+{
+  visit_outer_attrs (expr);
+
+  ctx.bindings.enter (BindingSource::For);
+
+  visit (expr.get_pattern ());
+
+  ctx.bindings.exit ();
+
+  visit (expr.get_iterator_expr ());
+
+  if (expr.has_loop_label ())
+    visit (expr.get_loop_label ());
+
+  visit (expr.get_loop_block ());
+}
+
+void
+Late::visit_if_let_patterns (AST::IfLetExpr &expr)
+{
+  ctx.bindings.enter (BindingSource::IfLet);
+
+  DefaultResolver::visit_if_let_patterns (expr);
+
+  ctx.bindings.exit ();
+}
+
+void
+Late::visit (AST::MatchArm &arm)
+{
+  visit_outer_attrs (arm);
+
+  ctx.bindings.enter (BindingSource::Match);
+
+  visit (arm.get_pattern ());
+
+  ctx.bindings.exit ();
+
+  if (arm.has_match_arm_guard ())
+    visit (arm.get_guard_expr ());
+}
+
+void
 Late::visit (AST::LetStmt &let)
 {
   DefaultASTVisitor::visit_outer_attrs (let);
@@ -138,7 +112,15 @@ Late::visit (AST::LetStmt &let)
   // this makes variable shadowing work properly
   if (let.has_init_expr ())
     visit (let.get_init_expr ());
+
+  ctx.bindings.enter (BindingSource::Let);
+
   visit (let.get_pattern ());
+
+  ctx.bindings.exit ();
+
+  if (let.has_else_expr ())
+    visit (let.get_else_expr ());
 
   // how do we deal with the fact that `let a = blipbloup` should look for a
   // label and cannot go through function ribs, but `let a = blipbloup()` can?
@@ -158,15 +140,120 @@ Late::visit (AST::LetStmt &let)
 }
 
 void
-Late::visit (AST::IdentifierPattern &identifier)
+Late::visit (AST::WhileLetLoopExpr &while_let)
+{
+  DefaultASTVisitor::visit_outer_attrs (while_let);
+
+  if (while_let.has_loop_label ())
+    visit (while_let.get_loop_label ());
+
+  // visit expression before pattern
+  // this makes variable shadowing work properly
+  visit (while_let.get_scrutinee_expr ());
+
+  ctx.bindings.enter (BindingSource::WhileLet);
+
+  visit (while_let.get_pattern ());
+
+  ctx.bindings.exit ();
+
+  visit (while_let.get_loop_block ());
+}
+
+static void
+visit_identifier_as_pattern (NameResolutionContext &ctx,
+			     const Identifier &ident, location_t locus,
+			     NodeId node_id, bool is_ref, bool is_mut)
 {
   // do we insert in labels or in values
   // but values does not allow shadowing... since functions cannot shadow
   // do we insert functions in labels as well?
 
-  // We do want to ignore duplicated data because some situations rely on it.
-  std::ignore = ctx.values.insert_shadowable (identifier.get_ident (),
-					      identifier.get_node_id ());
+  if (ctx.bindings.peek ().is_and_bound (ident))
+    {
+      if (ctx.bindings.peek ().get_source () == BindingSource::Param)
+	rust_error_at (
+	  locus, ErrorCode::E0415,
+	  "identifier %qs is bound more than once in the same parameter list",
+	  ident.as_string ().c_str ());
+      else
+	rust_error_at (
+	  locus, ErrorCode::E0416,
+	  "identifier %qs is bound more than once in the same pattern",
+	  ident.as_string ().c_str ());
+      return;
+    }
+
+  ctx.bindings.peek ().insert_ident (ident.as_string (), locus, is_ref, is_mut);
+
+  if (ctx.bindings.peek ().is_or_bound (ident))
+    {
+      auto res = ctx.values.get (ident);
+      rust_assert (res.has_value () && !res->is_ambiguous ());
+      ctx.map_usage (Usage (node_id), Definition (res->get_node_id ()),
+		     Namespace::Values);
+    }
+  else
+    {
+      // We do want to ignore duplicated data because some situations rely on
+      // it.
+      std::ignore = ctx.values.insert_shadowable (ident, node_id);
+    }
+}
+
+void
+Late::visit (AST::IdentifierPattern &identifier)
+{
+  DefaultResolver::visit (identifier);
+
+  visit_identifier_as_pattern (ctx, identifier.get_ident (),
+			       identifier.get_locus (),
+			       identifier.get_node_id (),
+			       identifier.get_is_ref (),
+			       identifier.get_is_mut ());
+}
+
+void
+Late::visit (AST::AltPattern &pattern)
+{
+  ctx.bindings.peek ().push (Binding::Kind::Or);
+  for (auto &alt : pattern.get_alts ())
+    {
+      ctx.bindings.peek ().push (Binding::Kind::Product);
+      visit (alt);
+      ctx.bindings.peek ().merge ();
+    }
+  ctx.bindings.peek ().merge ();
+}
+
+void
+Late::visit_function_params (AST::Function &function)
+{
+  ctx.bindings.enter (BindingSource::Param);
+
+  for (auto &param : function.get_function_params ())
+    visit (param);
+
+  ctx.bindings.exit ();
+}
+
+void
+Late::visit (AST::StructPatternFieldIdent &field)
+{
+  // We need to check if the Identifier resolves to a variant or empty struct
+  auto path = AST::SimplePath (field.get_identifier ());
+
+  if (auto resolved = ctx.resolve_path (path, Namespace::Types))
+    {
+      ctx.map_usage (Usage (field.get_node_id ()),
+		     Definition (resolved->definition.get_node_id ()),
+		     Namespace::Types);
+      return;
+    }
+
+  visit_identifier_as_pattern (ctx, field.get_identifier (), field.get_locus (),
+			       field.get_node_id (), field.is_ref (),
+			       field.is_mut ());
 }
 
 void
@@ -176,7 +263,7 @@ Late::visit (AST::SelfParam &param)
 
   DefaultResolver::visit (param);
   // FIXME: this location should be a bit off
-  // ex: would point to the begining of "mut self" instead of the "self"
+  // ex: would point to the beginning of "mut self" instead of the "self"
   std::ignore = ctx.values.insert (Identifier ("self", param.get_locus ()),
 				   param.get_node_id ());
 }
@@ -184,9 +271,12 @@ Late::visit (AST::SelfParam &param)
 void
 Late::visit (AST::BreakExpr &expr)
 {
+  if (expr.has_label ())
+    resolve_label (expr.get_label_unchecked ().get_lifetime ());
+
   if (expr.has_break_expr ())
     {
-      auto &break_expr = expr.get_break_expr ();
+      auto &break_expr = expr.get_break_expr_unchecked ();
       if (break_expr.get_expr_kind () == AST::Expr::Kind::Identifier)
 	{
 	  /* This is a break with an expression, and the expression is
@@ -196,9 +286,9 @@ Late::visit (AST::BreakExpr &expr)
 	     emit the error here though, because the identifier may still
 	     be in scope, and ICE'ing on valid programs would not be very
 	     funny.  */
-	  std::string ident
-	    = static_cast<AST::IdentifierExpr &> (expr.get_break_expr ())
-		.as_string ();
+	  std::string ident = static_cast<AST::IdentifierExpr &> (
+				expr.get_break_expr_unchecked ())
+				.as_string ();
 	  if (ident == "rust" || ident == "gcc")
 	    funny_error = true;
 	}
@@ -210,33 +300,77 @@ Late::visit (AST::BreakExpr &expr)
 }
 
 void
+Late::visit (AST::LoopLabel &label)
+{
+  auto resolved
+    = ctx.lookup (label.get_lifetime ().get_node_id (), Namespace::Labels);
+  if (resolved.has_value ())
+    return;
+  auto &lifetime = label.get_lifetime ();
+  ctx.labels.insert (Identifier (lifetime.as_string (), lifetime.get_locus ()),
+		     lifetime.get_node_id ());
+}
+
+void
+Late::resolve_label (AST::Lifetime &lifetime)
+{
+  if (auto resolved = ctx.labels.get (lifetime.as_string ()))
+    {
+      if (resolved->get_node_id () != lifetime.get_node_id ())
+	ctx.map_usage (Usage (lifetime.get_node_id ()),
+		       Definition (resolved->get_node_id ()),
+		       Namespace::Labels);
+    }
+  else
+    rust_error_at (lifetime.get_locus (), ErrorCode::E0426,
+		   "use of undeclared label %qs",
+		   lifetime.as_string ().c_str ());
+}
+
+void
+Late::visit (AST::ContinueExpr &expr)
+{
+  if (expr.has_label ())
+    resolve_label (expr.get_label_unchecked ());
+
+  DefaultResolver::visit (expr);
+}
+
+void
 Late::visit (AST::IdentifierExpr &expr)
 {
   // TODO: same thing as visit(PathInExpression) here?
 
   tl::optional<Rib::Definition> resolved = tl::nullopt;
+  tl::optional<Namespace> ns = tl::nullopt;
+
   if (auto value = ctx.values.get (expr.get_ident ()))
     {
       resolved = value;
+      ns = Namespace::Values;
     }
   else if (auto type = ctx.types.get (expr.get_ident ()))
     {
       resolved = type;
+      ns = Namespace::Types;
     }
   else if (funny_error)
     {
-      diagnostic_text_finalizer (global_dc) = Resolver::funny_ice_text_finalizer;
-      emit_diagnostic (DK_ICE_NOBT, expr.get_locus (), -1,
+      diagnostics::text_finalizer (global_dc)
+	= Resolver::funny_ice_text_finalizer;
+      emit_diagnostic (diagnostics::kind::ice_nobt, expr.get_locus (), -1,
 		       "are you trying to break %s? how dare you?",
 		       expr.as_string ().c_str ());
     }
   else
     {
-      if (auto type = ctx.types.get_prelude (expr.get_ident ()))
+      if (auto type = ctx.types.get_lang_prelude (expr.get_ident ()))
 	{
 	  resolved = type;
+	  ns = Namespace::Types;
 	}
-      else
+
+      if (!resolved)
 	{
 	  rust_error_at (expr.get_locus (), ErrorCode::E0425,
 			 "cannot find value %qs in this scope",
@@ -253,7 +387,7 @@ Late::visit (AST::IdentifierExpr &expr)
     }
 
   ctx.map_usage (Usage (expr.get_node_id ()),
-		 Definition (resolved->get_node_id ()));
+		 Definition (resolved->get_node_id ()), ns.value ());
 
   // For empty types, do we perform a lookup in ctx.types or should the
   // toplevel instead insert a name in ctx.values? (like it currently does)
@@ -284,7 +418,7 @@ Late::visit (AST::StructExprFieldIdentifier &expr)
     }
 
   ctx.map_usage (Usage (expr.get_node_id ()),
-		 Definition (resolved->get_node_id ()));
+		 Definition (resolved->get_node_id ()), Namespace::Values);
 }
 
 void
@@ -296,27 +430,30 @@ Late::visit (AST::PathInExpression &expr)
 
   DefaultResolver::visit (expr);
 
+  // TODO: do we need a namespace associated with each lang item?
   if (expr.is_lang_item ())
     {
       ctx.map_usage (Usage (expr.get_node_id ()),
 		     Definition (Analysis::Mappings::get ().get_lang_item_node (
-		       expr.get_lang_item ())));
+		       expr.get_lang_item ())),
+		     Namespace::Values);
       return;
     }
 
-  auto resolved = ctx.resolve_path (expr.get_segments (), Namespace::Values,
-				    Namespace::Types);
+  // TODO: we need to know which namespace that was in actually
+  auto resolved = ctx.resolve_path (expr, Namespace::Values, Namespace::Types);
 
   if (!resolved)
     {
-      if (!ctx.lookup (expr.get_segments ().front ().get_node_id ()))
-	rust_error_at (expr.get_locus (),
-		       "could not resolve path expression: %qs",
+      if (!ctx.lookup (expr.get_segments ().front ().get_node_id (),
+		       Namespace::Values, Namespace::Types))
+	rust_error_at (expr.get_locus (), ErrorCode::E0433,
+		       "Cannot find path %qs in this scope",
 		       expr.as_simple_path ().as_string ().c_str ());
       return;
     }
 
-  if (resolved->is_ambiguous ())
+  if (resolved->definition.is_ambiguous ())
     {
       rust_error_at (expr.get_locus (), ErrorCode::E0659, "%qs is ambiguous",
 		     expr.as_string ().c_str ());
@@ -324,44 +461,167 @@ Late::visit (AST::PathInExpression &expr)
     }
 
   ctx.map_usage (Usage (expr.get_node_id ()),
-		 Definition (resolved->get_node_id ()));
+		 Definition (resolved->definition.get_node_id ()),
+		 resolved->ns);
 }
 
 void
-Late::visit (AST::TypePath &type)
+Late::visit_impl_type (AST::Type &type)
+{
+  // TODO: does this have to handle reentrancy?
+  rust_assert (!block_big_self);
+  block_big_self = true;
+  visit (type);
+  block_big_self = false;
+}
+
+template <typename P>
+static void
+resolve_type_path_like (NameResolutionContext &ctx, bool block_big_self,
+			P &type)
 {
   // should we add type path resolution in `ForeverStack` directly? Since it's
   // quite more complicated.
   // maybe we can overload `resolve_path<Namespace::Types>` to only do
   // typepath-like path resolution? that sounds good
 
-  DefaultResolver::visit (type);
-
-  // take care of only simple cases
-  // TODO: remove this?
-  rust_assert (!type.has_opening_scope_resolution_op ());
-
-  // this *should* mostly work
-  // TODO: make sure typepath-like path resolution (?) is working
-  auto resolved = ctx.resolve_path (type.get_segments (), Namespace::Types);
-
-  if (!resolved.has_value ())
+  // prevent "impl Self {}" and similar
+  if (type.get_segments ().size () == 1
+      && !unwrap_segment_get_lang_item (type.get_segments ().front ())
+	    .has_value ()
+      && unwrap_type_segment (type.get_segments ().front ()).is_big_self_seg ()
+      && block_big_self)
     {
-      if (!ctx.lookup (type.get_segments ().front ()->get_node_id ()))
-	rust_error_at (type.get_locus (), "could not resolve type path %qs",
-		       type.as_string ().c_str ());
+      rust_error_at (type.get_locus (),
+		     "%<Self%> is not valid in the self type of an impl block");
       return;
     }
 
-  if (resolved->is_ambiguous ())
+  // this *should* mostly work
+  // TODO: make sure typepath-like path resolution (?) is working
+  auto resolved = ctx.resolve_path (type, Namespace::Types);
+
+  if (!resolved.has_value ())
+    {
+      if (!ctx.lookup (unwrap_segment_node_id (type.get_segments ().front ()),
+		       Namespace::Types))
+	rust_error_at (type.get_locus (), ErrorCode::E0412,
+		       "could not resolve type path %qs",
+		       unwrap_segment_error_string (type).c_str ());
+      return;
+    }
+
+  if (resolved->definition.is_ambiguous ())
     {
       rust_error_at (type.get_locus (), ErrorCode::E0659, "%qs is ambiguous",
-		     type.as_string ().c_str ());
+		     unwrap_segment_error_string (type).c_str ());
+      return;
+    }
+
+  if (ctx.types.forward_declared (resolved->definition.get_node_id (),
+				  type.get_node_id ()))
+    {
+      rust_error_at (type.get_locus (), ErrorCode::E0128,
+		     "type parameters with a default cannot use forward "
+		     "declared identifiers");
+    }
+
+  if (Analysis::Mappings::get ().is_module (
+	resolved->definition.get_node_id ()))
+    {
+      if (type.get_segments ().size () == 1)
+	{
+	  if (auto resolved
+	      = Builtins::find_builtin_node_id (type.as_string ()))
+	    {
+	      ctx.map_usage (Usage (type.get_node_id ()),
+			     Definition (*resolved), Namespace::Types);
+
+	      // In that specific case, we also override the segment resolution
+	      // as it causes issues later down the line during typechecking
+	      ctx.map_usage (Usage (unwrap_segment_node_id (
+			       type.get_segments ().front ())),
+			     Definition (*resolved), Namespace::Types);
+	    }
+	  else
+	    {
+	      rust_error_at (type.get_locus (), ErrorCode::E0573,
+			     "expected type, found module %qs",
+			     unwrap_segment_error_string (type).c_str ());
+	    }
+	}
+
       return;
     }
 
   ctx.map_usage (Usage (type.get_node_id ()),
-		 Definition (resolved->get_node_id ()));
+		 Definition (resolved->definition.get_node_id ()),
+		 Namespace::Types);
+}
+
+void
+Late::visit (AST::TypePath &type)
+{
+  DefaultResolver::visit (type);
+
+  resolve_type_path_like (ctx, block_big_self, type);
+}
+
+void
+Late::visit (AST::Visibility &vis)
+{
+  if (!vis.has_path ())
+    return;
+
+  AST::SimplePath &path = vis.get_path ();
+
+  rust_assert (path.get_segments ().size ());
+  auto &first_seg = path.get_segments ()[0];
+
+  auto mode = ResolutionMode::Normal;
+
+  if (path.has_opening_scope_resolution ())
+    {
+      if (get_rust_edition () == Edition::E2015)
+	mode = ResolutionMode::FromRoot;
+      else
+	mode = ResolutionMode::FromExtern;
+    }
+  else if (!first_seg.is_crate_path_seg () && !first_seg.is_super_path_seg ()
+	   && !first_seg.is_lower_self_seg ())
+    {
+      if (get_rust_edition () == Edition::E2015)
+	{
+	  mode = ResolutionMode::FromRoot;
+	}
+      else
+	{
+	  rust_error_at (path.get_locus (),
+			 "relative paths are not supported in visibilities in "
+			 "2018 edition or later");
+	  return;
+	}
+    }
+
+  auto res = ctx.resolve_path (path.get_segments (), mode, Namespace::Types);
+
+  if (!res.has_value ())
+    {
+      rust_error_at (path.get_locus (), ErrorCode::E0433,
+		     "could not resolve path %qs", path.as_string ().c_str ());
+      return;
+    }
+
+  // TODO: is this possible?
+  if (res->definition.is_ambiguous ())
+    {
+      rust_error_at (path.get_locus (), ErrorCode::E0659, "%qs is ambiguous",
+		     path.as_string ().c_str ());
+      return;
+    }
+
+  ctx.map_usage (Usage (path.get_node_id ()),
+		 Definition (res->definition.get_node_id ()), res->ns);
 }
 
 void
@@ -372,16 +632,9 @@ Late::visit (AST::Trait &trait)
   // which is then resolved to the node id of trait
   // we set up the latter mapping here
   ctx.map_usage (Usage (trait.get_implicit_self ().get_node_id ()),
-		 Definition (trait.get_node_id ()));
+		 Definition (trait.get_node_id ()), Namespace::Types);
 
   DefaultResolver::visit (trait);
-}
-
-void
-Late::visit (AST::StructStruct &s)
-{
-  auto s_vis = [this, &s] () { AST::DefaultASTVisitor::visit (s); };
-  ctx.scoped (Rib::Kind::Item, s.get_node_id (), s_vis);
 }
 
 void
@@ -391,11 +644,7 @@ Late::visit (AST::StructExprStruct &s)
   visit_inner_attrs (s);
   DefaultResolver::visit (s.get_struct_name ());
 
-  auto resolved
-    = ctx.resolve_path (s.get_struct_name ().get_segments (), Namespace::Types);
-
-  ctx.map_usage (Usage (s.get_struct_name ().get_node_id ()),
-		 Definition (resolved->get_node_id ()));
+  resolve_type_path_like (ctx, block_big_self, s.get_struct_name ());
 }
 
 void
@@ -406,11 +655,7 @@ Late::visit (AST::StructExprStructBase &s)
   DefaultResolver::visit (s.get_struct_name ());
   visit (s.get_struct_base ());
 
-  auto resolved
-    = ctx.resolve_path (s.get_struct_name ().get_segments (), Namespace::Types);
-
-  ctx.map_usage (Usage (s.get_struct_name ().get_node_id ()),
-		 Definition (resolved->get_node_id ()));
+  resolve_type_path_like (ctx, block_big_self, s.get_struct_name ());
 }
 
 void
@@ -418,17 +663,27 @@ Late::visit (AST::StructExprStructFields &s)
 {
   visit_outer_attrs (s);
   visit_inner_attrs (s);
-  DefaultResolver::visit (s.get_struct_name ());
+
+  auto &path = s.get_struct_name ();
+
+  DefaultResolver::visit (path);
   if (s.has_struct_base ())
     visit (s.get_struct_base ());
   for (auto &field : s.get_fields ())
     visit (field);
 
-  auto resolved
-    = ctx.resolve_path (s.get_struct_name ().get_segments (), Namespace::Types);
+  auto resolved = ctx.resolve_path (path, Namespace::Types);
 
-  ctx.map_usage (Usage (s.get_struct_name ().get_node_id ()),
-		 Definition (resolved->get_node_id ()));
+  if (!resolved)
+    {
+      rust_error_at (path.get_locus (), ErrorCode::E0433,
+		     "could not resolve path %qs", path.as_string ().c_str ());
+      return;
+    }
+
+  ctx.map_usage (Usage (path.get_node_id ()),
+		 Definition (resolved->definition.get_node_id ()),
+		 Namespace::Types);
 }
 
 // needed because Late::visit (AST::GenericArg &) is non-virtual
@@ -463,30 +718,27 @@ Late::visit (AST::GenericArg &arg)
   DefaultResolver::visit (arg);
 }
 
-template <class Closure>
-static void
-add_captures (Closure &closure, NameResolutionContext &ctx)
+void
+Late::visit_closure_params (AST::ClosureExpr &closure)
 {
+  ctx.bindings.enter (BindingSource::Param);
+
+  DefaultResolver::visit_closure_params (closure);
+
+  ctx.bindings.exit ();
+}
+
+void
+Late::visit (AST::ClosureExpr &expr)
+{
+  // add captures
   auto vals = ctx.values.peek ().get_values ();
   for (auto &val : vals)
     {
-      ctx.mappings.add_capture (closure.get_node_id (),
-				val.second.get_node_id ());
+      ctx.mappings.add_capture (expr.get_node_id (), val.second.get_node_id ());
     }
-}
 
-void
-Late::visit (AST::ClosureExprInner &closure)
-{
-  add_captures (closure, ctx);
-  DefaultResolver::visit (closure);
-}
-
-void
-Late::visit (AST::ClosureExprInnerTyped &closure)
-{
-  add_captures (closure, ctx);
-  DefaultResolver::visit (closure);
+  DefaultResolver::visit (expr);
 }
 
 } // namespace Resolver2_0

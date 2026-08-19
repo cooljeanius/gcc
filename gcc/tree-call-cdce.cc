@@ -1,5 +1,5 @@
 /* Conditional Dead Call Elimination pass for the GNU compiler.
-   Copyright (C) 2008-2025 Free Software Foundation, Inc.
+   Copyright (C) 2008-2026 Free Software Foundation, Inc.
    Contributed by Xinliang David Li <davidxl@google.com>
 
 This file is part of GCC.
@@ -36,7 +36,12 @@ along with GCC; see the file COPYING3.  If not see
 #include "builtins.h"
 #include "internal-fn.h"
 #include "tree-dfa.h"
-
+#include "tree-eh.h"
+#include "tree-ssanames.h"
+#include "gimple-fold.h"
+#include "value-query.h"
+#include "value-range.h"
+
 
 /* This pass serves two closely-related purposes:
 
@@ -296,8 +301,12 @@ can_test_argument_range (gcall *call)
     /* Trig functions.  */
     CASE_FLT_FN (BUILT_IN_ACOS):
     CASE_FLT_FN_FLOATN_NX (BUILT_IN_ACOS):
+    CASE_FLT_FN (BUILT_IN_ACOSPI):
+    CASE_FLT_FN_FLOATN_NX (BUILT_IN_ACOSPI):
     CASE_FLT_FN (BUILT_IN_ASIN):
     CASE_FLT_FN_FLOATN_NX (BUILT_IN_ASIN):
+    CASE_FLT_FN (BUILT_IN_ASINPI):
+    CASE_FLT_FN_FLOATN_NX (BUILT_IN_ASINPI):
     /* Hyperbolic functions.  */
     CASE_FLT_FN (BUILT_IN_ACOSH):
     CASE_FLT_FN_FLOATN_NX (BUILT_IN_ACOSH):
@@ -351,15 +360,21 @@ edom_only_function (gcall *call)
     {
     CASE_FLT_FN (BUILT_IN_ACOS):
     CASE_FLT_FN_FLOATN_NX (BUILT_IN_ACOS):
+    CASE_FLT_FN (BUILT_IN_ACOSPI):
+    CASE_FLT_FN_FLOATN_NX (BUILT_IN_ACOSPI):
     CASE_FLT_FN (BUILT_IN_ASIN):
     CASE_FLT_FN_FLOATN_NX (BUILT_IN_ASIN):
-    CASE_FLT_FN (BUILT_IN_ATAN):
-    CASE_FLT_FN_FLOATN_NX (BUILT_IN_ATAN):
+    CASE_FLT_FN (BUILT_IN_ASINPI):
+    CASE_FLT_FN_FLOATN_NX (BUILT_IN_ASINPI):
     CASE_FLT_FN (BUILT_IN_COS):
     CASE_FLT_FN_FLOATN_NX (BUILT_IN_COS):
+    CASE_FLT_FN (BUILT_IN_COSPI):
+    CASE_FLT_FN_FLOATN_NX (BUILT_IN_COSPI):
     CASE_FLT_FN (BUILT_IN_SIGNIFICAND):
     CASE_FLT_FN (BUILT_IN_SIN):
     CASE_FLT_FN_FLOATN_NX (BUILT_IN_SIN):
+    CASE_FLT_FN (BUILT_IN_SINPI):
+    CASE_FLT_FN_FLOATN_NX (BUILT_IN_SINPI):
     CASE_FLT_FN (BUILT_IN_SQRT):
     CASE_FLT_FN_FLOATN_NX (BUILT_IN_SQRT):
     CASE_FLT_FN (BUILT_IN_FMOD):
@@ -694,8 +709,12 @@ get_no_error_domain (enum built_in_function fnc)
     /* Trig functions: return [-1, +1]  */
     CASE_FLT_FN (BUILT_IN_ACOS):
     CASE_FLT_FN_FLOATN_NX (BUILT_IN_ACOS):
+    CASE_FLT_FN (BUILT_IN_ACOSPI):
+    CASE_FLT_FN_FLOATN_NX (BUILT_IN_ACOSPI):
     CASE_FLT_FN (BUILT_IN_ASIN):
     CASE_FLT_FN_FLOATN_NX (BUILT_IN_ASIN):
+    CASE_FLT_FN (BUILT_IN_ASINPI):
+    CASE_FLT_FN_FLOATN_NX (BUILT_IN_ASINPI):
       return get_domain (-1, true, true,
                          1, true, true);
     /* Hyperbolic functions.  */
@@ -1208,8 +1227,20 @@ use_internal_fn (gcall *call)
     {
       /* Skip the call if LHS == LHS.  If we reach here, EDOM is the only
 	 valid errno value and it is used iff the result is NaN.  */
-      conds.quick_push (gimple_build_cond (EQ_EXPR, lhs, lhs,
-					   NULL_TREE, NULL_TREE));
+      /* In the case of non call exceptions, with signaling NaNs, EQ_EXPR
+	 can throw an exception and that can't be part of the GIMPLE_COND. */
+      if (flag_exceptions
+	  && cfun->can_throw_non_call_exceptions
+	  && operation_could_trap_p (EQ_EXPR, true, false, NULL_TREE))
+	{
+	  tree b = make_ssa_name (boolean_type_node);
+	  conds.quick_push (gimple_build_assign (b, EQ_EXPR, lhs, lhs));
+	  conds.quick_push (gimple_build_cond (NE_EXPR, b, boolean_false_node,
+					       NULL_TREE, NULL_TREE));
+	}
+      else
+	conds.quick_push (gimple_build_cond (EQ_EXPR, lhs, lhs,
+					     NULL_TREE, NULL_TREE));
       nconds++;
 
       /* Try replacing the original call with a direct assignment to
@@ -1228,6 +1259,118 @@ use_internal_fn (gcall *call)
 					    is_arg_conds ? new_call : NULL);
 }
 
+/* Return the nonzero member of LEN's range if LEN is an SSA name with range
+   [0, 1] or the exact two-value set {0, N}.  Return NULL_TREE otherwise.  */
+
+static tree
+get_len_nonzero_value (tree len, gimple *stmt)
+{
+  if (TREE_CODE (len) != SSA_NAME || !INTEGRAL_TYPE_P (TREE_TYPE (len)))
+    return NULL_TREE;
+
+  if (ssa_name_has_boolean_range (len, stmt))
+    return build_one_cst (TREE_TYPE (len));
+
+  int_range<2> range (TREE_TYPE (len));
+  if (!get_range_query (cfun)->range_of_expr (range, len, stmt)
+      || range.num_pairs () != 2)
+    return NULL_TREE;
+
+  if (!wi::eq_p (range.lower_bound (0), 0)
+      || !wi::eq_p (range.upper_bound (0), 0))
+    return NULL_TREE;
+
+  if (!wi::eq_p (range.lower_bound (1), range.upper_bound (1)))
+    return NULL_TREE;
+
+  return wide_int_to_tree (TREE_TYPE (len), range.lower_bound (1));  
+}
+
+/* Return true if CALL is a supported length-taking builtin whose length
+   argument is an SSA name known to have a suitable range.  On success,
+   set LEN_ARG to the argument index of the length and, if NONZERO_LEN is
+   nonnull, set it to the nonzero member of the range.  */
+
+static bool
+can_shrink_wrap_len_p (gcall *call, unsigned *len_arg, tree *nonzero_len)
+{
+  if (!gimple_call_builtin_p (call, BUILT_IN_MEMSET)
+      || !gimple_vdef (call))
+    return false;
+
+  constexpr unsigned memset_len_arg = 2;
+  if (gimple_call_num_args (call) <= memset_len_arg)
+    return false;
+
+  tree len = gimple_call_arg (call, memset_len_arg);
+  tree value = get_len_nonzero_value (len, call);
+  if (!value)
+    return false;
+
+  *len_arg = memset_len_arg;
+  if (nonzero_len)
+    *nonzero_len = value;
+  return true;
+}
+
+/* Generate the condition vector that guards a call whose LEN is known to be
+   in [0, 1]: skip the call when LEN is zero.  */
+
+static void
+gen_zero_len_conditions (tree len, vec<gimple *> &conds, unsigned *nconds)
+{
+  tree zero = build_zero_cst (TREE_TYPE (len));
+
+  gcc_assert (nconds);
+  conds.quick_push (gimple_build_cond (EQ_EXPR, len, zero,
+				       NULL_TREE, NULL_TREE));
+  *nconds = 1;
+}
+
+/* Shrink-wrap CALL whose LEN_ARG argument is known to be in [0, 1] or
+   {0, N}.  ZERO_LEN_RESULT is the value of the call result when its length
+   is zero.  On the guarded path the length is NONZERO_LEN, so pin it to that
+   constant for subsequent folding.  */
+
+static void
+shrink_wrap_len_call (gcall *call, unsigned len_arg, tree zero_len_result,
+		      tree nonzero_len)
+{
+  tree lhs = gimple_call_lhs (call);
+
+  /* Define the result on both the guarded and bypass paths before wrapping.  */
+  if (lhs)
+    {
+      gcc_assert (zero_len_result);
+      location_t loc = gimple_location (call);
+      gimple_stmt_iterator gsi = gsi_for_stmt (call);
+
+      zero_len_result = gimple_convert (&gsi, true, GSI_SAME_STMT, loc,
+					TREE_TYPE (lhs), zero_len_result);
+      gassign *stmt = gimple_build_assign (lhs, zero_len_result);
+      gimple_set_location (stmt, loc);
+      gsi_insert_before (&gsi, stmt, GSI_SAME_STMT);
+
+      gimple_call_set_lhs (call, NULL_TREE);
+      SSA_NAME_DEF_STMT (lhs) = stmt;
+      update_stmt (call);
+    }
+
+  tree len = gimple_call_arg (call, len_arg);
+  unsigned nconds = 0;
+  auto_vec<gimple *, 1> conds;
+  gen_zero_len_conditions (len, conds, &nconds);
+  gcc_assert (nconds != 0);
+
+  shrink_wrap_one_built_in_call_with_conds (call, conds, nconds);
+
+  /* On the guarded path the length is NONZERO_LEN.  */
+  gimple_call_set_arg (call, len_arg, nonzero_len);
+  update_stmt (call);
+  gimple_stmt_iterator gsi = gsi_for_stmt (call);
+  fold_stmt (&gsi);
+}
+
 /* The top level function for conditional dead code shrink
    wrapping transformation.  */
 
@@ -1240,7 +1383,14 @@ shrink_wrap_conditional_dead_built_in_calls (const vec<gcall *> &calls)
   for (; i < n ; i++)
     {
       gcall *bi_call = calls[i];
-      if (gimple_call_lhs (bi_call))
+      unsigned len_arg;
+
+      /* memset returns its destination pointer on the zero-length path.  */
+      tree nonzero_len;
+      if (can_shrink_wrap_len_p (bi_call, &len_arg, &nonzero_len))
+	shrink_wrap_len_call (bi_call, len_arg, gimple_call_arg (bi_call, 0),
+			      nonzero_len);
+      else if (gimple_call_lhs (bi_call))
 	use_internal_fn (bi_call);
       else
 	shrink_wrap_one_built_in_call (bi_call);
@@ -1299,11 +1449,13 @@ pass_call_cdce::execute (function *fun)
       for (i = gsi_start_bb (bb); !gsi_end_p (i); gsi_next (&i))
         {
 	  gcall *stmt = dyn_cast <gcall *> (gsi_stmt (i));
+	  unsigned len_arg;
           if (stmt
 	      && gimple_call_builtin_p (stmt, BUILT_IN_NORMAL)
-	      && (gimple_call_lhs (stmt)
-		  ? can_use_internal_fn (stmt)
-		  : can_test_argument_range (stmt))
+	      && (can_shrink_wrap_len_p (stmt, &len_arg, nullptr)
+		  || (gimple_call_lhs (stmt)
+		      ? can_use_internal_fn (stmt)
+		      : can_test_argument_range (stmt)))
 	      && can_guard_call_p (stmt))
             {
               if (dump_file && (dump_flags & TDF_DETAILS))

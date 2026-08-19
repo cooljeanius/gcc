@@ -1,5 +1,5 @@
 /* Control flow redundancy hardening.
-   Copyright (C) 2022-2025 Free Software Foundation, Inc.
+   Copyright (C) 2022-2026 Free Software Foundation, Inc.
    Contributed by Alexandre Oliva <oliva@adacore.com>.
 
 This file is part of GCC.
@@ -1527,7 +1527,7 @@ pass_harden_control_flow_redundancy::execute (function *fun)
   FOR_EACH_VEC_ELT (chk_edges, i, e)
     if (!bitmap_set_bit (combined_blocks, (*e)->src->index))
       /* There may be multiple chk_edges with the same src block;
-	 guard againt overlaps with chkcall_blocks only.  */
+	 guard against overlaps with chkcall_blocks only.  */
       gcc_assert (!bitmap_bit_p (chkcall_blocks, (*e)->src->index));
 
   /* Visit blocks in index order, because building rtcfg depends on
@@ -1549,8 +1549,7 @@ pass_harden_control_flow_redundancy::execute (function *fun)
 
   return
     TODO_update_ssa
-    | TODO_cleanup_cfg
-    | TODO_verify_il;
+    | TODO_cleanup_cfg;
 }
 
 /* Instantiate a hardcfr pass.  */

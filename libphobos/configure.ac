@@ -1,5 +1,5 @@
 # Process this file with autoconf to produce a configure script.
-# Copyright (C) 2006-2025 Free Software Foundation, Inc.
+# Copyright (C) 2006-2026 Free Software Foundation, Inc.
 #
 # GCC is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -31,7 +31,7 @@ AC_CONFIG_SRCDIR(libdruntime/gcc/attribute.d)
 AC_CONFIG_HEADERS(config.h)
 
 AM_ENABLE_MULTILIB(, ..)
-AC_CANONICAL_SYSTEM
+AC_CANONICAL_TARGET
 AC_USE_SYSTEM_EXTENSIONS
 
 target_alias=${target_alias-$target}
@@ -86,7 +86,6 @@ AC_SUBST(CFLAGS_FOR_BUILD)
 
 # Enable libtool
 LT_INIT(dlopen)
-AM_PROG_LIBTOOL
 WITH_LOCAL_DRUNTIME([LT_LANG([D])], [])
 AC_SUBST(enable_shared)
 AC_SUBST(enable_static)
@@ -143,6 +142,7 @@ DRUNTIME_OS_ARM_EABI_UNWINDER
 DRUNTIME_OS_MINFO_BRACKETING
 DRUNTIME_OS_DLPI_TLS_MODID
 DRUNTIME_OS_LINK_SPEC
+DRUNTIME_OS_FEATURES
 DRUNTIME_LIBRARIES_CLIB
 
 WITH_LOCAL_DRUNTIME([
@@ -255,7 +255,7 @@ SPEC_PHOBOS_DEPS="$LIBS"
 AC_SUBST(SPEC_PHOBOS_DEPS)
 
 # Libdruntime / phobos soname version
-libtool_VERSION=6:0:0
+libtool_VERSION=7:0:0
 AC_SUBST(libtool_VERSION)
 
 # Set default flags (after DRUNTIME_WERROR!)
@@ -287,7 +287,7 @@ AC_CONFIG_FILES([testsuite/testsuite_flags],[chmod +x testsuite/testsuite_flags]
 # append it here.  Only modify Makefiles that have just been created.
 #
 # Also, get rid of this simulated-VPATH thing that automake does.
-AC_CONFIG_FILES(AC_FOREACH([DIR], [libdruntime src testsuite], [DIR/Makefile ]),
+AC_CONFIG_FILES(m4_foreach_w([DIR], [libdruntime src testsuite], [DIR/Makefile ]),
   [cat > vpsed$$ << \_EOF
 s!`test -f '$<' || echo '$(srcdir)/'`!!
 _EOF

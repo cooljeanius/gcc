@@ -1,4 +1,4 @@
-// { dg-additional-options -foffload-options=-lstdc++ }
+// { dg-additional-options "-Wno-deprecated-openmp" }
 // See also '../libgomp.oacc-c++/pr101544-1.C'.
 #ifndef ALWAYS_INLINE
 # define ALWAYS_INLINE

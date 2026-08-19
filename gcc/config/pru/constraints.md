@@ -1,5 +1,5 @@
 ;; Constraint definitions for TI PRU.
-;; Copyright (C) 2014-2025 Free Software Foundation, Inc.
+;; Copyright (C) 2014-2026 Free Software Foundation, Inc.
 ;; Contributed by Dimitar Dimitrov <dimitar@dinux.eu>
 ;;
 ;; This file is part of GCC.
@@ -53,7 +53,8 @@
 
 (define_register_constraint "Rmd0" "MULDST_REGS"
   "@internal
-  The multiply destination register.")
+  The multiply destination register."
+  "regno == MULDST_REGNUM")
 
 (define_register_constraint "Rms0" "MULSRC0_REGS"
   "@internal

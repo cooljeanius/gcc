@@ -6,7 +6,7 @@
  *                                                                          *
  *                              C Header File                               *
  *                                                                          *
- *          Copyright (C) 1992-2025, Free Software Foundation, Inc.         *
+ *          Copyright (C) 1992-2026, Free Software Foundation, Inc.         *
  *                                                                          *
  * GNAT is free software;  you can  redistribute it  and/or modify it under *
  * terms of the  GNU General Public License as published  by the Free Soft- *
@@ -110,8 +110,8 @@ extern Node_Id Get_Attribute_Definition_Clause (Entity_Id, unsigned char);
 
 /* errout: */
 
-#define Error_Msg_N		errout__error_msg_n
-#define Error_Msg_NE		errout__error_msg_ne
+#define Error_Msg_N		errout__error_msg_n_gigi
+#define Error_Msg_NE		errout__error_msg_ne_gigi
 #define Set_Identifier_Casing	errout__set_identifier_casing
 
 extern void Error_Msg_N			(String_Pointer, Node_Id);
@@ -122,9 +122,11 @@ extern void Set_Identifier_Casing	(void *, const void *);
 
 #define Error_Msg_Uint_1	err_vars__error_msg_uint_1
 #define Error_Msg_Uint_2	err_vars__error_msg_uint_2
+#define Error_Msg_Sloc	err_vars__error_msg_sloc
 
 extern Uint Error_Msg_Uint_1;
 extern Uint Error_Msg_Uint_2;
+extern Source_Ptr Error_Msg_Sloc;
 
 /* exp_ch11:  */
 
@@ -315,6 +317,7 @@ extern Boolean Is_Null_Range 		(Node_Id, Node_Id);
 #define First_Actual			sem_util__first_actual
 #define Has_Storage_Model_Type_Aspect	sem_util__storage_model_support__has_storage_model_type_aspect
 #define Has_Designated_Storage_Model_Aspect sem_util__storage_model_support__has_designated_storage_model_aspect
+#define Is_Extended_Access_Type sem_util__is_extended_access_type
 #define Is_Expression_Function		sem_util__is_expression_function
 #define Is_Variable_Size_Record 	sem_util__is_variable_size_record
 #define Needs_Secondary_Stack		sem_util__needs_secondary_stack
@@ -327,6 +330,7 @@ extern Entity_Id Defining_Entity		(Node_Id);
 extern Node_Id First_Actual			(Node_Id);
 extern Boolean Has_Storage_Model_Type_Aspect	(Entity_Id);
 extern Boolean Has_Designated_Storage_Model_Aspect (Entity_Id);
+extern Boolean Is_Extended_Access_Type	(Entity_Id);
 extern Boolean Is_Expression_Function		(Entity_Id);
 extern Boolean Is_Variable_Size_Record 		(Entity_Id);
 extern Boolean Needs_Secondary_Stack		(Entity_Id);
@@ -532,6 +536,9 @@ extern Node_Id Renamed_Entity (N Node);
 
 #define Renamed_Object einfo__entities__renamed_or_alias
 extern Node_Id Renamed_Object (N Node);
+
+#define Scope sinfo__nodes__scope_raw
+extern Node_Id Scope (N Node);
 
 #ifdef __cplusplus
 }

@@ -1,5 +1,5 @@
 ;; Constraints definitions belonging to the gcc backend for IBM S/390.
-;; Copyright (C) 2006-2025 Free Software Foundation, Inc.
+;; Copyright (C) 2006-2026 Free Software Foundation, Inc.
 ;; Written by Wolfgang Gellerich, using code and information found in
 ;; files s390.md, s390.h, and s390.cc.
 ;;
@@ -583,8 +583,8 @@
   (match_test "s390_mem_constraint (\"ZT\", op)"))
 
 (define_constraint "ZL"
-  "LARL operand when in 64-bit mode, otherwise nothing."
-  (match_test "TARGET_64BIT && larl_operand (op, VOIDmode)"))
+  "LARL operand."
+  (match_test "larl_operand (op, VOIDmode)"))
 
 ;; This constraint must behave like "i", in particular, the matching values
 ;; must never be placed into registers or memory by

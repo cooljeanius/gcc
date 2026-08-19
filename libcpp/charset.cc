@@ -1,5 +1,5 @@
 /* CPP Library - charsets
-   Copyright (C) 1998-2025 Free Software Foundation, Inc.
+   Copyright (C) 1998-2026 Free Software Foundation, Inc.
 
    Broken out of c-lex.cc Apr 2003, adding valid C99 UCN ranges.
 
@@ -840,6 +840,10 @@ _cpp_destroy_iconv (cpp_reader *pfile)
 	iconv_close (pfile->char32_cset_desc.cd);
       if (pfile->wide_cset_desc.func == convert_using_iconv)
 	iconv_close (pfile->wide_cset_desc.cd);
+      if (pfile->reverse_narrow_cset_desc.func == convert_using_iconv)
+	iconv_close (pfile->reverse_narrow_cset_desc.cd);
+      if (pfile->reverse_utf8_cset_desc.func == convert_using_iconv)
+	iconv_close (pfile->reverse_utf8_cset_desc.cd);
     }
 }
 
@@ -981,7 +985,9 @@ enum {
   /* Might be valid NFKC form?  */
   NKC = 512,
   /* Certain preceding characters might make it not valid NFC/NKFC form?  */
-  CTX = 1024
+  CTX = 1024,
+  /* Valid in C++23 but not in C23.  Set only when CXX23 is also set.  */
+  NONC = 2048
 };
 
 struct ucnrange {
@@ -1362,9 +1368,11 @@ cpp_check_xid_property (cppchar_t c)
 
   unsigned short flags = ucnranges[mn].flags;
 
-  if (flags & CXX23)
+  if (flags & NONC)
+    return 0;
+  if ((flags & (CXX23 | NXX23)) == CXX23)
     return CPP_XID_START | CPP_XID_CONTINUE;
-  if (flags & NXX23)
+  if ((flags & (CXX23 | NXX23)) == (CXX23 | NXX23))
     return CPP_XID_CONTINUE;
   return 0;
 }
@@ -1404,14 +1412,19 @@ ucn_valid_in_identifier (cpp_reader *pfile, cppchar_t c,
   if (CPP_PEDANTIC (pfile))
     {
       if (CPP_OPTION (pfile, xid_identifiers))
-	valid_flags = CXX23;
+	{
+	  valid_flags = CXX23;
+	  if (!CPP_OPTION (pfile, cplusplus)
+	      && (ucnranges[mn].flags & NONC))
+	    return 0;
+	}
       else if (CPP_OPTION (pfile, c11_identifiers))
 	valid_flags = C11;
       else if (CPP_OPTION (pfile, c99))
 	valid_flags = C99;
     }
   if (! (ucnranges[mn].flags & valid_flags))
-      return 0;
+    return 0;
 
   /* Update NST.  */
   if (ucnranges[mn].combine != 0 && ucnranges[mn].combine < nst->prev_class)
@@ -2420,7 +2433,7 @@ convert_escape (cpp_reader *pfile, const uchar *from, const uchar *limit,
 	{
 	  encoding_rich_location rich_loc (pfile);
 
-	  /* diagnostic.cc does not support "%03o".  When it does, this
+	  /* pretty-print.cc does not support "%03o".  When it does, this
 	     code can use %03o directly in the diagnostic again.  */
 	  char buf[32];
 	  sprintf(buf, "%03o", (int) c);
@@ -2724,6 +2737,110 @@ cpp_interpret_string_notranslate (cpp_reader *pfile, const cpp_string *from,
 
   pfile->narrow_cset_desc = save_narrow_cset_desc;
   return retval;
+}
+
+/* Convert a string FROM to TO, without handling of any UCNs etc., just
+   pure character set conversion.  If !REVERSE, convert from SOURCE_CHARSET
+   to execution charset corresponding to TYPE, if REVERSE, convert from the
+   execution charset corresponding to TYPE to SOURCE_CHARSET.  Return false
+   on error.  */
+
+bool
+cpp_translate_string (cpp_reader *pfile, const cpp_string *from,
+		      cpp_string *to, enum cpp_ttype type, bool reverse)
+{
+  struct cset_converter cvt = converter_for_type (pfile, type);
+  struct _cpp_strbuf tbuf;
+  if (reverse)
+    {
+      struct cset_converter *pcvt;
+      switch (type)
+	{
+	default:
+	  pcvt = &pfile->reverse_narrow_cset_desc;
+	  break;
+	case CPP_UTF8CHAR:
+	case CPP_UTF8STRING:
+	  pcvt = &pfile->reverse_utf8_cset_desc;
+	  break;
+	case CPP_CHAR16:
+	case CPP_STRING16:
+	case CPP_CHAR32:
+	case CPP_STRING32:
+	case CPP_WCHAR:
+	case CPP_WSTRING:
+	  return false;
+	}
+      if (pcvt->func == NULL)
+	{
+	  *pcvt = init_iconv_desc (pfile, cvt.from, cvt.to);
+	  pcvt->width = cvt.width;
+	}
+      cvt = *pcvt;
+    }
+  tbuf.asize = MAX (OUTBUF_BLOCK_SIZE, from->len);
+  tbuf.text = XNEWVEC (uchar, tbuf.asize);
+  tbuf.len = 0;
+  if (!APPLY_CONVERSION (cvt, from->text, from->len, &tbuf))
+    {
+      XDELETEVEC (tbuf.text);
+      return false;
+    }
+  tbuf.text = XRESIZEVEC (uchar, tbuf.text, tbuf.len);
+  to->text = tbuf.text;
+  to->len = tbuf.len;
+  return true;
+}
+
+/* Return true if ID is a valid identifier, false otherwise.  Without any
+   diagnostics.  */
+
+bool
+cpp_valid_identifier (cpp_reader *pfile, const unsigned char *id)
+{
+  normalize_state nst = INITIAL_NORMALIZE_STATE;
+  const unsigned char *p = id;
+  if (*p == '\0')
+    return false;
+  const unsigned char *limit
+    = (const unsigned char *) strchr ((const char *) p, '\0');
+  static const cppchar_t utf8_signifier = 0xC0;
+  if (ISIDST (*p))
+    {
+      NORMALIZE_STATE_UPDATE_IDNUM (&nst, *p);
+      ++p;
+    }
+  while (*p)
+    {
+      if (p != id && ISIDNUM (*p))
+	{
+	  while (ISIDNUM (*p))
+	    ++p;
+	  NORMALIZE_STATE_UPDATE_IDNUM (&nst, *(p - 1));
+	  continue;
+	}
+      if (CPP_OPTION (pfile, extended_identifiers) && *p >= utf8_signifier)
+	{
+	  const unsigned char *base = p;
+	  size_t inbytesleft = limit - p;
+	  cppchar_t c;
+	  if (one_utf8_to_cppchar (&p, &inbytesleft, &c))
+	    return false;
+	  switch (ucn_valid_in_identifier (pfile, c, &nst))
+	    {
+	    default:
+	      return false;
+	    case 1:
+	      continue;
+	    case 2:
+	      if (base == id)
+		return false;
+	      continue;
+	    }
+	}
+      return false;
+    }
+  return true;
 }
 
 

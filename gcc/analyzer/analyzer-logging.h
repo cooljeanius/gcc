@@ -1,5 +1,5 @@
 /* Hierarchical log messages for the analyzer.
-   Copyright (C) 2014-2025 Free Software Foundation, Inc.
+   Copyright (C) 2014-2026 Free Software Foundation, Inc.
    Contributed by David Malcolm <dmalcolm@redhat.com>.
 
 This file is part of GCC.
@@ -25,6 +25,8 @@ along with GCC; see the file COPYING3.  If not see
 
 #include "diagnostic-core.h"
 
+namespace text_art { class canvas; }
+
 namespace ana {
 
 /* A logger encapsulates a logging stream: a way to send
@@ -49,6 +51,8 @@ class logger
   void log_va_partial (const char *fmt, va_list *ap)
     ATTRIBUTE_GCC_DIAG(2, 0);
   void end_log_line ();
+
+  void log_canvas (const text_art::canvas &);
 
   void enter_scope (const char *scope_name);
   void enter_scope (const char *scope_name, const char *fmt, va_list *ap)
@@ -91,7 +95,7 @@ public:
 
 /* The constructor for log_scope.
 
-   The normal case is that the logger is NULL, in which case this should
+   The normal case is that the logger is nullptr, in which case this should
    be largely a no-op.
 
    If we do have a logger, notify it that we're entering the given scope.
@@ -139,7 +143,49 @@ log_scope::~log_scope ()
     }
 }
 
-/* A log_user is something that potentially uses a logger (which could be NULL).
+class log_nesting_level
+{
+public:
+  log_nesting_level (logger *logger, const char *fmt, ...)
+    ATTRIBUTE_GCC_DIAG(3, 4);
+  ~log_nesting_level ();
+
+private:
+  logger *m_logger;
+};
+
+inline
+log_nesting_level::log_nesting_level (logger *logger, const char *fmt, ...)
+: m_logger (logger)
+{
+  if (logger)
+    {
+      va_list ap;
+      va_start (ap, fmt);
+
+      logger->start_log_line ();
+      logger->log_va_partial (fmt, &ap);
+      logger->end_log_line ();
+
+      logger->inc_indent ();
+
+      va_end (ap);
+    }
+}
+
+
+/* The destructor for log_nesting_level; essentially the opposite of
+   the constructor.  */
+
+inline
+log_nesting_level::~log_nesting_level ()
+{
+  if (m_logger)
+    m_logger->dec_indent ();
+}
+
+/* A log_user is something that potentially uses a logger (which could be
+   nullptr).
 
    The log_user class keeps the reference-count of a logger up-to-date.  */
 
@@ -169,8 +215,8 @@ class log_user
 
   FILE *get_logger_file () const
   {
-    if (m_logger == NULL)
-      return NULL;
+    if (m_logger == nullptr)
+      return nullptr;
     return m_logger->get_file ();
   }
 
@@ -181,7 +227,7 @@ class log_user
 };
 
 /* A shortcut for calling log from a log_user, handling the common
-   case where the underlying logger is NULL via a no-op.  */
+   case where the underlying logger is nullptr via a no-op.  */
 
 inline void
 log_user::log (const char *fmt, ...) const
@@ -196,7 +242,7 @@ log_user::log (const char *fmt, ...) const
 }
 
 /* A shortcut for starting a log line from a log_user,
-   handling the common case where the underlying logger is NULL via
+   handling the common case where the underlying logger is nullptr via
    a no-op.  */
 
 inline void
@@ -207,7 +253,7 @@ log_user::start_log_line () const
 }
 
 /* A shortcut for ending a log line from a log_user,
-   handling the common case where the underlying logger is NULL via
+   handling the common case where the underlying logger is nullptr via
    a no-op.  */
 
 inline void
@@ -218,7 +264,7 @@ log_user::end_log_line () const
 }
 
 /* A shortcut for recording entry into a scope from a log_user,
-   handling the common case where the underlying logger is NULL via
+   handling the common case where the underlying logger is nullptr via
    a no-op.  */
 
 inline void
@@ -229,7 +275,7 @@ log_user::enter_scope (const char *scope_name)
 }
 
 /* A shortcut for recording exit from a scope from a log_user,
-   handling the common case where the underlying logger is NULL via
+   handling the common case where the underlying logger is nullptr via
    a no-op.  */
 
 inline void

@@ -6,7 +6,7 @@
  *                                                                          *
  *                              C Header File                               *
  *                                                                          *
- *          Copyright (C) 1992-2025, Free Software Foundation, Inc.         *
+ *          Copyright (C) 1992-2026, Free Software Foundation, Inc.         *
  *                                                                          *
  * GNAT is free software;  you can  redistribute it  and/or modify it under *
  * terms of the  GNU General Public License as published  by the Free Soft- *
@@ -146,7 +146,7 @@ extern int  __gnat_in_child_after_fork;
 
 extern OS_Time __gnat_current_time		   (void);
 extern void   __gnat_current_time_string           (char *);
-extern void   __gnat_to_gm_time			   (OS_Time *, int *, int *,
+extern void   __gnat_to_gm_time			   (OS_Time, int *, int *,
 				                    int *, int *,
 				                    int *, int *);
 extern void   __gnat_to_os_time                    (OS_Time *, int, int, int,

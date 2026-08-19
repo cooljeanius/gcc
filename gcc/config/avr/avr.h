@@ -1,6 +1,6 @@
 /* Definitions of target machine for GNU compiler,
    for AVR 8-bit microcontrollers.
-   Copyright (C) 1998-2025 Free Software Foundation, Inc.
+   Copyright (C) 1998-2026 Free Software Foundation, Inc.
    Contributed by Denis Chertykov (chertykov@gmail.com)
 
 This file is part of GCC.
@@ -309,12 +309,6 @@ enum reg_class {
 
 #define STATIC_CHAIN_REGNUM ((AVR_TINY) ? 18 :2)
 
-#define RELOAD_ELIMINABLE_REGS {				\
-    { ARG_POINTER_REGNUM, STACK_POINTER_REGNUM },               \
-    { ARG_POINTER_REGNUM, FRAME_POINTER_REGNUM },               \
-    { FRAME_POINTER_REGNUM, STACK_POINTER_REGNUM },             \
-    { FRAME_POINTER_REGNUM + 1, STACK_POINTER_REGNUM + 1 } }
-
 #define ELIMINABLE_REGS						\
   {								\
     { ARG_POINTER_REGNUM, STACK_POINTER_REGNUM },		\
@@ -357,18 +351,6 @@ typedef struct avr_args
 #define HAVE_PRE_DECREMENT 1
 
 #define MAX_REGS_PER_ADDRESS 1
-
-#define LEGITIMIZE_RELOAD_ADDRESS(X,MODE,OPNUM,TYPE,IND_L,WIN)          \
-  do {                                                                  \
-    rtx new_x = avr_legitimize_reload_address (&(X), MODE, OPNUM, TYPE, \
-                                               ADDR_TYPE (TYPE),        \
-                                               IND_L, make_memloc);     \
-    if (new_x)                                                          \
-      {                                                                 \
-        X = new_x;                                                      \
-        goto WIN;                                                       \
-      }                                                                 \
-  } while (0)
 
 /* We increase branch costs after reload in order to keep basic-block
    reordering from introducing out-of-line jumps and to prefer fall-through
@@ -517,7 +499,7 @@ extern const char *avr_no_devlib (int, const char**);
   { "no-devlib", avr_no_devlib },                       \
   { "device-specs-file", avr_devicespecs_file },
 
-/* Driver self specs has lmited functionality w.r.t. '%s' for dynamic specs.
+/* Driver self specs has limited functionality w.r.t. '%s' for dynamic specs.
    Apply '%s' to a static string to inflate the file (directory) name which
    is used to diagnose problems with reading the specs file.  */
 
@@ -604,7 +586,7 @@ struct GTY(()) machine_function
     bool yes;
     /* 'true' if this function is allowed to use "*gasisr" insns. */
     bool maybe;
-    /* The register numer as printed by the Done chunk.  */
+    /* The register number as printed by the Done chunk.  */
     int regno;
   } gasisr;
 

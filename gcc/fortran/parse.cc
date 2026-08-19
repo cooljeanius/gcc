@@ -1,5 +1,5 @@
 /* Main parser.
-   Copyright (C) 2000-2025 Free Software Foundation, Inc.
+   Copyright (C) 2000-2026 Free Software Foundation, Inc.
    Contributed by Andy Vaught
 
 This file is part of GCC.
@@ -27,6 +27,9 @@ along with GCC; see the file COPYING3.  If not see
 #include "match.h"
 #include "parse.h"
 #include "tree-core.h"
+#include "tree.h"
+#include "fold-const.h"
+#include "tree-hash-traits.h"
 #include "omp-general.h"
 
 /* Current statement label.  Zero means no statement label.  Because new_st
@@ -57,6 +60,7 @@ bool gfc_in_omp_metadirective_body;
 /* Each metadirective body in the translation unit is given a unique
    number, used to ensure that labels in the body have unique names.  */
 int gfc_omp_metadirective_region_count;
+vec<int> gfc_omp_metadirective_region_stack;
 
 /* TODO: Re-order functions to kill these forward decls.  */
 static void check_statement_label (gfc_statement);
@@ -68,23 +72,39 @@ static void reject_statement (void);
    input with the passed string.  If this succeeds, we call the
    keyword-dependent matching function that will match the rest of the
    statement.  For single keywords, the matching subroutine is
-   gfc_match_eos().  */
+   gfc_match_eos().
+
+   If NO_SUBSTRING, the keyword must be followed by a character not
+   permitted in a name (for free form); EOF is not handled here. Due
+   to fixed-form Fortran, longer keywords still need to be matched
+   before shorter substrings.
+
+   If REJECT_STMT_ON_ERROR is false, it is assumed that no error
+   recovery handling is needed.  */
 
 static match
-match_word (const char *str, match (*subr) (void), locus *old_locus)
+match_word (const char *str, match (*subr) (void), locus *old_locus,
+	    bool no_substring = false, bool reject_stmt_on_error = true)
 {
   match m;
+  char c;
 
   if (str != NULL)
     {
       m = gfc_match (str);
       if (m != MATCH_YES)
 	return m;
+      if (no_substring && gfc_current_form == FORM_FREE
+	  && ((c = gfc_peek_ascii_char ()) == '_' || c == '$' || ISALNUM (c)))
+	{
+	  gfc_current_locus = *old_locus;
+	  return MATCH_NO;
+	}
     }
 
   m = (*subr) ();
 
-  if (m != MATCH_YES)
+  if (m == MATCH_NO || (reject_stmt_on_error && m == MATCH_ERROR))
     {
       gfc_current_locus = *old_locus;
       reject_statement ();
@@ -95,24 +115,33 @@ match_word (const char *str, match (*subr) (void), locus *old_locus)
 
 
 /* Like match_word, but if str is matched, set a flag that it
-   was matched.  */
+   was matched. Note that reject_statement() is not called if
+   SUBR returned a match error - and no substring matching is
+   assumed.  */
 static match
 match_word_omp_simd (const char *str, match (*subr) (void), locus *old_locus,
 		     bool *simd_matched)
 {
   match m;
+  char c;
 
   if (str != NULL)
     {
       m = gfc_match (str);
       if (m != MATCH_YES)
 	return m;
+      if (gfc_current_form == FORM_FREE
+	  && ((c = gfc_peek_ascii_char ()) == '_' || c == '$' || ISALNUM (c)))
+	{
+	  gfc_current_locus = *old_locus;
+	  return MATCH_NO;
+	}
       *simd_matched = true;
     }
 
   m = (*subr) ();
 
-  if (m != MATCH_YES)
+  if (m == MATCH_NO)
     {
       gfc_current_locus = *old_locus;
       reject_statement ();
@@ -239,6 +268,7 @@ decode_specification_statement (void)
       break;
 
     case 'g':
+      match ("generic", gfc_match_generic, ST_GENERIC);
       break;
 
     case 'i':
@@ -488,6 +518,7 @@ decode_statement (void)
   match (NULL, gfc_match_do, ST_DO);
   match (NULL, gfc_match_block, ST_BLOCK);
   match (NULL, gfc_match_associate, ST_ASSOCIATE);
+  match (NULL, gfc_match_change_team, ST_CHANGE_TEAM);
   match (NULL, gfc_match_critical, ST_CRITICAL);
   match (NULL, gfc_match_select, ST_SELECT_CASE);
   match (NULL, gfc_match_select_type, ST_SELECT_TYPE);
@@ -517,7 +548,6 @@ decode_statement (void)
 
     case 'c':
       match ("call", gfc_match_call, ST_CALL);
-      match ("change% team", gfc_match_change_team, ST_CHANGE_TEAM);
       match ("close", gfc_match_close, ST_CLOSE);
       match ("continue", gfc_match_continue, ST_CONTINUE);
       match ("contiguous", gfc_match_contiguous, ST_ATTR_DECL);
@@ -537,7 +567,6 @@ decode_statement (void)
 
     case 'e':
       match ("end file", gfc_match_endfile, ST_END_FILE);
-      match ("end team", gfc_match_end_team, ST_END_TEAM);
       match ("exit", gfc_match_exit, ST_EXIT);
       match ("else", gfc_match_else, ST_ELSE);
       match ("else where", gfc_match_elsewhere, ST_ELSEWHERE);
@@ -673,21 +702,20 @@ decode_statement (void)
 }
 
 /* Like match and if spec_only, goto do_spec_only without actually
-   matching.  */
-/* If the directive matched but the clauses failed, do not start
-   matching the next directive in the same switch statement. */
-#define matcha(keyword, subr, st)				\
-    do {							\
-      match m2;							\
-      if (spec_only && gfc_match (keyword) == MATCH_YES)	\
-	goto do_spec_only;					\
-      else if ((m2 = match_word (keyword, subr, &old_locus))	\
-	       == MATCH_YES)					\
-	return st;						\
-      else if (m2 == MATCH_ERROR)				\
-	goto error_handling;					\
-      else							\
-	undo_new_statement ();				  	\
+   matching.  If the directive matched but the parsing then failed,
+   do not start matching the next directive in the same switch statement.  */
+#define matcha(keyword, subr, st)					\
+    do {								\
+      match m2;								\
+      if (spec_only && gfc_match (keyword) == MATCH_YES)		\
+	goto do_spec_only;						\
+      else if ((m2 = match_word (keyword, subr, &old_locus, true,	\
+				 false)) == MATCH_YES)			\
+	return st;							\
+      else if (m2 == MATCH_ERROR)					\
+	goto error_handling;						\
+      else								\
+	undo_new_statement ();				  		\
     } while (0)
 
 static gfc_statement
@@ -741,7 +769,7 @@ decode_oacc_directive (void)
       break;
     case 'd':
       matcha ("data", gfc_match_oacc_data, ST_OACC_DATA);
-      match ("declare", gfc_match_oacc_declare, ST_OACC_DECLARE);
+      matcha ("declare", gfc_match_oacc_declare, ST_OACC_DECLARE);
       break;
     case 'e':
       matcha ("end atomic", gfc_match_omp_eos_error, ST_OACC_END_ATOMIC);
@@ -762,6 +790,9 @@ decode_oacc_directive (void)
     case 'h':
       matcha ("host_data", gfc_match_oacc_host_data, ST_OACC_HOST_DATA);
       break;
+    case 'i':
+      matcha ("init", gfc_match_oacc_init, ST_OACC_INIT);
+      break;
     case 'p':
       matcha ("parallel loop", gfc_match_oacc_parallel_loop,
 	      ST_OACC_PARALLEL_LOOP);
@@ -778,6 +809,8 @@ decode_oacc_directive (void)
     case 's':
       matcha ("serial loop", gfc_match_oacc_serial_loop, ST_OACC_SERIAL_LOOP);
       matcha ("serial", gfc_match_oacc_serial, ST_OACC_SERIAL);
+      matcha ("set", gfc_match_oacc_set, ST_OACC_SET);
+      matcha ("shutdown", gfc_match_oacc_shutdown, ST_OACC_SHUTDOWN);
       break;
     case 'u':
       matcha ("update", gfc_match_oacc_update, ST_OACC_UPDATE);
@@ -787,17 +820,19 @@ decode_oacc_directive (void)
       break;
     }
 
-  /* Directive not found or stored an error message.
-     Check and give up.  */
+  /* Directive not found. */
+  gfc_error_now ("Unclassifiable OpenACC directive at %C");
+  goto recover;
 
+  /* Directive found but failed with an error, possibly with
+     a stored an error message.  */
  error_handling:
   if (gfc_error_check () == 0)
-    gfc_error_now ("Unclassifiable OpenACC directive at %C");
+    gfc_error_now ("Syntax error in statement at %C");
 
+ recover:
   reject_statement ();
-
   gfc_error_recovery ();
-
   return ST_NONE;
 
  do_spec_only:
@@ -807,6 +842,8 @@ decode_oacc_directive (void)
   gfc_current_locus = old_locus;
   return ST_GET_FCN_CHARACTERISTICS;
 }
+
+#undef matcha
 
 /* Checks for the ST_OMP_ALLOCATE. First, check whether all list items
    are allocatables/pointers - and if so, assume it is associated with a Fortran
@@ -907,23 +944,23 @@ check_omp_allocate_stmt (locus *loc)
    and if spec_only, goto do_spec_only without actually matching.  */
 /* If the directive matched but the clauses failed, do not start
    matching the next directive in the same switch statement. */
-#define matcho(keyword, subr, st)				\
-    do {							\
-      match m2;							\
-      if (!flag_openmp)						\
-	;							\
-      else if (spec_only && gfc_match (keyword) == MATCH_YES)	\
-	goto do_spec_only;					\
-      else if ((m2 = match_word (keyword, subr, &old_locus))	\
-	       == MATCH_YES)					\
-	{							\
-	  ret = st;						\
-	  goto finish;						\
-	}							\
-      else if (m2 == MATCH_ERROR)				\
-	goto error_handling;					\
-      else							\
-	undo_new_statement ();				  	\
+#define matcho(keyword, subr, st)					\
+    do {								\
+      match m2;								\
+      if (!flag_openmp)							\
+	;								\
+      else if (spec_only && gfc_match (keyword) == MATCH_YES)		\
+	goto do_spec_only;						\
+      else if ((m2 = match_word (keyword, subr, &old_locus, true,	\
+				 false)) == MATCH_YES)			\
+	{								\
+	  ret = st;							\
+	  goto finish;							\
+	}								\
+      else if (m2 == MATCH_ERROR)					\
+	goto error_handling;						\
+      else								\
+	undo_new_statement ();				  		\
     } while (0)
 
 /* Like match, but set a flag simd_matched if keyword matched.  */
@@ -943,21 +980,21 @@ check_omp_allocate_stmt (locus *loc)
     } while (0)
 
 /* Like match, but don't match anything if not -fopenmp.  */
-#define matchdo(keyword, subr, st)				\
-    do {							\
-      match m2;							\
-      if (!flag_openmp)						\
-	;							\
-      else if ((m2 = match_word (keyword, subr, &old_locus))	\
-	       == MATCH_YES)					\
-	{							\
-	  ret = st;						\
-	  goto finish;						\
-	}							\
-      else if (m2 == MATCH_ERROR)				\
-	goto error_handling;					\
-      else							\
-	undo_new_statement ();				  	\
+#define matchdo(keyword, subr, st)					\
+    do {								\
+      match m2;								\
+      if (!flag_openmp)							\
+	;								\
+      else if ((m2 = match_word (keyword, subr, &old_locus, true,	\
+				 false)) == MATCH_YES)			\
+	{								\
+	  ret = st;							\
+	  goto finish;							\
+	}								\
+      else if (m2 == MATCH_ERROR)					\
+	goto error_handling;						\
+      else								\
+	undo_new_statement ();				  		\
     } while (0)
 
 static gfc_statement
@@ -1010,6 +1047,8 @@ decode_omp_directive (void)
       break;
 
     case 'd':
+      matchdo ("declare mapper", gfc_match_omp_declare_mapper,
+	       ST_OMP_DECLARE_MAPPER);
       matchds ("declare reduction", gfc_match_omp_declare_reduction,
 	       ST_OMP_DECLARE_REDUCTION);
       matchds ("declare simd", gfc_match_omp_declare_simd,
@@ -1191,6 +1230,9 @@ decode_omp_directive (void)
     case 'f':
       matcho ("flush", gfc_match_omp_flush, ST_OMP_FLUSH);
       break;
+    case 'g':
+      matchdo ("groupprivate", gfc_match_omp_groupprivate, ST_OMP_GROUPPRIVATE);
+      break;
     case 'i':
       matcho ("interop", gfc_match_omp_interop, ST_OMP_INTEROP);
       break;
@@ -1321,17 +1363,20 @@ decode_omp_directive (void)
       break;
     }
 
-  /* All else has failed, so give up.  See if any of the matchers has
-     stored an error message of some sort.  Don't error out if
-     not -fopenmp and simd_matched is false, i.e. if a directive other
-     than one marked with match has been seen.  */
+  /* Directive not found.  Don't error out if not -fopenmp and
+     simd_matched is false, i.e. if a directive other than one marked
+     with match has been seen.  */
+  if (flag_openmp || simd_matched)
+    gfc_error_now ("Unclassifiable OpenMP directive at %C");
+  goto recover;
 
  error_handling:
-  if (flag_openmp || simd_matched)
-    {
-      if (!gfc_error_check ())
-	gfc_error_now ("Unclassifiable OpenMP directive at %C");
-    }
+  /* Directive found but failed with an error, possibly with
+     a stored an error message.  */
+  if ((flag_openmp || simd_matched) && gfc_error_check () == 0)
+    gfc_error_now ("Syntax error in statement at %C");
+
+ recover:
 
   /* If parsing a metadirective, let the caller deal with the cleanup.  */
   if (gfc_matching_omp_context_selector)
@@ -1457,6 +1502,11 @@ decode_omp_directive (void)
   gfc_current_locus = old_locus;
   return ST_GET_FCN_CHARACTERISTICS;
 }
+
+#undef matchs
+#undef matcho
+#undef matchds
+#undef matchdo
 
 gfc_statement
 match_omp_directive (void)
@@ -1927,11 +1977,11 @@ next_statement (void)
   case ST_OMP_INTEROP: \
   case ST_ERROR_STOP: case ST_OMP_SCAN: case ST_SYNC_ALL: \
   case ST_SYNC_IMAGES: case ST_SYNC_MEMORY: case ST_LOCK: case ST_UNLOCK: \
-  case ST_FORM_TEAM: case ST_CHANGE_TEAM: \
-  case ST_END_TEAM: case ST_SYNC_TEAM: \
+  case ST_FORM_TEAM: case ST_SYNC_TEAM: \
   case ST_EVENT_POST: case ST_EVENT_WAIT: case ST_FAIL_IMAGE: \
   case ST_OACC_UPDATE: case ST_OACC_WAIT: case ST_OACC_CACHE: \
-  case ST_OACC_ENTER_DATA: case ST_OACC_EXIT_DATA
+  case ST_OACC_ENTER_DATA: case ST_OACC_EXIT_DATA: \
+  case ST_OACC_INIT: case ST_OACC_SHUTDOWN: case ST_OACC_SET
 
 /* Statements that mark other executable statements.  */
 
@@ -1987,7 +2037,8 @@ next_statement (void)
 #define case_omp_decl case ST_OMP_THREADPRIVATE: case ST_OMP_DECLARE_SIMD: \
   case ST_OMP_DECLARE_TARGET: case ST_OMP_DECLARE_REDUCTION: \
   case ST_OMP_DECLARE_VARIANT: case ST_OMP_ALLOCATE: case ST_OMP_ASSUMES: \
-  case ST_OMP_REQUIRES: case ST_OACC_ROUTINE: case ST_OACC_DECLARE
+  case ST_OMP_REQUIRES: case ST_OMP_GROUPPRIVATE: case ST_OMP_DECLARE_MAPPER: \
+  case ST_OACC_ROUTINE: case ST_OACC_DECLARE
 
 /* OpenMP statements that are followed by a structured block.  */
 
@@ -2032,7 +2083,8 @@ next_statement (void)
 
 #define case_end case ST_END_BLOCK_DATA: case ST_END_FUNCTION: \
 		 case ST_END_PROGRAM: case ST_END_SUBROUTINE: \
-		 case ST_END_BLOCK: case ST_END_ASSOCIATE
+		 case ST_END_BLOCK: case ST_END_ASSOCIATE: \
+		 case ST_END_TEAM
 
 
 /* Push a new state onto the stack.  */
@@ -2077,7 +2129,7 @@ gfc_find_state (gfc_compile_state state)
     if (p->state == state)
       break;
 
-  return (p == NULL) ? false : true;
+  return p != NULL;
 }
 
 
@@ -2164,6 +2216,7 @@ check_statement_label (gfc_statement st)
     case ST_END_CRITICAL:
     case ST_END_BLOCK:
     case ST_END_ASSOCIATE:
+    case ST_END_TEAM:
     case_executable:
     case_exec_markers:
       if (st == ST_ENDDO || st == ST_CONTINUE)
@@ -2645,6 +2698,15 @@ gfc_ascii_statement (gfc_statement st, bool strip_sentinel)
     case ST_OACC_END_ATOMIC:
       p = "!$ACC END ATOMIC";
       break;
+    case ST_OACC_INIT:
+      p = "!ACC INIT";
+      break;
+    case ST_OACC_SHUTDOWN:
+      p = "!ACC SHUTDOWN";
+      break;
+    case ST_OACC_SET:
+      p = "!ACC SET";
+      break;
     case ST_OMP_ALLOCATE:
     case ST_OMP_ALLOCATE_EXEC:
       p = "!$OMP ALLOCATE";
@@ -2675,6 +2737,9 @@ gfc_ascii_statement (gfc_statement st, bool strip_sentinel)
       break;
     case ST_OMP_CRITICAL:
       p = "!$OMP CRITICAL";
+      break;
+    case ST_OMP_DECLARE_MAPPER:
+      p = "!$OMP DECLARE MAPPER";
       break;
     case ST_OMP_DECLARE_REDUCTION:
       p = "!$OMP DECLARE REDUCTION";
@@ -2903,6 +2968,9 @@ gfc_ascii_statement (gfc_statement st, bool strip_sentinel)
       break;
     case ST_OMP_FLUSH:
       p = "!$OMP FLUSH";
+      break;
+    case ST_OMP_GROUPPRIVATE:
+      p = "!$OMP GROUPPRIVATE";
       break;
     case ST_OMP_INTEROP:
       p = "!$OMP INTEROP";
@@ -3199,6 +3267,8 @@ accept_statement (gfc_statement st)
     case ST_ENTRY:
     case ST_OMP_METADIRECTIVE:
     case ST_OMP_BEGIN_METADIRECTIVE:
+    case ST_CHANGE_TEAM:
+    case ST_END_TEAM:
     case_executable:
     case_exec_markers:
       add_statement ();
@@ -3214,9 +3284,7 @@ accept_statement (gfc_statement st)
 }
 
 
-/* Undo anything tentative that has been built for the current statement,
-   except if a gfc_charlen structure has been added to current namespace's
-   list of gfc_charlen structure.  */
+/* Undo anything tentative that has been built for the current statement.  */
 
 static void
 reject_statement (void)
@@ -3383,6 +3451,8 @@ verify_st_order (st_state *p, gfc_statement st, bool silent)
 	goto order;
       break;
 
+    case ST_CHANGE_TEAM:
+    case ST_END_TEAM:
     case_executable:
     case_exec_markers:
       if (p->state < ORDER_EXEC)
@@ -3675,11 +3745,8 @@ check_component (gfc_symbol *sym, gfc_component *c, gfc_component **lockp,
                "of type LOCK_TYPE, which must have a codimension or be a "
                "subcomponent of a coarray", c->name, &c->loc);
 
-  if (lock_type && allocatable && !coarray)
-    gfc_error ("Allocatable component %s at %L of type LOCK_TYPE must have "
-               "a codimension", c->name, &c->loc);
-  else if (lock_type && allocatable && c->ts.type == BT_DERIVED
-           && c->ts.u.derived->attr.lock_comp)
+  if (lock_type && allocatable && !coarray && c->ts.type == BT_DERIVED
+      && c->ts.u.derived->attr.lock_comp)
     gfc_error ("Allocatable component %s at %L must have a codimension as "
                "it has a noncoarray subcomponent of type LOCK_TYPE",
                c->name, &c->loc);
@@ -3930,6 +3997,7 @@ parse_derived (void)
   gfc_state_data s;
   gfc_symbol *sym;
   gfc_component *c, *lock_comp = NULL, *event_comp = NULL;
+  bool pdt_parameters;
 
   accept_statement (ST_DERIVED_DECL);
   push_state (&s, COMP_DERIVED, gfc_new_block);
@@ -3938,8 +4006,10 @@ parse_derived (void)
   seen_private = 0;
   seen_sequence = 0;
   seen_component = 0;
+  pdt_parameters = false;
 
   compiling_type = 1;
+
 
   while (compiling_type)
     {
@@ -3953,6 +4023,31 @@ parse_derived (void)
 	case ST_PROCEDURE:
 	  accept_statement (st);
 	  seen_component = 1;
+	  /* Type parameters must not have an explicit access specification
+	     and must be placed before a PRIVATE statement. If a PRIVATE
+	     statement is encountered after type parameters, mark the remaining
+	     components as PRIVATE. */
+	  for (c = gfc_current_block ()->components; c; c = c->next)
+	    if (!c->next && (c->attr.pdt_kind || c->attr.pdt_len))
+	      {
+		pdt_parameters = true;
+		if (c->attr.access != ACCESS_UNKNOWN)
+		  {
+		    gfc_error ("Access specification of a type parameter at "
+			       "%C is not allowed");
+		    c->attr.access = ACCESS_PUBLIC;
+		    break;
+		  }
+		if (seen_private)
+		  {
+		    gfc_error ("The type parameter at %C must come before a "
+			       "PRIVATE statement");
+		    break;
+		  }
+	      }
+	    else if (pdt_parameters && seen_private
+		     && !(c->attr.pdt_kind || c->attr.pdt_len))
+	      c->attr.access = ACCESS_PRIVATE;
 	  break;
 
 	case ST_FINAL:
@@ -3978,7 +4073,7 @@ endType:
 	      break;
 	    }
 
-	  if (seen_component)
+	  if (seen_component && !pdt_parameters)
 	    {
 	      gfc_error ("PRIVATE statement at %C must precede "
 			 "structure components");
@@ -3988,7 +4083,10 @@ endType:
 	  if (seen_private)
 	    gfc_error ("Duplicate PRIVATE statement at %C");
 
-	  s.sym->component_access = ACCESS_PRIVATE;
+	  if (pdt_parameters)
+	    s.sym->component_access = ACCESS_PUBLIC;
+	  else
+	    s.sym->component_access = ACCESS_PRIVATE;
 
 	  accept_statement (ST_PRIVATE);
 	  seen_private = 1;
@@ -4397,6 +4495,8 @@ loop:
 	case ST_EQUIVALENCE:
 	case ST_IMPLICIT:
 	case ST_IMPLICIT_NONE:
+	case ST_OMP_ALLOCATE:
+	case ST_OMP_GROUPPRIVATE:
 	case ST_OMP_THREADPRIVATE:
 	case ST_PARAMETER:
 	case ST_STRUCTURE_DECL:
@@ -4523,6 +4623,11 @@ declSt:
 	  break;
 	}
 
+      accept_statement (st);
+      st = next_statement ();
+      goto loop;
+
+    case ST_GENERIC:
       accept_statement (st);
       st = next_statement ();
       goto loop;
@@ -5238,30 +5343,12 @@ parse_block_construct (void)
   pop_state ();
 }
 
-
-/* Parse an ASSOCIATE construct.  This is essentially a BLOCK construct
-   behind the scenes with compiler-generated variables.  */
-
 static void
-parse_associate (void)
+move_associates_to_block ()
 {
-  gfc_namespace* my_ns;
-  gfc_state_data s;
-  gfc_statement st;
-  gfc_association_list* a;
+  gfc_association_list *a;
   gfc_array_spec *as;
 
-  gfc_notify_std (GFC_STD_F2003, "ASSOCIATE construct at %C");
-
-  my_ns = gfc_build_block_ns (gfc_current_ns);
-
-  new_st.op = EXEC_BLOCK;
-  new_st.ext.block.ns = my_ns;
-  gcc_assert (new_st.ext.block.assoc);
-
-  /* Add all associate-names as BLOCK variables.  Creating them is enough
-     for now, they'll get their values during trans-* phase.  */
-  gfc_current_ns = my_ns;
   for (a = new_st.ext.block.assoc; a; a = a->next)
     {
       gfc_symbol *sym, *tsym;
@@ -5298,26 +5385,23 @@ parse_associate (void)
 
       /* Don’t share the character length information between associate
 	 variable and target if the length is not a compile-time constant,
-	 as we don’t want to touch some other character length variable when
-	 we try to initialize the associate variable’s character length
-	 variable.
-	 We do it here rather than later so that expressions referencing the
-	 associate variable will automatically have the correctly setup length
-	 information.  If we did it at resolution stage the expressions would
-	 use the original length information, and the variable a new different
-	 one, but only the latter one would be correctly initialized at
-	 translation stage, and the former one would need some additional setup
-	 there.  */
-      if (sym->ts.type == BT_CHARACTER
-	  && sym->ts.u.cl
+	 as we don’t want to touch some other character length variable
+	 when we try to initialize the associate variable’s character
+	 length variable.  We do it here rather than later so that expressions
+	 referencing the associate variable will automatically have the
+	 correctly setup length information.  If we did it at resolution stage
+	 the expressions would use the original length information, and the
+	 variable a new different one, but only the latter one would be
+	 correctly initialized at translation stage, and the former one would
+	 need some additional setup there.  */
+      if (sym->ts.type == BT_CHARACTER && sym->ts.u.cl
 	  && !(sym->ts.u.cl->length
 	       && sym->ts.u.cl->length->expr_type == EXPR_CONSTANT))
 	sym->ts.u.cl = gfc_new_charlen (gfc_current_ns, NULL);
 
       /* If the function has been parsed, go straight to the result to
 	 obtain the expression rank.  */
-      if (target->expr_type == EXPR_FUNCTION
-	  && target->symtree
+      if (target->expr_type == EXPR_FUNCTION && target->symtree
 	  && target->symtree->n.sym)
 	{
 	  tsym = target->symtree->n.sym;
@@ -5344,8 +5428,7 @@ parse_associate (void)
 	 by calling gfc_resolve_expr because the context is unavailable.
 	 However, the references can be resolved and the rank of the target
 	 expression set.  */
-      if (!sym->assoc->inferred_type
-	  && target->ref && gfc_resolve_ref (target)
+      if (!sym->assoc->inferred_type && target->ref && gfc_resolve_ref (target)
 	  && target->expr_type != EXPR_ARRAY
 	  && target->expr_type != EXPR_COMPCALL)
 	gfc_expression_rank (target);
@@ -5353,13 +5436,12 @@ parse_associate (void)
       /* Determine whether or not function expressions with unknown type are
 	 structure constructors. If so, the function result can be converted
 	 to be a derived type.  */
-      if (target->expr_type == EXPR_FUNCTION
-	  && target->ts.type == BT_UNKNOWN)
+      if (target->expr_type == EXPR_FUNCTION && target->ts.type == BT_UNKNOWN)
 	{
 	  gfc_symbol *derived;
 	  /* The derived type has a leading uppercase character.  */
 	  gfc_find_symbol (gfc_dt_upper_string (target->symtree->name),
-			   my_ns->parent, 1, &derived);
+			   gfc_current_ns->parent, 1, &derived);
 	  if (derived && derived->attr.flavor == FL_DERIVED)
 	    {
 	      sym->ts.type = BT_DERIVED;
@@ -5394,7 +5476,7 @@ parse_associate (void)
 		  attr.codimension = as->corank ? 1 : 0;
 		  sym->assoc->variable = true;
 		}
-	       else if (rank || corank)
+	      else if (rank || corank)
 		{
 		  as = gfc_get_array_spec ();
 		  as->type = AS_DEFERRED;
@@ -5449,6 +5531,30 @@ parse_associate (void)
 	}
       gfc_commit_symbols ();
     }
+}
+
+/* Parse an ASSOCIATE construct.  This is essentially a BLOCK construct
+   behind the scenes with compiler-generated variables.  */
+
+static void
+parse_associate (void)
+{
+  gfc_namespace* my_ns;
+  gfc_state_data s;
+  gfc_statement st;
+
+  gfc_notify_std (GFC_STD_F2003, "ASSOCIATE construct at %C");
+
+  my_ns = gfc_build_block_ns (gfc_current_ns);
+
+  new_st.op = EXEC_BLOCK;
+  new_st.ext.block.ns = my_ns;
+  gcc_assert (new_st.ext.block.assoc);
+
+  /* Add all associate-names as BLOCK variables.  Creating them is enough
+     for now, they'll get their values during trans-* phase.  */
+  gfc_current_ns = my_ns;
+  move_associates_to_block ();
 
   accept_statement (ST_ASSOCIATE);
   push_state (&s, COMP_ASSOCIATE, my_ns->proc_name);
@@ -5474,6 +5580,75 @@ loop:
   pop_state ();
 }
 
+
+/* F2018(11.1.5.2): Track coarrays allocated within CHANGE TEAM blocks.
+   Map from team namespace to vector of allocated coarray symbols.  */
+hash_map<gfc_namespace *, vec<gfc_expr *>> team_allocated_coarrays;
+
+/* Stack to track current CHANGE TEAM context.  */
+vec<gfc_namespace *> team_context_stack;
+
+gfc_namespace *
+get_current_team_context (void)
+{
+  return team_context_stack.is_empty () ? NULL : team_context_stack.last ();
+}
+
+
+static void
+parse_change_team (void)
+{
+  gfc_namespace *my_ns;
+  gfc_state_data s;
+  gfc_statement st;
+  vec<gfc_expr *> *team_allocs;
+
+  gfc_notify_std (GFC_STD_F2018, "CHANGE TEAM construct at %C");
+
+  my_ns = gfc_build_block_ns (gfc_current_ns);
+
+  new_st.op = EXEC_CHANGE_TEAM;
+  new_st.ext.block.ns = my_ns;
+
+  /* Add all associate-names as BLOCK variables.  Creating them is enough
+     for now, they'll get their values during trans-* phase.  */
+  gfc_current_ns = my_ns;
+  if (new_st.ext.block.assoc)
+    move_associates_to_block ();
+
+  accept_statement (ST_CHANGE_TEAM);
+  push_state (&s, COMP_CHANGE_TEAM, my_ns->proc_name);
+
+  /* Push team context for tracking coarrays allocated in a team block.  */
+  team_context_stack.safe_push (gfc_current_ns);
+
+loop:
+  st = parse_executable (ST_NONE);
+  switch (st)
+    {
+    case ST_NONE:
+      unexpected_eof ();
+
+    case_end:
+      accept_statement (st);
+      my_ns->code = gfc_state_stack->head;
+      /* F2018(11.1.5.2): Deallocate coarray expressions allocated in this
+	 team block,  */
+      team_allocs = team_allocated_coarrays.get (gfc_current_ns);
+      if (team_allocs)
+	deallocate_allocated_coarrays (team_allocs);
+      /* Pop team context.  */
+      team_context_stack.pop ();
+      break;
+
+    default:
+      unexpected_statement (st);
+      goto loop;
+    }
+
+  gfc_current_ns = gfc_current_ns->parent;
+  pop_state ();
+}
 
 /* Parse a DO loop.  Note that the ST_CYCLE and ST_EXIT statements are
    handled inside of parse_executable(), because they aren't really
@@ -6340,7 +6515,7 @@ parse_omp_structured_block (gfc_statement omp_st, bool workshare_stmts_only)
 			 new_st.ext.omp_name) != 0))
 	gfc_error ("Name after !$omp critical and !$omp end critical does "
 		   "not match at %C");
-      free (CONST_CAST (char *, new_st.ext.omp_name));
+      free (const_cast<char *> (new_st.ext.omp_name));
       new_st.ext.omp_name = NULL;
       break;
     case EXEC_OMP_END_SINGLE:
@@ -6454,6 +6629,9 @@ parse_omp_metadirective_body (gfc_statement omp_st)
       gfc_in_omp_metadirective_body = true;
 
       gfc_omp_metadirective_region_count++;
+      gfc_omp_metadirective_region_stack.safe_push (
+	gfc_omp_metadirective_region_count);
+
       switch (variant->stmt)
 	{
 	case_omp_structured_block:
@@ -6514,6 +6692,28 @@ parse_omp_metadirective_body (gfc_statement omp_st)
       if (gfc_state_stack->head)
 	*variant->code = *gfc_state_stack->head;
       pop_state ();
+
+      gfc_omp_metadirective_region_stack.pop ();
+      int outer_omp_metadirective_region
+	= gfc_omp_metadirective_region_stack.last ();
+
+      /* Rebind labels in the last statement -- which is the first statement
+	 past the end of the metadirective body -- to the outer region.  */
+      if (gfc_statement_label)
+	gfc_statement_label = gfc_rebind_label (gfc_statement_label,
+						outer_omp_metadirective_region);
+      if ((new_st.op == EXEC_READ || new_st.op == EXEC_WRITE)
+	  && new_st.ext.dt->format_label
+	  && new_st.ext.dt->format_label != &format_asterisk)
+	new_st.ext.dt->format_label
+	  = gfc_rebind_label (new_st.ext.dt->format_label,
+			      outer_omp_metadirective_region);
+      if (new_st.label1)
+	new_st.label1
+	  = gfc_rebind_label (new_st.label1, outer_omp_metadirective_region);
+      if (new_st.here)
+	new_st.here
+	  = gfc_rebind_label (new_st.here, outer_omp_metadirective_region);
 
       gfc_commit_symbols ();
       gfc_warning_check ();
@@ -6576,6 +6776,7 @@ parse_executable (gfc_statement st)
 	  case ST_STOP:
 	  case ST_ERROR_STOP:
 	  case ST_END_SUBROUTINE:
+	  case ST_END_TEAM:
 
 	  case ST_DO:
 	  case ST_FORALL:
@@ -6613,6 +6814,10 @@ parse_executable (gfc_statement st)
 
 	case ST_ASSOCIATE:
 	  parse_associate ();
+	  break;
+
+	case ST_CHANGE_TEAM:
+	  parse_change_team ();
 	  break;
 
 	case ST_IF_BLOCK:
@@ -6728,6 +6933,28 @@ parse_executable (gfc_statement st)
 }
 
 
+/* Update statement function formal argument lists that reference OLD_SYM
+   to point to NEW_SYM instead.  This prevents use-after-free when
+   gfc_fixup_sibling_symbols replaces and frees a symbol that is also
+   used as a statement function dummy argument (PR95879).  */
+
+static void
+fixup_st_func_formals (gfc_symtree *st, gfc_symbol *old_sym,
+		       gfc_symbol *new_sym)
+{
+  if (st == NULL)
+    return;
+
+  fixup_st_func_formals (st->left, old_sym, new_sym);
+  fixup_st_func_formals (st->right, old_sym, new_sym);
+
+  if (st->n.sym && st->n.sym->attr.proc == PROC_ST_FUNCTION)
+    for (gfc_formal_arglist *fa = st->n.sym->formal; fa; fa = fa->next)
+      if (fa->sym == old_sym)
+	fa->sym = new_sym;
+}
+
+
 /* Fix the symbols for sibling functions.  These are incorrectly added to
    the child namespace as the parser didn't know about this procedure.  */
 
@@ -6737,6 +6964,7 @@ gfc_fixup_sibling_symbols (gfc_symbol *sym, gfc_namespace *siblings)
   gfc_namespace *ns;
   gfc_symtree *st;
   gfc_symbol *old_sym;
+  bool imported;
 
   for (ns = siblings; ns; ns = ns->sibling)
     {
@@ -6752,6 +6980,7 @@ gfc_fixup_sibling_symbols (gfc_symbol *sym, gfc_namespace *siblings)
 	goto fixup_contained;
 
       old_sym = st->n.sym;
+      imported = old_sym->attr.imported == 1;
       if (old_sym->ns == ns
 	    && !old_sym->attr.contained
 
@@ -6778,6 +7007,12 @@ gfc_fixup_sibling_symbols (gfc_symbol *sym, gfc_namespace *siblings)
 	  /* Replace it with the symbol from the parent namespace.  */
 	  st->n.sym = sym;
 	  sym->refs++;
+	  if (imported)
+	    sym->attr.imported = 1;
+
+	  /* Update statement function formal argument lists that still
+	     reference old_sym before releasing it (PR95879).  */
+	  fixup_st_func_formals (ns->sym_root, old_sym, sym);
 
 	  gfc_release_symbol (old_sym);
 	}
@@ -7010,6 +7245,15 @@ loop:
 	  accept_statement (st);
 	  goto done;
 
+	/* Specification statements cannot appear after executable statements.  */
+	case_decl:
+	case_omp_decl:
+	  gfc_error ("%s statement at %C cannot appear after executable statements",
+		     gfc_ascii_statement (st));
+	  reject_statement ();
+	  st = next_statement ();
+	  continue;
+
 	default:
 	  break;
 	}
@@ -7228,6 +7472,32 @@ parse_module (void)
     {
       use_modules ();
       gfc_traverse_ns (gfc_current_ns, set_syms_host_assoc);
+
+      /* Link the submodule namespace to the parent (sub)module namespace so
+	 that internal subprograms of the ancestor module are accessible via
+	 host association (Fortran 2018, 14.6.1.3).  The parent namespace is
+	 already in gfc_global_ns_list when both units are compiled together.
+	 The submodule's fully-qualified name is "parent.child"; strip the
+	 child part to obtain the parent's name, then search the global list.  */
+      {
+	const char *submod_name = gfc_new_block->name;
+	const char *dot = strrchr (submod_name, '.');
+	if (dot != NULL)
+	  {
+	    size_t plen = (size_t) (dot - submod_name);
+	    char parent_name[GFC_MAX_SYMBOL_LEN + 1];
+	    gcc_assert (plen < sizeof (parent_name));
+	    memcpy (parent_name, submod_name, plen);
+	    parent_name[plen] = '\0';
+	    for (gfc_namespace *ns = gfc_global_ns_list; ns; ns = ns->sibling)
+	      if (ns->proc_name
+		  && strcmp (ns->proc_name->name, parent_name) == 0)
+		{
+		  gfc_current_ns->parent = ns;
+		  break;
+		}
+	  }
+      }
     }
 
   st = parse_spec (ST_NONE);
@@ -7386,6 +7656,11 @@ clean_up_modules (gfc_gsymbol *&gsym)
   if (gsym->ns)
     {
       gfc_current_ns = gsym->ns;
+      /* Disconnect any host-association parent link set for submodules
+	 (see parse_module): each module/submodule namespace in gfc_gsym_root
+	 is independently managed, so gfc_symbol_done_2 must not walk up to
+	 and double-free a sibling top-level namespace.  */
+      gfc_current_ns->parent = NULL;
       gfc_derived_types = gfc_current_ns->derived_types;
       gfc_done_2 ();
       gsym->ns = NULL;
@@ -7482,6 +7757,8 @@ gfc_parse_file (void)
   gfc_statement_label = NULL;
 
   gfc_omp_metadirective_region_count = 0;
+  gfc_omp_metadirective_region_stack.truncate (0);
+  gfc_omp_metadirective_region_stack.safe_push (0);
   gfc_in_omp_metadirective_body = false;
   gfc_matching_omp_context_selector = false;
 
@@ -7669,45 +7946,53 @@ done:
     {
     case OMP_REQ_ATOMIC_MEM_ORDER_SEQ_CST:
       omp_requires_mask
-	= (enum omp_requires) (omp_requires_mask | OMP_MEMORY_ORDER_SEQ_CST);
+	= (enum omp_requires) (omp_requires_mask
+			       | int (OMP_MEMORY_ORDER_SEQ_CST));
       break;
     case OMP_REQ_ATOMIC_MEM_ORDER_ACQ_REL:
       omp_requires_mask
-	= (enum omp_requires) (omp_requires_mask | OMP_MEMORY_ORDER_ACQ_REL);
+	= (enum omp_requires) (omp_requires_mask
+			       | int (OMP_MEMORY_ORDER_ACQ_REL));
       break;
     case OMP_REQ_ATOMIC_MEM_ORDER_ACQUIRE:
       omp_requires_mask
-	= (enum omp_requires) (omp_requires_mask | OMP_MEMORY_ORDER_ACQUIRE);
+	= (enum omp_requires) (omp_requires_mask
+			       | int (OMP_MEMORY_ORDER_ACQUIRE));
       break;
     case OMP_REQ_ATOMIC_MEM_ORDER_RELAXED:
       omp_requires_mask
-	= (enum omp_requires) (omp_requires_mask | OMP_MEMORY_ORDER_RELAXED);
+	= (enum omp_requires) (omp_requires_mask
+			       | int (OMP_MEMORY_ORDER_RELAXED));
       break;
     case OMP_REQ_ATOMIC_MEM_ORDER_RELEASE:
       omp_requires_mask
-	= (enum omp_requires) (omp_requires_mask | OMP_MEMORY_ORDER_RELEASE);
+	= (enum omp_requires) (omp_requires_mask
+			       | int (OMP_MEMORY_ORDER_RELEASE));
       break;
     }
 
   if (omp_target_seen)
     omp_requires_mask = (enum omp_requires) (omp_requires_mask
-					     | OMP_REQUIRES_TARGET_USED);
+					     | int (OMP_REQUIRES_TARGET_USED));
   if (omp_requires & OMP_REQ_REVERSE_OFFLOAD)
-    omp_requires_mask = (enum omp_requires) (omp_requires_mask
-					     | OMP_REQUIRES_REVERSE_OFFLOAD);
+    omp_requires_mask
+      = (enum omp_requires) (omp_requires_mask
+			     | int (OMP_REQUIRES_REVERSE_OFFLOAD));
   if (omp_requires & OMP_REQ_UNIFIED_ADDRESS)
-    omp_requires_mask = (enum omp_requires) (omp_requires_mask
-					     | OMP_REQUIRES_UNIFIED_ADDRESS);
+    omp_requires_mask
+      = (enum omp_requires) (omp_requires_mask
+			     | int (OMP_REQUIRES_UNIFIED_ADDRESS));
   if (omp_requires & OMP_REQ_UNIFIED_SHARED_MEMORY)
     omp_requires_mask
-	  = (enum omp_requires) (omp_requires_mask
-				 | OMP_REQUIRES_UNIFIED_SHARED_MEMORY);
+      = (enum omp_requires) (omp_requires_mask
+			     | int (OMP_REQUIRES_UNIFIED_SHARED_MEMORY));
   if (omp_requires & OMP_REQ_SELF_MAPS)
     omp_requires_mask
-	  = (enum omp_requires) (omp_requires_mask | OMP_REQUIRES_SELF_MAPS);
+      = (enum omp_requires) (omp_requires_mask | int (OMP_REQUIRES_SELF_MAPS));
   if (omp_requires & OMP_REQ_DYNAMIC_ALLOCATORS)
-    omp_requires_mask = (enum omp_requires) (omp_requires_mask
-					     | OMP_REQUIRES_DYNAMIC_ALLOCATORS);
+    omp_requires_mask
+      = (enum omp_requires) (omp_requires_mask
+			     | int (OMP_REQUIRES_DYNAMIC_ALLOCATORS));
   /* Do the parse tree dump.  */
   gfc_current_ns = flag_dump_fortran_original ? gfc_global_ns_list : NULL;
 
@@ -7793,6 +8078,9 @@ is_oacc (gfc_state_data *sd)
     case EXEC_OACC_EXIT_DATA:
     case EXEC_OACC_ATOMIC:
     case EXEC_OACC_ROUTINE:
+    case EXEC_OACC_INIT:
+    case EXEC_OACC_SHUTDOWN:
+    case EXEC_OACC_SET:
       return true;
 
     default:

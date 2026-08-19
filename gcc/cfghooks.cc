@@ -1,5 +1,5 @@
 /* Hooks for cfg representation specific functions.
-   Copyright (C) 2003-2025 Free Software Foundation, Inc.
+   Copyright (C) 2003-2026 Free Software Foundation, Inc.
    Contributed by Sebastian Pop <s.pop@laposte.net>
 
 This file is part of GCC.
@@ -18,6 +18,7 @@ You should have received a copy of the GNU General Public License
 along with GCC; see the file COPYING3.  If not see
 <http://www.gnu.org/licenses/>.  */
 
+#define INCLUDE_VECTOR
 #include "config.h"
 #include "system.h"
 #include "coretypes.h"
@@ -34,6 +35,8 @@ along with GCC; see the file COPYING3.  If not see
 #include "cfgloop.h"
 #include "sreal.h"
 #include "profile.h"
+#include "diagnostics/sarif-sink.h"
+#include "custom-sarif-properties/cfg.h"
 
 /* Disable warnings about missing quoting in GCC diagnostics.  */
 #if __GNUC__ >= 10
@@ -42,7 +45,7 @@ along with GCC; see the file COPYING3.  If not see
 #endif
 
 /* A pointer to one of the hooks containers.  */
-static struct cfg_hooks *cfg_hooks;
+static const struct cfg_hooks *cfg_hooks;
 
 /* Initialization of functions specific to the rtl IR.  */
 void
@@ -66,16 +69,16 @@ gimple_register_cfg_hooks (void)
   cfg_hooks = &gimple_cfg_hooks;
 }
 
-struct cfg_hooks
+const struct cfg_hooks *
 get_cfg_hooks (void)
 {
-  return *cfg_hooks;
+  return cfg_hooks;
 }
 
 void
-set_cfg_hooks (struct cfg_hooks new_cfg_hooks)
+set_cfg_hooks (const struct cfg_hooks *new_cfg_hooks)
 {
-  *cfg_hooks = new_cfg_hooks;
+  cfg_hooks = new_cfg_hooks;
 }
 
 /* Returns current ir type.  */
@@ -83,14 +86,24 @@ set_cfg_hooks (struct cfg_hooks new_cfg_hooks)
 enum ir_type
 current_ir_type (void)
 {
-  if (cfg_hooks == &gimple_cfg_hooks)
-    return IR_GIMPLE;
-  else if (cfg_hooks == &rtl_cfg_hooks)
-    return IR_RTL_CFGRTL;
-  else if (cfg_hooks == &cfg_layout_rtl_cfg_hooks)
-    return IR_RTL_CFGLAYOUT;
-  else
-    gcc_unreachable ();
+  return cfg_hooks->ir;
+}
+
+static const char *
+current_ir_name (void)
+{
+  enum ir_type ir = cfg_hooks->ir;
+  switch (ir)
+    {
+    case IR_GIMPLE:
+      return "gimple";
+    case IR_RTL_CFGRTL:
+      return "rtl";
+    case IR_RTL_CFGLAYOUT:
+      return "cfglayout mode";
+    default:
+      gcc_unreachable();
+    }
 }
 
 /* Verify the CFG consistency.
@@ -343,13 +356,40 @@ dump_bb_for_graph (pretty_printer *pp, basic_block bb)
 {
   if (!cfg_hooks->dump_bb_for_graph)
     internal_error ("%s does not support dump_bb_for_graph",
-		    cfg_hooks->name);
+		    current_ir_name ());
   /* TODO: Add pretty printer for counter.  */
   if (bb->count.initialized_p ())
     pp_printf (pp, "COUNT:" "%" PRId64, bb->count.to_gcov_type ());
   pp_write_text_to_stream (pp);
   if (!(dump_flags & TDF_SLIM))
     cfg_hooks->dump_bb_for_graph (pp, bb);
+}
+
+void
+dump_bb_as_sarif_properties (diagnostics::sarif_builder *builder,
+			     json::object &output_bag,
+			     basic_block bb)
+{
+  if (!cfg_hooks->dump_bb_for_graph)
+    internal_error ("%s does not support dump_bb_as_sarif_properties",
+		    current_ir_name ());
+  namespace bb_property_names = custom_sarif_properties::cfg::basic_block;
+  if (bb->index == ENTRY_BLOCK)
+    output_bag.set_string (bb_property_names::kind, "entry");
+  else if (bb->index == EXIT_BLOCK)
+    output_bag.set_string (bb_property_names::kind, "exit");
+  else if (BB_PARTITION (bb) == BB_HOT_PARTITION)
+    output_bag.set_string (bb_property_names::kind, "hot");
+  else if (BB_PARTITION (bb) == BB_COLD_PARTITION)
+    output_bag.set_string (bb_property_names::kind, "cold");
+  if (bb->count.initialized_p ())
+    {
+      pretty_printer pp;
+      pp_printf (&pp, "%" PRId64, bb->count.to_gcov_type ());
+      output_bag.set_string (bb_property_names::count,
+			     pp_formatted_text (&pp));
+    }
+  cfg_hooks->dump_bb_as_sarif_properties (builder, output_bag, bb);
 }
 
 /* Dump the complete CFG to FILE.  FLAGS are the TDF_* flags in dumpfile.h.  */
@@ -386,7 +426,7 @@ redirect_edge_and_branch (edge e, basic_block dest)
 
   if (!cfg_hooks->redirect_edge_and_branch)
     internal_error ("%s does not support redirect_edge_and_branch",
-		    cfg_hooks->name);
+		    current_ir_name ());
 
   ret = cfg_hooks->redirect_edge_and_branch (e, dest);
 
@@ -406,7 +446,7 @@ can_remove_branch_p (const_edge e)
 {
   if (!cfg_hooks->can_remove_branch_p)
     internal_error ("%s does not support can_remove_branch_p",
-		    cfg_hooks->name);
+		    current_ir_name ());
 
   if (EDGE_COUNT (e->src->succs) != 2)
     return false;
@@ -500,7 +540,7 @@ redirect_edge_and_branch_force (edge e, basic_block dest)
 
   if (!cfg_hooks->redirect_edge_and_branch_force)
     internal_error ("%s does not support redirect_edge_and_branch_force",
-		    cfg_hooks->name);
+		    current_ir_name ());
 
   if (current_loops != NULL)
     rescan_loop_exit (e, false, true);
@@ -537,7 +577,7 @@ split_block_1 (basic_block bb, void *i)
   edge res;
 
   if (!cfg_hooks->split_block)
-    internal_error ("%s does not support split_block", cfg_hooks->name);
+    internal_error ("%s does not support split_block", current_ir_name ());
 
   new_bb = cfg_hooks->split_block (bb, i);
   if (!new_bb)
@@ -602,7 +642,8 @@ move_block_after (basic_block bb, basic_block after)
   bool ret;
 
   if (!cfg_hooks->move_block_after)
-    internal_error ("%s does not support move_block_after", cfg_hooks->name);
+    internal_error ("%s does not support move_block_after",
+		    current_ir_name ());
 
   ret = cfg_hooks->move_block_after (bb, after);
 
@@ -615,7 +656,8 @@ void
 delete_basic_block (basic_block bb)
 {
   if (!cfg_hooks->delete_basic_block)
-    internal_error ("%s does not support delete_basic_block", cfg_hooks->name);
+    internal_error ("%s does not support delete_basic_block",
+		    current_ir_name ());
 
   cfg_hooks->delete_basic_block (bb);
 
@@ -662,7 +704,7 @@ split_edge (edge e)
   basic_block src = e->src, dest = e->dest;
 
   if (!cfg_hooks->split_edge)
-    internal_error ("%s does not support split_edge", cfg_hooks->name);
+    internal_error ("%s does not support split_edge", current_ir_name ());
 
   if (current_loops != NULL)
     rescan_loop_exit (e, false, true);
@@ -740,7 +782,8 @@ create_basic_block_1 (void *head, void *end, basic_block after)
   basic_block ret;
 
   if (!cfg_hooks->create_basic_block)
-    internal_error ("%s does not support create_basic_block", cfg_hooks->name);
+    internal_error ("%s does not support create_basic_block",
+		    current_ir_name ());
 
   ret = cfg_hooks->create_basic_block (head, end, after);
 
@@ -781,7 +824,8 @@ can_merge_blocks_p (basic_block bb1, basic_block bb2)
   bool ret;
 
   if (!cfg_hooks->can_merge_blocks_p)
-    internal_error ("%s does not support can_merge_blocks_p", cfg_hooks->name);
+    internal_error ("%s does not support can_merge_blocks_p",
+		    current_ir_name ());
 
   ret = cfg_hooks->can_merge_blocks_p (bb1, bb2);
 
@@ -792,7 +836,8 @@ void
 predict_edge (edge e, enum br_predictor predictor, int probability)
 {
   if (!cfg_hooks->predict_edge)
-    internal_error ("%s does not support predict_edge", cfg_hooks->name);
+    internal_error ("%s does not support predict_edge",
+		    current_ir_name ());
 
   cfg_hooks->predict_edge (e, predictor, probability);
 }
@@ -801,7 +846,8 @@ bool
 predicted_by_p (const_basic_block bb, enum br_predictor predictor)
 {
   if (!cfg_hooks->predict_edge)
-    internal_error ("%s does not support predicted_by_p", cfg_hooks->name);
+    internal_error ("%s does not support predicted_by_p",
+		    current_ir_name ());
 
   return cfg_hooks->predicted_by_p (bb, predictor);
 }
@@ -815,7 +861,17 @@ merge_blocks (basic_block a, basic_block b)
   edge_iterator ei;
 
   if (!cfg_hooks->merge_blocks)
-    internal_error ("%s does not support merge_blocks", cfg_hooks->name);
+    internal_error ("%s does not support merge_blocks",
+		    current_ir_name ());
+
+  /* Pick the more reliable count.  If both qualities agrees, pick the larger
+     one since turning mistakely hot code to cold is more harmful.  */
+  if (!a->count.initialized_p ())
+    a->count = b->count;
+  else if (a->count.quality () < b->count.quality ())
+    a->count = b->count;
+  else if (a->count.quality () == b->count.quality ())
+    a->count = profile_count::max_prefer_initialized (a->count, b->count);
 
   cfg_hooks->merge_blocks (a, b);
 
@@ -884,11 +940,11 @@ merge_blocks (basic_block a, basic_block b)
 
 /* Split BB into entry part and the rest (the rest is the newly created block).
    Redirect those edges for that REDIRECT_EDGE_P returns true to the entry
-   part.  Returns the edge connecting the entry part to the rest.  */
+   part.  Returns the edge connecting the entry part to the rest.
+   DATA gets passed on to REDIRECT_EDGE_P.  */
 
 edge
-make_forwarder_block (basic_block bb, bool (*redirect_edge_p) (edge),
-		      void (*new_bb_cbk) (basic_block))
+make_forwarder_block (basic_block bb, bool (*redirect_edge_p) (edge, void*), void *data)
 {
   edge e, fallthru;
   edge_iterator ei;
@@ -897,7 +953,7 @@ make_forwarder_block (basic_block bb, bool (*redirect_edge_p) (edge),
 
   if (!cfg_hooks->make_forwarder_block)
     internal_error ("%s does not support make_forwarder_block",
-		    cfg_hooks->name);
+		    current_ir_name ());
 
   fallthru = split_block_after_labels (bb);
   dummy = fallthru->src;
@@ -909,7 +965,7 @@ make_forwarder_block (basic_block bb, bool (*redirect_edge_p) (edge),
     {
       basic_block e_src;
 
-      if (redirect_edge_p (e))
+      if (redirect_edge_p (e, data))
 	{
 	  dummy->count += e->count ();
 	  ei_next (&ei);
@@ -927,9 +983,6 @@ make_forwarder_block (basic_block bb, bool (*redirect_edge_p) (edge),
               && dummy->loop_father->header == dummy
               && dummy->loop_father->latch == e_src)
             dummy->loop_father->latch = jump;
-
-          if (new_bb_cbk != NULL)
-            new_bb_cbk (jump);
         }
     }
 
@@ -1046,7 +1099,7 @@ force_nonfallthru (edge e)
 
   if (!cfg_hooks->force_nonfallthru)
     internal_error ("%s does not support force_nonfallthru",
-		    cfg_hooks->name);
+		    current_ir_name ());
 
   ret = cfg_hooks->force_nonfallthru (e);
   if (ret != NULL)
@@ -1080,7 +1133,7 @@ can_duplicate_block_p (const_basic_block bb)
 {
   if (!cfg_hooks->can_duplicate_block_p)
     internal_error ("%s does not support can_duplicate_block_p",
-		    cfg_hooks->name);
+		    current_ir_name ());
 
   if (bb == EXIT_BLOCK_PTR_FOR_FN (cfun) || bb == ENTRY_BLOCK_PTR_FOR_FN (cfun))
     return false;
@@ -1109,7 +1162,7 @@ duplicate_block (basic_block bb, edge e, basic_block after, copy_bb_data *id)
 
   if (!cfg_hooks->duplicate_block)
     internal_error ("%s does not support duplicate_block",
-		    cfg_hooks->name);
+		    current_ir_name ());
 
   if (bb->count < new_count)
     new_count = bb->count;
@@ -1183,7 +1236,8 @@ bool
 block_ends_with_call_p (basic_block bb)
 {
   if (!cfg_hooks->block_ends_with_call_p)
-    internal_error ("%s does not support block_ends_with_call_p", cfg_hooks->name);
+    internal_error ("%s does not support block_ends_with_call_p",
+		    current_ir_name ());
 
   return (cfg_hooks->block_ends_with_call_p) (bb);
 }
@@ -1195,7 +1249,7 @@ block_ends_with_condjump_p (const_basic_block bb)
 {
   if (!cfg_hooks->block_ends_with_condjump_p)
     internal_error ("%s does not support block_ends_with_condjump_p",
-		    cfg_hooks->name);
+		    current_ir_name ());
 
   return (cfg_hooks->block_ends_with_condjump_p) (bb);
 }
@@ -1213,7 +1267,7 @@ flow_call_edges_add (sbitmap blocks)
 {
   if (!cfg_hooks->flow_call_edges_add)
     internal_error ("%s does not support flow_call_edges_add",
-		    cfg_hooks->name);
+		    current_ir_name ());
 
   return (cfg_hooks->flow_call_edges_add) (blocks);
 }

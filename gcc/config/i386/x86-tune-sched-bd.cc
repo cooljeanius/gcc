@@ -1,5 +1,5 @@
 /* Scheduler hooks for IA-32 which implement bdver1-4 specific logic.
-   Copyright (C) 1988-2025 Free Software Foundation, Inc.
+   Copyright (C) 1988-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -143,7 +143,7 @@ typedef struct dispatch_windows_s {
   struct dispatch_windows_s *prev;
 } dispatch_windows;
 
-/* Immediate valuse used in an insn.  */
+/* Immediate values used in an insn.  */
 typedef struct imm_info_s
   {
     int imm;
@@ -345,7 +345,7 @@ find_constant (rtx in_rtx, imm_info *imm_values)
 	case SYMBOL_REF:
 	case CONST_INT:
 	  (imm_values->imm)++;
-	  if (x86_64_immediate_operand (CONST_CAST_RTX (x), SImode))
+	  if (x86_64_immediate_operand (const_cast<rtx> (x), SImode))
 	    (imm_values->imm32)++;
 	  else
 	    (imm_values->imm64)++;
@@ -372,7 +372,7 @@ find_constant (rtx in_rtx, imm_info *imm_values)
 
 /* Return total size of immediate operands of an instruction along with number
    of corresponding immediate-operands.  It initializes its parameters to zero
-   befor calling FIND_CONSTANT.
+   before calling FIND_CONSTANT.
    INSN is the input instruction.  IMM is the total of immediates.
    IMM32 is the number of 32 bit immediates.  IMM64 is the number of 64
    bit immediates.  */

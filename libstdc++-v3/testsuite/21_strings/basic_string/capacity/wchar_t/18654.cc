@@ -1,6 +1,6 @@
 // 2004-11-29  Paolo Carlini  <pcarlini@suse.de>
 
-// Copyright (C) 2004-2025 Free Software Foundation, Inc.
+// Copyright (C) 2004-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -50,6 +50,7 @@ void test01()
       const size_type cap = str.capacity();
       VERIFY( cap >= 3 * i );
 
+      // no shrink.
       str.reserve(2 * i);
       VERIFY( str.capacity() == cap );
 
@@ -58,7 +59,12 @@ void test01()
 #else
       str.shrink_to_fit(); // reserve is deprecated in C++20
 #endif
-      VERIFY( str.capacity() == i );
+#if __glibcxx_allocate_at_least
+      unsigned limit = __STDCPP_DEFAULT_NEW_ALIGNMENT__ / sizeof(wchar_t) - 1;
+#else
+      unsigned limit = 0;
+#endif
+      VERIFY( str.capacity() - i <= limit);
     }
 }
 

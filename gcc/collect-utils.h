@@ -1,5 +1,5 @@
 /* Utility functions used by tools like collect2 and lto-wrapper.
-   Copyright (C) 2009-2025 Free Software Foundation, Inc.
+   Copyright (C) 2009-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -33,7 +33,7 @@ extern int collect_wait (const char *, struct pex_obj *);
 extern void do_wait (const char *, struct pex_obj *);
 extern void fork_execute (const char *, char **, bool, const char *);
 extern void utils_cleanup (bool);
-
+extern const char *read_collect_gcc_options (void);
 
 extern bool debug;
 extern bool verbose;

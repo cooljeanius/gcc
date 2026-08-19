@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2025 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -20,6 +20,7 @@
 #define RUST_COMPILE_BLOCK
 
 #include "rust-compile-base.h"
+#include "rust-hir-expr.h"
 #include "rust-hir-visitor.h"
 
 namespace Rust {
@@ -83,14 +84,16 @@ public:
   void visit (HIR::MethodCallExpr &) override {}
   void visit (HIR::FieldAccessExpr &) override {}
   void visit (HIR::BlockExpr &) override {}
+  void visit (HIR::AnonConst &) override {}
+  void visit (HIR::ConstBlock &) override {}
   void visit (HIR::ContinueExpr &) override {}
   void visit (HIR::BreakExpr &) override {}
   void visit (HIR::RangeFromToExpr &) override {}
   void visit (HIR::RangeFromExpr &) override {}
   void visit (HIR::RangeToExpr &) override {}
   void visit (HIR::RangeFullExpr &) override {}
-  void visit (HIR::RangeFromToInclExpr &) override {}
   void visit (HIR::RangeToInclExpr &) override {}
+  void visit (HIR::BoxExpr &) override {}
   void visit (HIR::ReturnExpr &) override {}
   void visit (HIR::UnsafeBlockExpr &) override {}
   void visit (HIR::LoopExpr &) override {}
@@ -100,6 +103,8 @@ public:
   void visit (HIR::AwaitExpr &) override {}
   void visit (HIR::AsyncBlockExpr &) override {}
   void visit (HIR::InlineAsm &) override {}
+  void visit (HIR::LlvmInlineAsm &) override {}
+  void visit (HIR::OffsetOf &) override {}
 
 private:
   CompileConditionalBlocks (Context *ctx, Bvariable *result)
@@ -137,6 +142,12 @@ public:
     translated = CompileBlock::compile (expr, ctx, result);
   }
 
+  void visit (HIR::ConstBlock &expr) override
+  {
+    rust_unreachable ();
+    // translated = CompileExpr::compile (expr, ctx, result);
+  }
+
   // Empty visit for unused Expression HIR nodes.
   void visit (HIR::PathInExpression &) override {}
   void visit (HIR::QualifiedPathInExpression &) override {}
@@ -171,8 +182,8 @@ public:
   void visit (HIR::RangeFromExpr &) override {}
   void visit (HIR::RangeToExpr &) override {}
   void visit (HIR::RangeFullExpr &) override {}
-  void visit (HIR::RangeFromToInclExpr &) override {}
   void visit (HIR::RangeToInclExpr &) override {}
+  void visit (HIR::BoxExpr &) override {}
   void visit (HIR::ReturnExpr &) override {}
   void visit (HIR::UnsafeBlockExpr &) override {}
   void visit (HIR::LoopExpr &) override {}
@@ -182,6 +193,9 @@ public:
   void visit (HIR::AwaitExpr &) override {}
   void visit (HIR::AsyncBlockExpr &) override {}
   void visit (HIR::InlineAsm &) override {}
+  void visit (HIR::LlvmInlineAsm &) override {}
+  void visit (HIR::OffsetOf &) override {}
+  void visit (HIR::AnonConst &) override {}
 
 private:
   CompileExprWithBlock (Context *ctx, Bvariable *result)

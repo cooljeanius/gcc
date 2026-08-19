@@ -1,5 +1,5 @@
 /* Definitions for c-indentation.cc.
-   Copyright (C) 2015-2025 Free Software Foundation, Inc.
+   Copyright (C) 2015-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -25,8 +25,8 @@ along with GCC; see the file COPYING3.  If not see
 struct token_indent_info
 {
   location_t location;
-  ENUM_BITFIELD (cpp_ttype) type : 8;
-  ENUM_BITFIELD (rid) keyword : 8;
+  enum cpp_ttype type : 8;
+  enum rid keyword : 8;
 };
 
 /* Extract token information from TOKEN, which ought to either be a

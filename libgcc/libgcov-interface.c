@@ -1,6 +1,6 @@
 /* Routines required for instrumenting a program.  */
 /* Compile this one with gcc.  */
-/* Copyright (C) 1989-2025 Free Software Foundation, Inc.
+/* Copyright (C) 1989-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -121,7 +121,7 @@ __gcov_reset_int (void)
   struct gcov_root *root;
 
   /* If we're compatible with the master, iterate over everything,
-     otherise just do us.  */
+     otherwise just do us.  */
   for (root = __gcov_master.version == GCOV_VERSION
 	 ? __gcov_master.root : &__gcov_root; root; root = root->next)
     {
@@ -154,7 +154,7 @@ __gcov_dump_int (void)
   struct gcov_root *root;
 
   /* If we're compatible with the master, iterate over everything,
-     otherise just do us.  */
+     otherwise just do us.  */
   for (root = __gcov_master.version == GCOV_VERSION
 	 ? __gcov_master.root : &__gcov_root; root; root = root->next)
     __gcov_dump_one (root);

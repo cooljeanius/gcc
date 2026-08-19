@@ -2,7 +2,7 @@
 h
 (use-modules (srfi srfi-1))
 }*/
-// Copyright (C) 2023-2025 Free Software Foundation, Inc.
+// Copyright (C) 2023-2026 Free Software Foundation, Inc.
 
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -41,7 +41,7 @@ h
 //
 // This will generate the FTMs you named, and let you use them in your code as
 // if it was user code.  All macros are also exposed under __glibcxx_NAME even
-// if unwanted, to permit bits and other FTMs to depend on them for condtional
+// if unwanted, to permit bits and other FTMs to depend on them for conditional
 // computation without exposing extra FTMs to user code.
 
 #ifdef _GLIBCXX_SYSHDR
@@ -132,10 +132,11 @@ h
 
   This macro block defines two versions of each FTM:
 
-  1. __glibcxx_NAME, which is defined unconditionally, and
-  2. __cpp_lib_NAME, which is defined only if marked as wanted.
+  1. __glibcxx_NAME, which is defined as long its conditions are met, and
+  2. __cpp_lib_NAME, which is defined only if __glibcxx_want_NAME is defined
+     and no_stdname is not set.
 
-  This allows FTMs to depend on eachother in their definitions without messing
+  This allows FTMs to depend on each other in their definitions without messing
   with the exported values.
 
   This can also be used by bits that do not want to expose FTMs that they can't
@@ -143,17 +144,19 @@ h
 
 }*/# /*{(unless (first-for?) "el")}*/if /*{(generate-cond)}*/
 #  define __glibcxx_/*{name}*/ /*{v}*/L
-#  if defined(__glibcxx_want_all) || defined(__glibcxx_want_/*{name}*/)
+#  if defined(__glibcxx_want_all) || defined(__glibcxx_want_/*{name}*/)/*{
+ IF (not (exist? "no_stdname")) }*/
 #   define /*{
 ;; Compute the name for this FTM based on stdname/name.
 (if (exist? "stdname")
     (get "stdname")
     (format #f "__cpp_lib_~a" (get "name")))
-}*/ /*{v}*/L
+}*/ /*{v}*/L/*{
+ ENDIF no_std_name }*/
 #  endif
 /*{ ENDFOR values
   }*/# endif
-#endif /* !defined(__cpp_lib_/*{name}*/) && defined(__glibcxx_want_/*{name}*/) */
+#endif /* !defined(__cpp_lib_/*{name}*/) */
 #undef __glibcxx_want_/*{name
 }*//*{ (unless (last-for?) "\n\n" "\n")}*/
 /*{ ENDFOR ftms }*//*{

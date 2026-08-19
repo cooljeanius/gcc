@@ -1,5 +1,5 @@
 /* D-specific tree lowering bits; see also gimple.cc.
-   Copyright (C) 2020-2025 Free Software Foundation, Inc.
+   Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 GCC is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -41,7 +41,7 @@ empty_modify_p (tree type, tree op)
       return empty_modify_p (type, TREE_OPERAND (op, 1));
 
     case CONSTRUCTOR:
-      /* Non-empty construcors are valid.  */
+      /* Non-empty constructors are valid.  */
       if (CONSTRUCTOR_NELTS (op) != 0 || TREE_CLOBBER_P (op))
 	return false;
       break;

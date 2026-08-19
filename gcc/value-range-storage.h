@@ -1,5 +1,5 @@
 /* Support routines for vrange storage.
-   Copyright (C) 2022-2025 Free Software Foundation, Inc.
+   Copyright (C) 2022-2026 Free Software Foundation, Inc.
    Contributed by Aldy Hernandez <aldyh@redhat.com>.
 
 This file is part of GCC.
@@ -30,7 +30,7 @@ public:
   // Use GC memory when GC is true, otherwise use obstacks.
   vrange_allocator (bool gc = false);
   ~vrange_allocator ();
-  class vrange_storage *clone (const vrange &r);
+  class vrange_storage *clone (const vrange &r, bool shared_p = true);
   vrange_storage *clone_varying (tree type);
   vrange_storage *clone_undefined (tree type);
   void *alloc (size_t size);
@@ -46,22 +46,24 @@ private:
 // ggc_test_and_set_mark calls.  We ignore the derived classes, since
 // they don't contain any pointers.
 
-class GTY(()) vrange_storage
+class GTY((desc ("%h.m_discriminator"), tag("VR_UNKNOWN"))) vrange_storage
 {
 public:
-  static vrange_storage *alloc (vrange_internal_alloc &, const vrange &);
+  static vrange_storage *alloc (vrange_internal_alloc &, const vrange &,
+				bool shared_p = true);
   void get_vrange (vrange &r, tree type) const;
   void set_vrange (const vrange &r);
   bool fits_p (const vrange &r) const;
   bool equal_p (const vrange &r) const;
-protected:
+
   // Stack initialization disallowed.
-  vrange_storage () { }
+  vrange_storage (enum value_range_discriminator d) : m_discriminator (d) { }
+  const enum value_range_discriminator m_discriminator : 4;
 };
 
 // Efficient memory storage for an irange.
 
-class irange_storage : public vrange_storage
+class GTY((tag ("VR_IRANGE"))) irange_storage: public vrange_storage
 {
 public:
   static irange_storage *alloc (vrange_internal_alloc &, const irange &);
@@ -87,7 +89,7 @@ private:
 
   enum value_range_kind m_kind : 3;
 
-  // The length of this is m_num_ranges * 2 + 2 to accomodate the bitmask.
+  // The length of this is m_num_ranges * 2 + 2 to accommodate the bitmask.
   HOST_WIDE_INT m_val[1];
 
   // Another variable-length part of the structure following the HWIs.
@@ -98,42 +100,60 @@ private:
   irange_storage (const irange &r);
 };
 
-// Efficient memory storage for a prange.
 
-class prange_storage : public vrange_storage
+// A prange_kind summarizes some common variations for a prange, and is used
+// in a prange_storage clas for efficiency.
+
+enum prange_kind { PR_UNDEFINED,	// VR_UNDEFINED
+		   PR_VARYING,		// VR_VARYING
+		   PR_ZERO,		// [0, 0]
+		   PR_NONZERO,		// [1, +INF] (May have bitmask)
+		   PR_FULL,		// [0, +INF] (Must have bitmask)
+		   PR_OTHER };		// [x, y]    (MAy have bitmask)
+
+// Maximum number of words that may be allocated by a prange_storage class.
+const unsigned int PRANGE_STORAGE_NINTS = 4;
+
+// Efficient memory storage for a prange.
+class GTY((tag ("VR_PRANGE"))) prange_storage : public vrange_storage
 {
 public:
-  static prange_storage *alloc (vrange_internal_alloc &, const prange &);
+  friend void gt_ggc_mx_vrange_storage(void *);
+  friend void gt_pch_nx_vrange_storage(void *);
+  friend void gt_pch_p_14vrange_storage(void *, void *, gt_pointer_operator,
+					void *);
+  static prange_storage *alloc (vrange_internal_alloc &, const prange &,
+				bool shared_p = true);
   void set_prange (const prange &r);
   void get_prange (prange &r, tree type) const;
   bool equal_p (const prange &r) const;
   bool fits_p (const prange &r) const;
   void dump () const;
+
 private:
   DISABLE_COPY_AND_ASSIGN (prange_storage);
   prange_storage (const prange &r);
+  static enum prange_kind prange_format (const prange &r, unsigned &num_words);
 
-  enum value_range_kind m_kind : 3;
+  enum prange_kind m_kind;
+  bool m_has_bitmask;
+  bool m_points_to_p;
+  tree m_pt;
 
   // We don't use TRAILING_WIDE_INT_ACCESSOR because the getters here
   // must be const.  Perhaps TRAILING_WIDE_INT_ACCESSOR could be made
   // const and return wide_int instead of trailing_wide_int.
-  wide_int get_low () const { return m_trailing_ints[0]; }
-  wide_int get_high () const { return m_trailing_ints[1]; }
-  wide_int get_value () const { return m_trailing_ints[2]; }
-  wide_int get_mask () const { return m_trailing_ints[3]; }
-  template <typename T> void set_low (const T &x) { m_trailing_ints[0] = x; }
-  template <typename T> void set_high (const T &x) { m_trailing_ints[1] = x; }
-  template <typename T> void set_value (const T &x) { m_trailing_ints[2] = x; }
-  template <typename T> void set_mask (const T &x) { m_trailing_ints[3] = x; }
+  wide_int get_word (unsigned i, tree) const
+    { return m_trailing_ints[i]; }
+  template <typename T> void set_word (unsigned i, const T &x, tree)
+    { m_trailing_ints[i] = x; }
 
-  static const unsigned int NINTS = 4;
-  trailing_wide_ints<NINTS> m_trailing_ints;
+  trailing_wide_ints<PRANGE_STORAGE_NINTS> m_trailing_ints;
 };
 
 // Efficient memory storage for an frange.
 
-class frange_storage : public vrange_storage
+class GTY((tag ("VR_FRANGE"))) frange_storage : public vrange_storage
 {
  public:
   static frange_storage *alloc (vrange_internal_alloc &, const frange &r);
@@ -142,17 +162,21 @@ class frange_storage : public vrange_storage
   bool equal_p (const frange &r) const;
   bool fits_p (const frange &) const;
  private:
-  frange_storage (const frange &r) { set_frange (r); }
+  frange_storage (const frange &r);
   DISABLE_COPY_AND_ASSIGN (frange_storage);
+  static size_t size (const frange &r);
 
   enum value_range_kind m_kind;
-  REAL_VALUE_TYPE m_min;
-  REAL_VALUE_TYPE m_max;
+  // The max number of sub-ranges that fit in this storage.
+  const unsigned char m_max_ranges;
+  unsigned char m_num_ranges;
   bool m_pos_nan;
   bool m_neg_nan;
+  frange_pair m_pairs[1];
 };
 
 extern vrange_storage *ggc_alloc_vrange_storage (tree type);
-extern vrange_storage *ggc_alloc_vrange_storage (const vrange &);
+extern vrange_storage *ggc_alloc_vrange_storage (const vrange &,
+						 bool shared_p = true);
 
 #endif // GCC_VALUE_RANGE_STORAGE_H

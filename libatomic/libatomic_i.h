@@ -1,4 +1,4 @@
-/* Copyright (C) 2012-2025 Free Software Foundation, Inc.
+/* Copyright (C) 2012-2026 Free Software Foundation, Inc.
    Contributed by Richard Henderson <rth@redhat.com>.
 
    This file is part of the GNU Atomic Library (libatomic).
@@ -146,7 +146,7 @@ typedef unsigned UWORD __attribute__((mode(word)));
    granularity.
 
    Not actually declared here so that they can be defined static inline
-   in a target-specfic <host-config.h>.
+   in a target-specific <host-config.h>.
 
 UWORD protect_start (void *ptr);
 void protect_end (void *ptr, UWORD);

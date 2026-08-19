@@ -1,5 +1,5 @@
 /* Declarations for the C-SKY back end.
-   Copyright (C) 2018-2025 Free Software Foundation, Inc.
+   Copyright (C) 2018-2026 Free Software Foundation, Inc.
    Contributed by C-SKY Microsystems and Mentor Graphics.
 
    This file is part of GCC.
@@ -1006,6 +1006,14 @@ while (0)
 /* If INCOMING_RETURN_ADDR_RTX is defined & the RTL is REG,
    define DWARF_FRAME_RETURN_COLUMN to DWARF_FRAME_REGNUM.  */
 #define DWARF_FRAME_RETURN_COLUMN DWARF_FRAME_REGNUM (CSKY_LR_REGNUM)
+
+/* The Linux signal-frame fallback (config/csky/linux-unwind.h) records the
+   interrupted PC in DWARF column 32, one past the hard registers, and uses
+   it as the return column.  Declare it as the alternate return column so
+   that init_dwarf_reg_size_table sizes it; otherwise _Unwind_GetGR reads a
+   zero size and aborts when unwinding through a signal frame, such as
+   during NPTL pthread cancellation.  */
+#define DWARF_ALT_FRAME_RETURN_COLUMN 32
 
 /* Use r0 and r1 to pass exception handling information.  */
 #define EH_RETURN_DATA_REGNO(N) ((N) < 2 ? N : INVALID_REGNUM)

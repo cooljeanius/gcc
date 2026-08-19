@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2025 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -56,7 +56,7 @@ ASTValidation::visit (AST::LoopLabel &label)
 void
 ASTValidation::visit (AST::ConstantItem &const_item)
 {
-  if (!const_item.has_expr () && ctx.peek () != Kind::TRAIT_IMPL)
+  if (!const_item.has_expr () && ctx.peek () != Kind::TRAIT)
     {
       rust_error_at (const_item.get_locus (),
 		     "associated constant in %<impl%> without body");
@@ -77,6 +77,11 @@ void
 ASTValidation::visit (AST::Function &function)
 {
   const auto &qualifiers = function.get_qualifiers ();
+  if (qualifiers.is_default () && ctx.peek () != Kind::INHERENT_IMPL
+      && ctx.peek () != Kind::TRAIT_IMPL)
+    rust_error_at (
+      function.get_locus (),
+      "%<default%> is only allowed on items within %<impl%> blocks");
   if (qualifiers.is_async () && qualifiers.is_const ())
     rust_error_at (function.get_locus (),
 		   "functions cannot be both %<const%> and %<async%>");
@@ -191,6 +196,25 @@ ASTValidation::visit (AST::Module &module)
     rust_error_at (module.get_locus (), "module cannot be declared unsafe");
 
   AST::ContextualASTVisitor::visit (module);
+}
+
+void
+ASTValidation::visit (AST::SlicePattern &pattern)
+{
+  // TODO: store/use first rest pattern location?
+  //       for nicer errors
+  bool had_rest = false;
+
+  for (auto &pat : pattern.get_patterns ())
+    {
+      if (pat->get_pattern_kind () == AST::Pattern::Kind::Rest)
+	{
+	  if (had_rest)
+	    rust_error_at (pat->get_locus (),
+			   "%<..%> can only be used once per slice pattern");
+	  had_rest = true;
+	}
+    }
 }
 
 } // namespace Rust

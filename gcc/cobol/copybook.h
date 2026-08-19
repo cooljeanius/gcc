@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2025 Symas Corporation
+ * Copyright (c) 2021-2026 Symas Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -33,6 +33,13 @@
 #else
 #define _COPYBOOK_H
 
+#include <sys/types.h> // where macOS defines ino_t
+
+#if defined(CDF_Y)
+#define gcc_assert(x) assert(x)
+void gcc_unreachable(void);
+#endif
+
 FILE * copy_mode_start();
 
 const char * cobol_filename();
@@ -60,12 +67,12 @@ class copybook_t;
 class copybook_elem_t {
   friend copybook_t;
   struct copybook_loc_t {
-    YYLTYPE loc;
+    cbl_loc_t loc;
     const char *name;
-    copybook_loc_t() : name(NULL) {}
+    copybook_loc_t() : loc(), name(NULL) {}
   } source, library;
   bool suppress;
-  static const char *extensions;
+  static std::list<const char *> suffixes;
  public:
   struct { bool source, library; } literally;
   int  fd;
@@ -74,24 +81,22 @@ class copybook_elem_t {
 
   copybook_elem_t()
     : suppress(false)
+    , literally()
     , fd(-1)
     , nsubexpr(0)
     , regex_text(NULL)
-  {
-    literally = {};
-  }
+  {}
 
   void clear() {
     suppress = false;
     nsubexpr = 0;
-    if( fd ) close(fd);
+    if( fd >= 0 ) close(fd);
     fd = -1;
     // TODO: free src & tgt
     replacements.clear();
   }
 
   int open_file( const char dir[], bool literally = false );
-  void extensions_add( const char ext[], const char alt[] );
 
   static inline bool is_quote( const char ch ) {
     return ch == '\'' || ch == '"';
@@ -102,7 +107,7 @@ class copybook_elem_t {
   }
   static char * dequote( const char orig[] ) {
     gcc_assert(quoted(orig));
-    auto name = (char*)xcalloc(1, strlen(orig));
+    auto name = static_cast<char*>(xcalloc(1, strlen(orig)));
     gcc_assert(name);
     char *tgt = name;
 
@@ -128,15 +133,25 @@ private:
   char *regex_text;
 };
 
+#ifndef TOUPPER
+#define CTOUPPER(S) ::toupper(S)
+#define TOUPPER(S) CTOUPPER(S)
+#endif
+
 class uppername_t {
   std::string upper;
  public:
-  uppername_t( const std::string input ) : upper(input) {
+  explicit uppername_t( const std::string& input ) : upper(input) {
     std::transform(input.begin(), input.end(), upper.begin(), 
 		   []( char ch ) { return TOUPPER(ch); } );
   }
   const char *data() const { return upper.data(); }
 };
+
+#ifdef  CTOUPPER
+#undef  CTOUPPER
+#undef   TOUPPER
+#endif
 
 class copybook_t {
   std::list<const char *> directories;
@@ -158,13 +173,13 @@ class copybook_t {
 
   void suppress( bool tf = true  ) { book.suppress = tf; }
   bool suppressed()                { return book.suppress; }
-  void source( const YYLTYPE& loc, const char name[] ) {
+  void source( const cbl_loc_t& loc, const char name[] ) {
     book.source.loc = loc;
     book.literally.source = copybook_elem_t::quoted(name);
     book.source.name = book.literally.source?
       copybook_elem_t::dequote(name) : transform_name(name);
   }
-  void library( const YYLTYPE& loc, const char name[] ) {
+  void library( const cbl_loc_t& loc, const char name[] ) {
     book.library.loc = loc;
     book.literally.library = copybook_elem_t::quoted(name);
     book.library.name = book.literally.library?
@@ -179,18 +194,13 @@ class copybook_t {
   const char *source() const { return book.source.name; }
   const char *library() const { return book.library.name; }
 
-  int open(YYLTYPE loc, const char name[]) {
+  int open(cbl_loc_t loc, const char name[]) {
     int fd = -1;
     book.clear();
     this->source(loc, name);
 
-    for( auto dir : directories ) {
-      if( true ) {
-        dbgmsg("copybook_t::open '%s' OF '%s' %s",
-               book.source.name,
-               dir? dir: ".",
-               book.literally.source? ", literally" : "" );
-      }
+    for( const auto &dir : directories ) {
+      // cppcheck-suppress useStlAlgorithm
       if( (fd = book.open_file(dir, book.literally.source)) != -1 ) break;
     }
     return fd;

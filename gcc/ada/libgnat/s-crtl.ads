@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 S p e c                                  --
 --                                                                          --
---          Copyright (C) 2003-2025, Free Software Foundation, Inc.         --
+--          Copyright (C) 2003-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -31,8 +31,6 @@
 
 --  This package provides the low level interface to the C runtime library
 
-with System.Parameters;
-
 package System.CRTL is
    pragma Preelaborate;
 
@@ -50,8 +48,10 @@ package System.CRTL is
 
    subtype int is Integer;
 
-   type long is range -(2 ** (System.Parameters.long_bits - 1))
-                   .. +(2 ** (System.Parameters.long_bits - 1)) - 1;
+   type unsigned is mod 2 ** 32;
+   for unsigned'Size use 32;
+
+   subtype long is Long_Integer;
 
    subtype off_t is Long_Integer;
 
@@ -231,9 +231,11 @@ package System.CRTL is
    pragma Import (C, close, "close");
 
    function read (fd : int; buffer : chars; count : size_t) return ssize_t;
-   pragma Import (C, read, "read");
+   pragma Inline (read);
+   --  Different return types on Windows and Posix, requires body
 
    function write (fd : int; buffer : chars; count : size_t) return ssize_t;
-   pragma Import (C, write, "write");
+   pragma Inline (write);
+   --  Different return types on Windows and Posix, requires body
 
 end System.CRTL;

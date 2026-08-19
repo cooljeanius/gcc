@@ -1,5 +1,5 @@
 /* Declarations for interface to insn recognizer and insn-output.cc.
-   Copyright (C) 1987-2025 Free Software Foundation, Inc.
+   Copyright (C) 1987-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -50,7 +50,7 @@ struct operand_alternative
   const char *constraint;
 
   /* The register class valid for this alternative (possibly NO_REGS).  */
-  ENUM_BITFIELD (reg_class) cl : 16;
+  enum reg_class cl : 16;
 
   /* "Badness" of this alternative, computed from number of '?' and '!'
      characters in the constraint string.  */
@@ -67,6 +67,10 @@ struct operand_alternative
      register filter ID.  Use test_register_filters (REGISTER_FILTERS, REGNO)
      to test whether REGNO is a valid start register for the operand.  */
   unsigned int register_filters : MAX (NUM_REGISTER_FILTERS, 1);
+
+  /* Bit ID is set if the constraint string includes a dependent
+     register constraint with dependent-filter id ID.  */
+  unsigned int dependent_filters : MAX (NUM_DEPENDENT_FILTERS, 1);
 
   /* Nonzero if '&' was found in the constraint string.  */
   unsigned int earlyclobber : 1;
@@ -99,6 +103,18 @@ alternative_register_filters (const operand_alternative *alt, int i)
 	  ? alt[alt[i].matches].register_filters
 	  : alt[i].register_filters);
 }
+
+/* Return the mask of dynamic register filters that should be applied to
+   operand I of alternative ALT, taking matching constraints into
+   account.  */
+
+inline unsigned int
+alternative_dependent_filters (const operand_alternative *alt, int i)
+{
+  return (alt[i].matches >= 0
+	  ? alt[alt[i].matches].dependent_filters
+	  : alt[i].dependent_filters);
+}
 #endif
 
 /* A class for substituting one rtx for another within an instruction,
@@ -130,7 +146,7 @@ public:
 			  rtx /*mem*/) { return true; }
 
   /* Note that we've simplified OLD_RTX into NEW_RTX.  When substituting,
-     this only happens if a substitution occured within OLD_RTX.
+     this only happens if a substitution occurred within OLD_RTX.
      Undoing OLD_NUM_CHANGES and up will restore the old form of OLD_RTX.
      OLD_RESULT_FLAGS is the value that RESULT_FLAGS had before processing
      OLD_RTX.  */
@@ -489,7 +505,7 @@ struct insn_operand_data
 
   const char *const constraint;
 
-  ENUM_BITFIELD(machine_mode) const mode : 16;
+  machine_mode const mode : 16;
 
   const char strict_low;
 

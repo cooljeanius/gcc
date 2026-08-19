@@ -1,5 +1,5 @@
 /* Strongly-connected copy propagation pass for the GNU compiler.
-   Copyright (C) 2023-2025 Free Software Foundation, Inc.
+   Copyright (C) 2023-2026 Free Software Foundation, Inc.
    Contributed by Filip Kastl <fkastl@suse.cz>
 
 This file is part of GCC.
@@ -70,15 +70,15 @@ along with GCC; see the file COPYING3.  If not see
    and replace references to the statement with the value -- we propagate the
    copy.
 
-   _3 = _2; // Replace all occurences of _3 by _2
+   _3 = _2; // Replace all occurrences of _3 by _2
 
    _8 = PHI <_9, _10>;
    _9 = PHI <_8, _10>;
-   _10 = PHI <_8, _9, _1>; // Replace all occurences of _8, _9 and _10 by _1
+   _10 = PHI <_8, _9, _1>; // Replace all occurrences of _8, _9 and _10 by _1
 
    To find all three types of copy statements we use an algorithm based on
    strongly-connected components (SCCs) in dataflow graph.  The algorithm was
-   introduced in an article from 2013[1]. We describe the algorithm bellow.
+   introduced in an article from 2013[1]. We describe the algorithm below.
 
    To identify SCCs we implement the Robert Tarjan's SCC algorithm.  For the
    SCC computation we wrap potential copy statements in the 'vertex' struct.
@@ -405,22 +405,6 @@ stmt_may_generate_copy (gimple *stmt)
   if (SSA_NAME_OCCURS_IN_ABNORMAL_PHI (rhs))
     return false;
 
-  /* It is possible that lhs has more alignment or value range information.  By
-     propagating we would lose this information.  So in the case that alignment
-     or value range information differs, we are conservative and do not
-     propagate.
-
-     FIXME: Propagate alignment and value range info the same way copy-prop
-     does.  */
-  if (POINTER_TYPE_P (TREE_TYPE (lhs))
-      && POINTER_TYPE_P (TREE_TYPE (rhs))
-      && SSA_NAME_PTR_INFO (lhs) != SSA_NAME_PTR_INFO (rhs))
-    return false;
-  if (!POINTER_TYPE_P (TREE_TYPE (lhs))
-      && !POINTER_TYPE_P (TREE_TYPE (rhs))
-      && SSA_NAME_RANGE_INFO (lhs) != SSA_NAME_RANGE_INFO (rhs))
-    return false;
-
   return true;  /* A statement of type _2 = _1;.  */
 }
 
@@ -464,7 +448,7 @@ class scc_copy_prop
 public:
   scc_copy_prop ();
   ~scc_copy_prop ();
-  void propagate ();
+  bool propagate ();
 
 private:
   /* Bitmap tracking statements which were propagated so that they can be
@@ -474,15 +458,16 @@ private:
   void visit_op (tree op, hash_set<tree> &outer_ops,
 				hash_set<gimple *> &scc_set, bool &is_inner,
 				tree &last_outer_op);
-  void replace_scc_by_value (vec<gimple *> scc, tree val);
+  bool replace_scc_by_value (vec<gimple *> scc, tree val);
 };
 
 /* For each statement from given SCC, replace its usages by value
    VAL.  */
 
-void
+bool
 scc_copy_prop::replace_scc_by_value (vec<gimple *> scc, tree val)
 {
+  bool didsomething = false;
   for (gimple *stmt : scc)
     {
       tree name = gimple_get_lhs (stmt);
@@ -496,11 +481,15 @@ scc_copy_prop::replace_scc_by_value (vec<gimple *> scc, tree val)
 	  
 	}
       replace_uses_by (name, val);
+      if (TREE_CODE (val) == SSA_NAME)
+        maybe_duplicate_ssa_info_at_copy (name, val);
       bitmap_set_bit (dead_stmts, SSA_NAME_VERSION (name));
+      didsomething = true;
     }
 
   if (dump_file)
     fprintf (dump_file, "Replacing SCC of size %d\n", scc.length ());
+  return didsomething;
 }
 
 /* Part of 'scc_copy_prop::propagate ()'.  */
@@ -566,9 +555,10 @@ scc_copy_prop::visit_op (tree op, hash_set<tree> &outer_ops,
      Braun, Buchwald, Hack, Leissa, Mallon, Zwinkau, 2013, LNCS vol. 7791,
      Section 3.2.  */
 
-void
+bool
 scc_copy_prop::propagate ()
 {
+  bool didsomething = false;
   auto_vec<gimple *> useful_stmts = get_all_stmt_may_generate_copy ();
   scc_discovery discovery;
 
@@ -636,7 +626,7 @@ scc_copy_prop::propagate ()
 	{
 	  /* The only operand in outer_ops.  */
 	  tree outer_op = last_outer_op;
-	  replace_scc_by_value (scc, outer_op);
+	  didsomething |= replace_scc_by_value (scc, outer_op);
 	}
       else if (outer_ops.elements () > 1)
 	{
@@ -651,6 +641,7 @@ scc_copy_prop::propagate ()
 
       scc.release ();
     }
+  return didsomething;
 }
 
 scc_copy_prop::scc_copy_prop ()
@@ -683,7 +674,7 @@ const pass_data pass_data_sccopy =
   0, /* properties_provided */
   0, /* properties_destroyed */
   0, /* todo_flags_start */
-  TODO_update_ssa | TODO_cleanup_cfg, /* todo_flags_finish */
+  0, /* todo_flags_finish */
 };
 
 class pass_sccopy : public gimple_opt_pass
@@ -694,8 +685,8 @@ public:
   {}
 
   /* opt_pass methods: */
-  virtual bool gate (function *) { return true; }
-  virtual unsigned int execute (function *);
+  virtual bool gate (function *) final override { return true; }
+  virtual unsigned int execute (function *) final override;
   opt_pass * clone () final override { return new pass_sccopy (m_ctxt); }
 }; // class pass_sccopy
 
@@ -703,8 +694,7 @@ unsigned
 pass_sccopy::execute (function *)
 {
   scc_copy_prop sccopy;
-  sccopy.propagate ();
-  return 0;
+  return sccopy.propagate () ?  TODO_cleanup_cfg : 0;
 }
 
 } // anon namespace

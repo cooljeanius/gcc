@@ -1,5 +1,5 @@
 /* Support routines for Value Range Propagation (VRP).
-   Copyright (C) 2005-2025 Free Software Foundation, Inc.
+   Copyright (C) 2005-2026 Free Software Foundation, Inc.
    Contributed by Diego Novillo <dnovillo@redhat.com>.
 
 This file is part of GCC.
@@ -48,7 +48,6 @@ along with GCC; see the file COPYING3.  If not see
 #include "gimple-array-bounds.h"
 #include "gimple-range.h"
 #include "gimple-range-path.h"
-#include "value-pointer-equiv.h"
 #include "gimple-fold.h"
 #include "tree-dfa.h"
 #include "tree-ssa-dce.h"
@@ -87,15 +86,17 @@ along with GCC; see the file COPYING3.  If not see
 class remove_unreachable {
 public:
   remove_unreachable (range_query &r, bool all) : m_ranger (r), final_p (all)
-    { m_list.create (30); }
-  ~remove_unreachable () { m_list.release (); }
+    { m_list.create (30); m_tmp = BITMAP_ALLOC (NULL); }
+  ~remove_unreachable () { BITMAP_FREE (m_tmp); m_list.release (); }
   void handle_early (gimple *s, edge e);
   void maybe_register (gimple *s);
   bool remove ();
   bool remove_and_update_globals ();
+  bool fully_replaceable (tree name, basic_block bb);
   vec<std::pair<int, int> > m_list;
   range_query &m_ranger;
   bool final_p;
+  bitmap m_tmp;
 };
 
 // Check if block BB has a __builtin_unreachable () call on one arm, and
@@ -141,8 +142,8 @@ remove_unreachable::maybe_register (gimple *s)
 //    goto <bb 3>; [0.00%]
 //  Any additional use of _1 or _2 in this block invalidates early replacement.
 
-static bool
-fully_replaceable (tree name, basic_block bb)
+bool
+remove_unreachable::fully_replaceable (tree name, basic_block bb)
 {
   use_operand_p use_p;
   imm_use_iterator iter;
@@ -189,7 +190,7 @@ fully_replaceable (tree name, basic_block bb)
 // side effects (like being passed to a call, or stored to a global, etc.
 // This means we will miss cases where there are 2 or more uses that have
 // no interveneing statements that may had side effects, but it catches most
-// of the caes we care about, and prevents expensive in depth analysis.
+// of the cases we care about, and prevents expensive in depth analysis.
 //
 // Ranger will still reflect the proper ranges at other places in these missed
 // cases, we simply will not remove/set globals early.
@@ -197,7 +198,7 @@ fully_replaceable (tree name, basic_block bb)
 void
 remove_unreachable::handle_early (gimple *s, edge e)
 {
-  // If there is no gori_ssa, there is no early processsing.
+  // If there is no gori_ssa, there is no early processing.
   if (!m_ranger.gori_ssa ())
     return ;
   bool lhs_p = TREE_CODE (gimple_cond_lhs (s)) == SSA_NAME;
@@ -213,9 +214,11 @@ remove_unreachable::handle_early (gimple *s, edge e)
   gcc_checking_assert (gimple_outgoing_range_stmt_p (e->src) == s);
   gcc_checking_assert (!final_p);
 
-  // Check if every export use is dominated by this branch.
+  // Check if every export and its dependencies are dominated by this branch.
+  // Dependencies are required as it needs to dominate potential
+  // recalculations.  See PR 123300.
   tree name;
-  FOR_EACH_GORI_EXPORT_NAME (m_ranger.gori_ssa (), e->src, name)
+  FOR_EACH_GORI_EXPORT_AND_DEP_NAME (m_ranger.gori_ssa (), e->src, name, m_tmp)
     {
       if (!fully_replaceable (name, e->src))
 	return;
@@ -245,7 +248,7 @@ remove_unreachable::handle_early (gimple *s, edge e)
     {
       auto_bitmap dce;
       bitmap_set_bit (dce, SSA_NAME_VERSION (ssa));
-      simple_dce_from_worklist (dce);
+      simple_dce_from_worklist (dce, nullptr, true);
     }
 }
 
@@ -543,14 +546,10 @@ get_single_symbol (tree t, bool *neg, tree *inv)
 	+2 if VAL1 != VAL2
 
    This is similar to tree_int_cst_compare but supports pointer values
-   and values that cannot be compared at compile time.
-
-   If STRICT_OVERFLOW_P is not NULL, then set *STRICT_OVERFLOW_P to
-   true if the return value is only valid if we assume that signed
-   overflow is undefined.  */
+   and values that cannot be compared at compile time.  */
 
 int
-compare_values_warnv (tree val1, tree val2, bool *strict_overflow_p)
+compare_values (tree val1, tree val2)
 {
   if (val1 == val2)
     return 0;
@@ -589,13 +588,6 @@ compare_values_warnv (tree val1, tree val2, bool *strict_overflow_p)
       if (!overflow_undefined)
 	return -2;
 
-      if (strict_overflow_p != NULL
-	  /* Symbolic range building sets the no-warning bit to declare
-	     that overflow doesn't happen.  */
-	  && (!inv1 || !warning_suppressed_p (val1, OPT_Woverflow))
-	  && (!inv2 || !warning_suppressed_p (val2, OPT_Woverflow)))
-	*strict_overflow_p = true;
-
       if (!inv1)
 	inv1 = build_int_cst (TREE_TYPE (val1), 0);
       if (!inv2)
@@ -614,13 +606,6 @@ compare_values_warnv (tree val1, tree val2, bool *strict_overflow_p)
     {
       if (!overflow_undefined)
 	return -2;
-
-      if (strict_overflow_p != NULL
-	  /* Symbolic range building sets the no-warning bit to declare
-	     that overflow doesn't happen.  */
-	  && (!sym1 || !warning_suppressed_p (val1, OPT_Woverflow))
-	  && (!sym2 || !warning_suppressed_p (val2, OPT_Woverflow)))
-	*strict_overflow_p = true;
 
       const signop sgn = TYPE_SIGN (TREE_TYPE (val1));
       tree cst = cst1 ? val1 : val2;
@@ -684,41 +669,23 @@ compare_values_warnv (tree val1, tree val2, bool *strict_overflow_p)
       if (operand_equal_p (val1, val2, 0))
 	return 0;
 
-      fold_defer_overflow_warnings ();
-
       /* If VAL1 is a lower address than VAL2, return -1.  */
       tree t = fold_binary_to_constant (LT_EXPR, boolean_type_node, val1, val2);
       if (t && integer_onep (t))
-	{
-	  fold_undefer_and_ignore_overflow_warnings ();
-	  return -1;
-	}
+	return -1;
 
       /* If VAL1 is a higher address than VAL2, return +1.  */
       t = fold_binary_to_constant (LT_EXPR, boolean_type_node, val2, val1);
       if (t && integer_onep (t))
-	{
-	  fold_undefer_and_ignore_overflow_warnings ();
-	  return 1;
-	}
+	return 1;
 
       /* If VAL1 is different than VAL2, return +2.  */
       t = fold_binary_to_constant (NE_EXPR, boolean_type_node, val1, val2);
-      fold_undefer_and_ignore_overflow_warnings ();
       if (t && integer_onep (t))
 	return 2;
 
       return -2;
     }
-}
-
-/* Compare values like compare_values_warnv.  */
-
-int
-compare_values (tree val1, tree val2)
-{
-  bool sop;
-  return compare_values_warnv (val1, val2, &sop);
 }
 
 /* Helper for overflow_comparison_p
@@ -996,23 +963,39 @@ public:
       m_simplifier (r, r->non_executable_edge_flag)
   {
     m_ranger = r;
-    m_pta = new pointer_equiv_analyzer (m_ranger);
     m_last_bb_stmt = NULL;
-  }
-
-  ~rvrp_folder ()
-  {
-    delete m_pta;
   }
 
   tree value_of_expr (tree name, gimple *s = NULL) override
   {
     // Shortcircuit subst_and_fold callbacks for abnormal ssa_names.
     if (TREE_CODE (name) == SSA_NAME && SSA_NAME_OCCURS_IN_ABNORMAL_PHI (name))
-      return NULL;
-    tree ret = m_ranger->value_of_expr (name, s);
-    if (!ret && supported_pointer_equiv_p (name))
-      ret = m_pta->get_equiv (name);
+      return NULL_TREE;
+    if (!value_range::supports_type_p (TREE_TYPE (name)))
+      return NULL_TREE;
+
+    value_range r (TREE_TYPE (name));
+    if (!m_ranger->range_of_expr (r, name, s))
+      return NULL_TREE;
+
+    // A constant used in an unreachable block often returns as UNDEFINED.
+    // If the result is undefined, check the global value for a constant.
+    if (r.undefined_p ())
+      range_of_expr (r, name);
+
+    tree ret;
+    if (r.singleton_p (&ret))
+      return ret;
+    else
+      ret = NULL_TREE;
+    if (is_a <prange> (r))
+      {
+	prange &p = as_a <prange> (r);
+	ret = p.pt_invariant ();
+	// A const points has to be gimple_min_invariant.
+	gcc_checking_assert (!ret || is_gimple_min_invariant (ret));
+      }
+
     return ret;
   }
 
@@ -1021,9 +1004,31 @@ public:
     // Shortcircuit subst_and_fold callbacks for abnormal ssa_names.
     if (TREE_CODE (name) == SSA_NAME && SSA_NAME_OCCURS_IN_ABNORMAL_PHI (name))
       return NULL;
-    tree ret = m_ranger->value_on_edge (e, name);
-    if (!ret && supported_pointer_equiv_p (name))
-      ret = m_pta->get_equiv (name);
+    if (!value_range::supports_type_p (TREE_TYPE (name)))
+      return NULL_TREE;
+
+    value_range r (TREE_TYPE (name));
+    if (!m_ranger->range_on_edge (r, e, name))
+      return NULL_TREE;
+
+    // A constant used in an unreachable block often returns as UNDEFINED.
+    // If the result is undefined, check the global value for a constant.
+    if (r.undefined_p ())
+      range_of_expr (r, name);
+
+    tree ret;
+    if (r.singleton_p (&ret))
+      return ret;
+    else
+      ret = NULL_TREE;
+    if (is_a <prange> (r))
+      {
+	prange &p = as_a <prange> (r);
+	ret = p.pt_invariant ();
+	// A const points has to be gimple_min_invariant.
+	gcc_checking_assert (!ret || is_gimple_min_invariant (ret));
+      }
+
     return ret;
   }
 
@@ -1037,21 +1042,14 @@ public:
 
   void pre_fold_bb (basic_block bb) override
   {
-    m_pta->enter (bb);
     for (gphi_iterator gsi = gsi_start_phis (bb); !gsi_end_p (gsi);
 	 gsi_next (&gsi))
       m_ranger->register_inferred_ranges (gsi.phi ());
     m_last_bb_stmt = last_nondebug_stmt (bb);
   }
 
-  void post_fold_bb (basic_block bb) override
-  {
-    m_pta->leave (bb);
-  }
-
   void pre_fold_stmt (gimple *stmt) override
   {
-    m_pta->visit_stmt (stmt);
     // If this is the last stmt and there are inferred ranges, reparse the
     // block for transitive inferred ranges that occur earlier in the block.
     if (stmt == m_last_bb_stmt)
@@ -1077,7 +1075,6 @@ private:
   DISABLE_COPY_AND_ASSIGN (rvrp_folder);
   gimple_ranger *m_ranger;
   simplify_using_ranges m_simplifier;
-  pointer_equiv_analyzer *m_pta;
   gimple *m_last_bb_stmt;
 };
 
@@ -1094,8 +1091,8 @@ execute_ranger_vrp (struct function *fun, bool final_p)
 
   set_all_edges_as_executable (fun);
   gimple_ranger *ranger = enable_ranger (fun, false);
+  phi_analysis (*ranger);
   rvrp_folder folder (ranger, final_p);
-  phi_analysis_initialize (ranger->const_query ());
   folder.substitute_and_fold ();
   // Ensure the cache in SCEV has been cleared before processing
   // globals to be removed.
@@ -1142,14 +1139,13 @@ execute_ranger_vrp (struct function *fun, bool final_p)
 	{
 	  ipa_record_return_value_range (return_range);
 	  if (POINTER_TYPE_P (TREE_TYPE (TREE_TYPE (current_function_decl)))
-	      && return_range.nonzero_p ()
+	      && !return_range.contains_zero_p ()
 	      && cgraph_node::get (current_function_decl)
 			->add_detected_attribute ("returns_nonnull"))
 	    warn_function_returns_nonnull (current_function_decl);
 	}
     }
 
-  phi_analysis_finalize ();
   disable_ranger (fun);
   scev_finalize ();
   loop_optimizer_finalize ();
@@ -1297,7 +1293,7 @@ const pass_data pass_data_early_vrp =
   0, /* properties_provided */
   0, /* properties_destroyed */
   0, /* todo_flags_start */
-  ( TODO_cleanup_cfg | TODO_update_ssa | TODO_verify_all ),
+  ( TODO_cleanup_cfg | TODO_update_ssa ),
 };
 
 const pass_data pass_data_fast_vrp =
@@ -1310,7 +1306,7 @@ const pass_data pass_data_fast_vrp =
   0, /* properties_provided */
   0, /* properties_destroyed */
   0, /* todo_flags_start */
-  ( TODO_cleanup_cfg | TODO_update_ssa | TODO_verify_all ),
+  ( TODO_cleanup_cfg | TODO_update_ssa ),
 };
 
 

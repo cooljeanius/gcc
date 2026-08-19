@@ -1,4 +1,4 @@
-.. Copyright (C) 2014-2025 Free Software Foundation, Inc.
+.. Copyright (C) 2014-2026 Free Software Foundation, Inc.
    Originally contributed by David Malcolm <dmalcolm@redhat.com>
 
    This is free software: you can redistribute it and/or modify it
@@ -260,7 +260,7 @@ away with having a single error-handling check in your code:
      }
 
 For more information, see the :ref:`error-handling guide <error-handling>`
-within the Topic eference.
+within the Topic reference.
 
 
 Options

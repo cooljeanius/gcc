@@ -1,6 +1,6 @@
 /* Operating system specific defines to be used when targeting GCC for
    hosting on Windows32, using a Unix style C library and tools.
-   Copyright (C) 1995-2025 Free Software Foundation, Inc.
+   Copyright (C) 1995-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -26,17 +26,20 @@ along with GCC; see the file COPYING3.  If not see
 #define PREFERRED_DEBUGGING_TYPE DWARF2_DEBUG
 
 #undef TARGET_SEH
-#define TARGET_SEH  (TARGET_64BIT_MS_ABI && flag_unwind_tables)
+/* Win64 uses SEH unwind metadata regardless of whether an individual
+  function is compiled with the default MS ABI or with sysv_abi.  Keep
+  SEH enabled for all 64-bit Windows functions whenever unwind tables are
+  requested so .seh_proc state stays consistent with EH emission.  */
+#define TARGET_SEH  (TARGET_64BIT && flag_unwind_tables)
+
+#undef PREFERRED_STACK_BOUNDARY_DEFAULT
+#define PREFERRED_STACK_BOUNDARY_DEFAULT \
+  (TARGET_64BIT ? 128 : MIN_STACK_BOUNDARY)
 
 /* Win64 with SEH cannot represent DRAP stack frames.  Disable its use.
    Force the use of different mechanisms to allocate aligned local data.  */
 #undef MAX_STACK_ALIGNMENT
 #define MAX_STACK_ALIGNMENT  (TARGET_SEH ? 128 : MAX_OFILE_ALIGNMENT)
-
-/* 32-bit Windows aligns the stack on a 4-byte boundary but SSE instructions
-   may require 16-byte alignment.  */
-#undef STACK_REALIGN_DEFAULT
-#define STACK_REALIGN_DEFAULT TARGET_SSE
 
 /* Support hooks for SEH.  */
 #undef  TARGET_ASM_UNWIND_EMIT
@@ -44,12 +47,12 @@ along with GCC; see the file COPYING3.  If not see
 #undef  TARGET_ASM_UNWIND_EMIT_BEFORE_INSN
 #define TARGET_ASM_UNWIND_EMIT_BEFORE_INSN  false
 #undef  TARGET_ASM_FUNCTION_END_PROLOGUE
-#define TARGET_ASM_FUNCTION_END_PROLOGUE  i386_pe_seh_end_prologue
+#define TARGET_ASM_FUNCTION_END_PROLOGUE  mingw_pe_seh_end_prologue
 #undef  TARGET_ASM_EMIT_EXCEPT_PERSONALITY
-#define TARGET_ASM_EMIT_EXCEPT_PERSONALITY i386_pe_seh_emit_except_personality
+#define TARGET_ASM_EMIT_EXCEPT_PERSONALITY mingw_pe_seh_emit_except_personality
 #undef  TARGET_ASM_INIT_SECTIONS
-#define TARGET_ASM_INIT_SECTIONS  i386_pe_seh_init_sections
-#define SUBTARGET_ASM_UNWIND_INIT  i386_pe_seh_init
+#define TARGET_ASM_INIT_SECTIONS  mingw_pe_seh_init_sections
+#define SUBTARGET_ASM_UNWIND_INIT  mingw_pe_seh_init
 
 #undef DEFAULT_ABI
 #define DEFAULT_ABI (TARGET_64BIT ? MS_ABI : SYSV_ABI)
@@ -247,9 +250,10 @@ do {							\
 #undef ASM_OUTPUT_LABELREF
 #define  ASM_OUTPUT_LABELREF(STREAM, NAME)	\
 do {						\
+  const char *prefix = "";			\
   if ((NAME)[0] != FASTCALL_PREFIX)		\
-    fputs (user_label_prefix, (STREAM));	\
-  fputs ((NAME), (STREAM));			\
+    prefix = user_label_prefix;			\
+  ix86_asm_output_labelref ((STREAM), prefix, (NAME));	\
 } while (0)
 
 /* This does much the same in memory rather than to a stream.  */
@@ -310,18 +314,18 @@ do {						\
   do								\
     {								\
       mingw_pe_declare_type (FILE, NAME, 0, 1);		\
-      i386_pe_seh_cold_init (FILE, NAME);			\
+      mingw_pe_seh_cold_init (FILE, NAME);			\
       ASM_OUTPUT_LABEL (FILE, NAME);				\
     }								\
   while (0)
 
 #undef ASM_DECLARE_FUNCTION_SIZE
 #define ASM_DECLARE_FUNCTION_SIZE(FILE,NAME,DECL) \
-  i386_pe_end_function (FILE, NAME, DECL)
+  mingw_pe_end_function (FILE, NAME, DECL)
 
 #undef ASM_DECLARE_COLD_FUNCTION_SIZE
 #define ASM_DECLARE_COLD_FUNCTION_SIZE(FILE,NAME,DECL) \
-  i386_pe_end_cold_function (FILE, NAME, DECL)
+  mingw_pe_end_cold_function (FILE, NAME, DECL)
 
 /* Add an external function to the list of functions to be declared at
    the end of the file.  */
@@ -466,6 +470,8 @@ do {						\
 /* Static stack checking is supported by means of probes.  */
 #define STACK_CHECK_STATIC_BUILTIN 1
 
+#define STACK_CHECK_PROTECT (TARGET_64BIT ? 20 * 1024 : 12 * 1024)
+
 #ifndef HAVE_GAS_ALIGNED_COMM
 # define HAVE_GAS_ALIGNED_COMM 0
 #endif
@@ -474,3 +480,31 @@ do {						\
   (ix86_cmodel == CM_LARGE_PIC || ix86_cmodel == CM_MEDIUM_PIC)
 
 #define HAVE_64BIT_POINTERS TARGET_64BIT_DEFAULT
+
+/* Support for Windows resource files.  */
+#if TARGET_64BIT_DEFAULT
+#define WINDRES_FORMAT_SPEC \
+      "%{m32:-F pe-i386;m64|!m32:-F pe-x86-64} "
+#else
+#define WINDRES_FORMAT_SPEC \
+      "%{m64:-F pe-x86-64;m32|!m64:-F pe-i386} "
+#endif
+
+#define EXTRA_DEFAULT_COMPILERS \
+  {".rc", "@windres-rc", 0, 0, 0}, \
+  {"@windres-rc", \
+   "%{!E:%{!M:%{!MM:windres -J rc -O coff " \
+      WINDRES_FORMAT_SPEC \
+      "%{I*:-I%*} %{D*:-D%*} %{U*:-U%*} \
+      %{c:%W{o*}%{!o*:-o %w%b%O}}%{!c:-o %d%w%u%O} %i}}}", \
+   0, 0, 0}, /* \
+  {".res", "@windres-res", 0, 0, 0}, \
+  {"@windres-res", \
+   "%{!E:%{!M:%{!MM:windres -J res -O coff " \
+      WINDRES_FORMAT_SPEC \
+      "%{c:%W{o*}%{!o*:-o %w%b%O}}%{!c:-o %d%w%u%O} %i}}}", \
+   0, 0, 0}, */
+
+/* For now, do not handle .res because some packages pass
+COFF files named .res to gcc directly, expecting them to
+be passed to the linker, not windres. See PR123504.  */

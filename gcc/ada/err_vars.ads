@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 S p e c                                  --
 --                                                                          --
---          Copyright (C) 1992-2025, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -54,6 +54,13 @@ package Err_Vars is
    --  description of the } insertion character. Note that this value does
    --  not get reset by any Error_Msg call, so the caller is responsible
    --  for resetting it.
+
+   Error_Msg_Qual_For_Standard : Boolean := False;
+   --  Typically we do not want to specify the Standard package when presenting
+   --  entity names even when Error_Msg_Qual_Level is not zero. However
+   --  sometimes we want to emphasize the fact that it is the entity from
+   --  standard. Note that this value does not get reset by any Error_Msg call,
+   --  so the caller is responsible for resetting it.
 
    Current_Error_Source_File : Source_File_Index := No_Source_File;
    --  Id of current messages. Used to post file name when unit changes. This

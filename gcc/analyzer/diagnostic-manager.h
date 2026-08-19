@@ -1,5 +1,5 @@
 /* Classes for saving, deduplicating, and emitting analyzer diagnostics.
-   Copyright (C) 2019-2025 Free Software Foundation, Inc.
+   Copyright (C) 2019-2026 Free Software Foundation, Inc.
    Contributed by David Malcolm <dmalcolm@redhat.com>.
 
 This file is part of GCC.
@@ -21,9 +21,57 @@ along with GCC; see the file COPYING3.  If not see
 #ifndef GCC_ANALYZER_DIAGNOSTIC_MANAGER_H
 #define GCC_ANALYZER_DIAGNOSTIC_MANAGER_H
 
+#include "analyzer/supergraph.h"
+#include "analyzer/event-loc-info.h"
+
 namespace ana {
 
 class epath_finder;
+
+/* A bundle of information capturing where a pending_diagnostic should
+   be emitted.  */
+
+struct pending_location
+{
+public:
+  class fixer_for_epath
+  {
+  public:
+    virtual ~fixer_for_epath () = default;
+
+    virtual void
+    fixup_for_epath (const exploded_path &epath,
+		     pending_location &ploc) const = 0;
+  };
+
+  pending_location ();
+  pending_location (exploded_node *enode);
+  pending_location (exploded_node *enode,
+		    location_t loc);
+
+  location_t get_location () const
+  {
+    return m_event_loc_info.m_loc;
+  }
+
+  std::unique_ptr<json::object> to_json () const;
+
+  /* The enode with which a diagnostic is to be associated,
+     for tracking feasibility.  */
+  exploded_node *m_enode;
+
+  /* Information to use for the location of the warning,
+     and for the location of the "final warning" in the path.  */
+  event_loc_info m_event_loc_info;
+
+  /* Optional hook for use when eventually emitting the diagnostic
+     for fixing up m_event_loc_info based on the specific epath.  */
+  std::unique_ptr<fixer_for_epath> m_fixer_for_epath;
+};
+
+extern std::unique_ptr<pending_location::fixer_for_epath>
+make_ploc_fixer_for_epath_for_leak_diagnostic (const exploded_graph &eg,
+					       tree var);
 
 /* A to-be-emitted diagnostic stored within diagnostic_manager.  */
 
@@ -31,7 +79,7 @@ class saved_diagnostic
 {
 public:
   saved_diagnostic (const state_machine *sm,
-		    const pending_location &ploc,
+		    pending_location &&ploc,
 		    tree var, const svalue *sval,
 		    state_machine::state_t state,
 		    std::unique_ptr<pending_diagnostic> d,
@@ -53,7 +101,7 @@ public:
   }
 
   bool calc_best_epath (epath_finder *pf);
-  const exploded_path *get_best_epath () const { return m_best_epath.get (); }
+  exploded_path *get_best_epath () const { return m_best_epath.get (); }
   unsigned get_epath_length () const;
 
   void add_duplicate (saved_diagnostic *other);
@@ -67,15 +115,14 @@ public:
 
   void emit_any_notes () const;
 
-  void maybe_add_sarif_properties (sarif_object &result_obj) const;
+  void
+  maybe_add_sarif_properties (diagnostics::sarif_object &result_obj) const;
+
+  const supernode *get_supernode () const;
 
   //private:
   const state_machine *m_sm;
-  const exploded_node *m_enode;
-  const supernode *m_snode;
-  const gimple *m_stmt;
-  std::unique_ptr<stmt_finder> m_stmt_finder;
-  location_t m_loc;
+  pending_location m_ploc;
   tree m_var;
   const svalue *m_sval;
   state_machine::state_t m_state;
@@ -101,46 +148,6 @@ private:
 
 class path_builder;
 
-/* A bundle of information capturing where a pending_diagnostic should
-   be emitted.  */
-
-struct pending_location
-{
-public:
-  pending_location (exploded_node *enode,
-		    const supernode *snode,
-		    const gimple *stmt,
-		    const stmt_finder *finder)
-  : m_enode (enode),
-    m_snode (snode),
-    m_stmt (stmt),
-    m_finder (finder),
-    m_loc (UNKNOWN_LOCATION)
-  {
-    gcc_assert (m_stmt || m_finder);
-  }
-
-  /* ctor for cases where we have a location_t but there isn't any
-     gimple stmt associated with the diagnostic.  */
-
-  pending_location (exploded_node *enode,
-		    const supernode *snode,
-		    location_t loc)
-  : m_enode (enode),
-    m_snode (snode),
-    m_stmt (nullptr),
-    m_finder (nullptr),
-    m_loc (loc)
-  {
-  }
-
-  exploded_node *m_enode;
-  const supernode *m_snode;
-  const gimple *m_stmt;
-  const stmt_finder *m_finder;
-  location_t m_loc;
-};
-
 /* A class with responsibility for saving pending diagnostics, so that
    they can be emitted after the exploded_graph is complete.
    This lets us de-duplicate diagnostics, and find the shortest path
@@ -160,13 +167,13 @@ public:
   std::unique_ptr<json::object> to_json () const;
 
   bool add_diagnostic (const state_machine *sm,
-		       const pending_location &ploc,
+		       pending_location &&ploc,
 		       tree var,
 		       const svalue *sval,
 		       state_machine::state_t state,
 		       std::unique_ptr<pending_diagnostic> d);
 
-  bool add_diagnostic (const pending_location &ploc,
+  bool add_diagnostic (pending_location &&ploc,
 		       std::unique_ptr<pending_diagnostic> d);
 
   void add_note (std::unique_ptr<pending_note> pn);
@@ -191,6 +198,13 @@ public:
   }
 
 private:
+  const diagnostics::logical_locations::manager &
+  get_logical_location_manager () const;
+
+  void
+  annotate_exploded_path (const path_builder &pb,
+			  exploded_path &epath) const;
+
   void build_emission_path (const path_builder &pb,
 			    const exploded_path &epath,
 			    checker_path *emission_path) const;
@@ -203,14 +217,11 @@ private:
   void add_events_for_eedge (const path_builder &pb,
 			     const exploded_edge &eedge,
 			     checker_path *emission_path,
-			     interesting_t *interest) const;
+			     interesting_t *interest,
+			     const state_transition *state_trans) const;
 
   bool significant_edge_p (const path_builder &pb,
 			   const exploded_edge &eedge) const;
-
-  void add_events_for_superedge (const path_builder &pb,
-				 const exploded_edge &eedge,
-				 checker_path *emission_path) const;
 
   void prune_path (checker_path *path,
 		   const state_machine *sm,
@@ -229,6 +240,7 @@ private:
   void prune_interproc_events (checker_path *path) const;
   void prune_system_headers (checker_path *path) const;
   void consolidate_conditions (checker_path *path) const;
+  void consolidate_unwind_events (checker_path *path) const;
   void finish_pruning (checker_path *path) const;
 
   engine *m_eng;

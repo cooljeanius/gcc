@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2025 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -22,47 +22,69 @@
 #include "rust-derive-debug.h"
 #include "rust-derive-default.h"
 #include "rust-derive-eq.h"
+#include "rust-derive-ord.h"
 #include "rust-derive-partial-eq.h"
 #include "rust-derive-hash.h"
+#include "rust-system.h"
 
 namespace Rust {
 namespace AST {
 
-DeriveVisitor::DeriveVisitor (location_t loc)
-  : loc (loc), builder (Builder (loc))
+DeriveVisitor::DeriveVisitor (location_t loc, Builder::Source item_source)
+  : loc (loc), builder (Builder (loc, item_source))
 {}
 
 std::vector<std::unique_ptr<Item>>
 DeriveVisitor::derive (Item &item, const Attribute &attr,
-		       BuiltinMacro to_derive)
+		       BuiltinMacro to_derive, Builder::Source item_source)
 {
   auto loc = attr.get_locus ();
+
+  using Kind = AST::Item::Kind;
+  auto item_kind = item.get_item_kind ();
+  if (item_kind != Kind::Enum && item_kind != Kind::Struct
+      && item_kind != Kind::Union)
+    {
+      rust_error_at (loc,
+		     "derive may only be applied to structs, enums and unions");
+      return {};
+    }
 
   switch (to_derive)
     {
     case BuiltinMacro::Clone:
-      return vec (DeriveClone (loc).go (item));
+      return vec (DeriveClone (loc, item_source).go (item));
     case BuiltinMacro::Copy:
-      return vec (DeriveCopy (loc).go (item));
+      return vec (DeriveCopy (loc, item_source).go (item));
     case BuiltinMacro::Debug:
       rust_warning_at (
 	loc, 0,
 	"derive(Debug) is not fully implemented yet and has no effect - only a "
 	"stub implementation will be generated");
-      return vec (DeriveDebug (loc).go (item));
+      return vec (DeriveDebug (loc, item_source).go (item));
     case BuiltinMacro::Default:
-      return vec (DeriveDefault (loc).go (item));
+      return vec (DeriveDefault (loc, item_source).go (item));
     case BuiltinMacro::Eq:
-      return DeriveEq (loc).go (item);
+      return DeriveEq (loc, item_source).go (item);
     case BuiltinMacro::PartialEq:
-      return DerivePartialEq (loc).go (item);
+      return DerivePartialEq (loc, item_source).go (item);
     case BuiltinMacro::Hash:
-      return vec (DeriveHash (loc).go (item));
+      return vec (DeriveHash (loc, item_source).go (item));
     case BuiltinMacro::Ord:
+      return vec (
+	DeriveOrd (DeriveOrd::Ordering::Total, loc, item_source).go (item));
     case BuiltinMacro::PartialOrd:
-    default:
-      rust_sorry_at (loc, "unimplemented builtin derive macro");
+      return vec (
+	DeriveOrd (DeriveOrd::Ordering::Partial, loc, item_source).go (item));
+    case BuiltinMacro::RustcEncodable:
+    case BuiltinMacro::RustcDecodable:
+      rust_sorry_at (loc, "derive(%s) is not yet implemented",
+		     to_derive == BuiltinMacro::RustcEncodable
+		       ? "RustcEncodable"
+		       : "RustcDecodable");
       return {};
+    default:
+      rust_unreachable ();
     };
 }
 
@@ -70,7 +92,8 @@ DeriveVisitor::ImplGenerics
 DeriveVisitor::setup_impl_generics (
   const std::string &type_name,
   const std::vector<std::unique_ptr<GenericParam>> &type_generics,
-  tl::optional<std::unique_ptr<TypeParamBound>> &&extra_bound) const
+  tl::optional<std::function<std::unique_ptr<TypeParamBound> ()>> &&extra_bound)
+  const
 {
   std::vector<Lifetime> lifetime_args;
   std::vector<GenericArg> generic_args;
@@ -79,7 +102,8 @@ DeriveVisitor::setup_impl_generics (
     {
       switch (generic->get_kind ())
 	{
-	  case GenericParam::Kind::Lifetime: {
+	case GenericParam::Kind::Lifetime:
+	  {
 	    LifetimeParam &lifetime_param = (LifetimeParam &) *generic.get ();
 
 	    Lifetime l = builder.new_lifetime (lifetime_param.get_lifetime ());
@@ -91,7 +115,8 @@ DeriveVisitor::setup_impl_generics (
 	  }
 	  break;
 
-	  case GenericParam::Kind::Type: {
+	case GenericParam::Kind::Type:
+	  {
 	    TypeParam &type_param = (TypeParam &) *generic.get ();
 
 	    std::unique_ptr<Type> associated_type = builder.single_type_path (
@@ -104,7 +129,7 @@ DeriveVisitor::setup_impl_generics (
 	    std::vector<std::unique_ptr<TypeParamBound>> extra_bounds;
 
 	    if (extra_bound)
-	      extra_bounds.emplace_back (std::move (*extra_bound));
+	      extra_bounds.emplace_back (extra_bound.value () ());
 
 	    auto impl_type_param
 	      = builder.new_type_param (type_param, std::move (extra_bounds));
@@ -113,17 +138,22 @@ DeriveVisitor::setup_impl_generics (
 	  }
 	  break;
 
-	  case GenericParam::Kind::Const: {
-	    rust_unreachable ();
+	case GenericParam::Kind::Const:
+	  {
+	    ConstGenericParam &const_param
+	      = (ConstGenericParam &) *generic.get ();
 
-	    // TODO
-	    // const ConstGenericParam *const_param
-	    //   = (const ConstGenericParam *) generic.get ();
-	    // std::unique_ptr<Expr> const_expr = nullptr;
+	    auto associated_expr
+	      = std::make_unique<IdentifierExpr> (const_param.get_name (),
+						  std::vector<Attribute> (),
+						  const_param.get_locus ());
 
-	    // GenericArg type_arg
-	    //   = GenericArg::create_const (std::move (const_expr));
-	    // generic_args.push_back (std::move (type_arg));
+	    GenericArg const_arg
+	      = GenericArg::create_const (std::move (associated_expr));
+	    generic_args.push_back (std::move (const_arg));
+
+	    auto impl_const_param = builder.new_const_param (const_param);
+	    impl_generics.push_back (std::move (impl_const_param));
 	  }
 	  break;
 	}

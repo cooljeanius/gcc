@@ -2,7 +2,7 @@
 
 // 2010-02-17  Paolo Carlini  <paolo.carlini@oracle.com>
 //
-// Copyright (C) 2010-2025 Free Software Foundation, Inc.
+// Copyright (C) 2010-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -65,6 +65,8 @@ template<typename T>
     VERIFY( cv_limits::tinyness_before == limits::tinyness_before );
     VERIFY( cv_limits::round_style == limits::round_style );
   }
+// { dg-warning "has_denorm' is deprecated" "" { target c++23 } 52 }
+// { dg-warning "has_denorm_loss' is deprecated" "" { target c++23 } 53 }
 
 template<typename T>
   void

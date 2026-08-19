@@ -1,5 +1,5 @@
 ;; Machine description for DEC Alpha for GNU C compiler
-;; Copyright (C) 1992-2025 Free Software Foundation, Inc.
+;; Copyright (C) 1992-2026 Free Software Foundation, Inc.
 ;; Contributed by Richard Kenner (kenner@vlsi1.ultra.nyu.edu)
 ;;
 ;; This file is part of GCC.
@@ -74,6 +74,7 @@
   UNSPECV_MCOUNT
   UNSPECV_FORCE_MOV
   UNSPECV_LDGP1
+  UNSPECV_LDGP2
   UNSPECV_PLDGP2	; prologue ldgp
   UNSPECV_SET_TP
   UNSPECV_RPCC
@@ -2236,21 +2237,28 @@
    (use (match_operand:TF 1 "general_operand"))]
   "TARGET_FP && TARGET_HAS_XFLOATING_LIBS"
 {
-  rtx tmpf, sticky, arg, lo, hi;
+  rtx tmpf, sticky, arg, lo, discarded, kept;
+  HOST_WIDE_INT mask = ((HOST_WIDE_INT) 1 << 60) - 1;
 
   tmpf = gen_reg_rtx (DFmode);
   sticky = gen_reg_rtx (DImode);
   arg = copy_to_mode_reg (TFmode, operands[1]);
   lo = gen_lowpart (DImode, arg);
-  hi = gen_highpart (DImode, arg);
 
-  /* Convert the low word of the TFmode value into a sticky rounding bit,
-     then or it into the low bit of the high word.  This leaves the sticky
-     bit at bit 48 of the fraction, which is representable in DFmode,
-     which prevents rounding error in the final conversion to SFmode.  */
+  /* Round to odd at the last fraction bit DFmode keeps, so that the
+     conversion to DFmode is exact and the one to SFmode is the only
+     rounding.  DFmode keeps 52 fraction bits; the high word holds the first
+     48 of the 112 and the low word the rest, so that is bit 60 of the low
+     word.  Replace everything below it with a sticky bit.  */
 
-  emit_insn (gen_rtx_SET (sticky, gen_rtx_NE (DImode, lo, const0_rtx)));
-  emit_insn (gen_iordi3 (hi, hi, sticky));
+  discarded = expand_binop (DImode, and_optab, lo, GEN_INT (mask),
+			    NULL_RTX, 1, OPTAB_LIB_WIDEN);
+  emit_insn (gen_rtx_SET (sticky, gen_rtx_NE (DImode, discarded, const0_rtx)));
+  kept = expand_binop (DImode, and_optab, lo, GEN_INT (~mask),
+		       NULL_RTX, 1, OPTAB_LIB_WIDEN);
+  sticky = expand_shift (LSHIFT_EXPR, DImode, sticky, 60, NULL_RTX, 1);
+  emit_move_insn (lo, expand_binop (DImode, ior_optab, kept, sticky,
+				    NULL_RTX, 1, OPTAB_LIB_WIDEN));
   emit_insn (gen_trunctfdf2 (tmpf, arg));
   emit_insn (gen_truncdfsf2 (operands[0], tmpf));
   DONE;
@@ -4200,6 +4208,31 @@
 			    << INTVAL (operands[2])));
 })
 
+;; Multi-thread and async-signal safe variant.  Operand 0 is the aligned
+;; SImode MEM.  Operand 1 is the data to store. Operand 2 is the number
+;; of bits within the word that the value should be placed.  Operand 3 is
+;; the SImode status.  Operand 4 is a SImode temporary.
+
+(define_expand "aligned_store_safe_bwa"
+  [(set (match_operand:SI 3 "register_operand")
+	(unspec_volatile:SI
+	  [(match_operand:SI 0 "memory_operand")] UNSPECV_LL))
+   (set (subreg:DI (match_dup 3) 0)
+	(and:DI (subreg:DI (match_dup 3) 0) (match_dup 5)))
+   (set (subreg:DI (match_operand:SI 4 "register_operand") 0)
+	(ashift:DI (zero_extend:DI (match_operand 1 "register_operand"))
+		   (match_operand:DI 2 "const_int_operand")))
+   (set (subreg:DI (match_dup 3) 0)
+	(ior:DI (subreg:DI (match_dup 4) 0) (subreg:DI (match_dup 3) 0)))
+   (parallel [(set (subreg:DI (match_dup 3) 0)
+		   (unspec_volatile:DI [(const_int 0)] UNSPECV_SC))
+	      (set (match_dup 0) (match_dup 3))])]
+  ""
+{
+  operands[5] = GEN_INT (~(GET_MODE_MASK (GET_MODE (operands[1]))
+			   << INTVAL (operands[2])));
+})
+
 ;; For the unaligned byte and halfword cases, we use code similar to that
 ;; in the Architecture book, but reordered to lower the number of registers
 ;; required.  Operand 0 is the address.  Operand 1 is the data to store.
@@ -4227,6 +4260,31 @@
   ""
   "operands[5] = GEN_INT (GET_MODE_MASK (<MODE>mode));")
 
+;; Multi-thread and async-signal safe variant.  Operand 0 is the address.
+;; Operand 1 is the data to store.  Operand 2 is the aligned address.
+;; Operand 3 is the DImode status.  Operand 4 is a DImode temporary.
+
+(define_expand "@unaligned_store<mode>_safe_bwa"
+  [(set (match_operand:DI 3 "register_operand")
+	(unspec_volatile:DI
+	  [(mem:DI (match_operand:DI 2 "register_operand"))] UNSPECV_LL))
+   (set (match_dup 3)
+	(and:DI (not:DI
+		  (ashift:DI (match_dup 5)
+			     (ashift:DI (match_operand:DI 0 "register_operand")
+					(const_int 3))))
+		(match_dup 3)))
+   (set (match_operand:DI 4 "register_operand")
+	(ashift:DI (zero_extend:DI
+		     (match_operand:I12MODE 1 "register_operand"))
+		   (ashift:DI (match_dup 0) (const_int 3))))
+   (set (match_dup 3) (ior:DI (match_dup 4) (match_dup 3)))
+   (parallel [(set (match_dup 3)
+		   (unspec_volatile:DI [(const_int 0)] UNSPECV_SC))
+	      (set (mem:DI (match_dup 2)) (match_dup 3))])]
+  ""
+  "operands[5] = GEN_INT (GET_MODE_MASK (<MODE>mode));")
+
 ;; Here are the define_expand's for QI and HI moves that use the above
 ;; patterns.  We have the normal sets, plus the ones that need scratch
 ;; registers for reload.
@@ -4236,8 +4294,8 @@
 	(match_operand:I12MODE 1 "general_operand"))]
   ""
 {
-  if (TARGET_BWX
-      ? alpha_expand_mov (<MODE>mode, operands)
+  if (TARGET_BWX ? alpha_expand_mov (<MODE>mode, operands)
+      : TARGET_SAFE_BWA ? alpha_expand_mov_safe_bwa (<MODE>mode, operands)
       : alpha_expand_mov_nobwx (<MODE>mode, operands))
     DONE;
 })
@@ -4292,7 +4350,9 @@
 	  operands[1] = gen_lowpart (HImode, operands[1]);
 	do_aligned2:
 	  operands[0] = gen_lowpart (HImode, operands[0]);
-	  done = alpha_expand_mov_nobwx (HImode, operands);
+	  done = (TARGET_SAFE_BWA
+		  ? alpha_expand_mov_safe_bwa (HImode, operands)
+		  : alpha_expand_mov_nobwx (HImode, operands));
 	  gcc_assert (done);
 	  DONE;
 	}
@@ -4371,6 +4431,8 @@
     }
   else
     {
+      gcc_assert (!TARGET_SAFE_BWA);
+
       rtx addr = get_unaligned_address (operands[0]);
       rtx scratch1 = gen_rtx_REG (DImode, regno);
       rtx scratch2 = gen_rtx_REG (DImode, regno + 1);
@@ -4385,6 +4447,52 @@
       alpha_set_memflags (seq, operands[0]);
       emit_insn (seq);
     }
+  DONE;
+})
+
+(define_expand "@reload_out<mode>_safe_bwa"
+  [(parallel [(match_operand:RELOAD12 0 "any_memory_operand" "=m")
+	      (match_operand:RELOAD12 1 "register_operand" "r")
+	      (match_operand:OI 2 "register_operand" "=&r")])]
+  "!TARGET_BWX && TARGET_SAFE_BWA"
+{
+  unsigned regno = REGNO (operands[2]);
+
+  if (<MODE>mode == CQImode)
+    {
+      operands[0] = gen_lowpart (HImode, operands[0]);
+      operands[1] = gen_lowpart (HImode, operands[1]);
+    }
+
+  rtx addr = get_unaligned_address (operands[0]);
+  rtx status = gen_rtx_REG (DImode, regno);
+  rtx areg = gen_rtx_REG (DImode, regno + 1);
+  rtx aligned_addr = gen_rtx_REG (DImode, regno + 2);
+  rtx scratch = gen_rtx_REG (DImode, regno + 3);
+
+  if (REG_P (addr))
+    areg = addr;
+  else
+    emit_move_insn (areg, addr);
+  emit_move_insn (aligned_addr, gen_rtx_AND (DImode, areg, GEN_INT (-8)));
+
+  rtx label = gen_label_rtx ();
+  emit_label (label);
+  LABEL_NUSES (label) = 1;
+
+  rtx seq = gen_reload_out<reloadmode>_unaligned_safe_bwa (areg, operands[1],
+							   aligned_addr,
+							   status, scratch);
+  alpha_set_memflags (seq, operands[0]);
+  emit_insn (seq);
+
+  rtx label_ref = gen_rtx_LABEL_REF (DImode, label);
+  rtx cond = gen_rtx_EQ (DImode, status, const0_rtx);
+  rtx jump = alpha_emit_unlikely_jump (cond, label_ref);
+  JUMP_LABEL (jump) = label;
+
+  cfun->split_basic_blocks_after_reload = 1;
+
   DONE;
 })
 
@@ -4420,10 +4528,55 @@
 {
   rtx aligned_mem, bitnum;
   get_aligned_mem (operands[0], &aligned_mem, &bitnum);
-  emit_insn (gen_aligned_store (aligned_mem, operands[1], bitnum,
-				operands[2], operands[3]));
+  if (TARGET_SAFE_BWA)
+    {
+      rtx label = gen_label_rtx ();
+      emit_label (label);
+      LABEL_NUSES (label) = 1;
+
+      rtx status = operands[2];
+      rtx temp = operands[3];
+      emit_insn (gen_aligned_store_safe_bwa (aligned_mem, operands[1], bitnum,
+					     status, temp));
+
+      rtx label_ref = gen_rtx_LABEL_REF (DImode, label);
+      rtx cond = gen_rtx_EQ (DImode, gen_rtx_SUBREG (DImode, status, 0),
+			     const0_rtx);
+      rtx jump = alpha_emit_unlikely_jump (cond, label_ref);
+      JUMP_LABEL (jump) = label;
+
+      cfun->split_basic_blocks_after_reload = 1;
+    }
+  else
+    emit_insn (gen_aligned_store (aligned_mem, operands[1], bitnum,
+				  operands[2], operands[3]));
   DONE;
 })
+
+;; Operand 0 is the address.  Operand 1 is the data to store.  Operand 2
+;; is the aligned address.  Operand 3 is the DImode status.  Operand 4 is
+;; a DImode scratch.
+
+(define_expand "reload_out<mode>_unaligned_safe_bwa"
+  [(set (match_operand:DI 3 "register_operand")
+	(unspec_volatile:DI [(mem:DI (match_operand:DI 2 "register_operand"))]
+			    UNSPECV_LL))
+   (set (match_dup 3)
+	(and:DI (not:DI
+		  (ashift:DI (match_dup 5)
+			     (ashift:DI (match_operand:DI 0 "register_operand")
+					(const_int 3))))
+		(match_dup 3)))
+   (set (match_operand:DI 4 "register_operand")
+	(ashift:DI (zero_extend:DI
+		     (match_operand:I12MODE 1 "register_operand"))
+		   (ashift:DI (match_dup 0) (const_int 3))))
+   (set (match_dup 3) (ior:DI (match_dup 4) (match_dup 3)))
+   (parallel [(set (match_dup 3)
+		   (unspec_volatile:DI [(const_int 0)] UNSPECV_SC))
+	      (set (mem:DI (match_dup 2)) (match_dup 3))])]
+  ""
+  "operands[5] = GEN_INT (GET_MODE_MASK (<MODE>mode));")
 
 ;; Vector operations
 
@@ -4636,9 +4789,15 @@
 	  && INTVAL (operands[1]) != 64))
     FAIL;
 
-  alpha_expand_unaligned_store (operands[0], operands[3],
-				INTVAL (operands[1]) / 8,
-				INTVAL (operands[2]) / 8);
+  if (TARGET_SAFE_PARTIAL)
+    alpha_expand_unaligned_store_safe_partial (operands[0], operands[3],
+					       INTVAL (operands[1]) / 8,
+					       INTVAL (operands[2]) / 8,
+					       BITS_PER_UNIT);
+  else
+    alpha_expand_unaligned_store (operands[0], operands[3],
+				  INTVAL (operands[1]) / 8,
+				  INTVAL (operands[2]) / 8);
   DONE;
 })
 
@@ -4930,6 +5089,20 @@
   "lda %0,0(%1)\t\t!gpdisp!%2"
   [(set_attr "cannot_copy" "true")])
 
+;; Same as *ldgp_er_2, but for the pairs whose first half is the
+;; unspec_volatile *ldgp_er_1.  Both halves of a gpdisp pair have to be
+;; equally deletable: a plain unspec here is removed by DCE as soon as $29
+;; turns out to be unused, and the ldah left behind makes the assembler
+;; complain about a missing lda.
+(define_insn "*ldgp_er_2_v"
+  [(set (match_operand:DI 0 "register_operand" "=r")
+	(unspec_volatile:DI [(match_operand:DI 1 "register_operand" "r")
+			     (match_operand 2 "const_int_operand")]
+			    UNSPECV_LDGP2))]
+  "TARGET_EXPLICIT_RELOCS && TARGET_ABI_OSF"
+  "lda %0,0(%1)\t\t!gpdisp!%2"
+  [(set_attr "cannot_copy" "true")])
+
 (define_insn "*prologue_ldgp_er_2"
   [(set (match_operand:DI 0 "register_operand" "=r")
 	(unspec_volatile:DI [(match_operand:DI 1 "register_operand" "r")
@@ -5062,7 +5235,7 @@
   [(set (match_dup 1)
 	(unspec_volatile:DI [(match_dup 2) (match_dup 3)] UNSPECV_LDGP1))
    (set (match_dup 1)
-	(unspec:DI [(match_dup 1) (match_dup 3)] UNSPEC_LDGP2))]
+	(unspec_volatile:DI [(match_dup 1) (match_dup 3)] UNSPECV_LDGP2))]
 {
   if (prev_nonnote_insn (curr_insn) != XEXP (operands[0], 0))
     emit_insn (gen_rtx_UNSPEC_VOLATILE (VOIDmode, gen_rtvec (1, operands[0]),
@@ -5115,7 +5288,7 @@
   [(set (match_dup 0)
 	(unspec_volatile:DI [(match_dup 1) (match_dup 2)] UNSPECV_LDGP1))
    (set (match_dup 0)
-	(unspec:DI [(match_dup 0) (match_dup 2)] UNSPEC_LDGP2))]
+	(unspec_volatile:DI [(match_dup 0) (match_dup 2)] UNSPECV_LDGP2))]
 {
   operands[0] = pic_offset_table_rtx;
   operands[1] = gen_rtx_REG (Pmode, 26);

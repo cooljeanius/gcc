@@ -1,5 +1,5 @@
 /* d-lang.cc -- Language-dependent hooks for D.
-   Copyright (C) 2006-2025 Free Software Foundation, Inc.
+   Copyright (C) 2006-2026 Free Software Foundation, Inc.
 
 GCC is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -304,6 +304,7 @@ d_init_options (unsigned int, cl_decoded_option *decoded_options)
   global.params.useDeprecated = DIAGNOSTICinform;
   global.params.useWarnings = DIAGNOSTICoff;
   global.params.v.errorLimit = flag_max_errors;
+  global.params.v.errorSupplementLimit = flag_max_errors;
   global.params.v.messageStyle = MessageStyle::gnu;
 
   /* Extra GDC-specific options.  */
@@ -454,7 +455,7 @@ d_handle_option (size_t scode, const char *arg, HOST_WIDE_INT value,
       break;
 
     case OPT_fdebug_:
-      if (Identifier::isValidIdentifier (CONST_CAST (char *, arg)))
+      if (Identifier::isValidIdentifier (const_cast<char *> (arg)))
 	{
 	  DebugCondition::addGlobalIdent (arg);
 	  break;
@@ -521,6 +522,10 @@ d_handle_option (size_t scode, const char *arg, HOST_WIDE_INT value,
 
     case OPT_fignore_unknown_pragmas:
       global.params.ignoreUnsupportedPragmas = value;
+      break;
+
+    case OPT_finclude_imports:
+      includeImports = true;
       break;
 
     case OPT_finvariants:
@@ -695,7 +700,7 @@ d_handle_option (size_t scode, const char *arg, HOST_WIDE_INT value,
       break;
 
     case OPT_fversion_:
-      if (Identifier::isValidIdentifier (CONST_CAST (char *, arg)))
+      if (Identifier::isValidIdentifier (const_cast<char *> (arg)))
 	{
 	  VersionCondition::addGlobalIdent (arg);
 	  break;
@@ -770,6 +775,14 @@ d_handle_option (size_t scode, const char *arg, HOST_WIDE_INT value,
 
     case OPT_nostdinc:
       d_option.stdinc = false;
+      break;
+
+    case OPT_std_d2024:
+      global.params.edition = Edition::v2024;
+      break;
+
+    case OPT_std_d202y:
+      global.params.edition = Edition::v2025;
       break;
 
     case OPT_v:
@@ -872,6 +885,10 @@ d_post_options (const char ** fn)
       global.params.useOut = global.params.release
 	? CHECKENABLEoff : CHECKENABLEon;
     }
+
+  /* Checks for `null' pointer dereferences are default off.  */
+  if (global.params.useNullCheck == CHECKENABLEdefault)
+    global.params.useNullCheck = CHECKENABLEoff;
 
   /* When not linking against D runtime, turn off all code generation that
      would otherwise reference it.  */
@@ -1085,9 +1102,9 @@ d_parse_file (void)
   /* Buffer for contents of .ddoc files.  */
   OutBuffer ddocbuf;
 
-  /* In this mode, the first file name is supposed to be a duplicate
-     of one of the input files.  */
-  if (d_option.fonly && strcmp (d_option.fonly, main_input_filename) != 0)
+  /* In this mode, the main input file is supposed to be the same as the one
+     given by -fonly=.  */
+  if (d_option.fonly && !endswith (main_input_filename, d_option.fonly))
     error ("%<-fonly=%> argument is different from first input file name");
 
   for (size_t i = 0; i < num_in_fnames; i++)
@@ -1124,6 +1141,7 @@ d_parse_file (void)
 				      Identifier::idPool ("__stdin"),
 				      global.params.ddoc.doOutput,
 				      global.params.dihdr.doOutput);
+	  m->loc = Loc::singleFilename (in_fnames[i]);
 	  modules.push (m);
 
 	  /* Zero the padding past the end of the buffer so the D lexer has a
@@ -1144,6 +1162,7 @@ d_parse_file (void)
 	  Module *m = Module::create (in_fnames[i], Identifier::idPool (name),
 				      global.params.ddoc.doOutput,
 				      global.params.dihdr.doOutput);
+	  m->loc = Loc::singleFilename (in_fnames[i]);
 	  modules.push (m);
 	  FileName::free (name);
 	}
@@ -1263,7 +1282,7 @@ d_parse_file (void)
     }
 
   /* Do deferred semantic analysis.  */
-  Module::runDeferredSemantic ();
+  dmd::runDeferredSemantic ();
 
   if (Module::deferred.length)
     {
@@ -1293,7 +1312,7 @@ d_parse_file (void)
       dmd::semantic2 (m, NULL);
     }
 
-  Module::runDeferredSemantic2 ();
+  dmd::runDeferredSemantic2 ();
 
   if (global.errors)
     goto had_errors;
@@ -1309,9 +1328,24 @@ d_parse_file (void)
       dmd::semantic3 (m, NULL);
     }
 
-  Module::runDeferredSemantic3 ();
+  if (includeImports)
+    {
+      for (size_t i = 0; i < compiledImports.length; i++)
+	{
+	  Module *m = compiledImports[i];
+	  gcc_assert (m->isRoot ());
 
-  /* Check again, incase semantic3 pass loaded any more modules.  */
+	  if (global.params.v.verbose)
+	    message ("semantic3 %s", m->toChars ());
+
+	  dmd::semantic3 (m, NULL);
+	  modules.push (m);
+	}
+    }
+
+  dmd::runDeferredSemantic3 ();
+
+  /* Check again, in case semantic3 pass loaded any more modules.  */
   while (builtin_modules.length != 0)
     {
       Module *m = builtin_modules.pop ();
@@ -1391,7 +1425,7 @@ d_parse_file (void)
 
   /* Generate C++ header files.  */
   if (global.params.cxxhdr.doOutput)
-    dmd::genCppHdrFiles (modules);
+    dmd::genCppHdrFiles (modules, global.errorSink);
 
   if (global.errors)
     goto had_errors;

@@ -1,5 +1,5 @@
 /* Configuration file for ARM GNU/Linux FDPIC EABI targets.
-   Copyright (C) 2018-2025 Free Software Foundation, Inc.
+   Copyright (C) 2018-2026 Free Software Foundation, Inc.
    Contributed by STMicroelectronics.
 
    This file is part of GCC.
@@ -40,7 +40,7 @@
    force -pie.  */
 /* -static is not supported, because we have to define the
    dynamic-linker, as we have some relocations to resolve at load
-   time. We do not generate an error in case the user explictly passes
+   time. We do not generate an error in case the user explicitly passes
    the -dynamic-linker option to the linker.  */
 #undef  SUBTARGET_EXTRA_LINK_SPEC
 #define SUBTARGET_EXTRA_LINK_SPEC			    \

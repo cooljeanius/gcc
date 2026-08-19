@@ -3,7 +3,7 @@
 //
 // 2008-12-03  Edward M. Smith-Rowland <3dw4rd@verizon.net>
 //
-// Copyright (C) 2008-2025 Free Software Foundation, Inc.
+// Copyright (C) 2008-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -25,13 +25,17 @@
 
 #include <random>
 #include <testsuite_hooks.h>
+#include <testsuite_iterators.h>
 
+template<template<typename> class Range>
 void
-test01()
+test_it_pair()
 {
-  std::vector<double> x = {0.0, 1.0, 2.0, 3.0, 4.0, 5.0};
-  std::vector<double> wt = {0.5, 1.0, 2.5, 1.5, 0.5};
-  std::piecewise_constant_distribution<> u(x.begin(), x.end(), wt.begin());
+  double x[6] = {0.0, 1.0, 2.0, 3.0, 4.0, 5.0};
+  double wt[5] = {0.5, 1.0, 2.5, 1.5, 0.5};
+
+  Range<double> r(x, x+6);
+  std::piecewise_constant_distribution<> u(r.begin(), r.end(), wt);
   std::vector<double> interval = u.intervals();
   std::vector<double> density = u.densities();
   VERIFY( interval.size() == 6 );
@@ -44,6 +48,9 @@ test01()
 
 int main()
 {
-  test01();
+  using namespace __gnu_test;
+  test_it_pair<input_container>();
+  test_it_pair<forward_container>();
+  test_it_pair<random_access_container>();
   return 0;
 }

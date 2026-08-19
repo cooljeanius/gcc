@@ -1,5 +1,5 @@
 /* DWARF2 EH unwinding support for TPF OS.
-   Copyright (C) 2004-2025 Free Software Foundation, Inc.
+   Copyright (C) 2004-2026 Free Software Foundation, Inc.
    Contributed by P.J. Darcy (darcypj@us.ibm.com).
 
 This file is part of GCC.
@@ -93,7 +93,7 @@ s390_fallback_frame_state (struct _Unwind_Context *context,
 	}
 
       /* ... except for %r14, which is stored at CFA+offset where offset
-	 is displacment of ICST_CRET or ICST_SRET from CFA */
+	 is displacement of ICST_CRET or ICST_SRET from CFA */
       if ( __isPATrange(context->ra) )  {
 	   fs->regs.how[14] = REG_SAVED_OFFSET;
 	   fs->regs.reg[14].loc.offset = ICST_CRET - STACK_POINTER_OFFSET;

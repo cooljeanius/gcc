@@ -1,6 +1,6 @@
 /* Manipulation of formal and actual parameters of functions and function
    calls.
-   Copyright (C) 2017-2025 Free Software Foundation, Inc.
+   Copyright (C) 2017-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -50,8 +50,9 @@ along with GCC; see the file COPYING3.  If not see
 #include "sreal.h"
 #include "ipa-cp.h"
 #include "ipa-prop.h"
+#include "attr-callback.h"
 
-/* Actual prefixes of different newly synthetized parameters.  Keep in sync
+/* Actual prefixes of different newly synthesized parameters.  Keep in sync
    with IPA_PARAM_PREFIX_* defines.  */
 
 static const char *ipa_param_prefixes[IPA_PARAM_PREFIX_COUNT]
@@ -154,7 +155,7 @@ push_function_arg_decls (vec<tree> *args, tree fndecl)
 
   /* Safety check that we do not attempt to use the function in WPA, except
      when the function is a thunk and then we have DECL_ARGUMENTS or when we
-     have already explicitely loaded its body.  */
+     have already explicitly loaded its body.  */
   gcc_assert (!flag_wpa
 	      || DECL_ARGUMENTS (fndecl)
 	      || gimple_has_body_p (fndecl));
@@ -308,6 +309,16 @@ drop_type_attribute_if_params_changed_p (tree name)
   return false;
 }
 
+/* Return TRUE if the attribute should be dropped in the decl it is sitting on
+   changes.  Primarily affects attributes working with the decls arguments.  */
+static bool
+drop_decl_attribute_if_params_changed_p (tree name)
+{
+  if (is_attribute_p ("callback_only", name))
+    return true;
+  return false;
+}
+
 /* Build and return a function type just like ORIG_TYPE but with parameter
    types given in NEW_PARAM_TYPES - which can be NULL if, but only if,
    ORIG_TYPE itself has NULL TREE_ARG_TYPEs.  If METHOD2FUNC is true, also make
@@ -428,7 +439,7 @@ ipa_param_adjustments::get_surviving_params (vec<bool> *surviving_params)
 }
 
 /* Fill NEW_INDICES with new indices of each surviving parameter or -1 for
-   those which do not survive.  Any parameter outside of lenght of the vector
+   those which do not survive.  Any parameter outside of length of the vector
    does not survive.  There is currently no support for a parameter to be
    copied to two distinct new parameters.  */
 
@@ -488,11 +499,12 @@ ipa_param_adjustments::method2func_p (tree orig_type)
    performing all atored modifications.  TYPE_ORIGINAL_P should be true when
    OLD_TYPE refers to the type before any IPA transformations, as opposed to a
    type that can be an intermediate one in between various IPA
-   transformations.  */
+   transformations.  Set pointee of ARGS_MODIFIED (if provided) to TRUE if the
+   type's arguments were changed.  */
 
 tree
-ipa_param_adjustments::build_new_function_type (tree old_type,
-						bool type_original_p)
+ipa_param_adjustments::build_new_function_type (
+  tree old_type, bool type_original_p, bool *args_modified /* = NULL */)
 {
   auto_vec<tree,16> new_param_types, *new_param_types_p;
   if (prototype_p (old_type))
@@ -518,6 +530,8 @@ ipa_param_adjustments::build_new_function_type (tree old_type,
 	  || get_original_index (index) != (int)index)
 	modified = true;
 
+  if (args_modified)
+    *args_modified = modified;
 
   return build_adjusted_function_type (old_type, new_param_types_p,
 				       method2func_p (old_type), m_skip_return,
@@ -536,10 +550,11 @@ ipa_param_adjustments::adjust_decl (tree orig_decl)
 {
   tree new_decl = copy_node (orig_decl);
   tree orig_type = TREE_TYPE (orig_decl);
+  bool args_modified = false;
   if (prototype_p (orig_type)
       || (m_skip_return && !VOID_TYPE_P (TREE_TYPE (orig_type))))
     {
-      tree new_type = build_new_function_type (orig_type, false);
+      tree new_type = build_new_function_type (orig_type, false, &args_modified);
       TREE_TYPE (new_decl) = new_type;
     }
   if (method2func_p (orig_type))
@@ -556,6 +571,20 @@ ipa_param_adjustments::adjust_decl (tree orig_decl)
   if (m_skip_return)
     DECL_IS_MALLOC (new_decl) = 0;
 
+  /* If the decl's arguments changed, we might need to drop some attributes.  */
+  if (args_modified && DECL_ATTRIBUTES (new_decl))
+    {
+      tree t = DECL_ATTRIBUTES (new_decl);
+      tree *last = &DECL_ATTRIBUTES (new_decl);
+      DECL_ATTRIBUTES (new_decl) = NULL;
+      for (; t; t = TREE_CHAIN (t))
+	if (!drop_decl_attribute_if_params_changed_p (get_attribute_name (t)))
+	  {
+	    *last = copy_node (t);
+	    TREE_CHAIN (*last) = NULL;
+	    last = &TREE_CHAIN (*last);
+	  }
+    }
   return new_decl;
 }
 
@@ -607,6 +636,7 @@ purge_all_uses (tree name, hash_set <tree> *killed_ssas)
   imm_use_iterator imm_iter;
   gimple *stmt;
   auto_vec <tree, 4> worklist;
+  auto_vec <gimple *, 4> kill_list;
 
   worklist.safe_push (name);
   while (!worklist.is_empty ())
@@ -616,7 +646,7 @@ purge_all_uses (tree name, hash_set <tree> *killed_ssas)
 	{
 	  if (gimple_debug_bind_p (stmt))
 	    {
-	      /* When runing within tree-inline, we will never end up here but
+	      /* When running within tree-inline, we will never end up here but
 		 adding the SSAs to killed_ssas will do the trick in this case
 		 and the respective debug statements will get reset. */
 	      gimple_debug_bind_reset_value (stmt);
@@ -635,10 +665,18 @@ purge_all_uses (tree name, hash_set <tree> *killed_ssas)
 	  if (!killed_ssas->add (lhs))
 	    {
 	      worklist.safe_push (lhs);
-	      gimple_stmt_iterator gsi = gsi_for_stmt (stmt);
-	      gsi_remove (&gsi, true);
+	      kill_list.safe_push (stmt);
 	    }
 	}
+    }
+
+  /* Remove stmts in reverse and afterwards to properly handle debug stmt
+     generation and to not interfere with immediate use iteration.  */
+  while (!kill_list.is_empty ())
+    {
+      stmt = kill_list.pop ();
+      gimple_stmt_iterator gsi = gsi_for_stmt (stmt);
+      gsi_remove (&gsi, true);
     }
 }
 
@@ -1147,7 +1185,7 @@ ipa_param_body_adjustments::mark_dead_statements (tree dead_param,
 {
   /* Current IPA analyses which remove unused parameters never remove a
      non-gimple register ones which have any use except as parameters in other
-     calls, so we can safely leve them as they are.  */
+     calls, so we can safely leave them as they are.  */
   tree parm_ddef = get_ddef_if_exists_and_is_used (dead_param);
   if (!parm_ddef)
     return;
@@ -1286,7 +1324,7 @@ replace_with_mapped_expr (tree *remap, int *walk_subtrees, void *data)
   return 0;
 }
 
-/* Replace all occurances of SSAs in m_dead_ssa_debug_equiv in t with what they
+/* Replace all occurrences of SSAs in m_dead_ssa_debug_equiv in t with what they
    are mapped to.  */
 
 void
@@ -1348,8 +1386,8 @@ ipa_param_body_adjustments::prepare_debug_expressions (tree dead_ssa)
 	}
 
       gcc_assert (TREE_CODE (value) == SSA_NAME);
-      tree *d = m_dead_ssa_debug_equiv.get (value);
-      m_dead_ssa_debug_equiv.put (dead_ssa, *d);
+      tree d = *m_dead_ssa_debug_equiv.get (value);
+      m_dead_ssa_debug_equiv.put (dead_ssa, d);
       return true;
     }
 
@@ -1672,7 +1710,7 @@ ipa_param_body_adjustments
    in ADJUSTMENTS.  FNDECL designates the new function clone which is being
    modified.  OLD_FNDECL is the function of which FNDECL is a clone (and which
    at the time of invocation still share DECL_ARGUMENTS).  ID is the
-   copy_body_data structure driving the wholy body copying process.  VARS is a
+   copy_body_data structure driving the whole body copying process.  VARS is a
    pointer to the head of the list of new local variables, TREE_MAP is the map
    that drives tree substitution in the cloning process.  */
 
@@ -1713,7 +1751,7 @@ ipa_param_body_adjustments::get_new_param_chain ()
 /* Modify the function parameters FNDECL and its type according to the plan in
    ADJUSTMENTS.  This function needs to be called when the decl has not already
    been processed with ipa_param_adjustments::adjust_decl, otherwise just
-   seting DECL_ARGUMENTS to whatever get_new_param_chain will do is enough.  */
+   setting DECL_ARGUMENTS to whatever get_new_param_chain will do is enough.  */
 
 void
 ipa_param_body_adjustments::modify_formal_parameters ()
@@ -2167,7 +2205,7 @@ record_argument_state (copy_body_data *id, gimple *orig_stmt,
    up call_graph edges.
 
    If the method is invoked as a part of IPA clone materialization and if any
-   parameter split is pass-through, i.e. it applies to the functin that is
+   parameter split is pass-through, i.e. it applies to the function that is
    being modified and also to the callee of the statement, replace the
    parameter passed to old callee with all of the replacement a callee might
    possibly want and record the performed argument modifications in
@@ -2597,7 +2635,7 @@ ipa_param_body_adjustments::perform_cfun_body_modifications ()
 
 
 /* If there are any initialization statements that need to be emitted into
-   the basic block BB right at ther start of the new function, do so.  */
+   the basic block BB right at the start of the new function, do so.  */
 void
 ipa_param_body_adjustments::append_init_stmts (basic_block bb)
 {

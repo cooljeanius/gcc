@@ -1,5 +1,5 @@
 /* Intrinsic functions of Andes NDS32 cpu for GNU compiler
-   Copyright (C) 2012-2025 Free Software Foundation, Inc.
+   Copyright (C) 2012-2026 Free Software Foundation, Inc.
    Contributed by Andes Technology Corporation.
 
    This file is part of GCC.
@@ -477,7 +477,7 @@ nds32_expand_priority_builtin (enum insn_code icode, tree exp, rtx target,
   rtx op1 = nds32_read_argument (exp, 1);
 
   /* set_int_priority intrinsic function that two arguments are immediate,
-     so check whether auguments are immedite.  */
+     so check whether arguments are immediate.  */
 
   if (!nds32_check_constant_argument (icode, 0, op0, name))
     return NULL_RTX;

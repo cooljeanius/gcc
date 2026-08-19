@@ -1,5 +1,5 @@
 /* Operations with very long integers.
-   Copyright (C) 2012-2025 Free Software Foundation, Inc.
+   Copyright (C) 2012-2026 Free Software Foundation, Inc.
    Contributed by Kenneth Zadeck <zadeck@naturalbridge.com>
 
 This file is part of GCC.
@@ -90,7 +90,7 @@ canonize (HOST_WIDE_INT *val, unsigned int len, unsigned int precision)
     len = blocks_needed;
 
   if (len == 1)
-    return len;
+    return 1;
 
   top = val[len - 1];
   if (len * HOST_BITS_PER_WIDE_INT > precision)
@@ -319,7 +319,7 @@ wi::from_mpz (const_tree type, mpz_t x, bool wrap)
 
 /* Return the largest SGNed number that is representable in PRECISION bits.
 
-   TODO: There is still code from the double_int era that trys to
+   TODO: There is still code from the double_int era that tries to
    make up for the fact that double int's could not represent the
    min and max values of all types.  This code should be removed
    because the min and max values can always be represented in
@@ -401,7 +401,7 @@ wi::force_to_size (HOST_WIDE_INT *val, const HOST_WIDE_INT *xval,
 }
 
 /* This function hides the fact that we cannot rely on the bits beyond
-   the precision.  This issue comes up in the relational comparisions
+   the precision.  This issue comes up in the relational comparisons
    where we do allow comparisons of values of different precisions.  */
 static inline HOST_WIDE_INT
 selt (const HOST_WIDE_INT *a, unsigned int len,
@@ -763,22 +763,21 @@ wi::bswap_large (HOST_WIDE_INT *val, const HOST_WIDE_INT *xval,
   return canonize (val, len, precision);
 }
 
-/* Bitreverse the integer represented by XVAL and LEN into VAL.  Return
+/* Bitreverse the integer represented by XVAL and XLEN into VAL.  Return
    the number of blocks in VAL.  Both XVAL and VAL have PRECISION bits.  */
 unsigned int
 wi::bitreverse_large (HOST_WIDE_INT *val, const HOST_WIDE_INT *xval,
-		      unsigned int len, unsigned int precision)
+		      unsigned int xlen, unsigned int precision)
 {
-  unsigned int i, s;
+  unsigned int s, len = BLOCKS_NEEDED (precision);
 
-  for (i = 0; i < len; i++)
-    val[i] = 0;
+  memset (val, 0, sizeof (unsigned HOST_WIDE_INT) * len);
 
   for (s = 0; s < precision; s++)
     {
       unsigned int block = s / HOST_BITS_PER_WIDE_INT;
       unsigned int offset = s & (HOST_BITS_PER_WIDE_INT - 1);
-      if (((safe_uhwi (xval, len, block) >> offset) & 1) != 0)
+      if (((safe_uhwi (xval, xlen, block) >> offset) & 1) != 0)
 	{
 	  unsigned int d = (precision - 1) - s;
 	  block = d / HOST_BITS_PER_WIDE_INT;
@@ -1865,7 +1864,7 @@ wi::divmod_internal (HOST_WIDE_INT *quotient, unsigned int *remainder_len,
     overflow = true;
 
   /* Handle the overflow cases.  Viewed as unsigned value, the quotient of
-     (signed min / -1) has the same representation as the orignal dividend.
+     (signed min / -1) has the same representation as the original dividend.
      We have traditionally made division by zero act as division by one,
      so there too we use the original dividend.  */
   if (overflow)

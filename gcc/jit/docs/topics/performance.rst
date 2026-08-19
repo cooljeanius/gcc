@@ -1,4 +1,4 @@
-.. Copyright (C) 2015-2025 Free Software Foundation, Inc.
+.. Copyright (C) 2015-2026 Free Software Foundation, Inc.
    Originally contributed by David Malcolm <dmalcolm@redhat.com>
 
    This is free software: you can redistribute it and/or modify it
@@ -32,7 +32,7 @@ of "timer items": as control flow moves through your code, you can push
 and pop named items relating to your code onto the stack, and the timer
 will account the time spent accordingly.
 
-You can also asssociate a timer with a :c:type:`gcc_jit_context`, in
+You can also associate a timer with a :c:type:`gcc_jit_context`, in
 which case the time spent inside compilation will be subdivided.
 
 For example, the following code uses a timer, recording client items

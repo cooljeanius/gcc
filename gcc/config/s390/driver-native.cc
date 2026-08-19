@@ -1,5 +1,5 @@
 /* Subroutines for the gcc driver.
-   Copyright (C) 2015-2025 Free Software Foundation, Inc.
+   Copyright (C) 2015-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -48,12 +48,9 @@ s390_host_detect_local_cpu (int argc, const char **argv)
   unsigned int has_features;
   unsigned int has_processor;
   unsigned int is_cpu_z9_109 = 0;
-  unsigned int has_highgprs = 0;
   unsigned int has_dfp = 0;
   unsigned int has_te = 0;
   unsigned int has_vx = 0;
-  unsigned int has_opt_esa_zarch = 0;
-  int i;
 
   if (argc < 1)
     return NULL;
@@ -61,9 +58,6 @@ s390_host_detect_local_cpu (int argc, const char **argv)
   arch = strcmp (argv[0], "arch") == 0;
   if (!arch && strcmp (argv[0], "tune"))
     return NULL;
-  for (i = 1; i < argc; i++)
-    if (strcmp (argv[i], "mesa_mzarch") == 0)
-      has_opt_esa_zarch = 1;
 
   f = fopen ("/proc/cpuinfo", "r");
   if (f == NULL)
@@ -127,6 +121,10 @@ s390_host_detect_local_cpu (int argc, const char **argv)
 	    case 0x3932:
 	      cpu = "arch14";
 	      break;
+	    case 0x9175:
+	    case 0x9176:
+	      cpu = "arch15";
+	      break;
 	    default:
 	      cpu = "arch15";
 	      break;
@@ -154,8 +152,6 @@ s390_host_detect_local_cpu (int argc, const char **argv)
 		has_te = 1;
 	      else if (i == 2 && startswith (p, "vx"))
 		has_vx = 1;
-	      else if (i == 8 && startswith (p, "highgprs"))
-		has_highgprs = 1;
 	      p += i;
 	    }
 	  has_features = 1;
@@ -171,7 +167,6 @@ s390_host_detect_local_cpu (int argc, const char **argv)
     {
       const char *opt_htm = "";
       const char *opt_vx = "";
-      const char *opt_esa_zarch = "";
 
       /* We may switch off these cpu features but never switch the on
 	 explicitly.  This overrides options specified on the command line.  */
@@ -179,12 +174,7 @@ s390_host_detect_local_cpu (int argc, const char **argv)
 	opt_htm = " -mno-htm";
       if (!has_vx)
 	opt_vx = " -mno-vx";
-      /* However, we set -mzarch only if neither -mzarch nor -mesa are used on
-	 the command line.  This allows the user to switch to -mesa manually.
-      */
-      if (!has_opt_esa_zarch && has_highgprs)
-	opt_esa_zarch = " -mzarch";
-      options = concat (options, opt_htm, opt_vx, opt_esa_zarch, NULL);
+      options = concat (options, opt_htm, opt_vx, NULL);
     }
   if (has_dfp && is_cpu_z9_109)
     cpu = "z9-ec";

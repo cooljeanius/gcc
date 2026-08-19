@@ -1,7 +1,7 @@
 /* Functions to enable and disable individual warnings on an expression
    and statement basis.
 
-   Copyright (C) 2021-2025 Free Software Foundation, Inc.
+   Copyright (C) 2021-2026 Free Software Foundation, Inc.
 
    This file is part of GCC.
 
@@ -28,7 +28,7 @@
 #include "gimple.h"
 #include "cgraph.h"
 #include "hash-map.h"
-#include "diagnostic-spec.h"
+#include "gcc-diagnostic-spec.h"
 
 /* Return the no-warning bit for EXPR.  */
 
@@ -265,7 +265,7 @@ bool has_warning_spec (const_tree t)
   return !RESERVED_LOCATION_P (loc) && get_no_warning_bit (t);
 }
 
-/* Retrieve warning dispostion bitmap for tree streaming.  */
+/* Retrieve warning disposition bitmap for tree streaming.  */
 
 unsigned
 get_warning_spec (const_tree t)

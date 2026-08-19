@@ -1,6 +1,6 @@
 // -*- C++ -*-
 
-// Copyright (C) 2007-2025 Free Software Foundation, Inc.
+// Copyright (C) 2007-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the terms
@@ -1001,7 +1001,7 @@ namespace __gnu_parallel
   /**
    * @brief Stable sorting functor.
    *
-   * Used to reduce code instanciation in multiway_merge_sampling_splitting.
+   * Used to reduce code instantiation in multiway_merge_sampling_splitting.
    */
   template<bool __stable, class _RAIter, class _StrictWeakOrdering>
     struct _SamplingSorter

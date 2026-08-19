@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2025 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -169,6 +169,14 @@ public:
   {
     return_place (ExprStmtBuilder (ctx).build (expr), expr.get_locus ());
   }
+  void visit (HIR::AnonConst &expr) override
+  {
+    return_place (ExprStmtBuilder (ctx).build (expr), expr.get_locus ());
+  }
+  void visit (HIR::ConstBlock &expr) override
+  {
+    return_place (ExprStmtBuilder (ctx).build (expr), expr.get_locus ());
+  }
   void visit (HIR::UnsafeBlockExpr &expr) override
   {
     return_place (ExprStmtBuilder (ctx).build (expr), expr.get_locus ());
@@ -207,6 +215,8 @@ public:
   }
 
   void visit (HIR::InlineAsm &expr) override {}
+  void visit (HIR::LlvmInlineAsm &expr) override {}
+  void visit (HIR::OffsetOf &expr) override {}
 
 protected: // Illegal at this position.
   void visit (HIR::StructExprFieldIdentifier &field) override
@@ -227,9 +237,9 @@ protected: // Illegal at this position.
   void visit (HIR::RangeFromExpr &expr) override { rust_unreachable (); }
   void visit (HIR::RangeToExpr &expr) override { rust_unreachable (); }
   void visit (HIR::RangeFullExpr &expr) override { rust_unreachable (); }
-  void visit (HIR::RangeFromToInclExpr &expr) override { rust_unreachable (); }
   void visit (HIR::RangeToInclExpr &expr) override { rust_unreachable (); }
   void visit (HIR::ReturnExpr &expr) override { rust_unreachable (); }
+  void visit (HIR::BoxExpr &expr) override { rust_unreachable (); }
 };
 
 } // namespace BIR

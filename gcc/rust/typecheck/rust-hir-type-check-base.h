@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2025 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -32,6 +32,18 @@ class TypeCheckBase
 public:
   virtual ~TypeCheckBase () {}
 
+  static void ResolveGenericParams (
+    const HIR::Item::ItemKind item_kind, location_t item_locus,
+    const std::vector<std::unique_ptr<HIR::GenericParam>> &generic_params,
+    std::vector<TyTy::SubstitutionParamMapping> &substitutions, bool is_foreign,
+    ABI abi);
+
+  static TyTy::TypeBoundPredicate ResolvePredicateFromBound (
+    HIR::TypePath &path,
+    tl::optional<std::reference_wrapper<HIR::Type>> associated_self,
+    BoundPolarity polarity = BoundPolarity::RegularBound,
+    bool is_qualified_type = false, bool is_super_trait = false);
+
 protected:
   TypeCheckBase ();
 
@@ -41,13 +53,13 @@ protected:
     HIR::TypePath &path,
     tl::optional<std::reference_wrapper<HIR::Type>> associated_self,
     BoundPolarity polarity = BoundPolarity::RegularBound,
-    bool is_qualified_type = false);
+    bool is_qualified_type = false, bool is_super_trait = false);
 
   bool check_for_unconstrained (
     const std::vector<TyTy::SubstitutionParamMapping> &params_to_constrain,
     const TyTy::SubstitutionArgumentMappings &constraint_a,
     const TyTy::SubstitutionArgumentMappings &constraint_b,
-    const TyTy::BaseType *reference);
+    TyTy::BaseType *reference);
 
   TyTy::BaseType *resolve_literal (const Analysis::NodeMapping &mappings,
 				   HIR::Literal &literal, location_t locus);
@@ -56,14 +68,15 @@ protected:
 						 location_t locus);
 
   void resolve_generic_params (
+    const HIR::Item::ItemKind item_kind, location_t item_locus,
     const std::vector<std::unique_ptr<HIR::GenericParam>> &generic_params,
-    std::vector<TyTy::SubstitutionParamMapping> &substitutions);
+    std::vector<TyTy::SubstitutionParamMapping> &substitutions,
+    bool is_foreign = false, ABI abi = ABI::RUST);
 
   TyTy::TypeBoundPredicate get_marker_predicate (LangItem::Kind item_type,
 						 location_t locus);
 
   Analysis::Mappings &mappings;
-  Resolver *resolver;
   TypeCheckContext *context;
 };
 

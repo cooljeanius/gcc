@@ -1,3 +1,199 @@
+2026-08-12  Gaius Mulley  <gaiusmod2@gmail.com>
+
+	PR modula2/125129
+	* Makefile.am (GM2_FOR_TARGET_ESC): New define.
+	(AM_MAKEFLAGS): Add GM2_FOR_TARGET_ESC.
+	Add HAVE_PYTHON_INTERPRETER.
+	* Makefile.in: Regenerate.
+	* aclocal.m4: Regenerate.
+	* config.h.in: Regenerate.
+	* configure: Regenerate.
+	* configure.ac: Call AC_PYTHON_DEVEL.
+	Call GCC_PICFLAG.
+	* libm2cor/Makefile.am (libm2cor_la_M2FLAGS): Add
+	gm2-libs-cor-common and pathname.
+	(SYSTEM.def): Rewrite rule.
+	(SYSTEM.mod): Copy common file.
+	* libm2cor/Makefile.in: Regenerate.
+	* libm2iso/Makefile.am (AM_MAKEFLAGS): Add GM2_FOR_TARGET_ESC.
+	Add HAVE_PYTHON_INTERPRETER.
+	(libm2iso_la_CFLAGS): Add m2pim pathname and ../libm2pim to
+	include path.
+	* libm2log/Makefile.am: Rewrite to handle HAVE_PYTHON_INTERPRETER.
+	Falling back to the common versions of target sources if
+	HAVE_PYTHON_INTERPRETER is false.
+	* libm2min/Makefile.am: Ditto.
+	* libm2pim/Makefile.am:	Ditto.
+	* libm2iso/Makefile.in: Regenerate.
+	* libm2log/Makefile.in: Regenerate.
+	* libm2min/Makefile.in: Regenerate.
+	* libm2pim/Makefile.in: Regenerate.
+	* ax_python_devel.m4: New file.
+
+2026-07-09  Stefan Schulze Frielinghaus  <stefansf@gcc.gnu.org>
+
+	* configure.host: Remove s390 host part; keep s390x.
+
+2026-06-29  Pietro Monteiro  <pietro@sociotechnical.xyz>
+
+	PR bootstrap/103459
+	* acinclude.m4: Replace AC_HELP_STRING with AS_HELP_STRING.  Replace
+	AC_LANG_SAVE AC_LANG_CPLUSPLUS (...) AC_LANG_RESTORE with
+	AC_LANG_PUSH([C++]) (...) AC_LANG_POP([C++]).  Replace AC_TRY_LINK with
+	AC_LINK_IFELSE.  Replace AC_TRY_COMPILE with AC_COMPILE_IFELSE.
+	* configure: Regenerate.
+	* configure.ac: Replace AC_HELP_STRING AS_HELP_STRING.  Remove redundant
+	AM_PROG_LIBTOOL.  Replace AC_LANG_C with AC_LANG([C]).  Replace
+	AC_FOREACH with m4_foreach_w.
+
+2026-06-01  Jakub Jelinek  <jakub@redhat.com>
+
+	* configure: Regenerate.
+
+2026-05-30  Dhruv Chawla  <dhruvc@nvidia.com>
+
+	* configure.ac: Fix typos.
+
+2026-04-21  Gaius Mulley  <gaiusmod2@gmail.com>
+
+	PR modula2/120189
+	* libm2iso/m2rts.h (Copyright): Correct dates.
+	(DEFAULT_RUNTIME_MODULE_OVERRIDE): New define.
+
+2026-04-21  Gaius Mulley  <gaiusmod2@gmail.com>
+
+	PR modula2/120189
+	* libm2iso/m2rts.h (m2iso_M2RTS_RequestDependant): Correct
+	parameters.
+	(m2iso_M2RTS_ConstructModules): Ditto.
+	(m2iso_M2RTS_DeconstructModules): Ditto.
+
+2025-12-29  Rainer Orth  <ro@CeBiTec.Uni-Bielefeld.DE>
+
+	* configure: Regenerate.
+
+2025-11-23  Gaius Mulley  <gaiusmod2@gmail.com>
+
+	PR modula2/122801
+	* configure: Regenerate.
+	* configure.ac (libtool_VERSION): Assign to 21:0:0.
+
+2025-11-03  Sam James  <sam@gentoo.org>
+
+	* configure: Regenerate.
+
+2025-10-24  Gaius Mulley  <gaiusmod2@gmail.com>
+
+	PR modula2/122407
+	* libm2pim/Makefile.am (M2MODS): Add BinDict.mod.
+	(M2DEFS): Add BinDict.def.
+	* libm2pim/Makefile.in: Regenerate.
+
+2025-10-07  Jonathan Wakely  <jwakely@redhat.com>
+
+	* configure.host: Fix spelling in comment.
+
+2025-10-05  Sam James  <sam@gentoo.org>
+
+	* Makefile.in: Regenerate.
+	* aclocal.m4: Regenerate.
+	* configure: Regenerate.
+	* libm2cor/Makefile.in: Regenerate.
+	* libm2iso/Makefile.in: Regenerate.
+	* libm2log/Makefile.in: Regenerate.
+	* libm2min/Makefile.in: Regenerate.
+	* libm2pim/Makefile.in: Regenerate.
+
+2025-09-19  Gaius Mulley  <gaiusmod2@gmail.com>
+
+	* libm2pim/Makefile.am (M2MODS): Add M2Diagnostic.mod.
+	Add M2WIDESET.mod.
+	(M2DEFS): Add M2Diagnostic.def.
+	Add M2WIDESET.def.
+	* libm2pim/Makefile.in: Regenerate.
+
+2025-07-23  Gaius Mulley  <gaiusmod2@gmail.com>
+
+	PR modula2/121164
+	* libm2iso/Makefile.am (libm2iso_la_M2FLAGS): Add -Wall.
+	* libm2iso/Makefile.in: Regenerate.
+	* libm2log/Makefile.am (libm2log_la_M2FLAGS): Add -Wall.
+	* libm2log/Makefile.in: Regenerate.
+	* libm2min/Makefile.am (libm2min_la_M2FLAGS): Add -Wall.
+	* libm2min/Makefile.in: Regenerate.
+	* libm2pim/Makefile.am (libm2pim_la_M2FLAGS): Add -Wall.
+	* libm2pim/Makefile.in: Regenerate.
+
+2025-06-29  Gaius Mulley  <gaiusmod2@gmail.com>
+
+	PR modula2/117203
+	* libm2iso/Makefile.am (M2DEFS): Add IOChanUtils.def.
+	(M2MODS): Add IOChanUtils.mod.
+	* libm2iso/Makefile.in: Regenerate.
+
+2025-06-07  Gaius Mulley  <gaiusmod2@gmail.com>
+
+	PR modula2/119650
+	PR modula2/117203
+	* libm2pim/Makefile.am (M2MODS): Add ARRAYOFCHAR,
+	CHAR.mod, StringFileSysOp.mod and String.mod.
+	(M2DEFS): Add ARRAYOFCHAR, CHAR.mod,
+	StringFileSysOp.mod and String.mod.
+	(libm2pim_la_SOURCES): Add CFileSysOp.c.
+	* libm2pim/Makefile.in: Regenerate.
+	* libm2pim/CFileSysOp.cc: New file.
+
+2025-04-24  Gaius Mulley  <gaiusmod2@gmail.com>
+
+	PR modula2/115276
+	* config.h.in: Regenerate.
+	* configure: Regenerate.
+	* configure.ac (AC_STRUCT_TIMEZONE): Add.
+	(AC_CHECK_MEMBER): Test for struct tm.tm_year.
+	(AC_CHECK_MEMBER): Test for struct tm.tm_mon.
+	(AC_CHECK_MEMBER): Test for struct tm.tm_mday.
+	(AC_CHECK_MEMBER): Test for struct tm.tm_hour.
+	(AC_CHECK_MEMBER): Test for struct tm.tm_min.
+	(AC_CHECK_MEMBER): Test for struct tm.tm_sec.
+	(AC_CHECK_MEMBER): Test for struct tm.tm_year.
+	(AC_CHECK_MEMBER): Test for struct tm.tm_yday.
+	(AC_CHECK_MEMBER): Test for struct tm.tm_wday.
+	(AC_CHECK_MEMBER): Test for struct tm.tm_isdst.
+	(AC_CHECK_MEMBER): Test for struct timeval.tv_sec.
+	(AC_CHECK_MEMBER): Test for struct timeval.tv_sec.
+	(AC_CHECK_MEMBER): Test for struct timeval.tv_usec.
+	* libm2iso/wraptime.cc (InitTimeval): Guard against lack
+	struct timeval and malloc.
+	(InitTimezone): Guard against lack of struct tm.tm_zone
+	and malloc.
+	(KillTimezone): Ditto.
+	(InitTimeval): Guard against lack of struct timeval
+	and malloc.
+	(KillTimeval): Guard against lack of malloc.
+	(settimeofday): Guard against lack of struct tm.tm_zone.
+	(GetFractions): Guard against lack of struct timeval.
+	(localtime_r): Ditto.
+	(GetYear): Guard against lack of struct tm.
+	(GetMonth): Ditto.
+	(GetDay): Ditto.
+	(GetHour): Ditto.
+	(GetMinute): Ditto.
+	(GetSecond): Ditto.
+	(GetSummerTime): Ditto.
+	(GetDST): Guards against lack of struct timezone.
+	(SetTimezone): Ditto.
+	(SetTimeval): Guard against lack of struct tm.
+
+2025-03-28  Gaius Mulley  <gaiusmod2@gmail.com>
+
+	PR modula2/118045
+	* libm2iso/Makefile.am (libm2iso_la_LINK): Add -lm.
+	* libm2log/Makefile.am (libm2log_la_LINK): Ditto.
+	* libm2pim/Makefile.am (libm2pim_la_LINK): Ditto.
+	* libm2iso/Makefile.in: Regenerate.
+	* libm2log/Makefile.in: Regenerate.
+	* libm2pim/Makefile.in: Regenerate.
+
 2025-03-20  Gaius Mulley  <gaiusmod2@gmail.com>
 
 	* libm2iso/ErrnoCategory.cc (IsErrnoHard): Defend against

@@ -15,6 +15,7 @@ inherit	 Tests for inheritance -- virtual functions, multiple inheritance, etc.
 init	 Tests for initialization semantics, constructors/destructors, etc.
 lookup	 Tests for lookup semantics, namespaces, using, etc.
 lto	 Tests for Link Time Optimization.
+modules  Tests for C++20 modules.
 opt	 Tests for fixes of bugs with particular optimizations.
 overload Tests for overload resolution and conversions.
 parse	 Tests for parsing.
@@ -33,7 +34,7 @@ special	 Tests that need custom expect code to run them; see special/ecos.exp
 	 for an example.
 
 
-Copyright (C) 2001-2025 Free Software Foundation, Inc.
+Copyright (C) 2001-2026 Free Software Foundation, Inc.
 
 Copying and distribution of this file, with or without modification,
 are permitted in any medium without royalty provided the copyright

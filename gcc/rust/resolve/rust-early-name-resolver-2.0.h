@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2025 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -26,6 +26,7 @@
 #include "rust-default-resolver.h"
 #include "rust-rib.h"
 #include "rust-toplevel-name-resolver-2.0.h"
+#include "rust-pattern.h"
 
 namespace Rust {
 namespace Resolver2_0 {
@@ -36,6 +37,10 @@ class Early : public DefaultResolver
 
   TopLevel toplevel;
   bool dirty;
+
+  void visit_derive_attribute (AST::Attribute &, Analysis::Mappings &);
+  void visit_non_builtin_attribute (AST::Attribute &, Analysis::Mappings &,
+				    std::string &name);
 
 public:
   Early (NameResolutionContext &ctx);
@@ -54,13 +59,17 @@ public:
 
   // as well as lexical scopes
   void visit (AST::BlockExpr &) override;
+  void maybe_prelude_import () override;
   void visit (AST::Module &) override;
 
   void visit (AST::MacroInvocation &) override;
 
-  void visit (AST::Function &) override;
-  void visit (AST::StructStruct &) override;
   void visit (AST::UseDeclaration &) override;
+  void visit (AST::UseTreeList &) override;
+
+  void visit (AST::Attribute &) override;
+
+  void visit (AST::IdentifierPattern &) override;
 
   struct ImportData
   {
@@ -71,30 +80,31 @@ public:
       Rebind
     } kind;
 
-    static ImportData
-    Simple (std::vector<std::pair<Rib::Definition, Namespace>> &&definitions)
+    static ImportData Simple (
+      std::vector<NameResolutionContext::NamespacedDefinition> &&definitions)
     {
       return ImportData (Kind::Simple, std::move (definitions));
     }
 
-    static ImportData
-    Rebind (std::vector<std::pair<Rib::Definition, Namespace>> &&definitions)
+    static ImportData Rebind (
+      std::vector<NameResolutionContext::NamespacedDefinition> &&definitions)
     {
       return ImportData (Kind::Rebind, std::move (definitions));
     }
 
-    static ImportData Glob (Rib::Definition module)
+    static ImportData Glob (Rib::Definition container)
     {
-      return ImportData (Kind::Glob, module);
+      return ImportData (Kind::Glob, container);
     }
 
-    Rib::Definition module () const
+    Rib::Definition container () const
     {
       rust_assert (kind == Kind::Glob);
-      return glob_module;
+      return glob_container;
     }
 
-    std::vector<std::pair<Rib::Definition, Namespace>> definitions () const
+    std::vector<NameResolutionContext::NamespacedDefinition>
+    definitions () const
     {
       rust_assert (kind != Kind::Glob);
       return std::move (resolved_definitions);
@@ -103,21 +113,22 @@ public:
   private:
     ImportData (
       Kind kind,
-      std::vector<std::pair<Rib::Definition, Namespace>> &&definitions)
+      std::vector<NameResolutionContext::NamespacedDefinition> &&definitions)
       : kind (kind), resolved_definitions (std::move (definitions))
     {}
 
-    ImportData (Kind kind, Rib::Definition module)
-      : kind (kind), glob_module (module)
+    ImportData (Kind kind, Rib::Definition container)
+      : kind (kind), glob_container (container)
     {}
 
     // TODO: Should this be a union?
 
     // For Simple and Rebind
-    std::vector<std::pair<Rib::Definition, Namespace>> resolved_definitions;
+    std::vector<NameResolutionContext::NamespacedDefinition>
+      resolved_definitions;
 
     // For Glob
-    Rib::Definition glob_module;
+    Rib::Definition glob_container;
   };
 
   struct ImportPair
@@ -147,17 +158,6 @@ public:
       return iter.first->second;
     }
 
-    void insert (NodeId path_id, std::vector<ImportPair> &&pairs)
-    {
-      mappings.insert ({{path_id}, std::move (pairs)});
-    }
-
-    // Same as `insert`, but with just one node
-    void insert (NodeId path_id, ImportPair &&pair)
-    {
-      mappings.insert ({{path_id}, {pair}});
-    }
-
     std::vector<ImportPair> &get (NodeId use_id) { return mappings[use_id]; }
 
   private:
@@ -167,15 +167,13 @@ public:
   };
 
 private:
-  void visit_attributes (std::vector<AST::Attribute> &attrs);
-
   /**
    * Insert a resolved macro invocation into the mappings once, meaning that we
    * can call this function each time the early name resolution pass is underway
    * and it will not trigger assertions for already resolved invocations.
    */
   // TODO: Rename
-  void insert_once (AST::MacroInvocation &invocation, NodeId resolved);
+  void try_insert_once (AST::MacroInvocation &invocation, NodeId resolved);
   // TODO: Rename
   void insert_once (AST::MacroRulesDefinition &definition);
 
@@ -215,26 +213,28 @@ private:
   bool resolve_rebind_import (NodeId use_dec_id, TopLevel::ImportKind &&import);
 
   template <typename P>
-  std::vector<std::pair<Rib::Definition, Namespace>>
+  std::vector<NameResolutionContext::NamespacedDefinition>
   resolve_path_in_all_ns (const P &path)
   {
-    const auto &segments = path.get_segments ();
-    std::vector<std::pair<Rib::Definition, Namespace>> resolved;
+    std::vector<NameResolutionContext::NamespacedDefinition> resolved;
 
-    // Pair a definition with the namespace it was found in
-    auto pair_with_ns = [&] (Namespace ns) {
-      return [&, ns] (Rib::Definition def) {
-	auto pair = std::make_pair (def, ns);
-	return resolved.emplace_back (std::move (pair));
-      };
-    };
+    std::vector<Error> value_errors;
+    std::vector<Error> type_errors;
+    std::vector<Error> macro_errors;
 
-    ctx.resolve_path (segments, Namespace::Values)
-      .map (pair_with_ns (Namespace::Values));
-    ctx.resolve_path (segments, Namespace::Types)
-      .map (pair_with_ns (Namespace::Types));
-    ctx.resolve_path (segments, Namespace::Macros)
-      .map (pair_with_ns (Namespace::Macros));
+    auto resolved_fn
+      = [&resolved] (NameResolutionContext::NamespacedDefinition new_def) {
+	  resolved.emplace_back (new_def);
+	};
+
+    ctx.resolve_path (path, value_errors, Namespace::Values).map (resolved_fn);
+    ctx.resolve_path (path, type_errors, Namespace::Types).map (resolved_fn);
+    ctx.resolve_path (path, macro_errors, Namespace::Macros).map (resolved_fn);
+
+    if (!value_errors.empty () && !type_errors.empty ()
+	&& !macro_errors.empty ())
+      for (auto &ent : value_errors)
+	collect_error (std::move (ent));
 
     return resolved;
   }
@@ -255,6 +255,9 @@ private:
 			     const Early::ImportPair &mapping);
 
   void finalize_rebind_import (const Early::ImportPair &mapping);
+
+  /* used to help conversion from IdentifierPattern to PathInExpression */
+  std::set<NodeId> ident_path_to_convert;
 };
 
 } // namespace Resolver2_0

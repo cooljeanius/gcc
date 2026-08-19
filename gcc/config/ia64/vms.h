@@ -1,5 +1,5 @@
 /* Definitions of target machine GNU compiler. IA64-VMS version.
-   Copyright (C) 2003-2025 Free Software Foundation, Inc.
+   Copyright (C) 2003-2026 Free Software Foundation, Inc.
    Contributed by Douglas B Rupp (rupp@gnat.com).
 
 This file is part of GCC.
@@ -32,10 +32,6 @@ along with GCC; see the file COPYING3.  If not see
 
 #undef MAX_OFILE_ALIGNMENT
 #define MAX_OFILE_ALIGNMENT 524288  /* 8 x 2^16 by DEC Ada Test CD40VRA */
-
-/* Widest floating-point type efficiently supported by hardware and OS.  */
-#undef WIDEST_HARDWARE_FP_SIZE
-#define WIDEST_HARDWARE_FP_SIZE 64
 
 /* The structure return address arrives as an "argument" on VMS.  */
 #undef PCC_STATIC_STRUCT_RETURN

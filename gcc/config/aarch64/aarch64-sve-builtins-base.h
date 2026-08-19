@@ -1,5 +1,5 @@
 /* ACLE support for AArch64 SVE (__ARM_FEATURE_SVE intrinsics)
-   Copyright (C) 2018-2025 Free Software Foundation, Inc.
+   Copyright (C) 2018-2026 Free Software Foundation, Inc.
 
    This file is part of GCC.
 
@@ -20,7 +20,7 @@
 #ifndef GCC_AARCH64_SVE_BUILTINS_BASE_H
 #define GCC_AARCH64_SVE_BUILTINS_BASE_H
 
-namespace aarch64_sve
+namespace aarch64_acle
 {
   namespace functions
   {
@@ -105,6 +105,7 @@ namespace aarch64_sve
     extern const function_base *const sveor;
     extern const function_base *const sveorv;
     extern const function_base *const svexpa;
+    extern const function_base *const svexpand;
     extern const function_base *const svext;
     extern const function_base *const svextb;
     extern const function_base *const svexth;

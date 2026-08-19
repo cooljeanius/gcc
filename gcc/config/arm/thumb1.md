@@ -1,5 +1,5 @@
 ;; ARM Thumb-1 Machine Description
-;; Copyright (C) 2007-2025 Free Software Foundation, Inc.
+;; Copyright (C) 2007-2026 Free Software Foundation, Inc.
 ;;
 ;; This file is part of GCC.
 ;;
@@ -35,7 +35,7 @@
 ;; or clobbering the flags.  Instead, they have the attribute "conds"
 ;; with value "set" or "clob".  However, this attribute is not used to
 ;; identify dependencies and therefore the scheduler might reorder
-;; these instruction.  Currenly, this problem cannot happen because
+;; these instruction.  Currently, this problem cannot happen because
 ;; there are no separate Thumb1 patterns for individual instruction
 ;; that consume flags (except conditional execution, which is treated
 ;; differently).  In particular there is no Thumb1 armv6-m pattern for
@@ -1070,7 +1070,7 @@
 
 
 ;; A pattern to recognize a special situation and optimize for it.
-;; On the thumb, zero-extension from memory is preferrable to sign-extension
+;; On the thumb, zero-extension from memory is preferable to sign-extension
 ;; due to the available addressing modes.  Hence, convert a signed comparison
 ;; with zero into an unsigned comparison with 127 if possible.
 (define_expand "cbranchqi4"
@@ -1120,7 +1120,7 @@
       if (t != NULL_RTX)
 	{
 	  if (!rtx_equal_p (cfun->machine->thumb1_cc_op0, operands[1])
-	      || !rtx_equal_p (cfun->machine->thumb1_cc_op1, operands[2]))
+	      || !rtx_equal_p (cfun->machine->thumb1_cc_op1, const0_rtx))
 	    t = NULL_RTX;
 	  if (cfun->machine->thumb1_cc_mode == CC_NZmode)
 	    {
@@ -1135,7 +1135,7 @@
 	  output_asm_insn ("cmp\t%1, #0", operands);
 	  cfun->machine->thumb1_cc_insn = insn;
 	  cfun->machine->thumb1_cc_op0 = operands[1];
-	  cfun->machine->thumb1_cc_op1 = operands[2];
+	  cfun->machine->thumb1_cc_op1 = const0_rtx;
 	  cfun->machine->thumb1_cc_mode = CCmode;
 	}
       else
@@ -1874,10 +1874,10 @@
 )
 
 (define_insn "*nonsecure_call_reg_thumb1_v5"
-  [(call (unspec:SI [(mem:SI (reg:SI R4_REGNUM))]
-		    UNSPEC_NONSECURE_MEM)
+  [(call (mem:SI (reg:SI R4_REGNUM))
 	 (match_operand 0 "" ""))
    (use (match_operand 1 "" ""))
+   (unspec:SI [(match_operand 2)]UNSPEC_NONSECURE_MEM)
    (clobber (reg:SI LR_REGNUM))]
   "TARGET_THUMB1 && use_cmse && !SIBLING_CALL_P (insn)"
   "bl\\t__gnu_cmse_nonsecure_call"
@@ -1919,11 +1919,10 @@
 
 (define_insn "*nonsecure_call_value_reg_thumb1_v5"
   [(set (match_operand 0 "" "")
-	(call (unspec:SI
-	       [(mem:SI (reg:SI R4_REGNUM))]
-	       UNSPEC_NONSECURE_MEM)
+	(call (mem:SI (reg:SI R4_REGNUM))
 	      (match_operand 1 "" "")))
    (use (match_operand 2 "" ""))
+   (unspec:SI [(match_operand 3)] UNSPEC_NONSECURE_MEM)
    (clobber (reg:SI LR_REGNUM))]
   "TARGET_THUMB1 && use_cmse"
   "bl\\t__gnu_cmse_nonsecure_call"

@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2025 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -20,6 +20,9 @@
 #include "rust-operators.h"
 #include "optional.h"
 #include "bi-map.h"
+
+#ifndef RUST_LANG_ITEM_H
+#define RUST_LANG_ITEM_H
 
 namespace Rust {
 
@@ -74,6 +77,7 @@ public:
     RANGE_TO,
     RANGE_INCLUSIVE,
     RANGE_TO_INCLUSIVE,
+    RANGE_INCLUSIVE_NEW,
 
     // https://github.com/rust-lang/rust/blob/master/library/core/src/marker.rs
     PHANTOM_DATA,
@@ -87,6 +91,7 @@ public:
     // markers
     COPY,
     CLONE,
+    DROP,
     SIZED,
     SYNC,
 
@@ -121,6 +126,9 @@ public:
     SLICE_U8,
     SLICE,
     STR,
+    // NOTE: CStr is not present in Rust 1.49, and is only backported for
+    // compilation of Rust for Linux with a patched core lib.
+    CSTR,
     F32_RUNTIME,
     F64_RUNTIME,
 
@@ -150,6 +158,25 @@ public:
 
     DISCRIMINANT_TYPE,
     DISCRIMINANT_KIND,
+
+    MANUALLY_DROP,
+    DROP_IN_PLACE,
+
+    EXCHANGE_MALLOC,
+    OWNED_BOX,
+    OOM,
+    ALLOC_LAYOUT,
+    BOX_FREE,
+    MAYBE_UNINIT,
+
+    UNSAFE_CELL,
+
+    FUTURE_TRAIT,
+    POLL,
+    READY,
+    PENDING,
+    GENERATOR,
+    GENERATOR_STATE,
   };
 
   static const BiMap<std::string, Kind> lang_items;
@@ -183,3 +210,5 @@ template <> struct hash<Rust::LangItem::Kind>
   }
 };
 } // namespace std
+
+#endif // RUST_LANG_ITEM_H

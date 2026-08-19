@@ -1,4 +1,5 @@
 /* { dg-do assemble { target aarch64_asm_sve_ok } } */
+/* { dg-require-effective-target aarch64_mbig_endian } */
 /* { dg-options "-O -msve-vector-bits=256 -mbig-endian --save-temps" } */
 
 typedef char vnx16qi __attribute__((vector_size(32)));
@@ -37,7 +38,7 @@ typedef struct { vnx2df a[4]; } vnx8df;
 TEST_TYPE (vnx64qi, z0, z4)
 TEST_TYPE (vnx32hi, z6, z2)
 TEST_TYPE (vnx16si, z12, z16)
-TEST_TYPE (vnx8di, z17, z13)
+TEST_TYPE (vnx8di, z17, z12)
 TEST_TYPE (vnx32hf, z18, z1)
 TEST_TYPE (vnx16sf, z20, z16)
 TEST_TYPE (vnx8df, z24, z28)
@@ -92,11 +93,11 @@ TEST_TYPE (vnx8df, z24, z28)
 /* { dg-final { scan-assembler {\tld1d\tz19.d, p[0-7]/z, \[x0, #2, mul vl\]\n} } } */
 /* { dg-final { scan-assembler {\tld1d\tz20.d, p[0-7]/z, \[x0, #3, mul vl\]\n} } } */
 /* { dg-final { scan-assembler { test vnx8di 1 z17\n} } } */
-/* { dg-final { scan-assembler {\tmov\tz13.d, z17.d\n} } } */
-/* { dg-final { scan-assembler {\tmov\tz14.d, z18.d\n} } } */
-/* { dg-final { scan-assembler {\tmov\tz15.d, z19.d\n} } } */
-/* { dg-final { scan-assembler {\tmov\tz16.d, z20.d\n} } } */
-/* { dg-final { scan-assembler { test vnx8di 2 z17, z17, z13\n} } } */
+/* { dg-final { scan-assembler {\tmov\tz12.d, z17.d\n} } } */
+/* { dg-final { scan-assembler {\tmov\tz13.d, z18.d\n} } } */
+/* { dg-final { scan-assembler {\tmov\tz14.d, z19.d\n} } } */
+/* { dg-final { scan-assembler {\tmov\tz15.d, z20.d\n} } } */
+/* { dg-final { scan-assembler { test vnx8di 2 z17, z17, z12\n} } } */
 /* { dg-final { scan-assembler {\tst1d\tz17.d, p[0-7], \[x0, #4, mul vl\]\n} } } */
 /* { dg-final { scan-assembler {\tst1d\tz18.d, p[0-7], \[x0, #5, mul vl\]\n} } } */
 /* { dg-final { scan-assembler {\tst1d\tz19.d, p[0-7], \[x0, #6, mul vl\]\n} } } */

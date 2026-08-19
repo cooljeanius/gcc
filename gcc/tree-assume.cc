@@ -1,5 +1,5 @@
-/* Support for C++23 ASSUME keyword functionailty.
-   Copyright (C) 2023-2025 Free Software Foundation, Inc.
+/* Support for C++23 ASSUME keyword functionality.
+   Copyright (C) 2023-2026 Free Software Foundation, Inc.
    Contributed by Andrew MacLeod <amacleod@redhat.com>.
 
 This file is part of GCC.
@@ -295,7 +295,7 @@ assume_query::calculate_phi (gphi *phi, vrange &lhs_range)
 		  continue;
 		}
 
-	      // If the def is in the immediate preceeding block, process it
+	      // If the def is in the immediate preceding block, process it
 	      // with GORI to determine what values can produce this
 	      // argument value.  Otherwise there is more CFG flow, so query
 	      // the edge for parm ranges.  This is conservative.
@@ -312,7 +312,7 @@ assume_query::calculate_phi (gphi *phi, vrange &lhs_range)
 	    {
 	      // If this is a constant value that differs from LHS, this
 	      // edge cannot be taken and we can ignore it. Otherwise fall
-	      // thorugh and process the parameters on the edge.
+	      // through and process the parameters on the edge.
 	      edge_range.intersect (lhs_range);
 	      if (edge_range.undefined_p ())
 		{

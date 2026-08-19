@@ -1,7 +1,7 @@
 /* State will store states of variables for a function's single execution path.
    It will be used for bit-level symbolic execution to determine values of bits
    of function's return value and symbolic marked arguments.
-   Copyright (C) 2022-2025 Free Software Foundation, Inc.
+   Copyright (C) 2022-2026 Free Software Foundation, Inc.
    Contributed by Matevos Mehrabyan <matevosmehrabyan@gmail.com>
 
 This file is part of GCC.
@@ -183,7 +183,7 @@ class state {
   /* Performs AND operation on two bits.  */
   static value_bit *and_two_bits (value_bit *arg1, value_bit *arg2);
 
-  /* ANDs every bit of the value with var_bit, stroes the result in var1.  */
+  /* ANDs every bit of the value with var_bit, stores the result in var1.  */
   void and_number_bit (value *var1, value_bit *var_bit);
 
   /* Multiplies given values.  The result is stored in dest.  */
@@ -263,7 +263,7 @@ class state {
   value *shift_left_by_const (const value *number, size_t shift_value);
 
   /* Adds two bits and carry value.
-     Resturn result and stores new carry bit in "carry".  */
+     Returns result and stores new carry bit in "carry".  */
   static value_bit *full_adder (value_bit *var1, value_bit *var2,
 				value_bit **carry);
 

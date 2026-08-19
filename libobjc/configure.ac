@@ -1,5 +1,5 @@
 # Process this file with autoconf to produce a configure script.
-#   Copyright (C) 1994-2025 Free Software Foundation, Inc.
+#   Copyright (C) 1994-2026 Free Software Foundation, Inc.
 #   Originally contributed by Dave Love (d.love@dl.ac.uk).
 #
 #This file is part of GCC.
@@ -64,7 +64,7 @@ AC_MSG_RESULT($version_specific_libs)
 # Find the rest of the source tree framework.
 AM_ENABLE_MULTILIB(, ..)
 
-AC_CANONICAL_SYSTEM
+AC_CANONICAL_TARGET
 ACX_NONCANONICAL_TARGET
 
 # Export source directory.
@@ -166,7 +166,7 @@ AM_MAINTAINER_MODE
 # Enable Win32 DLL on MS Windows - FIXME
 AC_LIBTOOL_WIN32_DLL
 
-AC_PROG_LIBTOOL
+LT_INIT
 
 AM_PROG_CC_C_O
 
@@ -206,8 +206,8 @@ AC_CHECK_HEADER(stdio.h,:,
   [AC_MSG_ERROR([Can't find stdio.h.
 You must have a usable C system for the target already installed, at least
 including headers and, preferably, the library, before you can configure
-the Objective C runtime system.  If necessary, install gcc now with 
-\`LANGUAGES=c', then the target library, then build with \`LANGUAGES=objc'.])])
+the Objective C runtime system.  If necessary, install gcc now with
+`LANGUAGES=c', then the target library, then build with `LANGUAGES=objc'.])])
 
 AC_HEADER_STDC
 

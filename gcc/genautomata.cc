@@ -1,5 +1,5 @@
 /* Pipeline hazard description translator.
-   Copyright (C) 2000-2025 Free Software Foundation, Inc.
+   Copyright (C) 2000-2026 Free Software Foundation, Inc.
 
    Written by Vladimir Makarov <vmakarov@redhat.com>
 
@@ -5029,7 +5029,7 @@ struct unit_usage
 {
   unit_decl_t unit_decl;
   /* The following forms a list of units used on the same cycle in the
-     same alternative.  The list is ordered by the correspdoning unit
+     same alternative.  The list is ordered by the corresponding unit
      declarations and there is no unit declaration duplication in the
      list.  */
   struct unit_usage *next;
@@ -8143,7 +8143,7 @@ static void\n\
 dfa_insn_code_enlarge (int uid)\n\
 {\n\
   int i = %s;\n\
-  %s = 2 * uid;\n\
+  %s = MIN (INT_MAX, 2U * uid);\n\
   %s = XRESIZEVEC (int, %s,\n\
                  %s);\n\
   for (; i < %s; i++)\n\

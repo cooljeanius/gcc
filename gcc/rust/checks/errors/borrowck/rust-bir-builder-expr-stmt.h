@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2025 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -19,6 +19,7 @@
 #ifndef RUST_BIR_BUILDER_EXPR_H
 #define RUST_BIR_BUILDER_EXPR_H
 
+#include "rust-hir-expr.h"
 #include "rust-hir-visitor.h"
 #include "rust-bir-builder-internal.h"
 
@@ -84,14 +85,16 @@ protected: // Expr
   void visit (HIR::MethodCallExpr &expr) override;
   void visit (HIR::FieldAccessExpr &expr) override;
   void visit (HIR::BlockExpr &block) override;
+  void visit (HIR::AnonConst &block) override;
+  void visit (HIR::ConstBlock &block) override;
   void visit (HIR::ContinueExpr &cont) override;
   void visit (HIR::BreakExpr &brk) override;
   void visit (HIR::RangeFromToExpr &range) override;
   void visit (HIR::RangeFromExpr &expr) override;
   void visit (HIR::RangeToExpr &expr) override;
   void visit (HIR::RangeFullExpr &expr) override;
-  void visit (HIR::RangeFromToInclExpr &expr) override;
   void visit (HIR::RangeToInclExpr &expr) override;
+  void visit (HIR::BoxExpr &expr) override;
   void visit (HIR::ReturnExpr &ret) override;
   void visit (HIR::UnsafeBlockExpr &expr) override;
   void visit (HIR::LoopExpr &expr) override;
@@ -100,6 +103,8 @@ protected: // Expr
   void visit (HIR::IfExpr &expr) override;
   void visit (HIR::IfExprConseqElse &expr) override;
   void visit (HIR::InlineAsm &expr) override;
+  void visit (HIR::LlvmInlineAsm &expr) override;
+  void visit (HIR::OffsetOf &expr) override;
 
   void visit (HIR::MatchExpr &expr) override;
   void visit (HIR::AwaitExpr &expr) override;

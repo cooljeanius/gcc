@@ -1,4 +1,4 @@
-// Copyright (C) 2025 Free Software Foundation, Inc.
+// Copyright (C) 2025-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -24,8 +24,8 @@
 namespace Rust {
 namespace AST {
 
-DeriveDebug::DeriveDebug (location_t loc)
-  : DeriveVisitor (loc), expanded (nullptr)
+DeriveDebug::DeriveDebug (location_t loc, Builder::Source item_source)
+  : DeriveVisitor (loc, item_source), expanded (nullptr)
 {}
 
 std::unique_ptr<Item>
@@ -50,16 +50,15 @@ DeriveDebug::stub_debug_fn ()
   // we can't use builder.block() here as it returns a unique_ptr<Expr> and
   // Function's constructor expects a unique_ptr<BlockExpr>
   auto block = std::unique_ptr<BlockExpr> (
-    new BlockExpr ({}, std::move (stub_return), {}, {},
-		   AST::LoopLabel::error (), loc, loc));
+    new BlockExpr ({}, std::move (stub_return), {}, {}, tl::nullopt, loc, loc));
 
   auto self = builder.self_ref_param ();
 
-  auto return_type
-    = ptrify (builder.type_path ({"core", "fmt", "Result"}, true));
+  auto return_type = ptrify (
+    builder.type_path ({builder.get_path_start (), "fmt", "Result"}, true));
 
-  auto mut_fmt_type_inner
-    = ptrify (builder.type_path ({"core", "fmt", "Formatter"}, true));
+  auto mut_fmt_type_inner = ptrify (
+    builder.type_path ({builder.get_path_start (), "fmt", "Formatter"}, true));
 
   auto mut_fmt_type
     = builder.reference_type (std::move (mut_fmt_type_inner), true);
@@ -82,11 +81,15 @@ DeriveDebug::stub_derive_impl (
 {
   auto trait_items = vec (stub_debug_fn ());
 
-  auto debug = builder.type_path ({"core", "fmt", "Debug"}, true);
-  auto generics
-    = setup_impl_generics (name, type_generics, builder.trait_bound (debug));
+  auto debug = [this] () {
+    return builder.type_path ({builder.get_path_start (), "fmt", "Debug"},
+			      true);
+  };
+  auto generics = setup_impl_generics (name, type_generics, [&, this] () {
+    return builder.trait_bound (debug ());
+  });
 
-  return builder.trait_impl (debug, std::move (generics.self_type),
+  return builder.trait_impl (debug (), std::move (generics.self_type),
 			     std::move (trait_items),
 			     std::move (generics.impl));
 }

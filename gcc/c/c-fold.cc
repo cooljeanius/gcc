@@ -1,5 +1,5 @@
 /* Support for fully folding sub-trees of an expression for C compiler.
-   Copyright (C) 1992-2025 Free Software Foundation, Inc.
+   Copyright (C) 1992-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -40,11 +40,10 @@ c_disable_warnings (bool disable)
   if (disable)
     {
       ++c_inhibit_evaluation_warnings;
-      fold_defer_overflow_warnings ();
     }
 }
 
-/* If ENABLE is true, reenable issuing warnings.  */
+/* If ENABLE is true, re-enable issuing warnings.  */
 
 static void
 c_enable_warnings (bool enable)
@@ -52,7 +51,6 @@ c_enable_warnings (bool enable)
   if (enable)
     {
       --c_inhibit_evaluation_warnings;
-      fold_undefer_and_ignore_overflow_warnings ();
     }
 }
 
@@ -369,7 +367,25 @@ c_fully_fold_internal (tree expr, bool in_init, bool *maybe_const_operands,
 			    || TREE_CODE (op1) != INTEGER_CST))
 	goto out;
 
-      if (op0 != orig_op0 || op1 != orig_op1 || in_init)
+      if (TREE_CODE_CLASS (code) == tcc_comparison
+	  && TREE_CODE (TREE_TYPE (op0)) == NULLPTR_TYPE
+	  && TREE_CODE (TREE_TYPE (op1)) == NULLPTR_TYPE)
+	{
+	  switch (code)
+	    {
+	    case EQ_EXPR:
+	      ret = constant_boolean_node (true, TREE_TYPE (expr));
+	      break;
+	    case NE_EXPR:
+	      ret = constant_boolean_node (false, TREE_TYPE (expr));
+	      break;
+	    default:
+	      gcc_unreachable ();
+	    }
+	  ret = omit_two_operands_loc (loc, TREE_TYPE (expr), ret,
+				       op0, op1);
+	}
+      else if (op0 != orig_op0 || op1 != orig_op1 || in_init)
 	ret = in_init
 	  ? fold_build2_initializer_loc (loc, code, TREE_TYPE (expr), op0, op1)
 	  : fold_build2_loc (loc, code, TREE_TYPE (expr), op0, op1);

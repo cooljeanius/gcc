@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2025 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -20,7 +20,9 @@
 #define RUST_HIR_TYPE_CHECK
 
 #include "rust-hir-map.h"
+#include "rust-mapping-common.h"
 #include "rust-tyty.h"
+#include "rust-hir-impl-trait-context.h"
 #include "rust-hir-trait-reference.h"
 #include "rust-stacked-contexts.h"
 #include "rust-autoderef.h"
@@ -157,6 +159,39 @@ public:
   WARN_UNUSED_RESULT Lifetime next () { return Lifetime (interner_index++); }
 };
 
+struct DeferredOpOverload
+{
+  HirId expr_id;
+  LangItem::Kind lang_item_type;
+  HIR::PathIdentSegment specified_segment;
+  TyTy::TypeBoundPredicate predicate;
+  HIR::OperatorExprMeta op;
+
+  DeferredOpOverload (HirId expr_id, LangItem::Kind lang_item_type,
+		      HIR::PathIdentSegment specified_segment,
+		      TyTy::TypeBoundPredicate &predicate,
+		      HIR::OperatorExprMeta op)
+    : expr_id (expr_id), lang_item_type (lang_item_type),
+      specified_segment (specified_segment), predicate (predicate), op (op)
+  {}
+
+  DeferredOpOverload (const struct DeferredOpOverload &other)
+    : expr_id (other.expr_id), lang_item_type (other.lang_item_type),
+      specified_segment (other.specified_segment), predicate (other.predicate),
+      op (other.op)
+  {}
+
+  DeferredOpOverload &operator= (struct DeferredOpOverload const &other)
+  {
+    expr_id = other.expr_id;
+    lang_item_type = other.lang_item_type;
+    specified_segment = other.specified_segment;
+    op = other.op;
+
+    return *this;
+  }
+};
+
 class TypeCheckContext
 {
 public:
@@ -186,6 +221,10 @@ public:
 			 TyTy::BaseType *return_type);
   void pop_return_type ();
 
+  void push_expected_type (TyTy::BaseType *expected);
+  void pop_expected_type ();
+  TyTy::BaseType *peek_expected_type () const;
+
   StackedContexts<TypeCheckBlockContextItem> &block_context ();
 
   void iterate (std::function<bool (HirId, TyTy::BaseType *)> cb);
@@ -198,10 +237,18 @@ public:
 
   void swap_head_loop_context (TyTy::BaseType *val);
 
+  bool
+  find_matching_impl_trait_frame (const TraitReference &tref,
+				  struct ImplTraitContextFrame *find) const;
+  bool have_impl_trait_context () const;
+  void push_impl_trait_context (struct ImplTraitContextFrame frame);
+  struct ImplTraitContextFrame pop_impl_trait_context ();
+  struct ImplTraitContextFrame peek_impl_trait_context ();
+
   void insert_trait_reference (DefId id, TraitReference &&ref);
   bool lookup_trait_reference (DefId id, TraitReference **ref);
 
-  void insert_associated_trait_impl (HirId id,
+  bool insert_associated_trait_impl (HirId id,
 				     AssociatedImplTrait &&associated);
   bool lookup_associated_trait_impl (HirId id,
 				     AssociatedImplTrait **associated);
@@ -215,10 +262,10 @@ public:
   bool lookup_associated_type_mapping (HirId id, HirId *mapping);
 
   void insert_associated_impl_mapping (HirId trait_id,
-				       const TyTy::BaseType *impl_type,
+				       TyTy::BaseType *impl_type,
 				       HirId impl_id);
   bool lookup_associated_impl_mapping_for_self (HirId trait_id,
-						const TyTy::BaseType *self,
+						TyTy::BaseType *self,
 						HirId *mapping);
 
   void insert_autoderef_mappings (HirId id,
@@ -236,6 +283,13 @@ public:
 
   void insert_operator_overload (HirId id, TyTy::FnType *call_site);
   bool lookup_operator_overload (HirId id, TyTy::FnType **call);
+
+  void insert_deferred_operator_overload (DeferredOpOverload deferred);
+  bool lookup_deferred_operator_overload (HirId id,
+					  DeferredOpOverload *deferred);
+
+  void iterate_deferred_operator_overloads (
+    std::function<bool (HirId, DeferredOpOverload &)> cb);
 
   void insert_unconstrained_check_marker (HirId id, bool status);
   bool have_checked_for_unconstrained (HirId id, bool *result);
@@ -263,25 +317,30 @@ public:
   WARN_UNUSED_RESULT std::vector<TyTy::Region>
   regions_from_generic_args (const HIR::GenericArgs &args) const;
 
-  void compute_inference_variables (bool error);
+  void compute_inference_variables (bool emit_error);
 
   TyTy::VarianceAnalysis::CrateCtx &get_variance_analysis_ctx ();
 
 private:
   TypeCheckContext ();
 
+  bool compute_infer_var (HirId id, TyTy::BaseType *ty, bool emit_error);
+  bool compute_ambigious_op_overload (HirId id, DeferredOpOverload &op);
+
   std::map<NodeId, HirId> node_id_refs;
   std::map<HirId, TyTy::BaseType *> resolved;
   std::vector<std::unique_ptr<TyTy::BaseType>> builtins;
   std::vector<std::pair<TypeCheckContextItem, TyTy::BaseType *>>
     return_type_stack;
+  std::vector<TyTy::BaseType *> expected_type_stack;
   std::vector<TyTy::BaseType *> loop_type_stack;
   StackedContexts<TypeCheckBlockContextItem> block_stack;
   std::map<DefId, TraitReference> trait_context;
   std::map<HirId, AssociatedImplTrait> associated_impl_traits;
+  std::vector<ImplTraitContextFrame> impl_trait_frame_stack;
 
   // trait-id -> list of < self-tyty:impl-id>
-  std::map<HirId, std::vector<std::pair<const TyTy::BaseType *, HirId>>>
+  std::map<HirId, std::vector<std::pair<TyTy::BaseType *, HirId>>>
     associated_traits_to_impls;
 
   std::map<HirId, HirId> associated_type_mappings;
@@ -305,6 +364,9 @@ private:
   // query context lookups
   std::set<HirId> querys_in_progress;
   std::set<DefId> trait_queries_in_progress;
+
+  // deferred operator overload
+  std::map<HirId, DeferredOpOverload> deferred_operator_overloads;
 
   // variance analysis
   TyTy::VarianceAnalysis::CrateCtx variance_analysis_ctx;
@@ -509,6 +571,47 @@ public:
 private:
   DefId id;
   TypeCheckContext &ctx;
+};
+
+template <typename T> class ScopedPush
+{
+public:
+  ScopedPush (std::vector<T> &stack, T value, bool enabled = true)
+    : stack (stack), enabled (enabled)
+  {
+    if (enabled)
+      stack.push_back (value);
+  }
+
+  ~ScopedPush ()
+  {
+    if (enabled)
+      stack.pop_back ();
+  }
+
+  static bool contains (const std::vector<T> &stack, const T &value)
+  {
+    return std::find (stack.begin (), stack.end (), value) != stack.end ();
+  }
+
+private:
+  std::vector<T> &stack;
+  bool enabled;
+};
+
+class ImplTraitFrameGuard
+{
+public:
+  ImplTraitFrameGuard (ImplTraitContextFrame frame)
+    : ctx (*TypeCheckContext::get ())
+  {
+    ctx.push_impl_trait_context (frame);
+  }
+
+  ~ImplTraitFrameGuard () { ctx.pop_impl_trait_context (); }
+
+private:
+  Resolver::TypeCheckContext &ctx;
 };
 
 } // namespace Resolver

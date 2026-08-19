@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2025 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -27,6 +27,7 @@
 #include "rust-hir-path-probe.h"
 #include "rust-compile-extern.h"
 #include "rust-constexpr.h"
+#include "rust-rib.h"
 #include "rust-tyty.h"
 
 namespace Rust {
@@ -97,15 +98,20 @@ ResolvePathRef::attempt_constructor_expression_lookup (
 
   // this can only be for discriminant variants the others are built up
   // using call-expr or struct-init
-  rust_assert (variant->get_variant_type ()
-	       == TyTy::VariantDef::VariantType::NUM);
+  if (variant->get_variant_type () != TyTy::VariantDef::VariantType::NUM)
+    {
+      rust_error_at (expr_locus, "variant expected constructor call");
+      return error_mark_node;
+    }
 
   // we need the actual gcc type
   tree compiled_adt_type = TyTyResolveCompile::compile (ctx, adt);
 
   // make the ctor for the union
   HIR::Expr &discrim_expr = variant->get_discriminant ();
+  ctx->push_const_context ();
   tree discrim_expr_node = CompileExpr::Compile (discrim_expr, ctx);
+  ctx->pop_const_context ();
   tree folded_discrim_expr = fold_expr (discrim_expr_node);
   tree qualifier = folded_discrim_expr;
 
@@ -127,10 +133,8 @@ ResolvePathRef::resolve_with_node_id (
   tl::optional<HirId> hid
     = ctx->get_mappings ().lookup_node_to_hir (resolved_node_id);
   if (!hid.has_value ())
-    {
-      rust_error_at (expr_locus, "reverse call path lookup failure");
-      return error_mark_node;
-    }
+    return error_mark_node;
+
   auto ref = hid.value ();
 
   // might be a constant
@@ -178,24 +182,40 @@ ResolvePathRef::resolve_with_node_id (
       else if (fntype->get_abi () == ABI::INTRINSIC)
 	{
 	  Intrinsics compile (ctx);
-	  fn = compile.compile (fntype);
+	  fn = compile.compile (fntype, expr_locus);
 	  TREE_USED (fn) = 1;
 	  return address_expression (fn, expr_locus);
 	}
     }
 
+  // possibly a const expr value
+  if (lookup->get_kind () == TyTy::TypeKind::CONST)
+    {
+      auto d = lookup->destructure ();
+      rust_assert (d->get_kind () == TyTy::TypeKind::CONST);
+      auto c = d->as_const_type ();
+      if (c->const_kind () != TyTy::BaseConstType::ConstKind::Value)
+	return error_mark_node;
+
+      auto val = static_cast<TyTy::ConstValueType *> (c);
+      return val->get_value ();
+    }
+
   // Handle unit struct
+  tree resolved_item = error_mark_node;
   if (lookup->get_kind () == TyTy::TypeKind::ADT)
-    return attempt_constructor_expression_lookup (lookup, ctx, mappings,
-						  expr_locus);
+    resolved_item
+      = attempt_constructor_expression_lookup (lookup, ctx, mappings,
+					       expr_locus);
+
+  if (!error_operand_p (resolved_item))
+    return resolved_item;
 
   // let the query system figure it out
-  tree resolved_item = query_compile (ref, lookup, final_segment, mappings,
-				      expr_locus, is_qualified_path);
+  resolved_item = query_compile (ref, lookup, final_segment, mappings,
+				 expr_locus, is_qualified_path);
   if (resolved_item != error_mark_node)
-    {
-      TREE_USED (resolved_item) = 1;
-    }
+    TREE_USED (resolved_item) = 1;
 
   return resolved_item;
 }
@@ -207,36 +227,25 @@ ResolvePathRef::resolve (const HIR::PathIdentSegment &final_segment,
 {
   TyTy::BaseType *lookup = nullptr;
   bool ok = ctx->get_tyctx ()->lookup_type (mappings.get_hirid (), &lookup);
-  rust_assert (ok);
+  if (!ok)
+    return error_mark_node;
 
   // need to look up the reference for this identifier
 
   // this can fail because it might be a Constructor for something
   // in that case the caller should attempt ResolvePathType::Compile
-  NodeId ref_node_id = UNKNOWN_NODEID;
-  if (flag_name_resolution_2_0)
-    {
-      auto &nr_ctx
-	= Resolver2_0::ImmutableNameResolutionContext::get ().resolver ();
+  auto &nr_ctx = Resolver2_0::FinalizedNameResolutionContext::get ();
 
-      auto resolved = nr_ctx.lookup (mappings.get_nodeid ());
+  // TODO: Is Values the correct NS here?
+  auto resolved
+    = nr_ctx.lookup (mappings.get_nodeid (), Resolver2_0::Namespace::Values);
 
-      if (!resolved)
-	return attempt_constructor_expression_lookup (lookup, ctx, mappings,
-						      expr_locus);
-
-      ref_node_id = *resolved;
-    }
-  else
-    {
-      if (!ctx->get_resolver ()->lookup_resolved_name (mappings.get_nodeid (),
-						       &ref_node_id))
-	return attempt_constructor_expression_lookup (lookup, ctx, mappings,
-						      expr_locus);
-    }
+  if (!resolved)
+    return attempt_constructor_expression_lookup (lookup, ctx, mappings,
+						  expr_locus);
 
   return resolve_with_node_id (final_segment, mappings, expr_locus,
-			       is_qualified_path, ref_node_id);
+			       is_qualified_path, *resolved);
 }
 
 tree
@@ -259,10 +268,10 @@ HIRCompileBase::query_compile (HirId ref, TyTy::BaseType *lookup,
       HIR::ExternalItem *resolved_extern_item = hir_extern_item->first;
       if (!lookup->has_substitutions_defined ())
 	return CompileExternItem::compile (resolved_extern_item, ctx, nullptr,
-					   true, expr_locus);
+					   expr_locus);
       else
 	return CompileExternItem::compile (resolved_extern_item, ctx, lookup,
-					   true, expr_locus);
+					   expr_locus);
     }
   else
     {
@@ -284,10 +293,10 @@ HIRCompileBase::query_compile (HirId ref, TyTy::BaseType *lookup,
 	{
 	  if (!lookup->has_substitutions_defined ())
 	    return CompileInherentImplItem::Compile (resolved_item->first, ctx,
-						     nullptr, true, expr_locus);
+						     nullptr, expr_locus);
 	  else
 	    return CompileInherentImplItem::Compile (resolved_item->first, ctx,
-						     lookup, true, expr_locus);
+						     lookup, expr_locus);
 	}
       else if (auto trait_item
 	       = ctx->get_mappings ().lookup_hir_trait_item (ref))
@@ -301,6 +310,27 @@ HIRCompileBase::query_compile (HirId ref, TyTy::BaseType *lookup,
 	    trait->get_mappings ().get_defid (), &trait_ref);
 	  rust_assert (ok);
 
+	  if (trait_item.value ()->get_item_kind ()
+	      == HIR::TraitItem::TraitItemKind::CONST)
+	    {
+	      auto &c
+		= *static_cast<HIR::TraitItemConst *> (trait_item.value ());
+	      if (!c.has_expr ())
+		{
+		  rich_location r (line_table, expr_locus);
+		  r.add_range (trait->get_locus ());
+		  r.add_range (c.get_locus ());
+		  rust_error_at (r, "no default expression on trait constant");
+		  return error_mark_node;
+		}
+
+	      return CompileExpr::Compile (c.get_expr (), ctx);
+	    }
+
+	  if (trait_item.value ()->get_item_kind ()
+	      != HIR::TraitItem::TraitItemKind::FUNC)
+	    return error_mark_node;
+
 	  // the type resolver can only resolve type bounds to their trait
 	  // item so its up to us to figure out if this path should resolve
 	  // to an trait-impl-block-item or if it can be defaulted to the
@@ -313,11 +343,18 @@ HIRCompileBase::query_compile (HirId ref, TyTy::BaseType *lookup,
 	  rust_assert (lookup->is<TyTy::FnType> ());
 	  auto fn = lookup->as<TyTy::FnType> ();
 	  rust_assert (fn->get_num_type_params () > 0);
-	  auto &self = fn->get_substs ().at (0);
-	  auto receiver = self.get_param_ty ();
+	  TyTy::SubstitutionParamMapping &self = fn->get_substs ().at (0);
+	  TyTy::BaseGeneric *receiver = self.get_param_ty ();
+	  TyTy::BaseType *r = receiver;
+	  if (!receiver->can_resolve ())
+	    {
+	      bool ok
+		= ctx->get_tyctx ()->lookup_type (receiver->get_ref (), &r);
+	      rust_assert (ok);
+	    }
+
 	  auto candidates
-	    = Resolver::PathProbeImplTrait::Probe (receiver, final_segment,
-						   trait_ref);
+	    = Resolver::PathProbeImplTrait::Probe (r, final_segment, trait_ref);
 	  if (candidates.size () == 0)
 	    {
 	      // this means we are defaulting back to the trait_item if
@@ -349,11 +386,10 @@ HIRCompileBase::query_compile (HirId ref, TyTy::BaseType *lookup,
 
 	      if (!lookup->has_substitutions_defined ())
 		return CompileInherentImplItem::Compile (impl_item, ctx,
-							 nullptr, true,
-							 expr_locus);
+							 nullptr, expr_locus);
 	      else
 		return CompileInherentImplItem::Compile (impl_item, ctx, lookup,
-							 true, expr_locus);
+							 expr_locus);
 	    }
 	}
     }

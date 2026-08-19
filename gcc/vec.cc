@@ -1,5 +1,5 @@
 /* Vector API for GNU compiler.
-   Copyright (C) 2004-2025 Free Software Foundation, Inc.
+   Copyright (C) 2004-2026 Free Software Foundation, Inc.
    Contributed by Nathan Sidwell <nathan@codesourcery.com>
    Re-implemented in C++ by Diego Novillo <dnovillo@google.com>
 
@@ -111,7 +111,11 @@ public:
 };
 
 /* Vector memory description.  */
-static mem_alloc_description <vec_usage> vec_mem_desc;
+inline auto &
+vec_mem_desc ()
+{
+  return mem_alloc_description<vec_usage>::instance<VEC_ORIGIN> ();
+}
 
 /* Account the overhead.  */
 
@@ -119,10 +123,10 @@ void
 vec_prefix::register_overhead (void *ptr, size_t elements,
 			       size_t element_size MEM_STAT_DECL)
 {
-  vec_mem_desc.register_descriptor (ptr, VEC_ORIGIN, false
-				    FINAL_PASS_MEM_STAT);
+  vec_mem_desc ().register_descriptor (ptr, VEC_ORIGIN, false
+				       FINAL_PASS_MEM_STAT);
   vec_usage *usage
-    = vec_mem_desc.register_instance_overhead (elements * element_size, ptr);
+    = vec_mem_desc ().register_instance_overhead (elements * element_size, ptr);
   usage->m_element_size = element_size;
   usage->m_items += elements;
   if (usage->m_items_peak < usage->m_items)
@@ -135,11 +139,11 @@ void
 vec_prefix::release_overhead (void *ptr, size_t size, size_t elements,
 			      bool in_dtor MEM_STAT_DECL)
 {
-  if (!vec_mem_desc.contains_descriptor_for_instance (ptr))
-    vec_mem_desc.register_descriptor (ptr, VEC_ORIGIN,
+  if (!vec_mem_desc ().contains_descriptor_for_instance (ptr))
+    vec_mem_desc ().register_descriptor (ptr, VEC_ORIGIN,
 				      false FINAL_PASS_MEM_STAT);
-  vec_usage *usage = vec_mem_desc.release_instance_overhead (ptr, size,
-							     in_dtor);
+  vec_usage *usage = vec_mem_desc ().release_instance_overhead (ptr, size,
+								in_dtor);
   usage->m_items -= elements;
 }
 
@@ -173,7 +177,75 @@ vec_prefix::calculate_allocation_1 (unsigned alloc, unsigned desired)
 void
 dump_vec_loc_statistics (void)
 {
-  vec_mem_desc.dump (VEC_ORIGIN);
+  vec_mem_desc ().dump (VEC_ORIGIN);
+}
+
+/* Gets the next token from STR delimited by DELIMS (deliminator not included
+   in returned string).
+
+   Updates STR to be the remaining string after the given token.
+
+   STR and DELIMS must both be valid string_slices.
+
+   If there aren't any of the chars in DELIM in STR (ie no more tokens in STR)
+   then returns the string, and updates STR to be invalid.  */
+string_slice
+string_slice::tokenize (string_slice *str, string_slice delims)
+{
+  const char *ptr = str->begin ();
+
+  gcc_assert (str->is_valid () && delims.is_valid ());
+
+  for (; ptr < str->end (); ptr++)
+    for (char c : delims)
+      if (*ptr == c)
+	{
+	  /* Update the input string to be the remaining string.  */
+	  const char *str_begin = str->begin ();
+	  *str = string_slice (ptr  + 1, str->end ());
+	  return string_slice (str_begin, ptr);
+	}
+
+  /* If no deliminators between the start and end, return the whole string.  */
+  string_slice res = *str;
+  *str = string_slice::invalid ();
+  return res;
+}
+
+/* Compares the string_slices STR1 and STR2 giving a lexograpical ordering.
+   Returns -1 if STR1 comes before STR2, 1 if STR1 comes after, and 0 if the
+   string_slices have the same contents.  */
+
+int
+string_slice::strcmp (string_slice str1, string_slice str2)
+{
+  for (unsigned int i = 0; i < str1.size () && i < str2.size (); i++)
+    {
+      if (str1[i] < str2[i])
+	return -1;
+      if (str1[i] > str2[i])
+	return 1;
+    }
+
+  if (str1.size () < str2.size ())
+    return -1;
+  if (str1.size () > str2.size ())
+    return 1;
+  return 0;
+}
+
+string_slice
+string_slice::strip ()
+{
+  const char *start = this->begin ();
+  const char *end = this->end ();
+
+  while (start < end && ISSPACE (*start))
+    start++;
+  while (end > start && ISSPACE (*(end-1)))
+    end--;
+
+  return string_slice (start, end);
 }
 
 #if CHECKING_P
@@ -584,6 +656,159 @@ test_auto_alias ()
   ASSERT_EQ (val, 0);
 }
 
+static void
+test_string_slice_initializers ()
+{
+  string_slice str1 = string_slice ();
+  ASSERT_TRUE (str1.is_valid ());
+  ASSERT_EQ (str1.size (), 0);
+
+  string_slice str2 = string_slice ("Test string");
+  ASSERT_TRUE (str2.is_valid ());
+  ASSERT_EQ (str2.size (), 11);
+
+  string_slice str3 = "Test string the second";
+  ASSERT_TRUE (str3.is_valid ());
+  ASSERT_EQ (str3.size (), 22);
+
+  string_slice str4 = string_slice ("Test string", 4);
+  ASSERT_TRUE (str4.is_valid ());
+  ASSERT_EQ (str4.size (), 4);
+}
+
+static void
+test_string_slice_tokenize ()
+{
+  string_slice test_string_slice = "";
+  string_slice test_delims = ",";
+
+  ASSERT_EQ (string_slice::tokenize (&test_string_slice, test_delims), "");
+  ASSERT_FALSE (test_string_slice.is_valid ());
+
+  test_string_slice = ",";
+  test_delims = ",";
+  ASSERT_EQ (string_slice::tokenize (&test_string_slice, test_delims),
+	     string_slice (""));
+  ASSERT_EQ (string_slice::tokenize (&test_string_slice, test_delims),
+	     string_slice (""));
+  ASSERT_FALSE (test_string_slice.is_valid ());
+
+  test_string_slice = ",test.,.test, ,  test  ";
+  test_delims = ",.";
+  ASSERT_EQ (string_slice::tokenize (&test_string_slice, test_delims), "");
+  ASSERT_EQ (string_slice::tokenize (&test_string_slice, test_delims), "test");
+  ASSERT_EQ (string_slice::tokenize (&test_string_slice, test_delims), "");
+  ASSERT_EQ (string_slice::tokenize (&test_string_slice, test_delims), "");
+  ASSERT_EQ (string_slice::tokenize (&test_string_slice, test_delims), "test");
+  ASSERT_EQ (string_slice::tokenize (&test_string_slice, test_delims), " ");
+  ASSERT_EQ (string_slice::tokenize (&test_string_slice, test_delims),
+	     "  test  ");
+  ASSERT_FALSE (test_string_slice.is_valid ());
+
+  const char *test_string
+    = "This is the test string, it \0 is for testing, 123 ,,";
+  test_string_slice = string_slice (test_string, 52);
+  test_delims = string_slice (",\0", 2);
+
+  ASSERT_EQ (string_slice::tokenize (&test_string_slice, test_delims),
+	     "This is the test string");
+  ASSERT_EQ (string_slice::tokenize (&test_string_slice, test_delims),
+	     " it ");
+  ASSERT_EQ (string_slice::tokenize (&test_string_slice, test_delims),
+	     " is for testing");
+  ASSERT_EQ (string_slice::tokenize (&test_string_slice, test_delims),
+	     " 123 ");
+  ASSERT_EQ (string_slice::tokenize (&test_string_slice, test_delims),
+	     "");
+  ASSERT_EQ (string_slice::tokenize (&test_string_slice, test_delims),
+	     "");
+  ASSERT_FALSE (test_string_slice.is_valid ());
+}
+
+static void
+test_string_slice_strcmp ()
+{
+  ASSERT_EQ (string_slice::strcmp (string_slice (),
+				   string_slice ()), 0);
+  ASSERT_EQ (string_slice::strcmp (string_slice ("test"),
+				   string_slice ()), 1);
+  ASSERT_EQ (string_slice::strcmp (string_slice (),
+				   string_slice ("test")), -1);
+  ASSERT_EQ (string_slice::strcmp (string_slice ("test"),
+				   string_slice ("test")), 0);
+  ASSERT_EQ (string_slice::strcmp (string_slice ("a"),
+				   string_slice ("b")), -1);
+  ASSERT_EQ (string_slice::strcmp (string_slice ("b"),
+				   string_slice ("a")), 1);
+  ASSERT_EQ (string_slice::strcmp (string_slice ("ab", 1),
+				   string_slice ("a")), 0);
+  ASSERT_EQ (string_slice::strcmp (string_slice ("ab", 2),
+				   string_slice ("a")), 1);
+}
+
+static void
+test_string_slice_equality ()
+{
+  ASSERT_TRUE (string_slice () == string_slice ());
+  ASSERT_FALSE (string_slice ("test") == string_slice ());
+  ASSERT_FALSE ("test" == string_slice ());
+  ASSERT_FALSE (string_slice () == string_slice ("test"));
+  ASSERT_FALSE (string_slice () == "test");
+  ASSERT_TRUE (string_slice ("test") == string_slice ("test"));
+  ASSERT_TRUE ("test" == string_slice ("test"));
+  ASSERT_TRUE (string_slice ("test") == "test");
+  ASSERT_FALSE (string_slice ("a") == string_slice ("b"));
+  ASSERT_FALSE ("a" == string_slice ("b"));
+  ASSERT_FALSE (string_slice ("a") == "b");
+  ASSERT_FALSE (string_slice ("b") == string_slice ("a"));
+  ASSERT_TRUE (string_slice ("ab", 1) == string_slice ("a"));
+  ASSERT_TRUE (string_slice ("ab", 1) == "a");
+  ASSERT_FALSE (string_slice ("ab", 2) == string_slice ("a"));
+  ASSERT_FALSE (string_slice ("ab", 2) == "a");
+}
+
+static void
+test_string_slice_inequality ()
+{
+  ASSERT_FALSE (string_slice () != string_slice ());
+  ASSERT_TRUE (string_slice ("test") != string_slice ());
+  ASSERT_TRUE ("test" != string_slice ());
+  ASSERT_TRUE (string_slice () != string_slice ("test"));
+  ASSERT_TRUE (string_slice () != "test");
+  ASSERT_FALSE (string_slice ("test") != string_slice ("test"));
+  ASSERT_FALSE ("test" != string_slice ("test"));
+  ASSERT_FALSE (string_slice ("test") != "test");
+  ASSERT_TRUE (string_slice ("a") != string_slice ("b"));
+  ASSERT_TRUE ("a" != string_slice ("b"));
+  ASSERT_TRUE (string_slice ("a") != "b");
+  ASSERT_TRUE (string_slice ("b") != string_slice ("a"));
+  ASSERT_FALSE (string_slice ("ab", 1) != string_slice ("a"));
+  ASSERT_FALSE (string_slice ("ab", 1) != "a");
+  ASSERT_TRUE (string_slice ("ab", 2) != string_slice ("a"));
+  ASSERT_TRUE (string_slice ("ab", 2) != "a");
+}
+
+static void
+test_string_slice_invalid ()
+{
+  ASSERT_FALSE (string_slice::invalid ().is_valid ());
+  ASSERT_FALSE (string_slice (NULL, 1).is_valid ());
+  ASSERT_TRUE (string_slice (NULL, (size_t) 0).is_valid ());
+  ASSERT_TRUE (string_slice ("Test", (size_t) 0).is_valid ());
+  ASSERT_TRUE (string_slice ().is_valid ());
+}
+
+static void
+test_string_slice_strip ()
+{
+  ASSERT_EQ (string_slice ("   test   ").strip (), string_slice ("test"));
+  ASSERT_EQ (string_slice ("\t   test string\t   \n ").strip (),
+	     string_slice ("test string"));
+  ASSERT_EQ (string_slice ("test").strip (), string_slice ("test"));
+  ASSERT_EQ (string_slice ().strip (), string_slice ());
+  ASSERT_EQ (string_slice ("\t  \n \t   ").strip (), string_slice ());
+}
+
 /* Run all of the selftests within this file.  */
 
 void
@@ -604,6 +829,13 @@ vec_cc_tests ()
   test_reverse ();
   test_auto_delete_vec ();
   test_auto_alias ();
+  test_string_slice_initializers ();
+  test_string_slice_tokenize ();
+  test_string_slice_strcmp ();
+  test_string_slice_equality ();
+  test_string_slice_inequality ();
+  test_string_slice_invalid ();
+  test_string_slice_strip ();
 }
 
 } // namespace selftest

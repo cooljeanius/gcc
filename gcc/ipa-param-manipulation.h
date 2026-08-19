@@ -1,6 +1,6 @@
 /* Manipulation of formal and actual parameters of functions and function
    calls.
-   Copyright (C) 2017-2025 Free Software Foundation, Inc.
+   Copyright (C) 2017-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -229,7 +229,8 @@ public:
   /* Return if the first parameter is left intact.  */
   bool first_param_intact_p ();
   /* Build a function type corresponding to the modified call.  */
-  tree build_new_function_type (tree old_type, bool type_is_original_p);
+  tree build_new_function_type (tree old_type, bool type_is_original_p,
+				bool *args_modified = NULL);
   /* Build a declaration corresponding to the target of the modified call.  */
   tree adjust_decl (tree orig_decl);
   /* Fill a vector marking which parameters are intact by the described
@@ -289,7 +290,7 @@ struct ipa_replace_map;
    part of tree-inine.c's tree_function_versioning machinery to clone functions
    (when M_ID is not NULL) and in s standalone fashion, modifying an existing
    function in place (when M_ID is NULL).  While a lot of stuff handled in a
-   unified way in both modes, there are many aspects of the processs that
+   unified way in both modes, there are many aspects of the process that
    requires distinct paths.  */
 
 class ipa_param_body_adjustments
@@ -336,12 +337,12 @@ public:
 			   gimple *orig_stmt);
   /* Return the new chain of parameters.  */
   tree get_new_param_chain ();
-  /* Replace all occurances of SSAs in m_dead_ssa_debug_equiv in t with what
+  /* Replace all occurrences of SSAs in m_dead_ssa_debug_equiv in t with what
      they are mapped to.  */
   void remap_with_debug_expressions (tree *t);
 
   /* If there are any initialization statements that need to be emitted into
-     the basic block BB right at ther start of the new function, do so.  */
+     the basic block BB right at the start of the new function, do so.  */
   void append_init_stmts (basic_block bb);
 
   /* Pointers to data structures defining how the function should be

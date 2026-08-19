@@ -1,5 +1,5 @@
 /* The Blackfin code generation auxiliary output file.
-   Copyright (C) 2005-2025 Free Software Foundation, Inc.
+   Copyright (C) 2005-2026 Free Software Foundation, Inc.
    Contributed by Analog Devices.
 
    This file is part of GCC.
@@ -1816,7 +1816,7 @@ bfin_function_ok_for_sibcall (tree decl ATTRIBUTE_UNUSED,
 
   /* When compiling for ID shared libraries, can't sibcall a local function
      from a non-local function, because the local function thinks it does
-     not need to reload P5 in the prologue, but the sibcall wil pop P5 in the
+     not need to reload P5 in the prologue, but the sibcall will pop P5 in the
      sibcall epilogue, and we end up with the wrong value in P5.  */
 
   if (!decl)
@@ -3784,8 +3784,7 @@ hwloop_optimize (hwloop_info loop)
 	}
     }
 
-  seq = get_insns ();
-  end_sequence ();
+  seq = end_sequence ();
 
   if (loop->incoming_src)
     {

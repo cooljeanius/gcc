@@ -1,5 +1,5 @@
-/* C++ modules.  Experimental!	-*- c++ -*-
-   Copyright (C) 2020-2025 Free Software Foundation, Inc.
+/* C++ modules.  Experimental!
+   Copyright (C) 2020-2026 Free Software Foundation, Inc.
    Written by Nathan Sidwell <nathan@acm.org> while at FaceBook
 
    This file is part of GCC.

@@ -1,5 +1,5 @@
 /* Reassociation for trees.
-   Copyright (C) 2005-2025 Free Software Foundation, Inc.
+   Copyright (C) 2005-2026 Free Software Foundation, Inc.
    Contributed by Daniel Berlin <dan@dberlin.org>
 
 This file is part of GCC.
@@ -481,7 +481,7 @@ get_rank (tree e)
 	  /* Otherwise, find the maximum rank for the operands.  As an
 	     exception, remove the bias from loop-carried phis when propagating
 	     the rank so that dependent operations are not also biased.  */
-	  /* Simply walk over all SSA uses - this takes advatage of the
+	  /* Simply walk over all SSA uses - this takes advantage of the
 	     fact that non-SSA operands are is_gimple_min_invariant and
 	     thus have rank 0.  */
 	  rank = 0;
@@ -1521,7 +1521,8 @@ insert_stmt_after (gimple *stmt, gimple *insert_point)
       return;
     }
   else if (gimple_code (insert_point) == GIMPLE_ASM
-	   && gimple_asm_nlabels (as_a <gasm *> (insert_point)) != 0)
+	   && gimple_asm_nlabels (as_a <gasm *> (insert_point)) != 0
+	   && !single_succ_p (gimple_bb (insert_point)))
     /* We have no idea where to insert - it depends on where the
        uses will be placed.  */
     gcc_unreachable ();
@@ -1568,7 +1569,8 @@ build_and_add_sum (tree type, tree op1, tree op2, enum tree_code opcode)
   if ((!op1def || gimple_nop_p (op1def))
       && (!op2def || gimple_nop_p (op2def)))
     {
-      gsi = gsi_after_labels (single_succ (ENTRY_BLOCK_PTR_FOR_FN (cfun)));
+      gsi = gsi_start_nondebug_after_labels_bb
+		(single_succ (ENTRY_BLOCK_PTR_FOR_FN (cfun)));
       if (!gsi_end_p (gsi)
 	  && is_gimple_call (gsi_stmt (gsi))
 	  && (gimple_call_flags (gsi_stmt (gsi)) & ECF_RETURNS_TWICE))
@@ -2540,11 +2542,10 @@ init_range_entry (struct range_entry *r, tree exp, gimple *stmt)
 {
   int in_p;
   tree low, high;
-  bool is_bool, strict_overflow_p;
+  bool is_bool;
 
   r->exp = NULL_TREE;
   r->in_p = false;
-  r->strict_overflow_p = false;
   r->low = NULL_TREE;
   r->high = NULL_TREE;
   if (exp != NULL_TREE
@@ -2559,7 +2560,6 @@ init_range_entry (struct range_entry *r, tree exp, gimple *stmt)
   low = exp ? build_int_cst (TREE_TYPE (exp), 0) : boolean_false_node;
   high = low;
   in_p = 0;
-  strict_overflow_p = false;
   is_bool = false;
   if (exp == NULL_TREE)
     is_bool = true;
@@ -2659,8 +2659,7 @@ init_range_entry (struct range_entry *r, tree exp, gimple *stmt)
 	    return;
 	do_default:
 	  nexp = make_range_step (loc, code, arg0, arg1, exp_type,
-				  &low, &high, &in_p,
-				  &strict_overflow_p);
+				  &low, &high, &in_p);
 	  if (nexp != NULL_TREE)
 	    {
 	      exp = nexp;
@@ -2677,7 +2676,6 @@ init_range_entry (struct range_entry *r, tree exp, gimple *stmt)
       r->in_p = in_p;
       r->low = low;
       r->high = high;
-      r->strict_overflow_p = strict_overflow_p;
     }
 }
 
@@ -2781,7 +2779,7 @@ force_into_ssa_name (gimple_stmt_iterator *gsi, tree expr, bool before)
 }
 
 /* Helper routine of optimize_range_test.
-   [EXP, IN_P, LOW, HIGH, STRICT_OVERFLOW_P] is a merged range for
+   [EXP, IN_P, LOW, HIGH] is a merged range for
    RANGE and OTHERRANGE through OTHERRANGE + COUNT - 1 ranges,
    OPCODE and OPS are arguments of optimize_range_tests.  If OTHERRANGE
    is NULL, OTHERRANGEP should not be and then OTHERRANGEP points to
@@ -2797,7 +2795,7 @@ update_range_test (struct range_entry *range, struct range_entry *otherrange,
 		   struct range_entry **otherrangep,
 		   unsigned int count, enum tree_code opcode,
 		   vec<operand_entry *> *ops, tree exp, gimple_seq seq,
-		   bool in_p, tree low, tree high, bool strict_overflow_p)
+		   bool in_p, tree low, tree high)
 {
   unsigned int idx = range->idx;
   struct range_entry *swap_with = NULL;
@@ -2849,7 +2847,6 @@ update_range_test (struct range_entry *range, struct range_entry *otherrange,
   tree optype = op ? TREE_TYPE (op) : boolean_type_node;
   tree tem = build_range_check (loc, optype, unshare_expr (exp),
 				in_p, low, high);
-  enum warn_strict_overflow_code wc = WARN_STRICT_OVERFLOW_COMPARISON;
   gimple_stmt_iterator gsi;
   unsigned int i, uid;
 
@@ -2880,11 +2877,6 @@ update_range_test (struct range_entry *range, struct range_entry *otherrange,
 
   if (swap_with)
     std::swap (range->idx, swap_with->idx);
-
-  if (strict_overflow_p && issue_strict_overflow_warning (wc))
-    warning_at (loc, OPT_Wstrict_overflow,
-		"assuming signed overflow does not occur "
-		"when simplifying range test");
 
   if (dump_file && (dump_flags & TDF_DETAILS))
     {
@@ -2925,30 +2917,22 @@ update_range_test (struct range_entry *range, struct range_entry *otherrange,
 	 !gsi_end_p (gsi); gsi_next (&gsi))
       {
 	gimple *stmt = gsi_stmt (gsi);
-	if (is_gimple_assign (stmt))
-	  if (tree lhs = gimple_assign_lhs (stmt))
-	    if ((INTEGRAL_TYPE_P (TREE_TYPE (lhs))
-		 || POINTER_TYPE_P (TREE_TYPE (lhs)))
-		&& TYPE_OVERFLOW_UNDEFINED (TREE_TYPE (lhs)))
-	      {
-		enum tree_code code = gimple_assign_rhs_code (stmt);
-		if (arith_code_with_undefined_signed_overflow (code))
-		  {
-		    gimple_stmt_iterator gsip = gsi;
-		    gimple_stmt_iterator gsin = gsi;
-		    gsi_prev (&gsip);
-		    gsi_next (&gsin);
-		    rewrite_to_defined_overflow (&gsi);
-		    unsigned uid = gimple_uid (stmt);
-		    if (gsi_end_p (gsip))
-		      gsip = gsi_after_labels (bb);
-		    else
-		      gsi_next (&gsip);
-		    for (; gsi_stmt (gsip) != gsi_stmt (gsin);
-			 gsi_next (&gsip))
-		      gimple_set_uid (gsi_stmt (gsip), uid);
-		  }
-	      }
+	if (gimple_needing_rewrite_undefined (stmt))
+	  {
+	    gimple_stmt_iterator gsip = gsi;
+	    gimple_stmt_iterator gsin = gsi;
+	    gsi_prev (&gsip);
+	    gsi_next (&gsin);
+	    rewrite_to_defined_unconditional (&gsi);
+	    unsigned uid = gimple_uid (stmt);
+	    if (gsi_end_p (gsip))
+	      gsip = gsi_after_labels (bb);
+	    else
+	      gsi_next (&gsip);
+	    for (; gsi_stmt (gsip) != gsi_stmt (gsin);
+		 gsi_next (&gsip))
+	      gimple_set_uid (gsi_stmt (gsip), uid);
+	  }
       }
 
   if (opcode == BIT_IOR_EXPR
@@ -3015,7 +2999,6 @@ update_range_test (struct range_entry *range, struct range_entry *otherrange,
   range->low = low;
   range->high = high;
   range->in_p = in_p;
-  range->strict_overflow_p = false;
 
   for (i = 0; i < count; i++)
     {
@@ -3093,9 +3076,7 @@ optimize_range_tests_xor (enum tree_code opcode, tree type,
   lowj = fold_build2 (BIT_AND_EXPR, type, lowi, tem);
   highj = fold_build2 (BIT_AND_EXPR, type, highi, tem);
   if (update_range_test (rangei, rangej, NULL, 1, opcode, ops, exp,
-			 NULL, rangei->in_p, lowj, highj,
-			 rangei->strict_overflow_p
-			 || rangej->strict_overflow_p))
+			 NULL, rangei->in_p, lowj, highj))
     return true;
   return false;
 }
@@ -3151,9 +3132,7 @@ optimize_range_tests_diff (enum tree_code opcode, tree type,
   tem1 = fold_build2 (BIT_AND_EXPR, type, tem1, mask);
   lowj = build_int_cst (type, 0);
   if (update_range_test (rangei, rangej, NULL, 1, opcode, ops, tem1,
-			 NULL, rangei->in_p, lowj, tem2,
-			 rangei->strict_overflow_p
-			 || rangej->strict_overflow_p))
+			 NULL, rangei->in_p, lowj, tem2))
     return true;
   return false;
 }
@@ -3330,7 +3309,6 @@ optimize_range_tests_to_bit_test (enum tree_code opcode, int first, int length,
 					highi, &mask, &lowi);
       if (exp == NULL_TREE)
 	continue;
-      bool strict_overflow_p = ranges[i].strict_overflow_p;
       candidates.truncate (0);
       int end = MIN (i + 64, length);
       for (j = i + 1; j < end; j++)
@@ -3369,7 +3347,6 @@ optimize_range_tests_to_bit_test (enum tree_code opcode, int first, int length,
 	  if (exp2 != exp)
 	    continue;
 	  mask |= mask2;
-	  strict_overflow_p |= ranges[j].strict_overflow_p;
 	  candidates.safe_push (&ranges[j]);
 	}
 
@@ -3495,7 +3472,7 @@ optimize_range_tests_to_bit_test (enum tree_code opcode, int first, int length,
 	  tree val = build_zero_cst (optype);
 	  if (update_range_test (&ranges[i], NULL, candidates.address (),
 				 candidates.length (), opcode, ops, exp,
-				 seq, false, val, val, strict_overflow_p))
+				 seq, false, val, val))
 	    {
 	      any_changes = true;
 	      if (tem)
@@ -3636,14 +3613,12 @@ optimize_range_tests_cmp_bitwise (enum tree_code opcode, int first, int length,
 	  }
 	tree type1 = TREE_TYPE (ranges[k - 1].exp);
 	tree type2 = NULL_TREE;
-	bool strict_overflow_p = false;
 	candidates.truncate (0);
 	if (POINTER_TYPE_P (type1) || TREE_CODE (type1) == OFFSET_TYPE)
 	  type1 = pointer_sized_int_node;
 	for (j = i; j; j = chains[j - 1])
 	  {
 	    tree type = TREE_TYPE (ranges[j - 1].exp);
-	    strict_overflow_p |= ranges[j - 1].strict_overflow_p;
 	    if (POINTER_TYPE_P (type) || TREE_CODE (type) == OFFSET_TYPE)
 	      type = pointer_sized_int_node;
 	    if ((b % 4) == 3)
@@ -3757,7 +3732,7 @@ optimize_range_tests_cmp_bitwise (enum tree_code opcode, int first, int length,
 	if (update_range_test (&ranges[k - 1], NULL, candidates.address (),
 			       candidates.length (), opcode, ops, op,
 			       seq, ranges[k - 1].in_p, ranges[k - 1].low,
-			       ranges[k - 1].high, strict_overflow_p))
+			       ranges[k - 1].high))
 	  any_changes = true;
 	else
 	  gimple_seq_discard (seq);
@@ -3963,14 +3938,6 @@ optimize_range_tests_var_bound (enum tree_code opcode, int first, int length,
 	 and RHS2 is known to be RHS2 >= 0.  */
       tree utype = unsigned_type_for (TREE_TYPE (rhs1));
 
-      enum warn_strict_overflow_code wc = WARN_STRICT_OVERFLOW_COMPARISON;
-      if ((ranges[*idx].strict_overflow_p
-	   || ranges[i].strict_overflow_p)
-	  && issue_strict_overflow_warning (wc))
-	warning_at (gimple_location (stmt), OPT_Wstrict_overflow,
-		    "assuming signed overflow does not occur "
-		    "when simplifying range test");
-
       if (dump_file && (dump_flags & TDF_DETAILS))
 	{
 	  struct range_entry *r = &ranges[*idx];
@@ -4052,7 +4019,6 @@ optimize_range_tests_var_bound (enum tree_code opcode, int first, int length,
 	  ranges[i].low = build_zero_cst (TREE_TYPE (ranges[i].exp));
 	  ranges[i].high = ranges[i].low;
 	}
-      ranges[i].strict_overflow_p = false;
       oe = (*ops)[ranges[*idx].idx];
       /* Now change all the other range test immediate uses, so that
 	 those tests will be optimized away.  */
@@ -4126,7 +4092,6 @@ optimize_range_tests (enum tree_code opcode,
       tree low = ranges[i].low;
       tree high = ranges[i].high;
       int in_p = ranges[i].in_p;
-      bool strict_overflow_p = ranges[i].strict_overflow_p;
       int update_fail_count = 0;
 
       for (j = i + 1; j < length; j++)
@@ -4136,7 +4101,6 @@ optimize_range_tests (enum tree_code opcode,
 	  if (!merge_ranges (&in_p, &low, &high, in_p, low, high,
 			     ranges[j].in_p, ranges[j].low, ranges[j].high))
 	    break;
-	  strict_overflow_p |= ranges[j].strict_overflow_p;
 	}
 
       if (j == i + 1)
@@ -4144,7 +4108,7 @@ optimize_range_tests (enum tree_code opcode,
 
       if (update_range_test (ranges + i, ranges + i + 1, NULL, j - i - 1,
 			     opcode, ops, ranges[i].exp, NULL, in_p,
-			     low, high, strict_overflow_p))
+			     low, high))
 	{
 	  i = j - 1;
 	  any_changes = true;
@@ -4243,7 +4207,7 @@ ovce_extract_ops (tree var, gassign **rets, bool *reti, tree *type,
     }
   else
     return ERROR_MARK;
-  if (!integer_zerop (f))
+  if (!integer_zerop (inv ? t : f))
     return ERROR_MARK;
 
   /* Success!  */
@@ -4270,7 +4234,7 @@ optimize_vec_cond_expr (tree_code opcode, vec<operand_entry *> *ops)
 
   for (i = 0; i < length; ++i)
     {
-      tree elt0 = (*ops)[i]->op;
+      tree &elt0 = (*ops)[i]->op;
 
       gassign *stmt0, *vcond0;
       bool invert;
@@ -4318,11 +4282,13 @@ optimize_vec_cond_expr (tree_code opcode, vec<operand_entry *> *ops)
 	  gimple_stmt_iterator gsi = gsi_for_stmt (vcond0);
 	  tree exp = force_gimple_operand_gsi (&gsi, comb, true, NULL_TREE,
 					       true, GSI_SAME_STMT);
-	  if (invert)
-	    swap_ssa_operands (vcond0, gimple_assign_rhs2_ptr (vcond0),
-			       gimple_assign_rhs3_ptr (vcond0));
-	  gimple_assign_set_rhs1 (vcond0, exp);
-	  update_stmt (vcond0);
+	  tree res = gimple_build (&gsi, true, GSI_SAME_STMT, UNKNOWN_LOCATION,
+				   VEC_COND_EXPR, TREE_TYPE (elt0), exp,
+				   constant_boolean_node (true,
+							  TREE_TYPE (elt0)),
+				   constant_boolean_node (false,
+							  TREE_TYPE (elt0)));
+	  elt0 = res;
 
 	  elt1 = error_mark_node;
 	  any_changes = true;
@@ -5176,10 +5142,10 @@ remove_visited_stmt_chain (tree var)
     }
 }
 
-/* This function checks three consequtive operands in
+/* This function checks three consecutive operands in
    passed operands vector OPS starting from OPINDEX and
    swaps two operands if it is profitable for binary operation
-   consuming OPINDEX + 1 abnd OPINDEX + 2 operands.
+   consuming OPINDEX + 1 and OPINDEX + 2 operands.
 
    We pair ops with the same rank if possible.  */
 
@@ -5276,6 +5242,9 @@ rewrite_expr_tree (gimple *stmt, enum tree_code rhs_code, unsigned int opindex,
 
       oe1 = ops[opindex];
       oe2 = ops[opindex + 1];
+      if (commutative_tree_code (rhs_code)
+	  && tree_swap_operands_p (oe1->op, oe2->op))
+	std::swap (oe1, oe2);
 
       if (rhs1 != oe1->op || rhs2 != oe2->op)
 	{
@@ -7175,9 +7144,10 @@ reassociate_bb (basic_block bb)
 
 		  /* If the target support FMA, rank_ops_for_fma will detect if
 		     the chain has fmas and rearrange the ops if so.  */
-		  if (direct_internal_fn_supported_p (IFN_FMA,
-						      TREE_TYPE (lhs),
-						      opt_type)
+		  if (!reassoc_insert_powi_p
+		      && direct_internal_fn_supported_p (IFN_FMA,
+							 TREE_TYPE (lhs),
+							 opt_type)
 		      && (rhs_code == PLUS_EXPR || rhs_code == MINUS_EXPR))
 		    {
 		      mult_num = rank_ops_for_fma (&ops);
@@ -7208,7 +7178,8 @@ reassociate_bb (basic_block bb)
 			 to make sure the ones that get the double
 			 binary op are chosen wisely.  */
 		      int len = ops.length ();
-		      if (len >= 3
+		      if (!reassoc_insert_powi_p
+			  && len >= 3
 			  && (!has_fma
 			      /* width > 1 means ranking ops results in better
 				 parallelism.  Check current value to avoid

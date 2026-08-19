@@ -1,5 +1,5 @@
 /* Internal functions.
-   Copyright (C) 2011-2025 Free Software Foundation, Inc.
+   Copyright (C) 2011-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -88,7 +88,7 @@ enum ifn_goacc_loop_kind {
    LEVEL corresponds to the GOMP_DIM of the reduction
    OP is the tree code of the reduction operation
    OFFSET may be used as an offset into a reduction array for the
-          reductions occuring at this level.
+          reductions occurring at this level.
    In general the return value is LOCAL_VAR, which creates a data
    dependency between calls operating on the same reduction.  */
 
@@ -219,6 +219,7 @@ extern bool commutative_ternary_fn_p (internal_fn);
 extern int first_commutative_argument (internal_fn);
 extern bool associative_binary_fn_p (internal_fn);
 extern bool widening_fn_p (code_helper);
+extern bool widening_evenodd_fn_p (code_helper);
 
 extern bool set_edom_supported_p (void);
 
@@ -239,9 +240,14 @@ extern int internal_fn_mask_index (internal_fn);
 extern int internal_fn_len_index (internal_fn);
 extern int internal_fn_else_index (internal_fn);
 extern int internal_fn_stored_value_index (internal_fn);
+extern int internal_fn_offset_index (internal_fn fn);
+extern int internal_fn_scale_index (internal_fn fn);
+extern int internal_fn_alias_ptr_index (internal_fn fn);
 extern bool internal_gather_scatter_fn_supported_p (internal_fn, tree,
 						    tree, tree, int,
 						    vec<int> * = nullptr);
+extern bool internal_strided_fn_supported_p (internal_fn, tree,
+					      vec<int> * = nullptr);
 extern bool internal_check_ptrs_fn_supported_p (internal_fn, tree,
 						poly_uint64, unsigned int);
 
@@ -269,6 +275,7 @@ extern void expand_SPACESHIP (internal_fn, gcall *);
 extern void expand_TRAP (internal_fn, gcall *);
 extern void expand_ASSUME (internal_fn, gcall *);
 extern void expand_MASK_CALL (internal_fn, gcall *);
+extern void expand_VARYING (internal_fn, gcall *);
 extern void expand_MULBITINT (internal_fn, gcall *);
 extern void expand_DIVMODBITINT (internal_fn, gcall *);
 extern void expand_FLOATTOBITINT (internal_fn, gcall *);
@@ -279,6 +286,8 @@ extern void expand_CTZ (internal_fn, gcall *);
 extern void expand_FFS (internal_fn, gcall *);
 extern void expand_PARITY (internal_fn, gcall *);
 extern void expand_POPCOUNT (internal_fn, gcall *);
+extern void expand_BSWAP (internal_fn, gcall *);
+extern void expand_BITREVERSE (internal_fn, gcall *);
 
 extern bool vectorized_internal_fn_supported_p (internal_fn, tree);
 

@@ -1,5 +1,5 @@
 # Makefile.am -- Backtrace Makefile.
-# Copyright (C) 2012-2025 Free Software Foundation, Inc.
+# Copyright (C) 2012-2026 Free Software Foundation, Inc.
 
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are
@@ -344,6 +344,13 @@ MAKETESTS += btest_dwz_gnudebuglink
 endif HAVE_OBJCOPY_DEBUGLINK
 
 endif HAVE_DWZ
+
+mdtest_SOURCES = mdtest.c testlib.c
+mdtest_CFLAGS = $(libbacktrace_TEST_CFLAGS) -O
+mdtest_LDFLAGS = $(libbacktrace_testing_ldflags)
+mdtest_LDADD = libbacktrace.la
+
+BUILDTESTS += mdtest
 
 stest_SOURCES = stest.c
 stest_CFLAGS = $(libbacktrace_TEST_CFLAGS)

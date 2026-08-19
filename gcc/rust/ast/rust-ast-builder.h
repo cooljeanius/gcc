@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2025 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -24,6 +24,8 @@
 #include "rust-ast.h"
 #include "rust-item.h"
 #include "rust-operators.h"
+#include "options.h"
+#include "rust-system.h"
 
 namespace Rust {
 namespace AST {
@@ -51,6 +53,19 @@ vec (std::unique_ptr<T> &&t1, std::unique_ptr<T> &&t2)
   return v;
 }
 
+template <typename T>
+std::vector<std::unique_ptr<T>>
+vec (std::unique_ptr<T> &&t1, std::unique_ptr<T> &&t2, std::unique_ptr<T> &&t3)
+{
+  auto v = std::vector<std::unique_ptr<T>> ();
+
+  v.emplace_back (std::move (t1));
+  v.emplace_back (std::move (t2));
+  v.emplace_back (std::move (t3));
+
+  return v;
+}
+
 /* Pointer-ify something */
 template <typename T>
 static std::unique_ptr<T>
@@ -66,7 +81,20 @@ ptrify (T value)
 class Builder
 {
 public:
-  Builder (location_t loc) : loc (loc) {}
+  /**
+   * Are we building AST nodes for paths within `core`, or any other crate? This
+   * affects the leading path segment when constructing canonical paths, and is
+   * especially important when deriving items.
+   */
+  enum class Source
+  {
+    InCore,
+    Any,
+  };
+
+  Builder (location_t loc, Source item_source)
+    : loc (loc), item_source (item_source)
+  {}
 
   /* Create an expression statement from an expression */
   std::unique_ptr<Stmt> statementify (std::unique_ptr<Expr> &&value,
@@ -117,6 +145,9 @@ public:
   /* Create an empty block */
   std::unique_ptr<BlockExpr> block () const;
 
+  /* Create a block with just a tail expression */
+  std::unique_ptr<BlockExpr> block (std::unique_ptr<Expr> &&tail_expr) const;
+
   /* Create an early return expression with an optional expression */
   std::unique_ptr<Expr> return_expr (std::unique_ptr<Expr> &&to_return
 				     = nullptr);
@@ -152,6 +183,10 @@ public:
 				std::vector<PathExprSegment> &&segments
 				= {}) const;
 
+  std::unique_ptr<Expr>
+  qualified_call (std::vector<std::string> &&segments,
+		  std::vector<std::unique_ptr<Expr>> &&args) const;
+
   /* Self parameter for a function definition (`&self`) */
   std::unique_ptr<Param> self_ref_param (bool mutability = false) const;
   /* A regular named function parameter for a definition (`a: type`) */
@@ -167,8 +202,8 @@ public:
 	    std::unique_ptr<Type> return_type, std::unique_ptr<BlockExpr> block,
 	    std::vector<std::unique_ptr<GenericParam>> generic_params = {},
 	    FunctionQualifiers qualifiers
-	    = FunctionQualifiers (UNKNOWN_LOCATION, Async::No, Const::No,
-				  Unsafety::Normal),
+	    = FunctionQualifiers (UNKNOWN_LOCATION, Default::No, Async::No,
+				  Const::No, Unsafety::Normal),
 	    WhereClause where_clause = WhereClause::create_empty (),
 	    Visibility visibility = Visibility::create_private ()) const;
 
@@ -254,6 +289,10 @@ public:
   std::unique_ptr<Expr> field_access (std::unique_ptr<Expr> &&instance,
 				      std::string field) const;
 
+  std::unique_ptr<StructPatternField>
+  struct_pattern_ident_pattern (std::string field_name,
+				std::unique_ptr<Pattern> &&pattern);
+
   /* Create a wildcard pattern (`_`) */
   std::unique_ptr<Pattern> wildcard () const;
   /* Create a reference pattern (`&pattern`) */
@@ -268,6 +307,7 @@ public:
   MatchArm match_arm (std::unique_ptr<Pattern> &&pattern);
   MatchCase match_case (std::unique_ptr<Pattern> &&pattern,
 			std::unique_ptr<Expr> &&expr);
+  MatchCase match_case (MatchArm &&arm, std::unique_ptr<Expr> &&expr);
 
   /* Create a loop expression */
   std::unique_ptr<Expr> loop (std::vector<std::unique_ptr<Stmt>> &&stmts);
@@ -285,10 +325,19 @@ public:
 		      std::vector<std::unique_ptr<TypeParamBound>> &&bounds,
 		      std::unique_ptr<Type> &&type = nullptr);
 
-  static std::unique_ptr<Type> new_type (Type &type);
+  /**
+   * Create a let statement with the discriminant value of a given enum
+   * instance. This helper exists since it is a common operation in a lot of the
+   * derive implementations, and it sucks to repeat all the steps every time.
+   */
+  std::unique_ptr<Stmt> discriminant_value (std::string binding_name,
+					    std::string instance = "self");
 
   static std::unique_ptr<GenericParam>
   new_lifetime_param (LifetimeParam &param);
+
+  std::unique_ptr<GenericParam>
+  new_const_param (ConstGenericParam &param) const;
 
   static std::unique_ptr<GenericParam> new_type_param (
     TypeParam &param,
@@ -298,11 +347,33 @@ public:
 
   static GenericArgs new_generic_args (GenericArgs &args);
 
-private:
-  /**
-   * Location of the generated AST nodes
-   */
+  /* Location of the generated AST nodes */
   location_t loc;
+
+  /* The source in which we are creating AST nodes */
+  Builder::Source item_source;
+
+  static Builder::Source get_item_source (const AST::Crate &crate)
+  {
+    for (const auto &attr : crate.inner_attrs)
+      if (attr.as_string () == "no_core")
+	return Source::InCore;
+
+    return Source::Any;
+  }
+
+  const char *get_path_start () const
+  {
+    switch (item_source)
+      {
+      case Builder::Source::InCore:
+	return "crate";
+      case Builder::Source::Any:
+	return "core";
+      default:
+	rust_unreachable ();
+      }
+  }
 };
 
 } // namespace AST

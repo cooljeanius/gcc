@@ -1,5 +1,5 @@
 ;; Cavium ThunderX pipeline description
-;; Copyright (C) 2014-2025 Free Software Foundation, Inc.
+;; Copyright (C) 2014-2026 Free Software Foundation, Inc.
 ;;
 ;; Written by Andrew Pinski  <apinski@cavium.com>
 
@@ -59,7 +59,7 @@
        (eq_attr "type" "csel"))
   "thunderx_pipe0 | thunderx_pipe1")
 
-;; Multiply and mulitply accumulate and count leading zeros can only happen on pipe 1
+;; Multiply and multiply accumulate and count leading zeros can only happen on pipe 1
 
 (define_insn_reservation "thunderx_mul" 4
   (and (eq_attr "tune" "thunderx")

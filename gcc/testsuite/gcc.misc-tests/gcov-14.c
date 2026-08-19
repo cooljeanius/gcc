@@ -1,6 +1,6 @@
 /* Test gcov extern inline.  */
 
-/* { dg-do run { target native } } */
+/* { dg-do run } */
 /* { dg-options "-O2 -fprofile-arcs -ftest-coverage -fgnu89-inline" } */
 /* The following line arranges that Darwin has behavior like elf weak import.  */
 /* { dg-additional-options "-Wl,-U,_Foo" { target *-*-darwin* }  } */
@@ -15,7 +15,7 @@ extern __inline int Foo ()
   return 0; /* count(-) */
 }
 
-int (* __attribute__ ((noinline)) Bar ()) ()
+int (* __attribute__ ((noinline,noipa)) Bar ()) ()
 {
   return Foo; /* count(1) */
 }

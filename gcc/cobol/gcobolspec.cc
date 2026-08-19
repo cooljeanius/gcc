@@ -1,5 +1,5 @@
 /* Specific flags and argument handling of the Cobol front-end.
-   Copyright (C) 2021-2025 Free Software Foundation, Inc.
+   Copyright (C) 2021-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -57,10 +57,6 @@ along with GCC; see the file COPYING3.  If not see
 
 int lang_specific_extra_outfiles = 0;
 
-#ifndef MATH_LIBRARY
-#define MATH_LIBRARY "m"
-#endif
-
 #ifndef DL_LIBRARY
 #define DL_LIBRARY "dl"
 #endif
@@ -73,16 +69,30 @@ int lang_specific_extra_outfiles = 0;
 #define COBOL_LIBRARY "gcobol"
 #endif
 
+#ifndef COMPAT_LIBRARY
+#define COMPAT_LIBRARY "gcobol_compat_gnu"
+#endif
+
+#ifndef POSIX_LIBRARY
+#define POSIX_LIBRARY "gcobol_posix"
+#endif
+
+#define SPEC_FILE "libgcobol.spec"
+
 /* The original argument list and related info is copied here.  */
 static const struct cl_decoded_option *original_options;
 
 /* The new argument list will be built here.  */
 static std::vector<cl_decoded_option>new_opt;
 
+static bool need_libgcobol = true;
+static bool need_libcompat = false; // This one need for dialect mf or ibm
+static bool need_libposix = false;
+
 // #define NOISY 1
 
 static void
-append_arg(const struct cl_decoded_option arg)
+append_arg(const cl_decoded_option& arg)
   {
 #ifdef NOISY
   static int counter = 1;
@@ -126,41 +136,6 @@ add_arg_lib(const char *library, bool force_static ATTRIBUTE_UNUSED)
 #endif
   }
 
-static void
-append_rdynamic()
-  {
-  // This is a bit ham-handed, but I was in a hurry.
-  struct cl_decoded_option decoded = {};
-  decoded.opt_index = OPT_rdynamic;
-  decoded.orig_option_with_args_text = "-rdynamic";
-  decoded.canonical_option[0] = "-rdynamic";
-  decoded.canonical_option_num_elements = 1;
-  decoded.value = 1;
-  append_arg(decoded);
-  return;
-  }
-
-static void
-append_allow_multiple_definition()
-  {
-  append_option (OPT_Wl_, "--allow-multiple-definition", 1);
-  return;
-  }
-
-static void
-append_fpic()
-  {
-  // This is a bit ham-handed, but I was in a hurry.
-  struct cl_decoded_option decoded = {};
-  decoded.opt_index = OPT_rdynamic;
-  decoded.orig_option_with_args_text = "-fPIC";
-  decoded.canonical_option[0] = "-fPIC";
-  decoded.canonical_option_num_elements = 1;
-  decoded.value = 1;
-  append_arg(decoded);
-  return;
-  }
-
 void
 lang_specific_driver (struct cl_decoded_option **in_decoded_options,
                       unsigned int *in_decoded_options_count,
@@ -177,9 +152,6 @@ lang_specific_driver (struct cl_decoded_option **in_decoded_options,
   int n_infiles = 0;
   int n_outfiles = 0;
 
-  // The number of input files when the language is "none" or "cobol"
-  int n_cobol_files = 0;
-
   // saw_OPT_no_main means "don't expect -main"
   bool saw_OPT_no_main = false;
 
@@ -188,23 +160,18 @@ lang_specific_driver (struct cl_decoded_option **in_decoded_options,
 
   bool saw_OPT_c = false;
   bool saw_OPT_shared = false;
-  bool saw_OPT_pic = false;
-  bool saw_OPT_PIC = false;
 
   bool verbose = false;
 
   // These flags indicate whether we need various libraries
 
-  bool need_libgcobol   = true;
-  bool need_libmath     = (MATH_LIBRARY[0] != '\0');
   bool need_libdl       = (DL_LIBRARY[0] != '\0');
   bool need_libstdc     = (STDCPP_LIBRARY[0] != '\0');
-  // bool need_libquadmath = (QUADMATH_LIBRARY[0] != '\0');
-  bool need_rdynamic    = true;
-  bool need_allow_multiple_definition = true;
 
   // Separate flags for a couple of static libraries
   bool static_libgcobol  = false;
+  bool static_libcompat  = false;
+  bool static_libposix   = false;
   bool static_in_general = false;
 
   /*  WEIRDNESS ALERT:
@@ -276,11 +243,6 @@ lang_specific_driver (struct cl_decoded_option **in_decoded_options,
       case OPT_SPECIAL_input_file:
         no_files_error = false;
         n_infiles += 1;
-        if(    strcmp(language, "none")  == 0
-            || strcmp(language, "cobol") == 0 )
-          {
-          n_cobol_files += 1;
-          }
         if( strstr(decoded_options[i].orig_option_with_args_text, "libgcobol.a") )
           {
           // We have been given an explicit libgcobol.a.  We need to note that.
@@ -292,37 +254,10 @@ lang_specific_driver (struct cl_decoded_option **in_decoded_options,
         saw_OPT_shared = true;
         break;
 
-      case OPT_fpic:
-        saw_OPT_pic = true;
-        break;
-
-      case OPT_fPIC:
-        saw_OPT_PIC = true;
-        break;
-
-      case OPT_c:
-        // With this option, no libraries need be loaded
+	case OPT_c:
+        // Note -c specially.
         saw_OPT_c = true;
-        need_libgcobol   = false;
-        need_libmath     = false;
-        need_libdl       = false;
-        need_libstdc     = false;
-        // need_libquadmath = false;
-        need_rdynamic    = false;
-        break;
-
-      case OPT_rdynamic:
-        need_rdynamic  = false;
-        break;
-
-      case OPT_Wl_:
-        if( strstr(decoded_options[i].orig_option_with_args_text,
-            "--allow-multiple-definitions") )
-          {
-          need_allow_multiple_definition = false;
-          }
-        break;
-
+        // FALLTHROUGH
       case OPT_nostdlib:
       case OPT_nodefaultlibs:
       case OPT_r:
@@ -331,11 +266,8 @@ lang_specific_driver (struct cl_decoded_option **in_decoded_options,
       case OPT_E:
         // With these options, no libraries need be loaded
         need_libgcobol   = false;
-        need_libmath     = false;
         need_libdl       = false;
         need_libstdc     = false;
-        // need_libquadmath = false;
-        need_rdynamic    = false;
         break;
 
       case OPT_static_libgcobol:
@@ -345,11 +277,7 @@ lang_specific_driver (struct cl_decoded_option **in_decoded_options,
 
       case OPT_l:
         n_infiles += 1;
-        if(strcmp(decoded_options[i].arg, MATH_LIBRARY) == 0)
-          {
-          need_libmath = false;
-          }
-        else if(strcmp(decoded_options[i].arg, DL_LIBRARY) == 0)
+        if(strcmp(decoded_options[i].arg, DL_LIBRARY) == 0)
           {
           need_libdl = false;
           }
@@ -385,6 +313,9 @@ lang_specific_driver (struct cl_decoded_option **in_decoded_options,
       case OPT_print_multi_os_directory:
       case OPT_print_multiarch:
       case OPT_print_sysroot_headers_suffix:
+      case OPT_dumpmachine:
+      case OPT_dumpversion:
+      case OPT_dumpspecs:
         no_files_error = false;
         break;
 
@@ -403,33 +334,70 @@ lang_specific_driver (struct cl_decoded_option **in_decoded_options,
 
       case OPT__help:
         /*
-         * $ man ./gcobol.1 | ./help.gen
+         * Although initially generated with 
+         * $ man ./gcobol.1 | col -bx | ./help.gen
+         * ... the below text was edited for brevity and clarity. 
          */
         puts( "Options specific to gcobol: " );
         puts(
-        "  -main   option uses the first PROGRAM of filename as the entry point for\n"
-        "          the main() procedure.  \n"
-        "  -no_main    \n"
-        "          means that there is no -main, and the main() entry point is\n"
-        "          provided by some other compilation or .o file\n"
-        "  -findicator-column\n"
-        "          describes the location of the Indicator Area in a COBOL file with\n"
-        "          standard 80-column lines.  \n"
-        "  -ffixed-form\n"
-        "          Use strict Reference Format in reading the COBOL input: 72-char‐\n"
-        "          acter lines, with a 6-character sequence area, and an indicator\n"
-        "          column.  \n"
-        "  -ffree-form\n"
-        "          Force the COBOL input to be interpreted as free format.  \n"
-        "  -fmax-errors nerror\n"
-        "          nerror represents the number of error messages produced.  \n"
-        "  -fflex-debug, -fyacc-debug\n"
-        "          produce messages useful for compiler development.  \n" );
-
+             "  -main filename           "
+             "Generate a main() for filename.\n"
+             "  -main=filename           "
+             "Insert main() into filename.o\n"
+             "  -main=filename:program-id\n"
+             "                           Insert main() for program-id.\n"
+             "  -nomain                  "
+             "No main() generated.\n"
+             "  -B prefix                "
+             "Search prefix for the system copybooks;\n"
+             "  -D name[=expr]           "
+             "Define a CDF name.\n"
+             "  -fdefaultbyte=value      "
+             "Use value [0-255], for WORKING-STORAGE.\n"
+             "  -fsyntax-only            "
+             "Invoke only the parser.\n"
+             "  -copyext ext             "
+             "Use copybook extention ext.\n"
+             "  -ffixed-form             "
+             "Compile using Reference Format.\n"
+             "  -ffree-form              "
+             "Compile using logical free-form format.\n"
+             "  -fcobol-exceptions exception\n"
+             "                           Enable exception condition.\n"
+             "  -fmax-errors=N           "
+             "Terminate compilation after N errors.\n"
+             "  -fstatic-call            "
+             "Link CALL references at load time.\n"
+             "  -fexec-charset=encoding  "
+             "Use encoding for alphanumeric\n"
+             "  -fexec-national-charset=encoding\n"
+             "                           Use enc for National data items.\n"
+             "  -ftrunc                  "
+             "Truncate BINARY on MOVE.\n"
+             "  -dialect dialect-name    "
+             "Emulate dialect-name compiler.\n"
+             "  -include filename        "
+             "Include filename input in compilation.\n"
+             "  -preprocess filter       "
+             "Execute filter on input before compiling.\n"
+             "\n"
+             "  For warning options see gcobol(1).\n"
+             "  Supported standard gcc options follow.\n"
+             );
 
         /* Let gcc.cc handle this, as it has a really
            cool facility for handling --help and --verbose --help.  */
         return;
+
+      case OPT_dialect:
+        if(    strstr(decoded_options[i].arg, "ibm")
+            || strstr(decoded_options[i].arg, "mf") )
+          {
+          need_libcompat = true;
+          // libcompat depends on libposix.
+          need_libposix = true;
+          }
+        break;
 
       default:
         break;
@@ -455,10 +423,8 @@ lang_specific_driver (struct cl_decoded_option **in_decoded_options,
   if( n_infiles == 0 )
     {
     need_libgcobol   = false;
-    need_libmath     = false;
     need_libdl       = false;
     need_libstdc     = false;
-    // need_libquadmath = false;
     }
 
   /* Second pass through arglist, transforming arguments as appropriate.  */
@@ -556,7 +522,10 @@ lang_specific_driver (struct cl_decoded_option **in_decoded_options,
 ////        break;
 ////#endif
       case OPT_static:
+#if defined (HAVE_LD_STATIC_DYNAMIC)
+        append_arg(decoded_options[i]);
         static_in_general = true;
+#endif        
         break;
 
       default:
@@ -584,36 +553,31 @@ lang_specific_driver (struct cl_decoded_option **in_decoded_options,
     need_libgcobol = false;
     }
 
+  if( static_in_general )
+    {
+    // These two options interfere with each other.
+    static_libgcobol = false;
+    }
+
   if( need_libgcobol )
     {
     add_arg_lib(COBOL_LIBRARY, static_libgcobol);
     }
-  if( need_libmath)
+  if( need_libcompat )
     {
-    add_arg_lib(MATH_LIBRARY, static_in_general);
+    add_arg_lib(COMPAT_LIBRARY, static_libcompat);
     }
-  if( need_libdl   )
+  if( need_libdl )
     {
-    add_arg_lib(DL_LIBRARY, static_in_general);
+    add_arg_lib(DL_LIBRARY, false);
     }
   if( need_libstdc )
     {
-    add_arg_lib(STDCPP_LIBRARY, static_in_general);
+    add_arg_lib(STDCPP_LIBRARY, false);
     }
-
-  if( saw_OPT_shared && !saw_OPT_pic && !saw_OPT_PIC )
+  if( need_libposix )
     {
-    append_fpic();
-    }
-
-  if( need_rdynamic )
-    {
-    append_rdynamic();
-    }
-
-  if( need_allow_multiple_definition && (n_infiles || n_outfiles) )
-    {
-    append_allow_multiple_definition();
+    add_arg_lib(POSIX_LIBRARY, static_libposix);
     }
 
   if( prior_main )
@@ -626,7 +590,8 @@ lang_specific_driver (struct cl_decoded_option **in_decoded_options,
   // cl_decoded_option
 
   size_t new_option_count = new_opt.size();
-  struct cl_decoded_option *new_options = XNEWVEC (struct cl_decoded_option, new_option_count);
+  struct cl_decoded_option *new_options = XNEWVEC (struct cl_decoded_option,
+                                                    new_option_count);
 
   for(size_t i=0; i<new_option_count; i++)
     {
@@ -636,15 +601,16 @@ lang_specific_driver (struct cl_decoded_option **in_decoded_options,
 #ifdef NOISY
   verbose = true;
 #endif
-  if( verbose && new_options != original_options )
+  if( verbose && new_options != original_options ) // cppcheck-suppress knownConditionTrueFalse
     {
-    fprintf(stderr, _("Driving: (%ld)\n"), new_option_count);
+    fprintf(stderr, _("Driving: (" HOST_SIZE_T_PRINT_DEC ")\n"),
+            (fmt_size_t)new_option_count);
     for(size_t i=0; i<new_option_count; i++)
       {
       fprintf(stderr,
-              "   [%2ld] %4ld %s\n",
-              i,
-              new_options[i].opt_index,
+              "   [%2" GCC_PRISZ "d] %4" GCC_PRISZ "d %s\n",
+              (fmt_size_t)i,
+              (fmt_size_t)new_options[i].opt_index,
               new_options[i].orig_option_with_args_text);
       }
     fprintf (stderr, "\n");
@@ -654,14 +620,12 @@ lang_specific_driver (struct cl_decoded_option **in_decoded_options,
   *in_decoded_options = new_options;
   }
 
-/*
- * Called before linking.
- * Returns 0 on success and -1 on failure.
- * Unused.
- */
+/* Called before linking.  Returns 0 on success and -1 on failure.  */
 int
-lang_specific_pre_link( void )
-    {
-    return 0;
-    }
+lang_specific_pre_link (void)
+{
+  if (need_libgcobol)
+    do_spec ("%:include(libgcobol.spec)");
 
+  return 0;
+}

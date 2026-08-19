@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2025 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -17,8 +17,10 @@
 // <http://www.gnu.org/licenses/>.
 
 #include "rust-compile-block.h"
-#include "rust-compile-stmt.h"
+#include "rust-compile-drop.h"
 #include "rust-compile-expr.h"
+#include "rust-compile-stmt.h"
+#include "rust-hir-expr.h"
 
 namespace Rust {
 namespace Compile {
@@ -83,8 +85,9 @@ CompileBlock::visit (HIR::BlockExpr &expr)
 					 expr.get_locus ());
       ctx->add_statement (assignment);
     }
+  tree cleanup = CompileDrop (ctx).build_current_scope_drop_cleanup ();
 
-  ctx->pop_block ();
+  ctx->pop_block_with_cleanup (cleanup, expr.get_locus ());
   translated = new_block;
 }
 

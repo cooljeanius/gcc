@@ -1,5 +1,5 @@
 /* IPA reference lists.
-   Copyright (C) 2010-2025 Free Software Foundation, Inc.
+   Copyright (C) 2010-2026 Free Software Foundation, Inc.
    Contributed by Jan Hubicka
 
 This file is part of GCC.
@@ -63,7 +63,7 @@ public:
   /* speculative id is used to link direct calls with their corresponding
      IPA_REF_ADDR references when representing speculative calls.  */
   unsigned int speculative_id : 16;
-  ENUM_BITFIELD (ipa_ref_use) use:3;
+  enum ipa_ref_use use:3;
   unsigned int speculative:1;
 };
 

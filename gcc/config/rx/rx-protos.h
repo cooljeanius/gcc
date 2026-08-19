@@ -1,5 +1,5 @@
 /* Exported function prototypes from the Renesas RX backend.
-   Copyright (C) 2008-2025 Free Software Foundation, Inc.
+   Copyright (C) 2008-2026 Free Software Foundation, Inc.
    Contributed by Red Hat.
 
    This file is part of GCC.
@@ -70,6 +70,8 @@ extern void rx_copy_reg_dead_or_unused_notes (rtx reg, const rtx_insn* src,
 
 extern bool rx_fuse_in_memory_bitop (rtx* operands, rtx_insn* curr_insn,
 				     rtx (*gen_insn)(rtx, rtx));
+extern void rx_split_double_move (rtx* operands, machine_mode mode);
+extern void rx_relax_double_operands (rtx* operands, machine_mode mode);
 
 /* Result value of rx_find_set_of_reg.  */
 struct set_of_reg

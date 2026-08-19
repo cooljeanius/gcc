@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2025 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -19,10 +19,13 @@
 #ifndef RUST_PRIVACY_REPORTER_H
 #define RUST_PRIVACY_REPORTER_H
 
+#include "rust-hir-expr.h"
 #include "rust-hir-map.h"
 #include "rust-hir-visitor.h"
+#include "rust-hir-type-check.h"
 #include "rust-mapping-common.h"
-#include "rust-name-resolver.h"
+#include "rust-finalized-name-resolution-context.h"
+#include "rust-rib.h"
 
 namespace Rust {
 namespace Privacy {
@@ -37,7 +40,7 @@ class PrivacyReporter : public HIR::HIRExpressionVisitor,
 {
 public:
   PrivacyReporter (Analysis::Mappings &mappings,
-		   Rust::Resolver::Resolver &resolver,
+		   const Resolver2_0::FinalizedNameResolutionContext &resolver,
 		   const Rust::Resolver::TypeCheckContext &ty_ctx);
 
   /**
@@ -54,9 +57,17 @@ private:
    * @param use_id NodeId of the expression/statement referencing an item with
    * 		a visibility
    * @param locus Location of said expression/statement
+   * @param ns1, ns2 Namespaces in which to check for visibility
    */
   void check_for_privacy_violation (const NodeId &use_id,
-				    const location_t locus);
+				    const location_t locus,
+				    Resolver2_0::Namespace ns);
+  void check_for_privacy_violation (const NodeId &use_id,
+				    const location_t locus,
+				    Resolver2_0::Namespace ns1,
+				    Resolver2_0::Namespace ns2);
+
+  void check_violation_inner (NodeId ref_node_id, const location_t inner);
 
   /**
    * Internal function used by `check_type_privacy` when dealing with complex
@@ -106,14 +117,16 @@ types
   virtual void visit (HIR::MethodCallExpr &expr);
   virtual void visit (HIR::FieldAccessExpr &expr);
   virtual void visit (HIR::BlockExpr &expr);
+  virtual void visit (HIR::AnonConst &expr);
+  virtual void visit (HIR::ConstBlock &expr);
   virtual void visit (HIR::ContinueExpr &expr);
   virtual void visit (HIR::BreakExpr &expr);
   virtual void visit (HIR::RangeFromToExpr &expr);
   virtual void visit (HIR::RangeFromExpr &expr);
   virtual void visit (HIR::RangeToExpr &expr);
   virtual void visit (HIR::RangeFullExpr &expr);
-  virtual void visit (HIR::RangeFromToInclExpr &expr);
   virtual void visit (HIR::RangeToInclExpr &expr);
+  virtual void visit (HIR::BoxExpr &expr);
   virtual void visit (HIR::ReturnExpr &expr);
   virtual void visit (HIR::UnsafeBlockExpr &expr);
   virtual void visit (HIR::LoopExpr &expr);
@@ -125,6 +138,8 @@ types
   virtual void visit (HIR::AwaitExpr &expr);
   virtual void visit (HIR::AsyncBlockExpr &expr);
   virtual void visit (HIR::InlineAsm &expr);
+  virtual void visit (HIR::LlvmInlineAsm &expr);
+  virtual void visit (HIR::OffsetOf &expr);
 
   virtual void visit (HIR::EnumItemTuple &);
   virtual void visit (HIR::EnumItemStruct &);
@@ -152,7 +167,7 @@ types
   virtual void visit (HIR::ExprStmt &stmt);
 
   Analysis::Mappings &mappings;
-  Rust::Resolver::Resolver &resolver;
+  const Resolver2_0::FinalizedNameResolutionContext &resolver;
   const Rust::Resolver::TypeCheckContext &ty_ctx;
 
   // `None` means we're in the root module - the crate

@@ -1,5 +1,5 @@
 /* Data references and dependences detectors.
-   Copyright (C) 2003-2025 Free Software Foundation, Inc.
+   Copyright (C) 2003-2026 Free Software Foundation, Inc.
    Contributed by Sebastian Pop <pop@cri.ensmp.fr>
 
 This file is part of GCC.
@@ -1295,7 +1295,9 @@ access_fn_component_p (tree op)
       return true;
 
     case COMPONENT_REF:
-      return TREE_CODE (TREE_TYPE (TREE_OPERAND (op, 0))) == RECORD_TYPE;
+      return (TREE_CODE (TREE_TYPE (TREE_OPERAND (op, 0))) == RECORD_TYPE
+	      || (!AGGREGATE_TYPE_P (TREE_TYPE (op))
+		  && TREE_CODE (TREE_TYPE (op)) != COMPLEX_TYPE));
 
     default:
       return false;
@@ -1363,17 +1365,27 @@ dr_analyze_indices (struct indices *dri, tree ref, edge nest, loop_p loop)
 	  access_fns.safe_push (access_fn);
 	}
       else if (TREE_CODE (ref) == COMPONENT_REF
-	       && TREE_CODE (TREE_TYPE (TREE_OPERAND (ref, 0))) == RECORD_TYPE)
+	       && (TREE_CODE (TREE_TYPE (TREE_OPERAND (ref, 0))) == RECORD_TYPE
+		   || (!AGGREGATE_TYPE_P (TREE_TYPE (ref))
+		       && TREE_CODE (TREE_TYPE (ref)) != COMPLEX_TYPE)))
 	{
 	  /* For COMPONENT_REFs of records (but not unions!) use the
 	     FIELD_DECL offset as constant access function so we can
-	     disambiguate a[i].f1 and a[i].f2.  */
-	  tree off = component_ref_field_offset (ref);
-	  off = size_binop (PLUS_EXPR,
-			    size_binop (MULT_EXPR,
-					fold_convert (bitsizetype, off),
-					bitsize_int (BITS_PER_UNIT)),
-			    DECL_FIELD_BIT_OFFSET (TREE_OPERAND (ref, 1)));
+	     disambiguate a[i].f1 and a[i].f2.  For unions and accesses
+	     we do not create further access functions for just use
+	     zero.  */
+	  tree off;
+	  if (TREE_CODE (TREE_TYPE (TREE_OPERAND (ref, 0))) == RECORD_TYPE)
+	    {
+	      off = component_ref_field_offset (ref);
+	      off = size_binop (PLUS_EXPR,
+				size_binop (MULT_EXPR,
+					    fold_convert (bitsizetype, off),
+					    bitsize_int (BITS_PER_UNIT)),
+				DECL_FIELD_BIT_OFFSET (TREE_OPERAND (ref, 1)));
+	    }
+	  else
+	    off = bitsize_zero_node;
 	  access_fns.safe_push (off);
 	}
       else
@@ -1795,7 +1807,7 @@ dump_alias_pair (dr_with_seg_len_pair_t *alias_pair, const char *indent)
    memory of store_ptr_0 cannot be between the memory of load_ptr_0 and
    load_ptr_1.)
 
-   we then can use only the following expression to finish the alising checks
+   we then can use only the following expression to finish the aliasing checks
    between store_ptr_0 & load_ptr_0 and store_ptr_0 & load_ptr_1:
 
    ((store_ptr_0 + store_segment_length_0) <= load_ptr_0)
@@ -2037,7 +2049,7 @@ create_ifn_alias_checks (tree *cond_expr,
   tree addr_a = DR_BASE_ADDRESS (dr_a.dr);
   tree addr_b = DR_BASE_ADDRESS (dr_b.dr);
 
-  /* See whether the target suports what we want to do.  WAW checks are
+  /* See whether the target supports what we want to do.  WAW checks are
      equivalent to WAR checks here.  */
   internal_fn ifn = (alias_pair.flags & DR_ALIAS_RAW
 		     ? IFN_CHECK_RAW_PTRS
@@ -2498,9 +2510,10 @@ create_waw_or_war_checks (tree *cond_expr,
   limit = fold_build2 (PLUS_EXPR, sizetype, limit,
 		       size_int (last_chunk_a + last_chunk_b));
 
-  tree subject = fold_build2 (POINTER_DIFF_EXPR, ssizetype, addr_b, addr_a);
-  subject = fold_build2 (PLUS_EXPR, sizetype,
-			 fold_convert (sizetype, subject), bias);
+  tree subject = fold_build2 (MINUS_EXPR, sizetype,
+			      fold_convert (sizetype, addr_b),
+			      fold_convert (sizetype, addr_a));
+  subject = fold_build2 (PLUS_EXPR, sizetype, subject, bias);
 
   *cond_expr = fold_build2 (GT_EXPR, boolean_type_node, subject, limit);
   if (dump_enabled_p ())
@@ -2675,7 +2688,6 @@ create_runtime_alias_checks (class loop *loop,
 {
   tree part_cond_expr;
 
-  fold_defer_overflow_warnings ();
   for (const dr_with_seg_len_pair_t &alias_pair : alias_pairs)
     {
       gcc_assert (alias_pair.flags);
@@ -2693,7 +2705,6 @@ create_runtime_alias_checks (class loop *loop,
       else
 	*cond_expr = part_cond_expr;
     }
-  fold_undefer_and_ignore_overflow_warnings ();
 }
 
 /* Check if OFFSET1 and OFFSET2 (DR_OFFSETs of some data-refs) are identical

@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # allocfail.sh -- Test for libbacktrace library.
-# Copyright (C) 2018-2025 Free Software Foundation, Inc.
+# Copyright (C) 2018-2026 Free Software Foundation, Inc.
 
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are
@@ -77,7 +77,7 @@ while [ $i -le $allocs ]; do
 	exit 1
     fi
 
-    # The test-case would run too long if we would excercise all allocs.
+    # The test-case would run too long if we would exercise all allocs.
     # So, run with step 1 initially, and increase the step once we have 10
     # subsequent passes, and drop back to step 1 once we encounter another
     # failure.  This takes ~2.6 seconds on an i7-6600U CPU @ 2.60GHz.

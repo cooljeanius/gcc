@@ -6,7 +6,7 @@
  *                                                                          *
  *                          C Implementation File                           *
  *                                                                          *
- *                     Copyright (C) 2008-2025, AdaCore                     *
+ *                     Copyright (C) 2008-2026, AdaCore                     *
  *                                                                          *
  * GNAT is free software;  you can  redistribute it  and/or modify it under *
  * terms of the  GNU General Public License as published  by the Free Soft- *
@@ -724,13 +724,16 @@ __gnat_setup_child_communication
     if (bRet == FALSE) {
       cpid = -1;
     }
-
-    dwRet = buf[0] | (buf[1] << 8) | (buf[2] << 16) | (buf[3] << 24);
-    if (dwRet != 0) {
-      cpid = -1;
+    else {
+      dwRet = buf[0] | (buf[1] << 8) | (buf[2] << 16) | (buf[3] << 24);
+      if (dwRet != 0) {
+	cpid = -1;
+      }
+      else {
+	cpid = buf[4] | (buf[5] << 8) | (buf[6] << 16) | (buf[7] << 24);
+      }
     }
 
-    cpid = buf[4] | (buf[5] << 8) | (buf[6] << 16) | (buf[7] << 24);
     process->pid = cpid;
   }
 
@@ -1155,7 +1158,7 @@ __gnat_setup_winsize (void *desc ATTRIBUTE_UNUSED,
 #define USE_CLONE_DEVICE "/dev/ptc"
 #elif defined (__hpux__)
 /* On HP-UX we use the streamed version. Using the non streamed version is not
-   recommanded (through "/dev/ptym/clone"). Indeed it seems that there are
+   recommended (through "/dev/ptym/clone"). Indeed it seems that there are
    issues to detect process terminations. */
 #define USE_CLONE_DEVICE "/dev/ptmx"
 #endif
@@ -1642,7 +1645,7 @@ __gnat_new_tty (void)
 /* __gnat_close_tty - close a terminal
  *
  * PARAMETERS
- *   desc  a pty_desc strucure
+ *   desc  a pty_desc structure
  */
 void __gnat_close_tty (pty_desc* desc)
 {
@@ -1653,7 +1656,7 @@ void __gnat_close_tty (pty_desc* desc)
 /* __gnat_tty_name - return slave side device name
  *
  * PARAMETERS
- *   desc  a pty_desc strucure
+ *   desc  a pty_desc structure
  * RETURN VALUE
  *   a string
  */
@@ -1666,7 +1669,7 @@ __gnat_tty_name (pty_desc* desc)
 /* __gnat_tty_name - return master side fd
  *
  * PARAMETERS
- *   desc  a pty_desc strucure
+ *   desc  a pty_desc structure
  * RETURN VALUE
  *   a fd
  */

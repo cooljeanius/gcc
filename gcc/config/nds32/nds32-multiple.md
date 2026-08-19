@@ -1,5 +1,5 @@
 ;; Load/Store Multiple patterns description of Andes NDS32 cpu for GNU compiler
-;; Copyright (C) 2012-2025 Free Software Foundation, Inc.
+;; Copyright (C) 2012-2026 Free Software Foundation, Inc.
 ;; Contributed by Andes Technology Corporation.for NDS32.
 ;;
 ;; This file is part of GCC.
@@ -33,7 +33,7 @@
 {
   int maximum;
 
-  /* Because reduced-set regsiters has few registers
+  /* Because reduced-set registers has few registers
      (r0~r5, r6~10, r15, r28~r31, where 'r15' and 'r28~r31' cannot
      be used for register allocation),
      using 8 registers for load_multiple may easily consume all of them.
@@ -1882,7 +1882,7 @@
 {
   int maximum;
 
-  /* Because reduced-set regsiters has few registers
+  /* Because reduced-set registers has few registers
      (r0~r5, r6~10, r15, r28~r31, where 'r15' and 'r28~r31' cannot
      be used for register allocation),
      using 8 registers for store_multiple may easily consume all of them.

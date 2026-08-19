@@ -1,5 +1,5 @@
 /* Basic IPA optimizations and utilities.
-   Copyright (C) 2003-2025 Free Software Foundation, Inc.
+   Copyright (C) 2003-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -84,7 +84,7 @@ update_inlined_to_pointer (struct cgraph_node *node, struct cgraph_node *inlined
 
    The queue is linked via AUX pointers and terminated by pointer to 1.
    We enqueue nodes at two occasions: when we find them reachable or when we find
-   their bodies needed for further clonning.  In the second case we mark them
+   their bodies needed for further cloning.  In the second case we mark them
    by pointer to 2 after processing so they are re-queue when they become
    reachable.  */
 
@@ -105,7 +105,7 @@ enqueue_node (symtab_node *node, symtab_node **first,
 
 /* Return true if NODE may get inlined later.
    This is used to keep DECL_EXTERNAL function bodies around long enough
-   so inliner can proces them.  */
+   so inliner can process them.  */
 
 static bool
 possible_inline_candidate_p (symtab_node *node)
@@ -168,7 +168,7 @@ process_references (symtab_node *snode,
    devirtualization happens.  After inlining still keep their declarations
    around, so we can devirtualize to a direct call.
 
-   Also try to make trivial devirutalization when no or only one target is
+   Also try to make trivial devirtualization when no or only one target is
    possible.  */
 
 static void
@@ -310,6 +310,7 @@ bool
 symbol_table::remove_unreachable_nodes (FILE *file)
 {
   symtab_node *first = (symtab_node *) (void *) 1;
+  symtab_node *snode;
   struct cgraph_node *node, *next;
   varpool_node *vnode, *vnext;
   bool changed = false;
@@ -357,6 +358,12 @@ symbol_table::remove_unreachable_nodes (FILE *file)
 	reachable.add (vnode);
 	enqueue_node (vnode, &first, &reachable);
       }
+
+  /* Declarations or symbols in other partitions are also needed if referenced
+     from asm.  */
+  FOR_EACH_SYMBOL (snode)
+    if (snode->ref_by_asm)
+      enqueue_node (snode, &first, &reachable);
 
   /* Perform reachability analysis.  */
   while (first != (symtab_node *) (void *) 1)
@@ -428,11 +435,12 @@ symbol_table::remove_unreachable_nodes (FILE *file)
 		  for (e = cnode->indirect_calls; e; e = next)
 		    {
 		      next = e->next_callee;
-		      if (e->indirect_info->polymorphic)
+		      if (usable_polymorphic_info_p (e->indirect_info))
 			walk_polymorphic_call_targets (&reachable_call_targets,
 						       e, &first, &reachable);
 		    }
 		}
+
 	      for (e = cnode->callees; e; e = e->next_callee)
 		{
 	          symtab_node *body = e->callee->function_symbol ();
@@ -475,6 +483,15 @@ symbol_table::remove_unreachable_nodes (FILE *file)
 	    }
 	  else if (cnode->thunk)
 	    enqueue_node (cnode->callees->callee, &first, &reachable);
+
+	  /* A reference to the default node implies use of all the other
+	     versions (they get used in the function resolver made later
+	     in multiple_target.cc)  */
+	  cgraph_function_version_info *node_v = cnode->function_version ();
+	  if (node_v && is_function_default_version (node->decl))
+	    for (cgraph_function_version_info *fvi = node_v->next; fvi;
+		 fvi = fvi->next)
+	      enqueue_node (fvi->this_node, &first, &reachable);
 
 	  /* If any reachable function has simd clones, mark them as
 	     reachable as well.  */
@@ -730,7 +747,7 @@ set_readonly_bit (varpool_node *vnode, void *data ATTRIBUTE_UNUSED)
   return false;
 }
 
-/* Set writeonly bit and clear the initalizer, since it will not be needed.  */
+/* Set writeonly bit and clear the initializer, since it will not be needed.  */
 
 bool
 set_writeonly_bit (varpool_node *vnode, void *data)
@@ -767,7 +784,7 @@ clear_addressable_bit (varpool_node *vnode, void *data ATTRIBUTE_UNUSED)
    FIXME: This cannot be done in between gimplify and omp_expand since
    readonly flag plays role on what is shared and what is not.  Currently we do
    this transformation as part of whole program visibility and re-do at
-   ipa-reference pass (to take into account clonning), but it would
+   ipa-reference pass (to take into account cloning), but it would
    make sense to do it before early optimizations.  */
 
 bool
@@ -1370,7 +1387,7 @@ make_pass_ipa_cdtor_merge (gcc::context *ctxt)
 #define BOTTOM ((cgraph_node *)(size_t) 2)
 
 /* Meet operation for single user dataflow.
-   Here we want to associate variables with sigle function that may access it.
+   Here we want to associate variables with single function that may access it.
 
    FUNCTION is current single user of a variable, VAR is variable that uses it.
    Latttice is stored in SINGLE_USER_MAP.
@@ -1441,7 +1458,7 @@ propagate_single_user (varpool_node *vnode, cgraph_node *function,
 
 /* Pass setting used_by_single_function flag.
    This flag is set on variable when there is only one function that may
-   possibly referr to it.  */
+   possibly refer to it.  */
 
 static unsigned int
 ipa_single_use (void)

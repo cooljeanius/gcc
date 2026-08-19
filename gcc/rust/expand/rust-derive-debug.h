@@ -1,4 +1,4 @@
-// Copyright (C) 2025 Free Software Foundation, Inc.
+// Copyright (C) 2025-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -30,7 +30,7 @@ namespace AST {
 class DeriveDebug : DeriveVisitor
 {
 public:
-  DeriveDebug (location_t loc);
+  DeriveDebug (location_t loc, Builder::Source item_source);
 
   std::unique_ptr<Item> go (Item &);
 

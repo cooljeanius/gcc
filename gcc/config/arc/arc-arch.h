@@ -1,6 +1,6 @@
 /* Definitions of types that are used to store ARC architecture and
    device information.
-   Copyright (C) 2016-2025 Free Software Foundation, Inc.
+   Copyright (C) 2016-2026 Free Software Foundation, Inc.
    Contributed by Claudiu Zissulescu (claziss@synopsys.com)
 
 This file is part of GCC.
@@ -47,7 +47,7 @@ enum base_architecture
     BASE_ARCH_END
   };
 
-/* Architecture specific propoerties.  */
+/* Architecture specific properties.  */
 
 typedef struct
 {
