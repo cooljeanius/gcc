@@ -1,5 +1,5 @@
 /* Definitions of Tensilica's Xtensa target machine for GNU compiler.
-   Copyright (C) 2001-2025 Free Software Foundation, Inc.
+   Copyright (C) 2001-2026 Free Software Foundation, Inc.
    Contributed by Bob Wilson (bwilson@tensilica.com) at Tensilica.
 
 This file is part of GCC.
@@ -36,6 +36,7 @@ along with GCC; see the file COPYING3.  If not see
 #define TARGET_MINMAX		XCHAL_HAVE_MINMAX
 #define TARGET_SEXT		XCHAL_HAVE_SEXT
 #define TARGET_CLAMPS		XCHAL_HAVE_CLAMPS
+#define TARGET_DEPBITS		XCHAL_HAVE_DEPBITS
 #define TARGET_BOOLEANS		XCHAL_HAVE_BOOLEANS
 #define TARGET_HARD_FLOAT	XCHAL_HAVE_FP
 #define TARGET_HARD_FLOAT_DIV	XCHAL_HAVE_FP_DIV
@@ -253,6 +254,10 @@ along with GCC; see the file COPYING3.  If not see
 }
 #define ADJUST_REG_ALLOC_ORDER xtensa_adjust_reg_alloc_order ()
 
+/* Tell IRA to use the order we define rather than messing it up with its
+   own cost calculations.  */
+#define HONOR_REG_ALLOC_ORDER 1
+
 /* Internal macros to classify a register number.  */
 
 /* 16 address registers + fake registers */
@@ -316,6 +321,13 @@ along with GCC; see the file COPYING3.  If not see
    call an address kept in a register.  */
 #define NO_FUNCTION_CSE 1
 
+/* Named address spaces.  */
+#define ADDR_SPACE_FORCE_L32 1
+#define REGISTER_TARGET_PRAGMAS()					\
+  do {									\
+    c_register_addr_space ("__force_l32", ADDR_SPACE_FORCE_L32);	\
+  } while (0)
+
 /* Xtensa processors have "register windows".  GCC does not currently
    take advantage of the possibility for variable-sized windows; instead,
    we use a fixed window size of 8.  */
@@ -332,6 +344,9 @@ along with GCC; see the file COPYING3.  If not see
      ((unsigned) ((IN) - GP_REG_FIRST) < WINDOW_SIZE)) ?		\
     (IN) + WINDOW_SIZE : (IN)) : (IN))
 
+#define LOCAL_REGNO(REGNO)						\
+  (TARGET_WINDOWED_ABI && GP_REG_P (REGNO)				\
+   && ((unsigned) ((REGNO) - GP_REG_FIRST) < WINDOW_SIZE))
 
 /* Define the classes of registers for register constraints in the
    machine description.  */
@@ -400,7 +415,7 @@ enum reg_class
 #define INDEX_REG_CLASS NO_REGS
 
 /* The small_register_classes_for_mode_p hook must always return true for
-   Xtrnase, because all of the 16 AR registers may be explicitly used in
+   Xtensa, because all of the 16 AR registers may be explicitly used in
    the RTL, as either incoming or outgoing arguments.  */
 #define TARGET_SMALL_REGISTER_CLASSES_FOR_MODE_P hook_bool_mode_true
 
@@ -521,6 +536,10 @@ typedef struct xtensa_args
 /* Stack pointer value doesn't matter at exit.  */
 #define EXIT_IGNORE_STACK 1
 
+/* The "return" pattern requires A0 register as return address, and is
+   also required so that restoring A0 in the epilogue is not dead code.  */
+#define EPILOGUE_USES(REGNO) ((REGNO) == A0_REG)
+
 /* Size in bytes of the trampoline, as an integer.  Make sure this is
    a multiple of TRAMPOLINE_ALIGNMENT to avoid -Wpadded warnings.  */
 #define TRAMPOLINE_SIZE (TARGET_WINDOWED_ABI ? \
@@ -582,15 +601,15 @@ typedef struct xtensa_args
    for use as a base or index register in operand addresses.  */
 
 #define REGNO_OK_FOR_INDEX_P(NUM) 0
-#define REGNO_OK_FOR_BASE_P(NUM) \
-  (GP_REG_P (NUM) || GP_REG_P ((unsigned) reg_renumber[NUM]))
+#define REGNO_OK_FOR_BASE_P(NUM) GP_REG_P (NUM)
 
 /* C expressions that are nonzero if X (assumed to be a `reg' RTX) is
    valid for use as a base or index register.  */
 
 #define BASE_REG_P(X, STRICT)						\
   ((!(STRICT) && ! HARD_REGISTER_P (X))					\
-   || REGNO_OK_FOR_BASE_P (REGNO (X)))
+   || regno_ok_for_base_p (REGNO (X), VOIDmode, ADDR_SPACE_GENERIC,	\
+			   UNKNOWN, UNKNOWN))
 
 /* Maximum number of registers that can appear in a valid memory address.  */
 #define MAX_REGS_PER_ADDRESS 1

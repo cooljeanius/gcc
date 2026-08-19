@@ -1,5 +1,5 @@
 /* Support routines for Value Range Propagation (VRP).
-   Copyright (C) 2016-2025 Free Software Foundation, Inc.
+   Copyright (C) 2016-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -23,7 +23,6 @@ along with GCC; see the file COPYING3.  If not see
 #include "value-range.h"
 
 extern int compare_values (tree, tree);
-extern int compare_values_warnv (tree, tree, bool *);
 
 extern enum value_range_kind intersect_range_with_nonzero_bits
   (enum value_range_kind, wide_int *, wide_int *, const wide_int &, signop);

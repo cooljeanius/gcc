@@ -1,5 +1,5 @@
 /* Implementation of the C API; all wrappers into the internal C++ API
-   Copyright (C) 2013-2025 Free Software Foundation, Inc.
+   Copyright (C) 2013-2026 Free Software Foundation, Inc.
    Contributed by David Malcolm <dmalcolm@redhat.com>.
 
 This file is part of GCC.
@@ -20,6 +20,7 @@ along with GCC; see the file COPYING3.  If not see
 
 #include "config.h"
 #define INCLUDE_MUTEX
+#define INCLUDE_STRING
 #include "system.h"
 #include "coretypes.h"
 #include "timevar.h"
@@ -29,6 +30,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "libgccjit.h"
 #include "jit-recording.h"
 #include "jit-result.h"
+#include "jit-target.h"
 
 /* The opaque types used by the public API are actually subclasses
    of the gcc::jit::recording classes.  */
@@ -41,6 +43,10 @@ struct gcc_jit_context : public gcc::jit::recording::context
 };
 
 struct gcc_jit_result : public gcc::jit::result
+{
+};
+
+struct gcc_jit_target_info : public target_info
 {
 };
 
@@ -336,7 +342,7 @@ jit_error (gcc::jit::recording::context *ctxt,
   va_start (ap, fmt);
 
   if (ctxt)
-    ctxt->add_error_va (loc, fmt, ap);
+    ctxt->add_error_va (loc, diagnostics::kind::error, fmt, ap);
   else
     {
       /* No context?  Send to stderr.  */
@@ -634,6 +640,23 @@ gcc_jit_type_is_integral (gcc_jit_type *type)
 /* Public entrypoint.  See description in libgccjit.h.
 
    After error-checking, the real work is done by the
+   gcc::jit::recording::type::is_float method, in
+   jit-recording.cc.  */
+
+int
+gcc_jit_type_is_floating_point (gcc_jit_type *type)
+{
+  RETURN_VAL_IF_FAIL (type, FALSE, NULL, NULL, "NULL type");
+
+  if (type->is_vector ())
+    return false;
+
+  return type->is_float ();
+}
+
+/* Public entrypoint.  See description in libgccjit.h.
+
+   After error-checking, the real work is done by the
    gcc::jit::recording::type::is_vector method, in
    jit-recording.cc.  */
 
@@ -778,11 +801,21 @@ gcc_jit_context_new_array_type (gcc_jit_context *ctxt,
 				gcc_jit_type *element_type,
 				int num_elements)
 {
+  RETURN_NULL_IF_FAIL (num_elements >= 0, ctxt, NULL, "negative size");
+  return gcc_jit_context_new_array_type_u64 (ctxt, loc, element_type,
+    (uint64_t) num_elements);
+}
+
+gcc_jit_type *
+gcc_jit_context_new_array_type_u64 (gcc_jit_context *ctxt,
+					      gcc_jit_location *loc,
+					      gcc_jit_type *element_type,
+					      uint64_t num_elements)
+{
   RETURN_NULL_IF_FAIL (ctxt, NULL, loc, "NULL context");
   JIT_LOG_FUNC (ctxt->get_logger ());
   /* LOC can be NULL.  */
   RETURN_NULL_IF_FAIL (element_type, ctxt, loc, "NULL type");
-  RETURN_NULL_IF_FAIL (num_elements >= 0, ctxt, NULL, "negative size");
   RETURN_NULL_IF_FAIL (!element_type->is_void (), ctxt, loc,
 		       "void type for elements");
 
@@ -1486,7 +1519,7 @@ gcc_jit_context_new_struct_constructor (gcc_jit_context *ctxt,
 			       type->get_debug_string (),
 			       n_fields);
 
-  /* It is OK if fields are null here, indicating definiton order,
+  /* It is OK if fields are null here, indicating definition order,
      but there has to be a values array.  */
   RETURN_NULL_IF_FAIL (values,
 		       ctxt, loc,
@@ -2290,7 +2323,8 @@ gcc_jit_context_new_comparison (gcc_jit_context *ctxt,
   RETURN_NULL_IF_FAIL (a, ctxt, loc, "NULL a");
   RETURN_NULL_IF_FAIL (b, ctxt, loc, "NULL b");
   RETURN_NULL_IF_FAIL_PRINTF4 (
-    a->get_type ()->unqualified () == b->get_type ()->unqualified (),
+    compatible_types (a->get_type ()->unqualified (),
+		      b->get_type ()->unqualified ()),
     ctxt, loc,
     "mismatching types for comparison:"
     " a: %s (type: %s) b: %s (type: %s)",
@@ -2497,10 +2531,10 @@ is_valid_cast (gcc::jit::recording::type *src_type,
     if (dst_is_int || dst_is_bool)
       return true;
 
-  /* Permit casts between pointer types.  */
+  /* Permit casts between pointer types and integers and pointers.  */
   gcc::jit::recording::type *deref_src_type = src_type->is_pointer ();
   gcc::jit::recording::type *deref_dst_type = dst_type->is_pointer ();
-  if (deref_src_type && deref_dst_type)
+  if ((deref_src_type || src_is_int) && (deref_dst_type || dst_is_int))
     return true;
 
   return false;
@@ -3898,6 +3932,59 @@ gcc_jit_context_set_output_ident (gcc_jit_context *ctxt,
   JIT_LOG_FUNC (ctxt->get_logger ());
 
   ctxt->set_output_ident (output_ident);
+}
+
+gcc_jit_target_info *
+gcc_jit_context_get_target_info (gcc_jit_context *ctxt)
+{
+  RETURN_NULL_IF_FAIL (ctxt, NULL, NULL, "NULL context");
+  JIT_LOG_FUNC (ctxt->get_logger ());
+
+  ctxt->log ("populate_target_info of ctxt: %p", (void *)ctxt);
+
+  ctxt->populate_target_info ();
+
+  return (gcc_jit_target_info*) ctxt->move_target_info ();
+}
+
+void
+gcc_jit_target_info_release (gcc_jit_target_info *info)
+{
+  RETURN_IF_FAIL (info, NULL, NULL, "NULL info");
+  delete info;
+}
+
+int
+gcc_jit_target_info_cpu_supports (gcc_jit_target_info *info,
+				  const char *feature)
+{
+  RETURN_VAL_IF_FAIL (info, 0, NULL, NULL, "NULL info");
+  RETURN_VAL_IF_FAIL (feature, 0, NULL, NULL, "NULL feature");
+  return info->has_target_value ("target_feature", feature);
+}
+
+const char *
+gcc_jit_target_info_arch (gcc_jit_target_info *info)
+{
+  RETURN_NULL_IF_FAIL (info, NULL, NULL, "NULL info");
+  return info->m_arch.c_str ();
+}
+
+int
+gcc_jit_target_info_supports_target_dependent_type (gcc_jit_target_info *info,
+						    enum gcc_jit_types type)
+{
+  RETURN_VAL_IF_FAIL (info, 0, NULL, NULL, "NULL info");
+  return info->m_supported_target_dependent_types.find (type)
+    != info->m_supported_target_dependent_types.end ();
+}
+
+void
+gcc_jit_context_set_abort_on_unsupported_target_builtin (gcc_jit_context *ctxt)
+{
+  RETURN_IF_FAIL (ctxt, NULL, NULL, "NULL context");
+
+  ctxt->set_abort_on_unsupported_target_builtin ();
 }
 
 /* Public entrypoint.  See description in libgccjit.h.

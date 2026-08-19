@@ -1,6 +1,6 @@
 /* Plugin for AMD GCN execution.
 
-   Copyright (C) 2013-2025 Free Software Foundation, Inc.
+   Copyright (C) 2013-2026 Free Software Foundation, Inc.
 
    Contributed by Mentor Embedded
 
@@ -28,6 +28,7 @@
 
 /* {{{ Includes and defines  */
 
+#define _GNU_SOURCE
 #include "config.h"
 #include "symcat.h"
 #include <stdio.h>
@@ -41,6 +42,7 @@
 #include <hsa_ext_amd.h>
 #include <dlfcn.h>
 #include <signal.h>
+#include "alloc_cache.h"
 #define _LIBGOMP_PLUGIN_INCLUDE 1
 #include "libgomp-plugin.h"
 #undef _LIBGOMP_PLUGIN_INCLUDE
@@ -50,6 +52,16 @@
 #include "oacc-plugin.h"
 #include "oacc-int.h"
 #include <assert.h>
+#include <sys/mman.h>
+#include <unistd.h>
+
+/* Create hash-table for declare target's indirect clause on the host;
+   see build-target-indirect-htab.h for details.  */
+#define USE_HASHTAB_LOOKUP_FOR_INDIRECT
+#ifdef USE_HASHTAB_LOOKUP_FOR_INDIRECT
+static void* create_target_indirect_map (size_t *, size_t,
+					 uint64_t *, uint64_t *);
+#endif
 
 /* These probably won't be in elf.h for a while.  */
 #ifndef R_AMDGPU_NONE
@@ -208,6 +220,8 @@ struct hsa_runtime_fn_info
   hsa_status_t (*hsa_code_object_deserialize_fn)
     (void *serialized_code_object, size_t serialized_code_object_size,
      const char *options, hsa_code_object_t *code_object);
+  hsa_status_t (*hsa_amd_memory_fill_fn)(void *ptr, uint32_t value,
+					 size_t count);
   hsa_status_t (*hsa_amd_memory_lock_fn)
     (void *host_ptr, size_t size, hsa_agent_t *agents, int num_agent,
      void **agent_ptr);
@@ -218,11 +232,20 @@ struct hsa_runtime_fn_info
      const hsa_dim3_t *range, hsa_agent_t copy_agent,
      hsa_amd_copy_direction_t dir, uint32_t num_dep_signals,
      const hsa_signal_t *dep_signals, hsa_signal_t completion_signal);
+  hsa_status_t (*hsa_amd_svm_attributes_set_fn)
+    (void* ptr, size_t size, hsa_amd_svm_attribute_pair_t* attribute_list,
+     size_t attribute_count);
+  hsa_status_t (*hsa_amd_svm_attributes_get_fn)
+    (void* ptr, size_t size, hsa_amd_svm_attribute_pair_t* attribute_list,
+     size_t attribute_count);
+  hsa_status_t (*hsa_amd_pointer_info_fn)
+    (const void *, hsa_amd_pointer_info_t *, void *(*)(size_t),
+     uint32_t *, hsa_agent_t **); 
 };
 
 /* As an HIP runtime is dlopened, following structure defines function
    pointers utilized by the interop feature of this plugin.
-   Add suffient type declarations to get this work.  */
+   Add sufficient type declarations to get this work.  */
 
 typedef int hipError_t;  /* Actually an enum; 0 == success. */
 typedef void* hipCtx_t;
@@ -240,7 +263,7 @@ struct hip_runtime_fn_info
 };
 
 /* Structure describing the run-time and grid properties of an HSA kernel
-   lauch.  This needs to match the format passed to GOMP_OFFLOAD_run.  */
+   launch.  This needs to match the format passed to GOMP_OFFLOAD_run.  */
 
 struct GOMP_kernel_launch_attributes
 {
@@ -252,20 +275,21 @@ struct GOMP_kernel_launch_attributes
   uint32_t wdims[3];
 };
 
-/* Collection of information needed for a dispatch of a kernel from a
-   kernel.  */
+/* Collection of information needed for a dispatch of a kernel from a kernel.
+   Redundant with parts of hsa_kernel_dispatch_packet_t.  It is maintained
+   separately because the contents of the aforementioned packet become
+   unspecified after dispatch, so, we can't re-read back pointers we wrote into
+   the dispatch packet in order to clean them up.  */
 
 struct kernel_dispatch
 {
   struct agent_info *agent;
   /* Pointer to a command queue associated with a kernel dispatch agent.  */
   void *queue;
-  /* Pointer to a memory space used for kernel arguments passing.  */
-  void *kernarg_address;
   /* Kernel object.  */
   uint64_t object;
   /* Synchronization signal used for dispatch synchronization.  */
-  uint64_t signal;
+  hsa_signal_t signal;
   /* Private segment size.  */
   uint32_t private_segment_size;
   /* Group segment size.  */
@@ -282,14 +306,18 @@ struct kernargs {
 
   /* Output data.  */
   struct output output_data;
+
+  /* Target variable table.  Size determined by gomp_map_vars.  See
+     GOMP_OFFLOAD_session_allocate_target_var_table.  */
+  _Alignas (__BIGGEST_ALIGNMENT__) void *target_variable_table[];
 };
 
 /* A queue entry for a future asynchronous launch.  */
 
 struct kernel_launch
 {
+  struct gomp_offload_session *session;
   struct kernel_info *kernel;
-  void *vars;
   struct GOMP_kernel_launch_attributes kla;
 };
 
@@ -451,6 +479,10 @@ struct agent_info
   /* The HSA memory region from which to allocate kernel arguments.  */
   hsa_region_t kernarg_region;
 
+  /* A stack of allocations in kernarg_region of (sizeof (struct kernargs))
+     size each, used for ammortizing kernel argument allocation cost.  */
+  struct alloc_cache kernarg_cache;
+
   /* The HSA memory region from which to allocate device data.  */
   hsa_region_t data_region;
 
@@ -471,11 +503,14 @@ struct agent_info
      thread should have locked agent->module_rwlock for reading before
      acquiring it.  */
   pthread_mutex_t prog_mutex;
+  /* HSA executable - the finalized program that is used to locate kernels.  */
+  hsa_executable_t executable;
+  /* NUMA node; 0 = not initialized, < 0 N/A (error or virtualized machine);
+     if > 0: actual node is 'numa_node - 1' (range: 0...(num-nodes -1)).  */
+  int numa_node;
   /* Flag whether the HSA program that consists of all the modules has been
      finalized.  */
   bool prog_finalized;
-  /* HSA executable - the finalized program that is used to locate kernels.  */
-  hsa_executable_t executable;
 };
 
 /* Information required to identify, finalize and run any given kernel.  */
@@ -597,6 +632,13 @@ static int lowlat_size = -1;
    Set in init_debug depending on environment variables.  */
 
 static bool debug;
+
+/* Flag to decide whether to prevent merging the kernel arguments with the
+   target variable table, i.e. whether to always fail
+   GOMP_OFFLOAD_session_allocate_target_var_table.  Set from the
+   GCN_INHIBIT_KERNARGS_TVT_MERGE env var.  */
+
+static bool inhibit_kernargs_tvt_merge;
 
 /* Flag to decide if the runtime should suppress a possible fallback to host
    execution.  */
@@ -736,6 +778,24 @@ dump_hsa_system_info (void)
     }
   else
     GCN_WARNING ("HSA_SYSTEM_INFO_EXTENSIONS: FAILED\n");
+
+  bool svm_supported;
+  status = hsa_fns.hsa_system_get_info_fn
+    (HSA_AMD_SYSTEM_INFO_SVM_SUPPORTED, &svm_supported);
+  if (status == HSA_STATUS_SUCCESS)
+    GCN_DEBUG ("HSA_AMD_SYSTEM_INFO_SVM_SUPPORTED: %s\n",
+	       (svm_supported ? "TRUE" : "FALSE"));
+  else
+    GCN_WARNING ("HSA_AMD_SYSTEM_INFO_SVM_SUPPORTED: FAILED\n");
+
+  bool svm_accessible;
+  status = hsa_fns.hsa_system_get_info_fn
+    (HSA_AMD_SYSTEM_INFO_SVM_ACCESSIBLE_BY_DEFAULT, &svm_accessible);
+  if (status == HSA_STATUS_SUCCESS)
+    GCN_DEBUG ("HSA_AMD_SYSTEM_INFO_SVM_ACCESSIBLE_BY_DEFAULT: %s\n",
+	       (svm_accessible ? "TRUE" : "FALSE"));
+  else
+    GCN_WARNING ("HSA_AMD_SYSTEM_INFO_SVM_ACCESSIBLE_BY_DEFAULT: FAILED\n");
 }
 
 /* Dump information about the available hardware.  */
@@ -1040,11 +1100,10 @@ dump_executable_symbols (hsa_executable_t executable)
 
 /* Dump kernel DISPATCH data structure and indent it by INDENT spaces.  */
 
-static void
-print_kernel_dispatch (struct kernel_dispatch *dispatch, unsigned indent)
+static inline void
+print_kernel_dispatch (struct kernel_dispatch *dispatch, unsigned indent,
+		       struct kernargs *kernargs)
 {
-  struct kernargs *kernargs = (struct kernargs *)dispatch->kernarg_address;
-
   fprintf (stderr, "%*sthis: %p\n", indent, "", dispatch);
   fprintf (stderr, "%*squeue: %p\n", indent, "", dispatch->queue);
   fprintf (stderr, "%*skernarg_address: %p\n", indent, "", kernargs);
@@ -1139,6 +1198,9 @@ init_environment_variables (void)
   const char *lowlat = secure_getenv ("GOMP_GCN_LOWLAT_POOL");
   if (lowlat)
     lowlat_size = atoi (lowlat);
+
+  inhibit_kernargs_tvt_merge
+    = (bool) secure_getenv ("GCN_INHIBIT_KERNARGS_TVT_MERGE");
 }
 
 /* Return malloc'd string with name of SYMBOL.  */
@@ -1199,9 +1261,10 @@ get_cu_count (struct agent_info *agent)
 static int
 limit_worker_threads (int threads)
 {
-  /* FIXME Do something more inteligent here.
+  /* FIXME Do something more intelligent here.
      GCN can always run 4 threads within a Compute Unit, but
      more than that depends on register usage.  */
+  /* Keep in sync with GOMP_OFFLOAD_supported_threads_dim.  */
   if (threads > 16)
     threads = 16;
   return threads;
@@ -1456,9 +1519,13 @@ init_hsa_runtime_functions (void)
   DLSYM_FN (hsa_signal_load_acquire)
   DLSYM_FN (hsa_queue_destroy)
   DLSYM_FN (hsa_code_object_deserialize)
+  DLSYM_OPT_FN (hsa_amd_memory_fill)
   DLSYM_OPT_FN (hsa_amd_memory_lock)
   DLSYM_OPT_FN (hsa_amd_memory_unlock)
   DLSYM_OPT_FN (hsa_amd_memory_async_copy_rect)
+  DLSYM_OPT_FN (hsa_amd_svm_attributes_set)
+  DLSYM_OPT_FN (hsa_amd_svm_attributes_get)
+  DLSYM_OPT_FN (hsa_amd_pointer_info)
   return true;
 #undef DLSYM_OPT_FN
 #undef DLSYM_FN
@@ -1741,6 +1808,22 @@ isa_code(const char *isa) {
   return EF_AMDGPU_MACH_UNSUPPORTED;
 }
 
+/* Returns the code which is used in the GCN object code to identify the
+   generic ISA that corresponds to a specific ISA.  */
+
+static gcn_isa
+generic_isa_code (int isa) {
+  switch(isa)
+    {
+#define EF_AMDGPU_MACH_AMDGCN_NONE 0
+#define GCN_DEVICE(name, NAME, ELF, GCCISA, XNACK, SRAM, WAVE64, CUMODE, \
+		   VGPRS, CO, ARCH, GENERIC_ISA, ...) \
+    case ELF: return EF_AMDGPU_MACH_AMDGCN_ ## GENERIC_ISA;
+#include "../../gcc/config/gcn/gcn-devices.def"
+    }
+  return 0;
+}
+
 /* CDNA2 devices have twice as many VGPRs compared to older devices.  */
 
 static int
@@ -1759,6 +1842,119 @@ max_isa_vgprs (int isa)
 
 /* }}}  */
 /* {{{ Run  */
+struct gomp_offload_session
+{
+  /* Pointer to a memory space used for kernel arguments passing, wrapped in a
+     node from the agent kernel argument cache.  */
+  struct alloc_cache_node *kernarg_cache_node;
+  /* Pointer to the actual target variable table.  */
+  void **target_var_table;
+  /* Device executing the kernel for this offload session.  */
+  struct agent_info *agent;
+};
+GOMP_OFFLOAD_session_boilerplate ();
+
+/* Prepare SESSION for use by AGENT.  */
+static inline void
+init_session (struct gomp_offload_session *session, struct agent_info *agent)
+{
+  assert (agent);
+  *session = (struct gomp_offload_session) {
+    .kernarg_cache_node = NULL,
+    .target_var_table = NULL,
+    .agent = agent,
+  };
+}
+
+void
+GOMP_OFFLOAD_session_start (struct gomp_offload_session *session, int device)
+{
+  GCN_DEBUG ("Starting session %p\n", session);
+  assert ((((uintptr_t) session) % __BIGGEST_ALIGNMENT__) == 0);
+  init_session (session, get_agent_info (device));
+}
+
+/* Release resources held by SESSION (but not SESSION itself).  */
+static inline void
+release_session (struct gomp_offload_session *session)
+{
+  release_alloc_cache_node (session->kernarg_cache_node);
+}
+
+/* Get new kernargs for SESSION such that it can store TABLE_SIZE char units of
+   target variable table, reusing cached kernargs allocations, if possible.  */
+
+static inline struct kernargs *
+allocate_session_kernargs (struct gomp_offload_session *session,
+			   size_t table_size)
+{
+  GCN_DEBUG ("Session %p asked for allocation of kernargs+%llu...\n",
+	     session, (unsigned long long) table_size);
+  struct agent_info *agent = session->agent;
+  assert (!session->kernarg_cache_node);
+
+  /* To increase chance of cache hit, round up size of the target variable
+     table to a multiple of (64*sizeof(void*)), and ensure that this size is
+     nonzero.  */
+  if (!table_size)
+    table_size++;
+
+  {
+    constexpr size_t rounding_factor = 64 * sizeof (void*);
+    table_size += rounding_factor - 1;
+    table_size = (table_size / rounding_factor) * rounding_factor;
+  }
+  size_t kernargs_size = sizeof (struct kernargs) + table_size;
+
+  session->kernarg_cache_node = (alloc_cache_try_find
+				 (&agent->kernarg_cache,
+				  kernargs_size));
+
+  if (!session->kernarg_cache_node)
+    {
+      /* Cache miss.  */
+      void *ka_addr;
+      hsa_status_t status = hsa_fns.hsa_memory_allocate_fn
+	(agent->kernarg_region, sizeof (struct kernargs), &ka_addr);
+      if (status != HSA_STATUS_SUCCESS)
+	hsa_fatal ("Could not allocate memory for GCN kernel arguments", status);
+
+      session->kernarg_cache_node = (alloc_cache_add_taken_node
+				     (&agent->kernarg_cache, ka_addr,
+				      kernargs_size));
+      if (!session->kernarg_cache_node)
+	GOMP_PLUGIN_fatal ("Could not allocate cache node for kernel arguments");
+    }
+
+  return session->kernarg_cache_node->allocation;
+}
+
+void **
+GOMP_OFFLOAD_session_allocate_target_var_table (struct gomp_offload_session *session,
+						size_t table_size)
+{
+  GCN_DEBUG ("Session %p asked to allocate\n", session);
+  /* libgomp wants us to handle the TVT.  */
+  assert (!session->target_var_table);
+
+  if (inhibit_kernargs_tvt_merge)
+    /* ... but the user does not.  Used for testing.  */
+    return NULL;
+
+  struct kernargs *kernargs = allocate_session_kernargs (session, table_size);
+  return session->target_var_table = &kernargs->target_variable_table[0];
+}
+
+void
+GOMP_OFFLOAD_session_set_target_var_table (struct gomp_offload_session *session,
+					   void **table)
+{
+  GCN_DEBUG ("Session %p will use TVT %p...\n", session, table);
+  assert (!session->target_var_table);
+  /* libgomp wants to handle the TVT.  */
+  allocate_session_kernargs (session, 0);
+  session->target_var_table = table;
+}
 
 /* Create or reuse a team arena and stack space.
  
@@ -1766,7 +1962,7 @@ max_isa_vgprs (int isa)
    while setting up each team.  This is purely a performance optimization.
 
    The stack space is used by all kernels.  We must allocate it in such a
-   way that the reverse offload implmentation can access the data.
+   way that the reverse offload implementation can access the data.
 
    Allocating this memory costs performance, so this function will reuse an
    existing allocation if a large enough one is idle.
@@ -1948,13 +2144,12 @@ alloc_by_agent (struct agent_info *agent, size_t size)
 /* Create kernel dispatch data structure for given KERNEL, along with
    the necessary device signals and memory allocations.  */
 
-static struct kernel_dispatch *
-create_kernel_dispatch (struct kernel_info *kernel, int num_teams,
-			int num_threads)
+static inline void
+prepare_kernel_dispatch (struct kernel_dispatch *shadow,
+			 struct kernel_info *kernel, int num_teams,
+			 int num_threads, struct kernargs *kernargs)
 {
   struct agent_info *agent = kernel->agent;
-  struct kernel_dispatch *shadow
-    = GOMP_PLUGIN_malloc_cleared (sizeof (struct kernel_dispatch));
 
   shadow->agent = kernel->agent;
   shadow->object = kernel->object;
@@ -1964,7 +2159,7 @@ create_kernel_dispatch (struct kernel_info *kernel, int num_teams,
   if (status != HSA_STATUS_SUCCESS)
     hsa_fatal ("Error creating the GCN sync signal", status);
 
-  shadow->signal = sync_signal.handle;
+  shadow->signal = sync_signal;
   shadow->private_segment_size = kernel->private_segment_size;
 
   if (lowlat_size < 0)
@@ -1992,15 +2187,8 @@ create_kernel_dispatch (struct kernel_info *kernel, int num_teams,
   if (kernel->kernarg_segment_size > 8)
     {
       GOMP_PLUGIN_fatal ("Unexpectedly large kernargs segment requested");
-      return NULL;
+      return;
     }
-
-  status = hsa_fns.hsa_memory_allocate_fn (agent->kernarg_region,
-					   sizeof (struct kernargs),
-					   &shadow->kernarg_address);
-  if (status != HSA_STATUS_SUCCESS)
-    hsa_fatal ("Could not allocate memory for GCN kernel arguments", status);
-  struct kernargs *kernargs = shadow->kernarg_address;
 
   /* Zero-initialize the output_data (minimum needed).  */
   kernargs->abi.out_ptr = (int64_t)&kernargs->output_data;
@@ -2020,8 +2208,19 @@ create_kernel_dispatch (struct kernel_info *kernel, int num_teams,
 
   /* Ensure we can recognize unset return values.  */
   kernargs->output_data.return_value = 0xcafe0000;
+}
 
-  return shadow;
+/* Copy information from DISPATCH into PACKET, to get it ready for
+   dispatching.  */
+
+static inline void
+populate_packet_from_dispatch (hsa_kernel_dispatch_packet_t *packet,
+			       struct kernel_dispatch *shadow)
+{
+  packet->private_segment_size = shadow->private_segment_size;
+  packet->group_segment_size = shadow->group_segment_size;
+  packet->kernel_object = shadow->object;
+  packet->completion_signal = shadow->signal;
 }
 
 static void
@@ -2094,24 +2293,18 @@ console_output (struct kernel_info *kernel, struct kernargs *kernargs,
 /* Release data structure created for a kernel dispatch in SHADOW argument,
    and clean up the signal and memory allocations.  */
 
-static void
-release_kernel_dispatch (struct kernel_dispatch *shadow)
+static inline void
+cleanup_kernel_dispatch (struct kernel_dispatch *shadow,
+			 struct kernargs *kernargs)
 {
   GCN_DEBUG ("Released kernel dispatch: %p\n", shadow);
 
-  struct kernargs *kernargs = shadow->kernarg_address;
   void *addr = (void *)kernargs->abi.arena_ptr;
   if (!addr)
     addr = (void *)kernargs->abi.stack_ptr;
   release_ephemeral_memories (shadow->agent, addr);
 
-  hsa_fns.hsa_memory_free_fn (shadow->kernarg_address);
-
-  hsa_signal_t s;
-  s.handle = shadow->signal;
-  hsa_fns.hsa_signal_destroy_fn (s);
-
-  free (shadow);
+  hsa_fns.hsa_signal_destroy_fn (shadow->signal);
 }
 
 /* Extract the properties from a kernel binary.  */
@@ -2204,15 +2397,16 @@ init_kernel (struct kernel_info *kernel)
 		       "mutex");
 }
 
-/* Run KERNEL on its agent, pass VARS to it as arguments and take
-   launch attributes from KLA.
+/* Run KERNEL on its agent as part of SESSION and take launch attributes from
+   KLA.
    
    MODULE_LOCKED indicates that the caller already holds the lock and
    run_kernel need not lock it again.
    If AQ is NULL then agent->sync_queue will be used.  */
 
 static void
-run_kernel (struct kernel_info *kernel, void *vars,
+run_kernel (struct gomp_offload_session *session,
+	    struct kernel_info *kernel,
 	    struct GOMP_kernel_launch_attributes *kla,
 	    struct goacc_asyncqueue *aq, bool module_locked)
 {
@@ -2298,6 +2492,9 @@ run_kernel (struct kernel_info *kernel, void *vars,
 					     packet->grid_size_x,
 					     kla->wdims[0]);
 
+  struct kernargs *kernargs = session->kernarg_cache_node->allocation;
+  packet->kernarg_address = kernargs;
+
   if (kla->ndim >= 2)
     {
       packet->grid_size_y = kla->gdims[1];
@@ -2333,28 +2530,24 @@ run_kernel (struct kernel_info *kernel, void *vars,
 	     packet->workgroup_size_x, packet->workgroup_size_y,
 	     packet->workgroup_size_z);
 
-  struct kernel_dispatch *shadow
-    = create_kernel_dispatch (kernel, packet->grid_size_x,
-			      packet->grid_size_z);
-  shadow->queue = command_q;
+  struct kernel_dispatch shadow;
+  prepare_kernel_dispatch (&shadow, kernel, packet->grid_size_x,
+			   packet->grid_size_z, kernargs);
+  shadow.queue = command_q;
 
   if (debug)
     {
       fprintf (stderr, "\nKernel has following dependencies:\n");
-      print_kernel_dispatch (shadow, 2);
+      print_kernel_dispatch (&shadow, 2, kernargs);
     }
 
-  packet->private_segment_size = shadow->private_segment_size;
-  packet->group_segment_size = shadow->group_segment_size;
-  packet->kernel_object = shadow->object;
-  packet->kernarg_address = shadow->kernarg_address;
-  hsa_signal_t s;
-  s.handle = shadow->signal;
-  packet->completion_signal = s;
-  hsa_fns.hsa_signal_store_relaxed_fn (s, 1);
-  memcpy (shadow->kernarg_address, &vars, sizeof (vars));
+  populate_packet_from_dispatch (packet, &shadow);
 
-  GCN_DEBUG ("Copying kernel runtime pointer to kernarg_address\n");
+  hsa_signal_t s = shadow.signal;
+  hsa_fns.hsa_signal_store_relaxed_fn (s, 1);
+
+  GCN_DEBUG ("Copying kernel runtime pointer %p to kernarg_address\n", session->target_var_table);
+  memcpy (kernargs, &session->target_var_table, sizeof (session->target_var_table));
 
   uint16_t header;
   header = HSA_PACKET_TYPE_KERNEL_DISPATCH << HSA_PACKET_HEADER_TYPE;
@@ -2378,14 +2571,14 @@ run_kernel (struct kernel_info *kernel, void *vars,
 					     1000 * 1000,
 					     HSA_WAIT_STATE_BLOCKED) != 0)
     {
-      console_output (kernel, shadow->kernarg_address, false);
+      console_output (kernel, kernargs, false);
     }
-  console_output (kernel, shadow->kernarg_address, true);
+  console_output (kernel, kernargs, true);
 
-  struct kernargs *kernargs = shadow->kernarg_address;
   unsigned int return_value = (unsigned int)kernargs->output_data.return_value;
 
-  release_kernel_dispatch (shadow);
+  cleanup_kernel_dispatch (&shadow, kernargs);
+  release_session (session);
 
   if (!module_locked && pthread_rwlock_unlock (&agent->module_rwlock))
     GOMP_PLUGIN_fatal ("Unable to unlock a GCN agent rwlock");
@@ -2516,6 +2709,15 @@ isa_matches_agent (struct agent_info *agent, Elf64_Ehdr *image,
 	      "Consider using ROCR_VISIBLE_DEVICES to disable incompatible "
 	      "devices or run with LOADER_ENABLE_LOGGING=1 for more details.",
 	      device_isa_s, agent_isa_s, agent->device_id);
+  else if (strcmp (device_isa_s, agent_isa_s) == 0
+	   || (elf_gcn_isa_is_generic (image)
+	       && generic_isa_code (agent->device_isa) == isa_field))
+    snprintf (msg, sizeof msg,
+	      "GCN code object features do not match for an unknown reason "
+	      "(device %d).\n"
+	      "Try to adjust the HSA_XNACK setting (perhaps?), or use\n"
+	      "ROCR_VISIBLE_DEVICES to disable incompatible devices.\n",
+	      agent->device_id);
   else
     snprintf (msg, sizeof msg,
 	      "GCN code object ISA '%s' is incompatible with GPU ISA '%s' "
@@ -2688,7 +2890,10 @@ destroy_module (struct module_info *module, bool locked)
   if (module->fini_array_func)
     {
       init_kernel (module->fini_array_func);
-      run_kernel (module->fini_array_func, NULL, &kla, NULL, locked);
+      struct gomp_offload_session session;
+      init_session (&session, module->fini_array_func->agent);
+      GOMP_OFFLOAD_session_set_target_var_table (&session, NULL);
+      run_kernel (&session, module->fini_array_func, &kla, NULL, locked);
     }
   module->constructors_run_p = false;
 
@@ -2720,8 +2925,8 @@ execute_queue_entry (struct goacc_asyncqueue *aq, int index)
       if (DEBUG_QUEUES)
 	GCN_DEBUG ("Async thread %d:%d: Executing launch entry (%d)\n",
 		   aq->agent->device_id, aq->id, index);
-      run_kernel (entry->u.launch.kernel,
-		  entry->u.launch.vars,
+      run_kernel (entry->u.launch.session,
+		  entry->u.launch.kernel,
 		  &entry->u.launch.kla, aq, false);
       if (DEBUG_QUEUES)
 	GCN_DEBUG ("Async thread %d:%d: Executing launch entry (%d) done\n",
@@ -2883,8 +3088,10 @@ wait_for_queue_nonfull (struct goacc_asyncqueue *aq)
    kernel to run.  */
 
 static void
-queue_push_launch (struct goacc_asyncqueue *aq, struct kernel_info *kernel,
-		   void *vars, struct GOMP_kernel_launch_attributes *kla)
+queue_push_launch (struct goacc_asyncqueue *aq,
+		   struct gomp_offload_session *session,
+		   struct kernel_info *kernel,
+		   struct GOMP_kernel_launch_attributes *kla)
 {
   assert (aq->agent == kernel->agent);
 
@@ -2899,8 +3106,8 @@ queue_push_launch (struct goacc_asyncqueue *aq, struct kernel_info *kernel,
 	       aq->id, queue_last);
 
   aq->queue[queue_last].type = KERNEL_LAUNCH;
+  aq->queue[queue_last].u.launch.session = session;
   aq->queue[queue_last].u.launch.kernel = kernel;
-  aq->queue[queue_last].u.launch.vars = vars;
   aq->queue[queue_last].u.launch.kla = *kla;
 
   aq->queue_n++;
@@ -3177,13 +3384,132 @@ wait_queue (struct goacc_asyncqueue *aq)
 }
 
 /* }}}  */
+/* {{{ Managed Memory
+
+   This implements an allocator equivalent to CUDA "Managed" memory, in which
+   the pages automatically migrate between host and device memory, as needed.
+   These allocations are visible from both the host and devices without the
+   need for explicit mappings.  However, OpenMP does need "is_device_ptr" or
+   "has_device_addr" to function properly.
+
+   There isn't a high-level HSA/ROCr API to allocate managed memory, so we
+   use regular memory and register it with the driver by setting it to
+   "coarse-grained" mode, and setting the "accessible by default" attribute
+   on devices where HSA_AMD_SYSTEM_INFO_SVM_ACCESSIBLE_BY_DEFAULT isn't set
+   as standard (as it isn't on systems that don't support USM, or when
+   HSA_XNACK != 1).
+
+   This is in contrast to GOMP_OFFLOAD_alloc which allocates coarse-grained
+   *GPU memory*, which is not visible on the host.
+
+   It would be possible to register memory returned by malloc, but
+   experimentation shows that doing so causes memory faults within the HSA
+   runtime code.  Therefore, the Managed memory space is allocated as a
+   largish block and then subdivided via a custom allocator.  The "simple"
+   allocator is designed specifically to store its free-chain outside of
+   the registered pages so that allocation does not inadvertently cause
+   pages to migrate.
+
+   Note: if the user has multiple mismatched devices, and one or more do
+   not support USM (or XNACK is off), then each page of the Managed heap
+   could end up associated with a different device (by calling omp_alloc
+   before and after omp_set_default_device).  This issue remains
+   an *unhandled* edge-case, at present.  */
+
+gomp_simple_alloc_ctx_p managed_ctx = NULL;
+
+/* Initialize or extend the Managed memory space.  This is called whenever
+   allocation fails.  SIZE is the minimum size required for the failed
+   allocation to succeed; the function may choose a larger size.
+   Note that Linux lazy allocation means that the memory returned isn't
+   guaranteed to actually exist.  */
+
+static bool
+managed_heap_create (struct agent_info *agent, size_t size)
+{
+  static int lock = 0;
+  while (__atomic_exchange_n (&lock, 1, __ATOMIC_ACQUIRE) != 0)
+    ;
+
+  size_t default_size = 1L * 1024 * 1024 * 1024; /* 1GB */
+  if (size < default_size)
+    size = default_size;
+
+  /* Round up to a whole page.  */
+  int pagesize = getpagesize ();
+  int misalignment = size % pagesize;
+  if (misalignment > 0)
+    size += pagesize - misalignment;
+
+  /* Try to get contiguous memory, but it might not be possible.
+     The most recent previous allocation is at the head of the list.  */
+  static void *addrhint = NULL;
+  void *new_pages = mmap (addrhint, size, PROT_READ | PROT_WRITE,
+			  MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (!new_pages)
+    {
+      GCN_DEBUG ("Could not allocate Managed Memory heap.");
+      __atomic_store_n (&lock, 0, __ATOMIC_RELEASE);
+      return false;
+    }
+
+  /* Register the heap allocation as coarse grained, "Managed" memory.  */
+  struct hsa_amd_svm_attribute_pair_s attr = {
+    HSA_AMD_SVM_ATTRIB_GLOBAL_FLAG,
+    HSA_AMD_SVM_GLOBAL_FLAG_COARSE_GRAINED
+  };
+  hsa_status_t status = hsa_fns.hsa_amd_svm_attributes_set_fn (new_pages, size,
+							       &attr, 1);
+  if (status != HSA_STATUS_SUCCESS)
+    GOMP_PLUGIN_fatal ("Failed to allocate Unified Shared Memory;"
+		       " please update your drivers and/or kernel");
+
+  /* The HSA_AMD_SVM_ATTRIB_AGENT_ACCESSIBLE setting is required on devices
+     without default SVM.  */
+  static int svm_accessible = 0xff; /* Use 0xff as "undefined".  */
+  if (svm_accessible == 0xff)
+    {
+      status = hsa_fns.hsa_system_get_info_fn
+	(HSA_AMD_SYSTEM_INFO_SVM_ACCESSIBLE_BY_DEFAULT, &svm_accessible);
+      if (status != HSA_STATUS_SUCCESS)
+	{
+	  GCN_DEBUG ("warning: failed to query "
+		     " HSA_AMD_SYSTEM_INFO_SVM_ACCESSIBLE_BY_DEFAULT\n");
+	  svm_accessible = false;
+	}
+    }
+  if (svm_accessible == false)
+    {
+      struct hsa_amd_svm_attribute_pair_s attr2;
+      attr2.attribute = HSA_AMD_SVM_ATTRIB_AGENT_ACCESSIBLE;
+      attr2.value = agent->id.handle;
+      status = hsa_fns.hsa_amd_svm_attributes_set_fn (new_pages, size, &attr2,
+						      1);
+      if (status != HSA_STATUS_SUCCESS)
+	GOMP_PLUGIN_fatal ("Failed to allocate Unified Shared Memory;"
+			   " please update your drivers and/or kernel");
+    }
+
+  addrhint = new_pages + size;
+
+  /* Initialize a new Managed memory heap, or add the new memory into an
+     existing Managed memory heap.  */
+  if (!managed_ctx)
+    managed_ctx = gomp_simple_alloc_init_context ();
+  gomp_simple_alloc_register_memory (managed_ctx, new_pages, size);
+
+  __atomic_store_n (&lock, 0, __ATOMIC_RELEASE);
+  return true;
+}
+
+/* }}} */
 /* {{{ OpenACC support  */
 
 /* Execute an OpenACC kernel, synchronously or asynchronously.  */
 
 static void
-gcn_exec (struct kernel_info *kernel,
-	  void **devaddrs, unsigned *dims, void *targ_mem_desc, bool async,
+gcn_exec (struct kernel_info *kernel, struct gomp_offload_session *session,
+	  unsigned *dims, void *targ_mem_desc, bool async,
 	  struct goacc_asyncqueue *aq)
 {
   if (!GOMP_OFFLOAD_can_run (kernel))
@@ -3303,9 +3629,9 @@ gcn_exec (struct kernel_info *kernel,
     }
 
   if (!async)
-    run_kernel (kernel, devaddrs, &kla, NULL, false);
+    run_kernel (session, kernel, &kla, NULL, false);
   else
-    queue_push_launch (aq, kernel, devaddrs, &kla);
+    queue_push_launch (aq, session, kernel, &kla);
 
   if (profiling_dispatch_p)
     {
@@ -3329,7 +3655,7 @@ GOMP_OFFLOAD_get_name (void)
 }
 
 /* Return the UID; if not available return NULL.
-   Returns freshly allocated memoy.  */
+   Returns freshly allocated memory.  */
 
 const char *
 GOMP_OFFLOAD_get_uid (int ord)
@@ -3350,14 +3676,186 @@ GOMP_OFFLOAD_get_uid (int ord)
   return str;
 }
 
+/* Return the NUMA node of the GPU identified by ORD; returns -1 when
+   an error occurred; this value might also be returned if on
+   virtualized systems.
+   The implementation assumes that the Linux /sys is available.  */
+
+int
+GOMP_OFFLOAD_get_numa_node (int ord)
+{
+  hsa_status_t status, status2;
+  uint32_t domain, bdfid;
+  struct agent_info *agent = get_agent_info (ord);
+
+  /* Initialized to 0; to distinguish, save with offset.  */
+  if (agent->numa_node != 0)
+    return agent->numa_node > 0 ? agent->numa_node - 1 : agent->numa_node;
+
+  agent->numa_node = -1;
+
+  status = hsa_fns.hsa_agent_get_info_fn (agent->id, HSA_AMD_AGENT_INFO_DOMAIN,
+					  &domain);
+  status2 = hsa_fns.hsa_agent_get_info_fn (agent->id, HSA_AMD_AGENT_INFO_BDFID,
+					   &bdfid);
+  if (status != HSA_STATUS_SUCCESS || status2 != HSA_STATUS_SUCCESS)
+    return -1;
+
+  constexpr int len = sizeof ("/sys/bus/pci/devices/0000:00:00.00/numa_node");
+  char filename[len];
+  if (len < snprintf (filename, sizeof (filename),
+		      "/sys/bus/pci/devices/%04x:%02x:%02x.0/numa_node",
+		      domain, bdfid >> 8, bdfid & 0xFF))
+    return -1;
+
+  FILE *in = fopen (filename, "r");
+  if (!in)
+    return -1;
+  int numa_node = -1;
+  fscanf (in, "%d", &numa_node);
+  fclose (in);
+
+  agent->numa_node = numa_node >= 0 ? numa_node + 1 : numa_node;
+  return numa_node;
+}
+
+/* Number of teams supported (by dimension) as reported by OpenMP.
+   For dim < 0 (invalid) and for dim > supported dims, return 1. */
+
+int
+GOMP_OFFLOAD_supported_teams_dim (int ord, int dim)
+{
+  if (dim > 0 /* max supported dims */ || dim < 0)
+    return 1;
+  struct agent_info *agent = get_agent_info (ord);
+  return limit_teams (__INT_MAX__, agent);
+}
+
+/* Number of threads supported (by dimension) as reported by OpenMP.
+   For dim < 0 (invalid) and for dim > supported dims, return 1. */
+
+int
+GOMP_OFFLOAD_supported_threads_dim (int ord, int dim)
+{
+  (void) ord;
+  if (dim > 0 /* max supported dims */ || dim < 0)
+    return 1;
+
+  return limit_worker_threads (__INT_MAX__);
+}
+
 /* Return the specific capabilities the HSA accelerator have.  */
 
 unsigned int
 GOMP_OFFLOAD_get_caps (void)
 {
-  /* FIXME: Enable shared memory for APU, but not discrete GPU.  */
-  return /*GOMP_OFFLOAD_CAP_SHARED_MEM |*/ GOMP_OFFLOAD_CAP_OPENMP_400
-	    | GOMP_OFFLOAD_CAP_OPENACC_200;
+  return (GOMP_OFFLOAD_CAP_OPENMP_400 | GOMP_OFFLOAD_CAP_OPENACC_200
+	  | GOMP_OFFLOAD_CAP_UNIFIED_ADDR | GOMP_OFFLOAD_CAP_REV_OFFLOAD);
+}
+
+/* Return any additional capabilities that are specific to the specified
+   device.  Currently returns:
+   * GOMP_OFFLOAD_CAP_SHARED_MEM
+       when USM is supported
+   * GOMP_OFFLOAD_CAP_APU_SHARED_MEM
+       when USM is supported and the system is an APU. This assumes that the
+       same memory controler is used.
+       NOTE: To avoid potential issues with swapped-out memory, this is not
+       set if XNACK is not supported */
+
+unsigned int
+GOMP_OFFLOAD_get_dev_caps (int n)
+{
+  unsigned int caps = 0;
+
+  /* The device agents have been enumerated, but might not have been
+     initialized, so get_agent_info won't work here.  */
+  struct agent_info *agent = &hsa_context.agents[n];
+
+  /* First, check for general USM support - this is system wide, i.e.
+     implies that all devices support it.  */
+  bool b;
+  hsa_system_info_t type = HSA_AMD_SYSTEM_INFO_SVM_ACCESSIBLE_BY_DEFAULT;
+  hsa_status_t status = hsa_fns.hsa_system_get_info_fn (type, &b);
+  if (status != HSA_STATUS_SUCCESS)
+    {
+      GOMP_PLUGIN_error ("HSA_AMD_SYSTEM_INFO_SVM_ACCESSIBLE_BY_DEFAULT failed");
+      return 0;
+    }
+
+  if (b)
+    caps |= GOMP_OFFLOAD_CAP_SHARED_MEM;
+
+  /* Next check whether the device is an APU.  */
+  bool is_apu;
+  uint8_t mem_prop[8];
+
+  status = hsa_fns.hsa_agent_get_info_fn (
+	     agent->id, (hsa_agent_info_t) HSA_AMD_AGENT_INFO_MEMORY_PROPERTIES,
+	     mem_prop);
+  _Static_assert (HSA_AMD_MEMORY_PROPERTY_AGENT_IS_APU < 8,
+		  "HSA_AMD_MEMORY_PROPERTY_AGENT_IS_APU < 8");
+  is_apu = (status == HSA_STATUS_SUCCESS
+	    && (mem_prop[0] & (1 << HSA_AMD_MEMORY_PROPERTY_AGENT_IS_APU)));
+
+  /* If it is an APU:
+     - set GOMP_OFFLOAD_CAP_SHARED_MEM, unless the support is known
+       to be broken.
+     - Set GOMP_OFFLOAD_CAP_APU_SHARED_MEM to state that it might make
+       sense to enable USM automatically.  */
+  if (is_apu)
+    {
+      char name[64];
+      status = hsa_fns.hsa_agent_get_info_fn (agent->id, HSA_AGENT_INFO_NAME,
+					      &name);
+      if (status != HSA_STATUS_SUCCESS)
+	return 0;
+      gcn_isa device_isa = isa_code (name);
+
+      /* Known not to work (well): MI100 and the gfx902 APU. */
+      if (device_isa == EF_AMDGPU_MACH_AMDGCN_GFX908
+	  || device_isa == EF_AMDGPU_MACH_AMDGCN_GFX902)
+	return 0;
+
+      /* Obtain XNACK status.  */
+      enum {
+	HSACO_ATTR_UNSUPPORTED,
+	HSACO_ATTR_OFF,
+	HSACO_ATTR_ON,
+	HSACO_ATTR_ANY,
+	HSACO_ATTR_DEFAULT
+      };
+
+      int xnack;
+      switch(device_isa)
+	{
+#define GCN_DEVICE(name, NAME, ELF, ISA, XNACK, ...) \
+	case ELF: xnack = XNACK;
+#include "../../gcc/config/gcn/gcn-devices.def"
+	default: return 0;  /* Just to be save.  */
+	}
+
+      /* USM requires either enabled XNACK support or XNACK being
+	 unsupported.  For GOMP_OFFLOAD_CAP_APU_SHARED_MEM be prudent and
+	 require XNACK support in addition as this ensures it also works
+	 with swapped-out memory.  */
+      if (caps && xnack != HSACO_ATTR_UNSUPPORTED)
+	caps |= GOMP_OFFLOAD_CAP_APU_SHARED_MEM;
+      else if (xnack == HSACO_ATTR_UNSUPPORTED)
+	caps |= GOMP_OFFLOAD_CAP_SHARED_MEM;
+      else
+	{
+	  type = HSA_AMD_SYSTEM_INFO_XNACK_ENABLED;
+	  status = hsa_fns.hsa_system_get_info_fn (type, &b);
+	  if (status != HSA_STATUS_SUCCESS)
+	    return 0;
+	  if (b)
+	    caps |= (GOMP_OFFLOAD_CAP_SHARED_MEM
+		     | GOMP_OFFLOAD_CAP_APU_SHARED_MEM);
+	}
+    }
+
+  return caps;
 }
 
 /* Identify as GCN accelerator.  */
@@ -3380,36 +3878,10 @@ GOMP_OFFLOAD_version (void)
 /* Return the number of GCN devices on the system.  */
 
 int
-GOMP_OFFLOAD_get_num_devices (unsigned int omp_requires_mask)
+GOMP_OFFLOAD_get_num_devices ()
 {
   if (!init_hsa_context (true))
     exit (EXIT_FAILURE);
-  /* Return -1 if no omp_requires_mask cannot be fulfilled but
-     devices were present.  */
-  if (hsa_context.agent_count > 0
-      && ((omp_requires_mask
-	   & ~(GOMP_REQUIRES_UNIFIED_ADDRESS
-	       | GOMP_REQUIRES_UNIFIED_SHARED_MEMORY
-	       | GOMP_REQUIRES_SELF_MAPS
-	       | GOMP_REQUIRES_REVERSE_OFFLOAD)) != 0))
-    return -1;
-  /* Check whether host page access is supported; this is per system level
-     (all GPUs supported by HSA).  While intrinsically true for APUs, it
-     requires XNACK support for discrete GPUs.  */
-  if (hsa_context.agent_count > 0
-      && (omp_requires_mask
-	  & (GOMP_REQUIRES_UNIFIED_SHARED_MEMORY | GOMP_REQUIRES_SELF_MAPS)))
-    {
-      bool b;
-      hsa_system_info_t type = HSA_AMD_SYSTEM_INFO_SVM_ACCESSIBLE_BY_DEFAULT;
-      hsa_status_t status = hsa_fns.hsa_system_get_info_fn (type, &b);
-      if (status != HSA_STATUS_SUCCESS)
-	GOMP_PLUGIN_error ("HSA_AMD_SYSTEM_INFO_SVM_ACCESSIBLE_BY_DEFAULT "
-			   "failed");
-      if (!b)
-	return -1;
-    }
-
   return hsa_context.agent_count;
 }
 
@@ -3523,6 +3995,9 @@ GOMP_OFFLOAD_init_device (int n)
     }
   GCN_DEBUG ("Selected device data memory region:\n");
   dump_hsa_region (agent->data_region, NULL);
+
+  /* Prepare kernargs cache.  */
+  init_alloc_cache (&agent->kernarg_cache);
 
   GCN_DEBUG ("GCN agent %d initialized\n", n);
 
@@ -3685,37 +4160,28 @@ GOMP_OFFLOAD_load_image (int ord, unsigned version, const void *target_data,
 			     (void*) ind_funcs_table_addr,
 			     sizeof (ind_funcs_table));
 
-      /* Build host->target address map for indirect functions.  */
-      uint64_t ind_fn_map[ind_func_count * 2 + 1];
-      for (unsigned i = 0; i < ind_func_count; i++)
-	{
-	  ind_fn_map[i * 2] = host_ind_fn_table[i];
-	  ind_fn_map[i * 2 + 1] = ind_funcs_table[i];
-	  GCN_DEBUG ("Indirect function %d: %lx->%lx\n",
-		     i, host_ind_fn_table[i], ind_funcs_table[i]);
-	}
-      ind_fn_map[ind_func_count * 2] = 0;
+      /* For newer binaries, the hash table for 'indirect' is created on the
+	 host. Older binaries don't have GOMP_INDIRECT_ADDR_HMAP on the
+	 device side - and have to create the table themselves using
+	 GOMP_INDIRECT_ADDR_MAP.  */
 
-      /* Write the map onto the target.  */
-      void *map_target_addr
-	= GOMP_OFFLOAD_alloc (agent->device_id, sizeof (ind_fn_map));
-      GCN_DEBUG ("Allocated indirect map at %p\n", map_target_addr);
-
-      GOMP_OFFLOAD_host2dev (agent->device_id, map_target_addr,
-			     (void*) ind_fn_map,
-			     sizeof (ind_fn_map));
-
-      /* Write address of the map onto the target.  */
       hsa_executable_symbol_t symbol;
-
+      bool host_init_htab = true;
+      #ifdef USE_HASHTAB_LOOKUP_FOR_INDIRECT
       status
 	= hsa_fns.hsa_executable_get_symbol_fn (agent->executable, NULL,
-						XSTRING (GOMP_INDIRECT_ADDR_MAP),
+						XSTRING (GOMP_INDIRECT_ADDR_HMAP),
 						agent->id, 0, &symbol);
+      if (status != HSA_STATUS_SUCCESS)
+      #endif
+	{
+	  host_init_htab = false;
+	  status = hsa_fns.hsa_executable_get_symbol_fn (agent->executable, NULL,
+		     XSTRING (GOMP_INDIRECT_ADDR_MAP), agent->id, 0, &symbol);
+	}
       if (status != HSA_STATUS_SUCCESS)
 	hsa_fatal ("Could not find GOMP_INDIRECT_ADDR_MAP in code object",
 		   status);
-
       uint64_t varptr;
       uint32_t varsize;
 
@@ -3731,9 +4197,51 @@ GOMP_OFFLOAD_load_image (int ord, unsigned version, const void *target_data,
 	hsa_fatal ("Could not extract a variable size from its symbol",
 		   status);
 
-      GCN_DEBUG ("Found GOMP_INDIRECT_ADDR_MAP at %lx with size %d\n",
-		 varptr, varsize);
+      GCN_DEBUG ("Found GOMP_INDIRECT_ADDR_%sMAP at %lx with size %d\n",
+		 host_init_htab ? "H" : "", varptr, varsize);
 
+      void *map_target_addr;
+      if (!host_init_htab)
+	{
+	  /* Build host->target address map for indirect functions.  */
+	  uint64_t ind_fn_map[ind_func_count * 2 + 1];
+	  for (unsigned i = 0; i < ind_func_count; i++)
+	    {
+	      ind_fn_map[i * 2] = host_ind_fn_table[i];
+	      ind_fn_map[i * 2 + 1] = ind_funcs_table[i];
+	      GCN_DEBUG ("Indirect function %d: %lx->%lx\n",
+			 i, host_ind_fn_table[i], ind_funcs_table[i]);
+	    }
+	  ind_fn_map[ind_func_count * 2] = 0;
+	  /* Write the map onto the target.  */
+	  map_target_addr = GOMP_OFFLOAD_alloc (agent->device_id,
+						sizeof (ind_fn_map));
+	  GOMP_OFFLOAD_host2dev (agent->device_id, map_target_addr,
+				 (void*) ind_fn_map, sizeof (ind_fn_map));
+	}
+      #ifdef USE_HASHTAB_LOOKUP_FOR_INDIRECT
+      else
+	{
+	  /* FIXME: Handle multi-kernel load and unload, cf. PR 114690.  */
+	  size_t host_map_size;
+	  void *host_map;
+	  host_map = create_target_indirect_map (&host_map_size, ind_func_count,
+						 host_ind_fn_table,
+						 ind_funcs_table);
+	  for (unsigned i = 0; i < ind_func_count; i++)
+	      GCN_DEBUG ("Indirect function %d: %lx->%lx\n",
+			 i, host_ind_fn_table[i], ind_funcs_table[i]);
+	  /* Write the map onto the target.  */
+	  map_target_addr = GOMP_OFFLOAD_alloc (agent->device_id,
+						host_map_size);
+	  GOMP_OFFLOAD_host2dev (agent->device_id, map_target_addr,
+				 host_map, host_map_size);
+	}
+      #endif
+
+      GCN_DEBUG ("Allocated indirect map at %p\n", map_target_addr);
+
+      /* Write address of the map onto the target.  */
       GOMP_OFFLOAD_host2dev (agent->device_id, (void *) varptr,
 			     &map_target_addr,
 			     sizeof (map_target_addr));
@@ -3786,7 +4294,10 @@ GOMP_OFFLOAD_load_image (int ord, unsigned version, const void *target_data,
   if (module->init_array_func)
     {
       init_kernel (module->init_array_func);
-      run_kernel (module->init_array_func, NULL, &kla, NULL, false);
+      struct gomp_offload_session session;
+      init_session (&session, agent);
+      GOMP_OFFLOAD_session_set_target_var_table (&session, NULL);
+      run_kernel (&session, module->init_array_func, &kla, NULL, false);
     }
   module->constructors_run_p = true;
 
@@ -3907,6 +4418,17 @@ GOMP_OFFLOAD_fini_device (int n)
   hsa_status_t status = hsa_fns.hsa_queue_destroy_fn (agent->sync_queue);
   if (status != HSA_STATUS_SUCCESS)
     return hsa_error ("Error destroying command queue", status);
+
+  /* Clean up kernargs cache.  */
+  struct alloc_cache_node *node = agent->kernarg_cache.head;
+  while (node)
+    {
+      hsa_fns.hsa_memory_free_fn (node->allocation);
+
+      struct alloc_cache_node *curr_node = node;
+      node = curr_node->next;
+      destroy_alloc_cache_node (curr_node);
+    }
 
   if (pthread_mutex_destroy (&agent->prog_mutex))
     {
@@ -4397,6 +4919,22 @@ unlock:
   return retval;
 }
 
+/* This plugin hook function should be kept in sync with gcn_memspace_validate
+   in config/gcn/allocator.c.  */
+
+int
+GOMP_OFFLOAD_memspace_validate (omp_memspace_handle_t memspace, unsigned access)
+{
+  /* Disallow use of low-latency memory when it must be accessible by
+     all threads.  */
+  return (memspace != omp_low_lat_mem_space
+	  || access != omp_atv_all);
+
+  /* Otherwise, standard memspaces are accepted, even when we don't have
+     anything special to do with them, and non-standard memspaces are assumed
+     to need explicit support.  */
+  return (memspace <= GOMP_OMP_PREDEF_MEMSPACE_MAX);
+}
 
 static bool
 init_hip_runtime_functions (void)
@@ -4435,6 +4973,83 @@ init_hip_runtime_functions (void)
   return true;
 }
 
+bool
+GOMP_OFFLOAD_memset (int ord, void *ptr, int val, size_t count)
+{
+  hsa_status_t status = HSA_STATUS_SUCCESS;
+
+  /* A memset feature is only provided via hsa_amd_memory_fill; while it
+     is fast, it is an HSA extension and it has two requirements: The memory
+     must be aligned to multiples of 4 bytes - and, by construction, only
+     multiples of 4 bytes can be filled (uint32_t value argument).
+
+     This means: Either not using that function or up to three function calls:
+     - copy 1 to 3 bytes to get alignment (hsa_memory_copy), if unaligned
+     - call hsa_amd_memory_fill
+     - copy remaining 1 to 3 bytes (hsa_memory_copy), if after alignment
+       count is not a multiple of 4 bytes.
+
+     Having more than one function call is only profitable if there is
+     enough data to process; see below for the used heuristic values.  */
+
+  uint8_t v8 = (uint8_t) val;
+  size_t before = (4 - (uintptr_t) ptr % 4) % 4;  /* 0 to 3 bytes.  */
+  size_t tail = (count - before) % 4;  /* 0 to 3 bytes.  */
+
+  /* Heuristic  */
+  enum {
+    /* Prefer alloca to malloc up to ... */
+    alloca_size = 256,  /* bytes */
+    /* Call hsa_amd_memory_fill also when two copy calls are required.  */
+    always_use_fill = 256*1024,  /* bytes */
+    /* Call hsa_amd_memory_fill also when on copy call is required.  */
+    use_fill_one_copy = (128+64)*1024  /* bytes */
+  };
+
+  /* Do not call hsa_amd_memory_fill when any of the following conditions
+     is true. Note that it is always preferred if available and
+     before == tail == 0.  */
+  if (__builtin_expect (!hsa_fns.hsa_amd_memory_fill_fn, 0)
+      || (before && tail && count < always_use_fill)
+      || ((before || tail) && count < use_fill_one_copy))
+    before = count;
+
+  /* Copy call for alignment - or all data, if condition above is true.  */
+  if (before)
+    {
+      void *data;
+      if (before > alloca_size)
+	data = malloc (before * sizeof (uint8_t));
+      else
+	data = alloca (before * sizeof (uint8_t));
+      memset (data, val, before);
+      status = hsa_fns.hsa_memory_copy_fn (ptr, data, before);
+      if (before > alloca_size)
+	free (data);
+      if (data == 0 || status != HSA_STATUS_SUCCESS)
+	goto fail;
+      count -= before;
+    }
+
+  if (count == 0)
+    return true;
+
+  ptr += before;
+
+  uint32_t values = v8 | (v8 << 8) | (v8 << 16) | (v8 << 24);
+  status = hsa_fns.hsa_amd_memory_fill_fn (ptr, values, count / 4);
+  if (tail && status == HSA_STATUS_SUCCESS)
+    {
+      ptr += count - tail;
+      status = hsa_fns.hsa_memory_copy_fn (ptr, &values, tail);
+    }
+  if (status == HSA_STATUS_SUCCESS)
+    return true;
+
+fail:
+  GOMP_PLUGIN_error ("memory set failed");
+  return false;
+}
 
 void
 GOMP_OFFLOAD_interop (struct interop_obj_t *obj, int ord,
@@ -4600,7 +5215,7 @@ GOMP_OFFLOAD_get_interop_int (struct interop_obj_t *obj,
     case omp_ipr_vendor:
       if (ret_code)
 	*ret_code = omp_irc_success;
-      return 1; /* amd */
+      return 5; /* gnu */
     case omp_ipr_vendor_name:
       if (ret_code)
 	*ret_code = omp_irc_type_str;
@@ -4768,7 +5383,7 @@ GOMP_OFFLOAD_get_interop_str (struct interop_obj_t *obj,
     case omp_ipr_vendor_name:
       if (ret_code)
 	*ret_code = omp_irc_success;
-      return "amd";
+      return "gnu";
     case omp_ipr_device_num:
       if (ret_code)
 	*ret_code = omp_irc_type_int;
@@ -4834,9 +5449,9 @@ GOMP_OFFLOAD_get_interop_type_desc (struct interop_obj_t *obj,
    specified device.  */
 
 void
-GOMP_OFFLOAD_run (int device, void *fn_ptr, void *vars, void **args)
+GOMP_OFFLOAD_run (struct gomp_offload_session *session, void *fn_ptr, void **args)
 {
-  struct agent_info *agent = get_agent_info (device);
+  struct agent_info *agent = session->agent;
   struct kernel_info *kernel = (struct kernel_info *) fn_ptr;
   struct GOMP_kernel_launch_attributes def;
   struct GOMP_kernel_launch_attributes *kla;
@@ -4850,7 +5465,7 @@ GOMP_OFFLOAD_run (int device, void *fn_ptr, void *vars, void **args)
       GCN_WARNING ("Will not run GCN kernel because the grid size is zero\n");
       return;
     }
-  run_kernel (kernel, vars, kla, NULL, false);
+  run_kernel (session, kernel, kla, NULL, false);
 }
 
 /* Run an asynchronous OpenMP kernel on DEVICE.  This is similar to
@@ -4858,11 +5473,13 @@ GOMP_OFFLOAD_run (int device, void *fn_ptr, void *vars, void **args)
    GOMP_PLUGIN_target_task_completion when it has finished.  */
 
 void
-GOMP_OFFLOAD_async_run (int device, void *tgt_fn, void *tgt_vars,
-			void **args, void *async_data)
+GOMP_OFFLOAD_async_run (struct gomp_offload_session *session,
+			void *tgt_fn,
+			void **args,
+			void *async_data)
 {
   GCN_DEBUG ("GOMP_OFFLOAD_async_run invoked\n");
-  struct agent_info *agent = get_agent_info (device);
+  struct agent_info *agent = session->agent;
   struct kernel_info *kernel = (struct kernel_info *) tgt_fn;
   struct GOMP_kernel_launch_attributes def;
   struct GOMP_kernel_launch_attributes *kla;
@@ -4880,9 +5497,141 @@ GOMP_OFFLOAD_async_run (int device, void *tgt_fn, void *tgt_vars,
   maybe_init_omp_async (agent);
   if (!agent->omp_async_queue)
     GOMP_PLUGIN_fatal ("Asynchronous queue initialization failed");
-  queue_push_launch (agent->omp_async_queue, kernel, tgt_vars, kla);
+  queue_push_launch (agent->omp_async_queue, session, kernel, kla);
   queue_push_callback (agent->omp_async_queue,
 		       GOMP_PLUGIN_target_task_completion, async_data);
+}
+
+/* Allocate memory suitable for Managed Memory.  */
+
+void *
+GOMP_OFFLOAD_managed_alloc (int device, size_t size)
+{
+  struct agent_info *agent = get_agent_info (device);
+  while (1)
+    {
+      void *result = gomp_simple_alloc (managed_ctx, size);
+      if (result)
+	return result;
+
+      /* Allocation failed.  Try again if we can create a new heap block.
+	 Note: it's possible another thread could get to the new memory
+	 first, so the while loop is necessary. */
+      if (!managed_heap_create (agent, size))
+	return NULL;
+    }
+}
+
+/* Free memory allocated via GOMP_OFFLOAD_managed_alloc.  */
+
+bool
+GOMP_OFFLOAD_managed_free (int device, void *ptr)
+{
+  gomp_simple_free (managed_ctx, ptr);
+  return true;
+}
+
+enum accessible {
+  UNKNOWN,
+  INACCESSIBLE,
+  ACCESSIBLE
+};
+
+/* Is a host memory address accessible on the given device?
+   Returns UNKNOWN if the memory isn't registered, or if it isn't a valid host
+   pointer.  */
+
+static enum accessible
+host_memory_is_accessible (hsa_agent_t agent, const void *ptr, size_t size)
+{
+  if (!hsa_fns.hsa_amd_svm_attributes_get_fn)
+    return UNKNOWN;
+
+  /* The HSA API doesn't seem to report for the whole range given, so we call
+     once for each page the range straddles.  */
+  const void *p = ptr;
+  size_t remaining = size;
+  do
+    {
+      /* Note: the access query returns in the attribute field.  */
+      struct hsa_amd_svm_attribute_pair_s attr = {
+	HSA_AMD_SVM_ATTRIB_ACCESS_QUERY, agent.handle
+      };
+      hsa_status_t status = hsa_fns.hsa_amd_svm_attributes_get_fn ((void*)p,
+								   remaining,
+								   &attr, 1);
+      if (status != HSA_STATUS_SUCCESS)
+	/* This happens when the memory isn't registered with ROCr at all.  */
+	return UNKNOWN;
+
+      switch (attr.attribute)
+	{
+	case HSA_AMD_SVM_ATTRIB_AGENT_ACCESSIBLE:
+	case HSA_AMD_SVM_ATTRIB_AGENT_ACCESSIBLE_IN_PLACE:
+	  break;
+	case HSA_AMD_SVM_ATTRIB_AGENT_NO_ACCESS:
+	default:
+	  return INACCESSIBLE;
+	}
+
+      p = (void*)(((uintptr_t)p + 4096) & ~0xfffUL);
+      remaining = size - ((uintptr_t)p - (uintptr_t)ptr);
+    } while (p < ptr + size);
+
+  /* All pages were accessible.  */
+  return ACCESSIBLE;
+}
+
+/* Is a device memory address accessible on the given device?
+   Returns UNKNOWN if it isn't a valid device address.  Returns INACCESSIBLE if
+   the pointer is valid, but not the whole range, or if it refers to the wrong
+   device.  */
+
+static enum accessible
+device_memory_is_accessible (hsa_agent_t agent, const void *ptr, size_t size)
+{
+  if (!hsa_fns.hsa_amd_pointer_info_fn)
+    return UNKNOWN;
+
+  hsa_amd_pointer_info_t info;
+  uint32_t nagents;
+  hsa_agent_t *agents;
+  info.size = sizeof (hsa_amd_pointer_info_t);
+
+  hsa_status_t status = hsa_fns.hsa_amd_pointer_info_fn (ptr, &info, NULL,
+							 &nagents, &agents); 
+  if (status != HSA_STATUS_SUCCESS
+      || info.type == HSA_EXT_POINTER_TYPE_UNKNOWN)
+    return UNKNOWN;
+
+  if (agent.handle == info.agentOwner.handle)
+    return (info.sizeInBytes >= size ? ACCESSIBLE : INACCESSIBLE);
+
+  for (unsigned i = 0; i < nagents; i++)
+    {
+      if (agent.handle == agents[0].handle)
+	return (info.sizeInBytes >= size ? ACCESSIBLE : INACCESSIBLE); 
+    }
+
+  return INACCESSIBLE;
+}
+
+/* Backend implementation for omp_target_is_accessible.  */
+
+int
+GOMP_OFFLOAD_is_accessible_ptr (int device, const void *ptr, size_t size)
+{
+  if (!init_hsa_context (false)
+      || device < 0 || device > hsa_context.agent_count)
+    return 0;
+
+  struct agent_info *agent = get_agent_info (device);
+
+  enum accessible result;
+  result = host_memory_is_accessible (agent->id, ptr, size);
+  if (result == UNKNOWN)
+    result = device_memory_is_accessible (agent->id, ptr, size);
+  return result == ACCESSIBLE;
 }
 
 /* }}} */
@@ -4892,30 +5641,30 @@ GOMP_OFFLOAD_async_run (int device, void *tgt_fn, void *tgt_vars,
    already-loaded KERNEL.  */
 
 void
-GOMP_OFFLOAD_openacc_exec (void (*fn_ptr) (void *),
+GOMP_OFFLOAD_openacc_exec (struct gomp_offload_session *session,
+			   void (*fn_ptr) (void *),
 			   size_t mapnum __attribute__((unused)),
 			   void **hostaddrs __attribute__((unused)),
-			   void **devaddrs, unsigned *dims,
-			   void *targ_mem_desc)
+			   unsigned *dims, void *targ_mem_desc)
 {
   struct kernel_info *kernel = (struct kernel_info *) fn_ptr;
 
-  gcn_exec (kernel, devaddrs, dims, targ_mem_desc, false, NULL);
+  gcn_exec (kernel, session, dims, targ_mem_desc, false, NULL);
 }
 
 /* Run an asynchronous OpenACC kernel on the specified queue.  */
 
 void
-GOMP_OFFLOAD_openacc_async_exec (void (*fn_ptr) (void *),
+GOMP_OFFLOAD_openacc_async_exec (struct gomp_offload_session *session,
+				 void (*fn_ptr) (void *),
 				 size_t mapnum __attribute__((unused)),
 				 void **hostaddrs __attribute__((unused)),
-				 void **devaddrs,
 				 unsigned *dims, void *targ_mem_desc,
 				 struct goacc_asyncqueue *aq)
 {
   struct kernel_info *kernel = (struct kernel_info *) fn_ptr;
 
-  gcn_exec (kernel, devaddrs, dims, targ_mem_desc, true, aq);
+  gcn_exec (kernel, session, dims, targ_mem_desc, true, aq);
 }
 
 /* Create a new asynchronous thread and queue for running future kernels.  */
@@ -5079,7 +5828,8 @@ GOMP_OFFLOAD_openacc_async_queue_callback (struct goacc_asyncqueue *aq,
   queue_push_callback (aq, fn, data);
 }
 
-/* Queue up an asynchronous data copy from host to DEVICE.  */
+/* Queue up an asynchronous data copy from host to DEVICE.
+   (Also handles dev2host and dev2dev.)  */
 
 bool
 GOMP_OFFLOAD_openacc_async_host2dev (int device, void *dst, const void *src,
@@ -5097,10 +5847,16 @@ bool
 GOMP_OFFLOAD_openacc_async_dev2host (int device, void *dst, const void *src,
 				     size_t n, struct goacc_asyncqueue *aq)
 {
-  struct agent_info *agent = get_agent_info (device);
-  assert (agent == aq->agent);
-  queue_push_copy (aq, dst, src, n);
-  return true;
+  return GOMP_OFFLOAD_openacc_async_host2dev (device, dst, src, n, aq);
+}
+
+/* Queue up an asynchronous data copy from DEVICE to DEVICE.  */
+
+bool
+GOMP_OFFLOAD_openacc_async_dev2dev (int device, void *dst, const void *src,
+				    size_t n, struct goacc_asyncqueue *aq)
+{
+  return GOMP_OFFLOAD_openacc_async_host2dev (device, dst, src, n, aq);
 }
 
 union goacc_property_value
@@ -5159,5 +5915,9 @@ GOMP_OFFLOAD_openacc_destroy_thread_data (void *data)
 {
   free (data);
 }
+
+#ifdef USE_HASHTAB_LOOKUP_FOR_INDIRECT
+  #include "build-target-indirect-htab.h"
+#endif
 
 /* }}} */

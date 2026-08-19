@@ -144,7 +144,7 @@ AM_CONDITIONAL(BUILD_INFO, test $gcc_cv_prog_makeinfo_modern = "yes")
 
 
 # Configure libtool
-AM_PROG_LIBTOOL
+LT_INIT
 ACX_LT_HOST_FLAGS
 AC_SUBST(enable_shared)
 AC_SUBST(enable_static)
@@ -159,26 +159,26 @@ FCFLAGS="$FCFLAGS -L."
 # We need gfortran to compile parts of the library
 # We can't use AC_PROG_FC because it expects a fully working gfortran.
 #AC_PROG_FC(gfortran)
-case `echo $GFORTRAN` in
-  -* | no* )
-    FC=no ;;
-  *)
-    set dummy $GFORTRAN; ac_word=$2
-    if test -x "$ac_word"; then
-      FC="$GFORTRAN"
-    else
-      FC=no
-    fi ;;
-esac
+FC="$GFORTRAN"
 AC_PROG_FC(gfortran)
 FCFLAGS="$FCFLAGS -Wall -L../libgfortran"
+
+case ,${enable_languages}, in
+  *,fortran,* )
+   use_fortran=true
+   ;;
+  * )
+   use_fortran=false
+   ;;
+esac
+AM_CONDITIONAL([USE_FORTRAN], ["$use_fortran"])
 
 # For libtool versioning info, format is CURRENT:REVISION:AGE
 libtool_VERSION=1:0:0
 AC_SUBST(libtool_VERSION)
 
 # Check header files.
-AC_STDC_HEADERS
+AC_HEADER_STDC
 AC_HEADER_TIME
 ACX_HEADER_STRING
 AC_CHECK_HEADERS(pthread.h unistd.h semaphore.h sys/loadavg.h sys/sysctl.h sys/time.h)
@@ -232,6 +232,11 @@ fi
 AC_CHECK_SIZEOF([void *])
 
 m4_include([plugin/configfrag.ac])
+
+if test x"$offload_plugins" != x; then
+  AC_DEFINE(LIBGOMP_OFFLOAD_HOST, 1,
+    [Define to 1 if building libgomp for a offload host])
+fi
 
 # Check for functions needed.
 AC_CHECK_FUNCS(getloadavg clock_gettime strtoull)
@@ -325,7 +330,7 @@ GCC_CHECK_TLS
 GCC_CHECK_EMUTLS
 
 # See what sort of export controls are available.
-LIBGOMP_CHECK_ATTRIBUTE_VISIBILITY
+GCC_CHECK_ATTRIBUTE_VISIBILITY
 LIBGOMP_CHECK_ATTRIBUTE_DLLEXPORT
 LIBGOMP_CHECK_ATTRIBUTE_ALIAS
 LIBGOMP_ENABLE_SYMVERS
@@ -364,6 +369,19 @@ CFLAGS="$save_CFLAGS $XCFLAGS"
 # Check for __sync_val_compare_and_swap, but only after the target has
 # had a chance to set XCFLAGS.
 LIBGOMP_CHECK_SYNC_BUILTINS
+
+# If offloading is enabled, both offload hosts and accelerators are required to support
+# __sync_* builtins, to simplify architectural assumptions between both sides
+if test x$libgomp_cv_have_sync_builtins = xno; then
+  # We require accelerator targets to support __sync_* builtins.
+  if test x$libgomp_offloaded_only = xyes; then
+    AC_MSG_ERROR([accelerator targets require __sync_val_compare_and_swap to build libgomp.])
+  fi
+  # Same for offload hosts.
+  if test x"$offload_plugins" != x; then
+    AC_MSG_ERROR([offload hosts require __sync_val_compare_and_swap to build libgomp.])
+  fi
+fi
 
 XCFLAGS="$XCFLAGS$XPCFLAGS"
 
@@ -409,8 +427,6 @@ else
 fi
 AC_SUBST(link_gomp)
 
-AM_CONDITIONAL([USE_FORTRAN], [test "$ac_cv_fc_compiler_gnu" = yes])
-
 # ??? 2006-01-24: Paulo committed to asking autoconf folk to document
 # and export AC_COMPUTE_INT.  If that happens, then we'll need to remove
 # the underscore here and update the PREREQ.  If it doesn't, then we'll
@@ -423,20 +439,20 @@ for i in $config_path; do
   fi
 done
 
-_AC_COMPUTE_INT([sizeof (__INTPTR_TYPE__)], [INTPTR_T_KIND])
-_AC_COMPUTE_INT([sizeof (__int128)], [OMP_INT128_SIZE],,[OMP_INT128_SIZE=0])
-_AC_COMPUTE_INT([2*sizeof (__INTPTR_TYPE__)], [OMP_DEPEND_KIND],,
-		[OMP_DEPEND_KIND=0])
-_AC_COMPUTE_INT([sizeof (omp_lock_t)], [OMP_LOCK_SIZE],,
+AC_COMPUTE_INT([INTPTR_T_KIND], [sizeof (__INTPTR_TYPE__)])
+AC_COMPUTE_INT([OMP_INT128_SIZE], [sizeof (__int128)],,[OMP_INT128_SIZE=0])
+AC_COMPUTE_INT([OMP_DEPEND_KIND], [2*sizeof (__INTPTR_TYPE__)],,
+	       [OMP_DEPEND_KIND=0])
+AC_COMPUTE_INT([OMP_LOCK_SIZE], [sizeof (omp_lock_t)],,
   [AC_MSG_ERROR([unsupported system, cannot find sizeof (omp_lock_t)])])
-_AC_COMPUTE_INT([__alignof (omp_lock_t)], [OMP_LOCK_ALIGN])
-_AC_COMPUTE_INT([sizeof (omp_nest_lock_t)], [OMP_NEST_LOCK_SIZE])
-_AC_COMPUTE_INT([__alignof (omp_nest_lock_t)], [OMP_NEST_LOCK_ALIGN])
-_AC_COMPUTE_INT([sizeof (omp_lock_25_t)], [OMP_LOCK_25_SIZE],,
+AC_COMPUTE_INT([OMP_LOCK_ALIGN], [__alignof (omp_lock_t)])
+AC_COMPUTE_INT([OMP_NEST_LOCK_SIZE], [sizeof (omp_nest_lock_t)])
+AC_COMPUTE_INT([OMP_NEST_LOCK_ALIGN], [__alignof (omp_nest_lock_t)])
+AC_COMPUTE_INT([OMP_LOCK_25_SIZE], [sizeof (omp_lock_25_t)],,
   [AC_MSG_ERROR([unsupported system, cannot find sizeof (omp_lock_25_t)])])
-_AC_COMPUTE_INT([__alignof (omp_lock_25_t)], [OMP_LOCK_25_ALIGN])
-_AC_COMPUTE_INT([sizeof (omp_nest_lock_25_t)], [OMP_NEST_LOCK_25_SIZE])
-_AC_COMPUTE_INT([__alignof (omp_nest_lock_25_t)], [OMP_NEST_LOCK_25_ALIGN])
+AC_COMPUTE_INT([OMP_LOCK_25_ALIGN], [__alignof (omp_lock_25_t)])
+AC_COMPUTE_INT([OMP_NEST_LOCK_25_SIZE], [sizeof (omp_nest_lock_25_t)])
+AC_COMPUTE_INT([OMP_NEST_LOCK_25_ALIGN], [__alignof (omp_nest_lock_25_t)])
 
 # If the lock fits in an integer, then arrange for Fortran to use that
 # integer.  If it doesn't, then arrange for Fortran to use a pointer.

@@ -1,5 +1,5 @@
 /* Compilation switch flag definitions for GCC.
-   Copyright (C) 1987-2025 Free Software Foundation, Inc.
+   Copyright (C) 1987-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -112,9 +112,6 @@ extern class target_flag_state *this_target_flag_state;
 
 #define abi_version_at_least(N) \
   (flag_abi_version == 0 || flag_abi_version >= (N))
-
-/* Whether to emit an overflow warning whose code is C.  */
-#define issue_strict_overflow_warning(c) (warn_strict_overflow >= (int) (c))
 
 #endif /* ! in target library */
 

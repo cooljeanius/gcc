@@ -1,5 +1,5 @@
 /* CPP Library.
-   Copyright (C) 1986-2025 Free Software Foundation, Inc.
+   Copyright (C) 1986-2026 Free Software Foundation, Inc.
    Contributed by Per Bothner, 1994-95.
    Based on CCCP program by Paul Rubin, June 1986
    Adapted to ANSI C, Richard Stallman, Jan 1987
@@ -151,6 +151,8 @@ static const struct lang_flags lang_defaults[] = {
   /* CXX23    */ { 1,1,1,1,1,1,1,1,1,1,1,1,1,0,1,1,1,0,1,1,1,1,1,0,1,0,0,1 },
   /* GNUCXX26 */ { 1,1,1,1,1,1,0,1,1,1,1,1,1,0,1,1,1,0,1,1,1,1,1,0,1,1,0,1 },
   /* CXX26    */ { 1,1,1,1,1,1,1,1,1,1,1,1,1,0,1,1,1,0,1,1,1,1,1,0,1,1,0,1 },
+  /* GNUCXX29 */ { 1,1,1,1,1,1,0,1,1,1,1,1,1,0,1,1,1,0,1,1,1,1,1,0,1,1,0,1 },
+  /* CXX29    */ { 1,1,1,1,1,1,1,1,1,1,1,1,1,0,1,1,1,0,1,1,1,1,1,0,1,1,0,1 },
   /* ASM      */ { 0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 }
 };
 
@@ -246,6 +248,7 @@ cpp_create_reader (enum c_lang lang, cpp_hash_table *table,
   CPP_OPTION (pfile, dollars_in_ident) = 1;
   CPP_OPTION (pfile, warn_dollars) = 1;
   CPP_OPTION (pfile, warn_variadic_macros) = 1;
+  CPP_OPTION (pfile, suppress_builtin_macro_warnings) = 0;
   CPP_OPTION (pfile, warn_builtin_macro_redefined) = 1;
   CPP_OPTION (pfile, cpp_warn_implicit_fallthrough) = 0;
   CPP_OPTION (pfile, warn_header_guard) = 0;
@@ -593,14 +596,19 @@ cpp_init_builtins (cpp_reader *pfile, int hosted)
       && (! CPP_OPTION (pfile, stdc_0_in_system_headers)
 	  || CPP_OPTION (pfile, std)))
     _cpp_define_builtin (pfile, "__STDC__ 1");
+  else if (CPP_OPTION (pfile, cplusplus))
+    cpp_warn (pfile, "__STDC__");
 
   if (CPP_OPTION (pfile, cplusplus))
     {
-      /* C++26 is not yet a standard.  For now, use an invalid
-	 year/month, 202400L, which is larger than 202302L.  */
-      if (CPP_OPTION (pfile, lang) == CLK_CXX26
-	  || CPP_OPTION (pfile, lang) == CLK_GNUCXX26)
-	_cpp_define_builtin (pfile, "__cplusplus 202400L");
+      /* C++29 is not yet a standard.  For now, use an invalid
+	 year/month, 202700L, which is larger than 202603L.  */
+      if (CPP_OPTION (pfile, lang) == CLK_CXX29
+	  || CPP_OPTION (pfile, lang) == CLK_GNUCXX29)
+	_cpp_define_builtin (pfile, "__cplusplus 202700L");
+      else if (CPP_OPTION (pfile, lang) == CLK_CXX26
+	       || CPP_OPTION (pfile, lang) == CLK_GNUCXX26)
+	_cpp_define_builtin (pfile, "__cplusplus 202603L");
       else if (CPP_OPTION (pfile, lang) == CLK_CXX23
 	  || CPP_OPTION (pfile, lang) == CLK_GNUCXX23)
 	_cpp_define_builtin (pfile, "__cplusplus 202302L");
@@ -618,6 +626,14 @@ cpp_init_builtins (cpp_reader *pfile, int hosted)
 	_cpp_define_builtin (pfile, "__cplusplus 201103L");
       else
 	_cpp_define_builtin (pfile, "__cplusplus 199711L");
+      cpp_warn (pfile, "__cplusplus");
+      if (CPP_OPTION (pfile, lang) >= CLK_GNUCXX11)
+	{
+	  cpp_warn (pfile, "__STDC_VERSION__");
+	  cpp_warn (pfile, "__STDC_MB_MIGHT_NEQ_WC__");
+	  if (CPP_OPTION (pfile, lang) < CLK_GNUCXX23)
+	    cpp_warn (pfile, "__STDCPP_STRICT_POINTER_SAFETY__");
+	}
     }
   else if (CPP_OPTION (pfile, lang) == CLK_ASM)
     _cpp_define_builtin (pfile, "__ASSEMBLER__ 1");
@@ -882,11 +898,34 @@ read_original_directory (cpp_reader *pfile)
 
       if (pfile->cb.dir_change)
 	{
-	  /* Smash the string directly, it's dead at this point  */
-	  char *smashy = (char *)text;
-	  smashy[len - 3] = 0;
+	  cpp_string s = { 0, 0 };
+	  const char *dir_slashslash;
+	  unsigned int dir_slashslash_len;
 
-	  pfile->cb.dir_change (pfile, smashy + 1);
+	  /* If we fail to decode escape sequences in the string literal, fall
+	     back onto the literal itself, manually removing the opening and
+	     closing quotes (").  */
+	  if (cpp_interpret_string_notranslate (pfile, &string->val.str, 1, &s,
+						CPP_STRING))
+	    {
+	      /* At this point, the trailing NUL byte in S is included in its
+		 length, so take it out.  */
+	      dir_slashslash = (const char *) s.text;
+	      dir_slashslash_len = s.len - 1;
+	    }
+	  else
+	    {
+	      dir_slashslash = (const char *) string->val.str.text + 1;
+	      dir_slashslash_len = string->val.str.len - 2;
+	    }
+
+	  /* Strip the trailing double slash.  */
+	  const unsigned dir_len = dir_slashslash_len - 2;
+	  char *dir = (char *) alloca (dir_len + 1);
+	  memcpy (dir, dir_slashslash, dir_len);
+	  dir[dir_len] = '\0';
+
+	  pfile->cb.dir_change (pfile, dir);
 	}
 
       /* We should be at EOL.  */
@@ -899,7 +938,7 @@ read_original_directory (cpp_reader *pfile)
    Maybe it should also reset state, such that you could call
    cpp_start_read with a new filename to restart processing.  */
 void
-cpp_finish (struct cpp_reader *pfile, FILE *deps_stream, FILE *fdeps_stream)
+cpp_finish (cpp_reader *pfile, FILE *deps_stream, FILE *fdeps_stream)
 {
   /* Warn about unused macros before popping the final buffer.  */
   if (CPP_OPTION (pfile, warn_unused_macros))

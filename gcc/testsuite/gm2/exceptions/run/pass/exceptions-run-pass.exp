@@ -1,5 +1,5 @@
 # Expect driver script for GCC Regression Tests
-# Copyright (C) 2008-2025 Free Software Foundation, Inc.
+# Copyright (C) 2008-2026 Free Software Foundation, Inc.
 
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -28,8 +28,8 @@ load_lib prune.exp
 load_lib gm2-torture.exp
 
 
-set output [target_compile $srcdir/$subdir/cpp.cpp cpp.o object "-g"]
-set output [target_compile $srcdir/$subdir/mycpp.cpp mycpp.o object "-g"]
+set output [gm2_target_compile $srcdir/$subdir/cpp.cpp cpp.o object "-g"]
+set output [gm2_target_compile $srcdir/$subdir/mycpp.cpp mycpp.o object "-g"]
 
 #
 #  notice this uses PIM libraries with exceptions - this is a useful test.

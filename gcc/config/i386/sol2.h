@@ -1,5 +1,5 @@
 /* Target definitions for GCC for Intel 80386 running Solaris 2
-   Copyright (C) 1993-2025 Free Software Foundation, Inc.
+   Copyright (C) 1993-2026 Free Software Foundation, Inc.
    Contributed by Fred Fish (fnf@cygnus.com).
 
 This file is part of GCC.
@@ -26,17 +26,6 @@ along with GCC; see the file COPYING3.  If not see
 #undef STACK_REALIGN_DEFAULT
 #define STACK_REALIGN_DEFAULT (TARGET_64BIT ? 0 : 1)
 
-/* Old versions of the Solaris assembler cannot handle the difference of
-   labels in different sections, so force DW_EH_PE_datarel if so.  */
-#ifndef HAVE_AS_IX86_DIFF_SECT_DELTA
-#undef ASM_PREFERRED_EH_DATA_FORMAT
-#define ASM_PREFERRED_EH_DATA_FORMAT(CODE,GLOBAL)			\
-  (flag_pic ? ((GLOBAL ? DW_EH_PE_indirect : 0)				\
-	       | (TARGET_64BIT ? DW_EH_PE_pcrel | DW_EH_PE_sdata4	\
-		  : DW_EH_PE_datarel))					\
-   : DW_EH_PE_absptr)
-#endif
-
 /* The Solaris linker will not merge a read-only .eh_frame section
    with a read-write .eh_frame section.  None of the encodings used
    with non-PIC code require runtime relocations.  In 64-bit mode,
@@ -51,26 +40,21 @@ along with GCC; see the file COPYING3.  If not see
 #undef TARGET_SUN_TLS
 #define TARGET_SUN_TLS 1
 
-#undef CPP_SPEC
-#define CPP_SPEC "%(cpp_subtarget)"
-
 #undef CC1_SPEC
-#define CC1_SPEC "%(cc1_cpu) " ASAN_CC1_SPEC \
+#define CC1_SPEC "%(cc1_cpu) " ASAN_CC1_SPEC SCTF_CC1_SPEC \
   " %{mx32:%e-mx32 is not supported on Solaris}"
 
-/* GNU as understands --32 and --64, but the native Solaris
-   assembler requires -xarch=generic or -xarch=generic64 instead.  */
-#ifdef USE_GAS
+#if HAVE_SOLARIS_AS
+#define ASM_CPU32_DEFAULT_SPEC "-m32"
+#define ASM_CPU64_DEFAULT_SPEC "-m64"
+#else
 #define ASM_CPU32_DEFAULT_SPEC "--32"
 #define ASM_CPU64_DEFAULT_SPEC "--64"
-#else
-#define ASM_CPU32_DEFAULT_SPEC "-xarch=generic"
-#define ASM_CPU64_DEFAULT_SPEC "-xarch=generic64"
 #endif
 
+#if HAVE_SOLARIS_AS
 /* Since Studio 12.6, as needs -xbrace_comment=no so its AVX512 syntax is
    fully compatible with gas.  */
-#ifdef HAVE_AS_XBRACE_COMMENT_OPTION
 #define ASM_XBRACE_COMMENT_SPEC "-xbrace_comment=no"
 #else
 #define ASM_XBRACE_COMMENT_SPEC ""
@@ -90,16 +74,9 @@ along with GCC; see the file COPYING3.  If not see
 
 #define ARCH64_SUBDIR "amd64"
 
-#ifdef USE_GLD
-/* Since binutils 2.21, GNU ld supports new *_sol2 emulations to strictly
-   follow the Solaris 2 ABI.  Prefer them if present.  */
-#ifdef HAVE_LD_SOL2_EMULATION
+#if !HAVE_SOLARIS_LD
 #define ARCH32_EMULATION "elf_i386_sol2"
 #define ARCH64_EMULATION "elf_x86_64_sol2"
-#else
-#define ARCH32_EMULATION "elf_i386"
-#define ARCH64_EMULATION "elf_x86_64"
-#endif
 #endif
 
 #define ENDFILE_ARCH_SPEC \
@@ -108,7 +85,6 @@ along with GCC; see the file COPYING3.  If not see
    %{mpc80:crtprec80.o%s}"
 
 #define SUBTARGET_CPU_EXTRA_SPECS \
-  { "cpp_subtarget",	 CPP_SUBTARGET_SPEC },		\
   { "asm_cpu",		 ASM_CPU_SPEC },		\
   { "asm_cpu_default",	 ASM_CPU_DEFAULT_SPEC },	\
 
@@ -117,28 +93,6 @@ along with GCC; see the file COPYING3.  If not see
 
 #undef LOCAL_LABEL_PREFIX
 #define LOCAL_LABEL_PREFIX "."
-
-/* The 32-bit Solaris assembler does not support .quad.  Do not use it.  */
-#ifndef HAVE_AS_IX86_QUAD
-#undef ASM_QUAD
-#endif
-
-/* The native Solaris assembler can't calculate the difference between
-   symbols in different sections, which causes problems for -fPIC jump
-   tables in .rodata.  */
-#ifndef HAVE_AS_IX86_DIFF_SECT_DELTA
-#undef JUMP_TABLES_IN_TEXT_SECTION
-#define JUMP_TABLES_IN_TEXT_SECTION 1
-
-/* The native Solaris assembler cannot handle the SYMBOL-. syntax, but
-   requires SYMBOL@rel/@rel64 instead.  */
-#define ASM_OUTPUT_DWARF_PCREL(FILE, SIZE, LABEL)	\
-  do {							\
-    fputs (integer_asm_op (SIZE, FALSE), FILE);		\
-    assemble_name (FILE, LABEL);			\
-    fputs (SIZE == 8 ? "@rel64" : "@rel", FILE);	\
-  } while (0)
-#endif
 
 /* The Solaris assembler wants a .local for non-exported aliases.  */
 #define ASM_OUTPUT_DEF_FROM_DECLS(FILE, DECL, TARGET)	\
@@ -156,7 +110,7 @@ along with GCC; see the file COPYING3.  If not see
       }							\
   } while (0)
 
-#ifndef USE_GAS
+#if HAVE_SOLARIS_AS
 /* The Sun assembler uses .tcomm for TLS common sections.  */
 #define TLS_COMMON_ASM_OP ".tcomm"
 
@@ -186,7 +140,7 @@ along with GCC; see the file COPYING3.  If not see
       ASM_OUTPUT_LABEL (FILE, NAME);				\
     }								\
   while (0)
-#endif /* !USE_GAS */
+#endif /* HAVE_SOLARIS_AS */
 
 /* As in sparc/sol2.h, override the default from i386/x86-64.h to work
    around Sun as TLS bug.  */
@@ -215,15 +169,13 @@ along with GCC; see the file COPYING3.  If not see
 #undef TARGET_ASM_NAMED_SECTION
 #define TARGET_ASM_NAMED_SECTION i386_solaris_elf_named_section
 
-/* Sun as requires "h" flag for large sections, GNU as can do without, but
-   accepts "l".  */
-#ifdef USE_GAS
-#define MACH_DEP_SECTION_ASM_FLAG 'l'
-#else
+/* Sun as requires the "h" flag for large sections.  */
+#if HAVE_SOLARIS_AS
+#undef MACH_DEP_SECTION_ASM_FLAG
 #define MACH_DEP_SECTION_ASM_FLAG 'h'
 #endif
 
-#ifndef USE_GAS
+#if HAVE_SOLARIS_AS
 /* Emit COMDAT group signature symbols for Sun as.  */
 #undef TARGET_ASM_FILE_END
 #define TARGET_ASM_FILE_END solaris_file_end
@@ -231,12 +183,12 @@ along with GCC; see the file COPYING3.  If not see
 
 /* Unlike GNU ld, Sun ld doesn't coalesce .ctors.N/.dtors.N sections, so
    inhibit their creation.  Also cf. sparc/sysv4.h.  */
-#ifndef USE_GLD
+#if HAVE_SOLARIS_LD
 #define CTORS_SECTION_ASM_OP	"\t.section\t.ctors, \"aw\""
 #define DTORS_SECTION_ASM_OP	"\t.section\t.dtors, \"aw\""
 #endif
 
-#ifndef USE_GAS
+#if HAVE_SOLARIS_AS
 #define LARGECOMM_SECTION_ASM_OP "\t.lbcomm\t"
 #endif
 

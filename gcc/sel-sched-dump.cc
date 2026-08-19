@@ -1,5 +1,5 @@
 /* Instruction scheduling pass.   Log dumping infrastructure.
-   Copyright (C) 2006-2025 Free Software Foundation, Inc.
+   Copyright (C) 2006-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -539,14 +539,14 @@ dump_insn_vector (rtx_vec_t succs)
 static void
 print_hard_reg_set (FILE *file, const char *prefix, HARD_REG_SET set)
 {
-  int i;
+  unsigned int i;
 
   fprintf (file, "%s{ ", prefix);
-  for (i = 0; i < FIRST_PSEUDO_REGISTER; i++)
-    {
-      if (TEST_HARD_REG_BIT (set, i))
-	fprintf (file, "%d ", i);
-    }
+
+  hard_reg_set_iterator hrsi;
+  EXECUTE_IF_SET_IN_HARD_REG_SET (set, 0, i, hrsi)
+    fprintf (file, "%d ", i);
+
   fprintf (file, "}\n");
 }
 

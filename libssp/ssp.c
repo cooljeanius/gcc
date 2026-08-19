@@ -1,5 +1,5 @@
 /* Stack protector support.
-   Copyright (C) 2005-2025 Free Software Foundation, Inc.
+   Copyright (C) 2005-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -39,6 +39,9 @@ see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
 #ifdef HAVE_MALLOC_H
 # include <malloc.h>
 #endif
+#ifdef HAVE_STDLIB_H
+# include <stdlib.h>
+#endif
 #ifdef HAVE_STRING_H
 # include <string.h>
 #endif
@@ -66,8 +69,9 @@ see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
 #ifdef HAVE_SYSLOG_H
 # include <syslog.h>
 #endif
+#include <stdint.h>
 
-void *__stack_chk_guard = 0;
+uintptr_t __stack_chk_guard = 0;
 
 static void __attribute__ ((constructor))
 __guard_setup (void)

@@ -1,5 +1,5 @@
 /* Reload pseudo regs into hard regs for insns that require hard regs.
-   Copyright (C) 1987-2025 Free Software Foundation, Inc.
+   Copyright (C) 1987-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -743,7 +743,7 @@ will_delete_init_insn_p (rtx_insn *insn)
    so any pseudo reg that is spilled must go to the stack.
 
    Return value is TRUE if reload likely left dead insns in the
-   stream and a DCE pass should be run to elimiante them.  Else the
+   stream and a DCE pass should be run to eliminate them.  Else the
    return value is FALSE.  */
 
 bool
@@ -1272,8 +1272,10 @@ reload (rtx_insn *first, int global)
 
   inserted = fixup_abnormal_edges ();
 
-  /* We've possibly turned single trapping insn into multiple ones.  */
-  if (cfun->can_throw_non_call_exceptions)
+  /* Split basic blocks if we've possibly turned single trapping insn
+     into multiple ones or otherwise the backend requested to do so.  */
+  if (cfun->can_throw_non_call_exceptions
+      || cfun->split_basic_blocks_after_reload)
     {
       auto_sbitmap blocks (last_basic_block_for_fn (cfun));
       bitmap_ones (blocks);
@@ -1401,12 +1403,13 @@ maybe_fix_stack_asms (void)
 	 constraints, must be usable as reload registers.  So clear them
 	 out of the life information.  */
       allowed &= clobbered;
-      for (i = 0; i < FIRST_PSEUDO_REGISTER; i++)
-	if (TEST_HARD_REG_BIT (allowed, i))
-	  {
-	    CLEAR_REGNO_REG_SET (&chain->live_throughout, i);
-	    CLEAR_REGNO_REG_SET (&chain->dead_or_set, i);
-	  }
+      hard_reg_set_iterator hrsi;
+      unsigned int j = 0;
+      EXECUTE_IF_SET_IN_HARD_REG_SET (allowed, 0, j, hrsi)
+	{
+	  CLEAR_REGNO_REG_SET (&chain->live_throughout, j);
+	  CLEAR_REGNO_REG_SET (&chain->dead_or_set, j);
+	}
     }
 
 #endif
@@ -3917,29 +3920,29 @@ update_eliminables (HARD_REG_SET *pset)
 static bool
 update_eliminables_and_spill (void)
 {
-  int i;
+  unsigned int i;
   bool did_spill = false;
   HARD_REG_SET to_spill;
   CLEAR_HARD_REG_SET (to_spill);
   update_eliminables (&to_spill);
   used_spill_regs &= ~to_spill;
 
-  for (i = 0; i < FIRST_PSEUDO_REGISTER; i++)
-    if (TEST_HARD_REG_BIT (to_spill, i))
-      {
-	spill_hard_reg (i, 1);
-	did_spill = true;
+  hard_reg_set_iterator hrsi;
+  EXECUTE_IF_SET_IN_HARD_REG_SET (to_spill, 0, i, hrsi)
+    {
+      spill_hard_reg (i, 1);
+      did_spill = true;
 
-	/* Regardless of the state of spills, if we previously had
-	   a register that we thought we could eliminate, but now
-	   cannot eliminate, we must run another pass.
+      /* Regardless of the state of spills, if we previously had
+	 a register that we thought we could eliminate, but now
+	 cannot eliminate, we must run another pass.
 
-	   Consider pseudos which have an entry in reg_equiv_* which
-	   reference an eliminable register.  We must make another pass
-	   to update reg_equiv_* so that we do not substitute in the
-	   old value from when we thought the elimination could be
-	   performed.  */
-      }
+	 Consider pseudos which have an entry in reg_equiv_* which
+	 reference an eliminable register.  We must make another pass
+	 to update reg_equiv_* so that we do not substitute in the
+	 old value from when we thought the elimination could be
+	 performed.  */
+    }
   return did_spill;
 }
 
@@ -7538,8 +7541,7 @@ emit_input_reload_insns (class insn_chain *chain, struct reload *rl,
     copy_reg_eh_region_note_forward (insn, get_insns (), NULL);
 
   /* End this sequence.  */
-  *where = get_insns ();
-  end_sequence ();
+  *where = end_sequence ();
 
   /* Update reload_override_in so that delete_address_reloads_1
      can see the actual register usage.  */
@@ -8255,7 +8257,7 @@ emit_reload_insns (class insn_chain *chain)
 	}
 
       /* The following if-statement was #if 0'd in 1.34 (or before...).
-	 It's reenabled in 1.35 because supposedly nothing else
+	 It's re-enabled in 1.35 because supposedly nothing else
 	 deals with this problem.  */
 
       /* If a register gets output-reloaded from a non-spill register,

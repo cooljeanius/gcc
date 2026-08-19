@@ -1,5 +1,5 @@
 /* Definitions of target machine for GNU compiler.  VAX version.
-   Copyright (C) 1987-2025 Free Software Foundation, Inc.
+   Copyright (C) 1987-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -646,7 +646,7 @@ VAX operand formatting codes:
 #define PRINT_OPERAND_ADDRESS(FILE, ADDR)  \
   print_operand_address (FILE, ADDR)
 
-/* This is a blatent lie.  However, it's good enough, since we don't
+/* This is a blatant lie.  However, it's good enough, since we don't
    actually have any code whatsoever for which this isn't overridden
    by the proper FDE definition.  */
 #define INCOMING_RETURN_ADDR_RTX gen_rtx_REG (Pmode, PC_REGNUM)

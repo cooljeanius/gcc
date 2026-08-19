@@ -1,5 +1,5 @@
 /* Translation of isl AST to Gimple.
-   Copyright (C) 2014-2025 Free Software Foundation, Inc.
+   Copyright (C) 2014-2026 Free Software Foundation, Inc.
    Contributed by Roman Gareev <gareevroman@gmail.com>.
 
 This file is part of GCC.
@@ -319,7 +319,7 @@ binary_op_to_tree (tree type, __isl_take isl_ast_expr *expr, ivs_params &ip)
   isl_ast_expr_free (expr);
 
   /* From our constraint generation we may get modulo operations that
-     we cannot represent explicitely but that are no-ops for TYPE.
+     we cannot represent explicitly but that are no-ops for TYPE.
      Elide those.  */
   if ((expr_type == isl_ast_op_pdiv_r
        || expr_type == isl_ast_op_zdiv_r
@@ -1147,7 +1147,8 @@ void translate_isl_ast_to_gimple::
 graphite_copy_stmts_from_block (basic_block bb, basic_block new_bb,
 				vec<tree> iv_map)
 {
-  /* Iterator poining to the place where new statement (s) will be inserted.  */
+  /* Iterator pointing to the place where new statement (s) will be
+     inserted.  */
   gimple_stmt_iterator gsi_tgt = gsi_last_bb (new_bb);
 
   for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);

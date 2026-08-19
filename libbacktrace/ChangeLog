@@ -1,3 +1,120 @@
+2026-07-06  Ian Lance Taylor  <iant@golang.org>
+
+	* backtrace.h (backtrace_create_state): Rewrite comment to change
+	threaded parameter to flags.
+	(backtrace_full_callback, backtrace_syminfo_callback): Document
+	behavior change if moredata flag is set.
+	(struct backtrace_moredata): Define.
+	* backtrace-supported.h.in (BACKTRACE_SUPPORTS_MOREDATA): Define.
+	* internal.h (struct backtrace_state): Add moredata field.
+	(BACKTRACE_MOREDATA_VERSION): Define.
+	* state.c (backtrace_create_state): Change threaded parameter to
+	flags.  Set state moredata field based on flags.
+	* dwarf.c (struct line): Add disc field.
+	(struct function): Add caller_disc field.
+	(call_callback): New static function.
+	(add_line): Add disc parameter.  Change all callers.  Store disc
+	in new line value.
+	(read_line_program): Track discriminator value.
+	(read_line_info): Initialize disc field in final line entry.
+	(read_function_entry): Handle DW_AT_GNU_discriminator.
+	(report_inlined_functions): Add disc parameter. Change all
+	callers. Call call_callback rather than calling callback
+	directly.
+	(dwarf_lookup_pc): Handle inlined discriminators. Call
+	call_callback rather than calling callback directly.
+	(dwarf_fileline): Call call_callback rather than calling callback
+	directly.
+	* elf.c (elf_syminfo): Pass moredata if requested.
+	* macho.c (macho_syminfo): Likewise.
+	* pecoff.c (coff_syminfo): Likewise.
+	* xcoff.c (xcoff_syminfo): Likewise.
+	(xcoff_lookup_pc): Likewise.
+	* backtrace.c: #include <string.h>.
+	(unwind): Pass moredata if requested.
+	* unknown.c: #include <string.h>.
+	(unknown_fileline): Pass moredata if requested.
+	* fileline.c (backtrace_syminfo_to_full_callback): Add comment
+	about moredata.
+	* mdtest.c: New test file.
+	* Makefile.am (mdtest_SOURCES): Define.
+	(mdtest_CFLAGS, mdtest_LDFLAGS, mdtest_LDADD): Define.
+	(BUILDTESTS): Add mdtest.
+	* Makefile.in: Regenerate.
+
+2026-06-29  Pietro Monteiro  <pietro@sociotechnical.xyz>
+
+	PR bootstrap/103459
+	* configure: Regenerate.
+	* configure.ac: Remove redundant AM_PROG_LIBTOOL.
+
+2026-06-27  Ian Lance Taylor  <iant@golang.org>
+
+	* elf.c (elf_zstd_unpack_seq_decode): Set table field for RLE
+	sequence.
+	* zstdtest.c (tests): Add rle-sequence-tables test.
+
+2026-06-27  Ian Lance Taylor  <iant@golang.org>
+
+	* elf.c (elf_zstd_decompress_frame): Support a compressed block
+	that does not set the single segment flag.
+	* zstdtest.c (tests): Add tests without single segment.
+
+2026-06-02  Ian Lance Taylor  <iant@golang.org>
+
+	* elf.c (elf_zstd_decompress_frame): Support a compressed block
+	with no sequences, only literals.
+
+2026-05-30  Dhruv Chawla  <dhruvc@nvidia.com>
+
+	* allocfail.sh: Fix typos.
+	* elf.c (elf_fetch_bits): Likewise.
+
+2026-05-04  Ian Lance Taylor  <iant@golang.org>
+
+	* elf.c (elf_zstd_decompress_frame): New static function,
+	broken out of elf_zstd_decompress.
+	(elf_zstd_decompress): Call elf_zstd_decompress_frame in a loop.
+	* zstdtest.c (test_large): Compress the file in chunks.
+
+2025-12-29  Rainer Orth  <ro@CeBiTec.Uni-Bielefeld.DE>
+
+	* configure: Regenerate.
+
+2025-11-06  Ian Lance Taylor  <iant@golang.org>
+
+	* elf.c (ELFMAGn): In #undef rename from ELF_MAGn.
+
+2025-11-03  Sam James  <sam@gentoo.org>
+
+	* configure: Regenerate.
+
+2025-10-02  H.J. Lu  <hjl.tools@gmail.com>
+
+	* Makefile.in: Regenerated.
+	* aclocal.m4: Likewise.
+	* configure: Likewise.
+
+2025-09-28  Ian Lance Taylor  <iant@golang.org>
+
+	* filetype.awk: Recognize PE bigobj objects at configure time.
+
+2025-04-10  John David Anglin  <danglin@gcc.gnu.org>
+
+	* fileline.c (hpux_get_executable_path): New.
+	(fileline_initialize): Add pass to get hpux executable path.
+
+2025-04-09  Richard Biener  <rguenther@suse.de>
+
+	PR bootstrap/119680
+	* configure.ac (--enable-host-pie): Handle by setting PIC_FLAG
+	to -fPIE.
+	* configure: Regenerate.
+
+2025-04-07  Jonathan Wakely  <jwakely@redhat.com>
+
+	* atomic.c (backtrace_atomic_store_int): Use int for old value.
+
 2025-02-10  Ian Lance Taylor  <iant@golang.org>
 
 	* elf.c (elf_uncompress_lzma_block): Add casts to avoid
@@ -2262,7 +2379,7 @@
 
 	* Initial implementation.
 
-Copyright (C) 2012-2025 Free Software Foundation, Inc.
+Copyright (C) 2012-2026 Free Software Foundation, Inc.
 
 Copying and distribution of this file, with or without modification,
 are permitted in any medium without royalty provided the copyright

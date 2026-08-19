@@ -1,5 +1,5 @@
 /* Definitions of target machine for GNU compiler for Renesas / SuperH SH.
-   Copyright (C) 1993-2025 Free Software Foundation, Inc.
+   Copyright (C) 1993-2026 Free Software Foundation, Inc.
    Contributed by Steve Chamberlain (sac@cygnus.com).
    Improved by Jim Wilson (wilson@cygnus.com).
 
@@ -1402,15 +1402,6 @@ extern bool current_function_interrupt;
 #define INDEX_REGISTER_RTX_P(X) MAYBE_INDEX_REGISTER_RTX_P(X, false)
 #endif
 
-
-/* A C compound statement that attempts to replace X, which is an address
-   that needs reloading, with a valid memory address for an operand of
-   mode MODE.  WIN is a C statement label elsewhere in the code.  */
-#define LEGITIMIZE_RELOAD_ADDRESS(X,MODE,OPNUM,TYPE,IND_LEVELS,WIN)	\
-  do {									\
-    if (sh_legitimize_reload_address (&(X), (MODE), (OPNUM), (TYPE)))	\
-      goto WIN;								\
-  } while (0)
 
 /* Specify the machine mode that this machine uses
    for the index in the tablejump instruction.  */

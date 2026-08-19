@@ -1,5 +1,5 @@
 /* Code coverage instrumentation for fuzzing.
-   Copyright (C) 2015-2025 Free Software Foundation, Inc.
+   Copyright (C) 2015-2026 Free Software Foundation, Inc.
    Contributed by Dmitry Vyukov <dvyukov@google.com> and
    Wish Wu <wishwu007@gmail.com>
 
@@ -274,13 +274,6 @@ sancov_pass (function *fun)
 		    instrument_comparison (&gsi,
 					   gimple_assign_rhs1 (stmt),
 					   gimple_assign_rhs2 (stmt));
-		  else if (rhs_code == COND_EXPR
-			   && COMPARISON_CLASS_P (gimple_assign_rhs1 (stmt)))
-		    {
-		      tree cond = gimple_assign_rhs1 (stmt);
-		      instrument_comparison (&gsi, TREE_OPERAND (cond, 0),
-					     TREE_OPERAND (cond, 1));
-		    }
 		  break;
 		case GIMPLE_COND:
 		  instrument_comparison (&gsi,

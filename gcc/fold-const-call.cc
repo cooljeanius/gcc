@@ -1,5 +1,5 @@
 /* Constant folding for calls to built-in and internal functions.
-   Copyright (C) 1988-2025 Free Software Foundation, Inc.
+   Copyright (C) 1988-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -495,27 +495,25 @@ static bool
 fold_const_pow (real_value *result, const real_value *arg0,
 		const real_value *arg1, const real_format *format)
 {
-  if (do_mpfr_arg2 (result, mpfr_pow, arg0, arg1, format))
-    return true;
+  if (flag_signaling_nans
+      && (REAL_VALUE_ISSIGNALING_NAN (*arg0)
+	  || REAL_VALUE_ISSIGNALING_NAN (*arg1)))
+    return false;
 
-  /* Check for an integer exponent.  */
-  REAL_VALUE_TYPE cint1;
-  HOST_WIDE_INT n1 = real_to_integer (arg1);
-  real_from_integer (&cint1, VOIDmode, n1, SIGNED);
-  /* Attempt to evaluate pow at compile-time, unless this should
-     raise an exception.  */
-  if (real_identical (arg1, &cint1)
-      && (n1 > 0
-	  || (!flag_trapping_math && !flag_errno_math)
-	  || !real_equal (arg0, &dconst0)))
+  if (do_mpfr_arg2 (result, mpfr_pow, arg0, arg1, format))
     {
-      bool inexact = real_powi (result, format, arg0, n1);
-      /* Avoid the folding if flag_signaling_nans is on.  */
-      if (flag_unsafe_math_optimizations
-	  || (!inexact
-	      && !(flag_signaling_nans
-	           && REAL_VALUE_ISSIGNALING_NAN (*arg0))))
-	return true;
+      if (flag_errno_math)
+	switch (result->cl)
+	  {
+	  case rvc_inf:
+	  case rvc_nan:
+	    return false;
+	  case rvc_zero:
+	    return arg0->cl == rvc_zero;
+	  default:
+	    break;
+	  }
+      return true;
     }
 
   return false;
@@ -788,6 +786,36 @@ fold_const_call_ss (real_value *result, combined_fn fn,
     CASE_CFN_TANH_FN:
       return do_mpfr_arg1 (result, mpfr_tanh, arg, format);
 
+#if MPFR_VERSION >= MPFR_VERSION_NUM(4, 2, 0)
+    CASE_CFN_ACOSPI:
+    CASE_CFN_ACOSPI_FN:
+      return (real_compare (GE_EXPR, arg, &dconstm1)
+	      && real_compare (LE_EXPR, arg, &dconst1)
+	      && do_mpfr_arg1 (result, mpfr_acospi, arg, format));
+
+    CASE_CFN_ASINPI:
+    CASE_CFN_ASINPI_FN:
+      return (real_compare (GE_EXPR, arg, &dconstm1)
+	      && real_compare (LE_EXPR, arg, &dconst1)
+	      && do_mpfr_arg1 (result, mpfr_asinpi, arg, format));
+
+    CASE_CFN_ATANPI:
+    CASE_CFN_ATANPI_FN:
+      return do_mpfr_arg1 (result, mpfr_atanpi, arg, format);
+
+    CASE_CFN_COSPI:
+    CASE_CFN_COSPI_FN:
+      return do_mpfr_arg1 (result, mpfr_cospi, arg, format);
+
+    CASE_CFN_SINPI:
+    CASE_CFN_SINPI_FN:
+      return do_mpfr_arg1 (result, mpfr_sinpi, arg, format);
+
+    CASE_CFN_TANPI:
+    CASE_CFN_TANPI_FN:
+      return do_mpfr_arg1 (result, mpfr_tanpi, arg, format);
+#endif
+
     CASE_CFN_ERF:
     CASE_CFN_ERF_FN:
       return do_mpfr_arg1 (result, mpfr_erf, arg, format);
@@ -1027,7 +1055,7 @@ fold_const_call_ss (wide_int *result, combined_fn fn, const wide_int_ref &arg,
 	int tmp;
 	if (wi::ne_p (arg, 0))
 	  tmp = wi::clz (arg);
-	else if (TREE_CODE (arg_type) == BITINT_TYPE)
+	else if (BITINT_TYPE_P (arg_type))
 	  tmp = TYPE_PRECISION (arg_type);
 	else if (!CLZ_DEFINED_VALUE_AT_ZERO (SCALAR_INT_TYPE_MODE (arg_type),
 					     tmp))
@@ -1042,7 +1070,7 @@ fold_const_call_ss (wide_int *result, combined_fn fn, const wide_int_ref &arg,
 	int tmp;
 	if (wi::ne_p (arg, 0))
 	  tmp = wi::ctz (arg);
-	else if (TREE_CODE (arg_type) == BITINT_TYPE)
+	else if (BITINT_TYPE_P (arg_type))
 	  tmp = TYPE_PRECISION (arg_type);
 	else if (!CTZ_DEFINED_VALUE_AT_ZERO (SCALAR_INT_TYPE_MODE (arg_type),
 					     tmp))
@@ -1066,12 +1094,14 @@ fold_const_call_ss (wide_int *result, combined_fn fn, const wide_int_ref &arg,
       *result = wi::shwi (wi::parity (arg), precision);
       return true;
 
-    case CFN_BUILT_IN_BSWAP16:
-    case CFN_BUILT_IN_BSWAP32:
-    case CFN_BUILT_IN_BSWAP64:
-    case CFN_BUILT_IN_BSWAP128:
+    CASE_CFN_BSWAP:
       *result = wi::bswap (wide_int::from (arg, precision,
 					   TYPE_SIGN (arg_type)));
+      return true;
+
+    CASE_CFN_BITREVERSE:
+      *result = wi::bitreverse (wide_int::from (arg, precision,
+						TYPE_SIGN (arg_type)));
       return true;
 
     default:
@@ -1410,6 +1440,77 @@ fold_const_fold_left (tree type, tree arg0, tree arg1, tree_code code)
   return arg0;
 }
 
+/* Fold a call to IFN_VEC_SHL_INSERT (ARG0, ARG1), returning a value
+   of type TYPE.  */
+
+static tree
+fold_const_vec_shl_insert (tree, tree arg0, tree arg1)
+{
+  if (TREE_CODE (arg0) != VECTOR_CST)
+    return NULL_TREE;
+
+  /* vec_shl_insert ( dup(CST), CST) -> dup (CST). */
+  if (tree elem = uniform_vector_p (arg0))
+    {
+      if (operand_equal_p (elem, arg1))
+	return arg0;
+    }
+
+  return NULL_TREE;
+}
+
+/* Fold a call to IFN_VEC_EXTRACT (ARG0, ARG1), returning a value
+   of type TYPE.
+
+   Right now this is only handling uniform vectors, so ARG1 is not
+   used.  But it could be easily adjusted in the future to handle
+   non-uniform vectors by extracting the relevant element.  */
+
+static tree
+fold_const_vec_extract (tree, tree arg0, tree)
+{
+  if (TREE_CODE (arg0) != VECTOR_CST)
+    return NULL_TREE;
+
+  /* vec_extract ( dup(CST), CST) -> dup (CST). */
+  if (tree elem = uniform_vector_p (arg0))
+    return elem;
+
+  return NULL_TREE;
+}
+
+/* Try to fold scalar integer IFN_SAT_ADD with operands OP0 and OP1.  */
+
+static tree
+fold_internal_fn_sat_add (tree type, tree op0, tree op1)
+{
+  if (!INTEGRAL_NB_TYPE_P (type))
+    return NULL_TREE;
+
+  if (TREE_CODE (op0) != INTEGER_CST
+      || TREE_CODE (op1) != INTEGER_CST)
+    return NULL_TREE;
+
+  wi::overflow_type overflow;
+  unsigned int prec = TYPE_PRECISION (type);
+  wide_int result = wi::add (wi::to_wide (op0), wi::to_wide (op1),
+			     TYPE_SIGN (type), &overflow);
+
+  if (overflow != wi::OVF_NONE)
+    {
+      if (TYPE_UNSIGNED (type))
+	result = wi::max_value (prec, UNSIGNED);
+      else if (overflow == wi::OVF_OVERFLOW)
+	result = wi::max_value (prec, SIGNED);
+      else if (overflow == wi::OVF_UNDERFLOW)
+	result = wi::min_value (prec, SIGNED);
+      else
+	return NULL_TREE;
+    }
+
+  return wide_int_to_tree (type, result);
+}
+
 /* Try to evaluate:
 
       *RESULT = FN (*ARG0, *ARG1)
@@ -1431,6 +1532,12 @@ fold_const_call_sss (real_value *result, combined_fn fn,
     CASE_CFN_ATAN2:
     CASE_CFN_ATAN2_FN:
       return do_mpfr_arg2 (result, mpfr_atan2, arg0, arg1, format);
+
+#if MPFR_VERSION >= MPFR_VERSION_NUM(4, 2, 0)
+    CASE_CFN_ATAN2PI:
+    CASE_CFN_ATAN2PI_FN:
+      return do_mpfr_arg2 (result, mpfr_atan2pi, arg0, arg1, format);
+#endif
 
     CASE_CFN_FDIM:
     CASE_CFN_FDIM_FN:
@@ -1804,8 +1911,28 @@ fold_const_call (combined_fn fn, tree type, tree arg0, tree arg1)
 	}
       return NULL_TREE;
 
+    case CFN_BUILT_IN_STRNLEN:
+      if ((p0 = c_getstr (arg0)))
+	{
+	  unsigned HOST_WIDE_INT s1 = 0;
+	  if (!size_t_cst_p (arg1, &s1))
+	    return NULL_TREE;
+
+	  return build_int_cst (type, strnlen (p0, s1));
+	}
+      return NULL_TREE;
+
     case CFN_FOLD_LEFT_PLUS:
       return fold_const_fold_left (type, arg0, arg1, PLUS_EXPR);
+
+    case CFN_VEC_SHL_INSERT:
+      return fold_const_vec_shl_insert (type, arg0, arg1);
+
+    case CFN_VEC_EXTRACT:
+      return fold_const_vec_extract (type, arg0, arg1);
+
+    case CFN_SAT_ADD:
+      return fold_internal_fn_sat_add (type, arg0, arg1);
 
     case CFN_UBSAN_CHECK_ADD:
     case CFN_ADD_OVERFLOW:

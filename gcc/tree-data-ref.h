@@ -1,5 +1,5 @@
 /* Data references and dependences detectors.
-   Copyright (C) 2003-2025 Free Software Foundation, Inc.
+   Copyright (C) 2003-2026 Free Software Foundation, Inc.
    Contributed by Sebastian Pop <pop@cri.ensmp.fr>
 
 This file is part of GCC.
@@ -475,7 +475,7 @@ struct data_dependence_relation
        for (int i = 0; i < n; ++i)
          a[0].f[i] += b[i].f[i];
 
-     conservatively have a distance vector of (0), but they are indepenent
+     conservatively have a distance vector of (0), but they are independent
      when a != b + i.  In contrast, the references in:
 
        struct s *a;

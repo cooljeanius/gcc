@@ -1,5 +1,5 @@
 ;; Pipeline descriptions of Andes NDS32 cpu for GNU compiler
-;; Copyright (C) 2012-2025 Free Software Foundation, Inc.
+;; Copyright (C) 2012-2026 Free Software Foundation, Inc.
 ;; Contributed by Andes Technology Corporation.
 ;;
 ;; This file is part of GCC.
@@ -31,7 +31,7 @@
 ;; IF - Instruction Fetch
 ;; II - Instruction Issue / Address Generation
 ;; EX - Instruction Execution
-;; EXD - Psuedo Stage / Load Data Completion
+;; EXD - Pseudo Stage / Load Data Completion
 
 (define_cpu_unit "e8_ii" "nds32_e8_machine")
 (define_cpu_unit "e8_ex" "nds32_e8_machine")

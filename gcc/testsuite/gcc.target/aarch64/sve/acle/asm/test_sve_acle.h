@@ -1,6 +1,13 @@
 #ifndef TEST_SVE_ACLE_H
 #define TEST_SVE_ACLE_H 1
 
+/* When compiling for e.g. C++98, we won't get the INt*_MIN macros that some
+   tests want without defining this macro.  */
+
+#ifndef __STDC_LIMIT_MACROS
+# define __STDC_LIMIT_MACROS 1
+#endif
+
 #include <arm_neon_sve_bridge.h>
 
 #if defined (TEST_OVERLOADS)
@@ -680,6 +687,24 @@
     __asm volatile ("" :: "w" (RES));				\
   }
 
+#define TEST_XN_INDEXED(NAME, TTYPE, VTYPE, CODE1, CODE2)      \
+       PROTO (NAME, TTYPE, (TTYPE t, VTYPE v)) \
+       {       \
+          register TTYPE z0 __asm ("z0");      \
+          register TTYPE z1 __asm ("z1");      \
+          register TTYPE z2 __asm ("z2");      \
+          register TTYPE z3 __asm ("z3");      \
+          register VTYPE z4 __asm ("z4");      \
+          register VTYPE z5 __asm ("z5");      \
+          register VTYPE z6 __asm ("z6");      \
+          register VTYPE z7 __asm ("z7");      \
+          register uint64_t x0 __asm ("x0");   \
+          __asm volatile ("" : "=r" (x0));				\
+          INVOKE (CODE1, CODE2);       \
+          __asm volatile ("" :: "w" (t));      \
+          return t;    \
+       }
+
 #define TEST_DUAL_XN(NAME, TTYPE1, TTYPE2, RES, CODE1, CODE2)	\
   PROTO (NAME, void, ())					\
   {								\
@@ -733,6 +758,7 @@
 #define TEST_X2_NARROW(NAME, TTYPE, ZTYPE, CODE1, CODE2)	\
   PROTO (NAME, void, ())					\
   {								\
+    register fpm_t fpm0 __asm ("x0");				\
     register TTYPE z0 __asm ("z0");				\
     register ZTYPE z5 __asm ("z5");				\
     register TTYPE z6 __asm ("z6");				\
@@ -749,6 +775,7 @@
 #define TEST_X4_NARROW(NAME, TTYPE, ZTYPE, CODE1, CODE2)	\
   PROTO (NAME, void, ())					\
   {								\
+    register fpm_t fpm0 __asm ("x0");				\
     register TTYPE z0 __asm ("z0");				\
     register TTYPE z4 __asm ("z4");				\
     register TTYPE z16 __asm ("z16");				\
@@ -767,6 +794,7 @@
 #define TEST_X2_WIDE(NAME, TTYPE, ZTYPE, CODE1, CODE2)		\
   PROTO (NAME, void, ())					\
   {								\
+    register fpm_t fpm0 __asm ("x0");				\
     register ZTYPE z0 __asm ("z0");				\
     register ZTYPE z5 __asm ("z5");				\
     register TTYPE z6 __asm ("z6");				\

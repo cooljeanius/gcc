@@ -1,5 +1,5 @@
 /* Transformations based on profile information for values.
-   Copyright (C) 2003-2025 Free Software Foundation, Inc.
+   Copyright (C) 2003-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -82,7 +82,7 @@ along with GCC; see the file COPYING3.  If not see
    compute_value_histograms() that translates the collected data to
    histograms and attaches them to the profiled statements via
    gimple_add_histogram_value().  Histograms are stored in a hash table
-   that is attached to every intrumented function, see VALUE_HISTOGRAMS
+   that is attached to every instrumented function, see VALUE_HISTOGRAMS
    in function.h.
 
    The value-profile transformations driver is the function

@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2025 Free Software Foundation, Inc.
+/* Copyright (C) 2015-2026 Free Software Foundation, Inc.
    Contributed by Alexander Monakov <amonakov@ispras.ru>
 
    This file is part of the GNU Offloading and Multi Processing Library
@@ -179,7 +179,7 @@ gomp_team_barrier_cancel (struct gomp_team *team)
   team->barrier.generation |= BAR_CANCELLED;
   gomp_mutex_unlock (&team->task_lock);
 
-  /* The 'exit' instruction cancels this thread and also fullfills any other
+  /* The 'exit' instruction cancels this thread and also fulfills any other
      CTA threads waiting on barriers.  */
   asm volatile ("exit;");
 }

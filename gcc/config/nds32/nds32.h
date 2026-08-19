@@ -1,5 +1,5 @@
 /* Definitions of target machine of Andes NDS32 cpu for GNU compiler
-   Copyright (C) 2012-2025 Free Software Foundation, Inc.
+   Copyright (C) 2012-2026 Free Software Foundation, Inc.
    Contributed by Andes Technology Corporation.
 
    This file is part of GCC.
@@ -1188,7 +1188,7 @@ enum nds32_builtins
 /* Register Classes.  */
 
 /* In nds32 target, we have three levels of registers:
-     Low cost regsiters    : $r0 ~ $r7
+     Low cost registers    : $r0 ~ $r7
      Middle cost registers : $r8 ~ $r11, $r16 ~ $r19
      High cost registers   : $r12 ~ $r14, $r20 ~ $r31
 
@@ -1689,7 +1689,7 @@ enum reg_class
 /* This is the machine mode that elements of a jump-table should have.  */
 #define CASE_VECTOR_MODE Pmode
 
-/* Return the preferred mode for and addr_diff_vec when the mininum
+/* Return the preferred mode for and addr_diff_vec when the minimum
    and maximum offset are known.  */
 #define CASE_VECTOR_SHORTEN_MODE(min_offset, max_offset, body)  \
   nds32_case_vector_shorten_mode (min_offset, max_offset, body)

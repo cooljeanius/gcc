@@ -1,5 +1,5 @@
 /* Language-dependent hooks for LTO.
-   Copyright (C) 2009-2025 Free Software Foundation, Inc.
+   Copyright (C) 2009-2026 Free Software Foundation, Inc.
    Contributed by CodeSourcery, Inc.
 
 This file is part of GCC.
@@ -841,7 +841,6 @@ lto_init_options_struct (struct gcc_options *opts)
      safe choice.  This will pessimize Fortran code with LTO unless
      people specify a complex method manually or use -ffast-math.  */
   opts->x_flag_complex_method = 2;
-  opts->x_flag_default_complex_method = opts->x_flag_complex_method;
 }
 
 /* Handle command-line option SCODE.  If the option takes an argument, it is
@@ -933,7 +932,7 @@ lto_post_options (const char **pfilename ATTRIBUTE_UNUSED)
       break;
 
     case LTO_LINKER_OUTPUT_DYN: /* .so: PID library */
-      /* On some targets, like i386 it makes sense to build PIC library wihout
+      /* On some targets, like i386 it makes sense to build PIC library without
 	 -fpic for performance reasons.  So no need to adjust flags.  */
       break;
 
@@ -960,7 +959,7 @@ lto_post_options (const char **pfilename ATTRIBUTE_UNUSED)
   if (flag_excess_precision == EXCESS_PRECISION_DEFAULT)
     flag_excess_precision = EXCESS_PRECISION_FAST;
 
-  /* When partitioning, we can tear appart STRING_CSTs uses from the same
+  /* When partitioning, we can tear apart STRING_CSTs uses from the same
      TU into multiple partitions.  Without constant merging the constants
      might not be equal at runtime.  See PR50199.  */
   if (!flag_merge_constants)

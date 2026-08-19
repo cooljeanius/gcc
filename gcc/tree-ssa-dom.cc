@@ -1,5 +1,5 @@
 /* SSA Dominator optimizations for trees
-   Copyright (C) 2001-2025 Free Software Foundation, Inc.
+   Copyright (C) 2001-2026 Free Software Foundation, Inc.
    Contributed by Diego Novillo <dnovillo@redhat.com>
 
 This file is part of GCC.
@@ -42,7 +42,6 @@ along with GCC; see the file COPYING3.  If not see
 #include "tree-ssa-scopedtables.h"
 #include "tree-ssa-threadedge.h"
 #include "tree-ssa-dom.h"
-#include "gimplify.h"
 #include "tree-cfgcleanup.h"
 #include "dbgcnt.h"
 #include "alloc-pool.h"
@@ -524,6 +523,11 @@ record_edge_info (basic_block bb)
 	    {
 	      int i;
               int n_labels = gimple_switch_num_labels (switch_stmt);
+	      /* info contains NULL, error_mark_node or a value.
+		 error_mark signifies there are multiple values already.
+		 A NULL signifies there it is uninitialized.
+		 A value signifies that is the only value on that edge
+		 to that bb.  */
 	      tree *info = XCNEWVEC (tree, last_basic_block_for_fn (cfun));
 
 	      for (i = 0; i < n_labels; i++)
@@ -531,23 +535,27 @@ record_edge_info (basic_block bb)
 		  tree label = gimple_switch_label (switch_stmt, i);
 		  basic_block target_bb
 		    = label_to_block (cfun, CASE_LABEL (label));
+		  /* The default case is a case with multiple values.
+		     If the value is already set then it has multiple values.  */
 		  if (CASE_HIGH (label)
 		      || !CASE_LOW (label)
 		      || info[target_bb->index])
 		    info[target_bb->index] = error_mark_node;
 		  else
-		    info[target_bb->index] = label;
+		    /* Record the one value that can be on that edge to the
+		       target_bb.  */
+		    info[target_bb->index] = CASE_LOW (label);
 		}
 
 	      FOR_EACH_EDGE (e, ei, bb->succs)
 		{
 		  basic_block target_bb = e->dest;
-		  tree label = info[target_bb->index];
+		  tree value = info[target_bb->index];
 
-		  if (label != NULL && label != error_mark_node)
+		  if (value != NULL && value != error_mark_node)
 		    {
 		      tree x = fold_convert_loc (loc, TREE_TYPE (index),
-						 CASE_LOW (label));
+						 value);
 		      edge_info = new class edge_info (e);
 		      edge_info->record_simple_equiv (index, x);
 		    }
@@ -817,7 +825,7 @@ private:
   gcond *m_dummy_cond;
 
   /* Optimize a single statement within a basic block using the
-     various tables mantained by DOM.  Returns the taken edge if
+     various tables maintained by DOM.  Returns the taken edge if
      the statement is a conditional with a statically determined
      value.  */
   edge optimize_stmt (basic_block, gimple_stmt_iterator *, bool *);
@@ -1030,7 +1038,7 @@ pass_dominator::execute (function *fun)
   /* Fixup stmts that became noreturn calls.  This may require splitting
      blocks and thus isn't possible during the dominator walk or before
      jump threading finished.  Do this in reverse order so we don't
-     inadvertedly remove a stmt we want to fixup by visiting a dominating
+     inadvertently remove a stmt we want to fixup by visiting a dominating
      now noreturn call first.  */
   while (!need_noreturn_fixup.is_empty ())
     {
@@ -1429,6 +1437,12 @@ dom_opt_dom_walker::set_global_ranges_from_unreachable_edges (basic_block bb)
       || !assert_unreachable_fallthru_edge_p (pred_e))
     return;
 
+  // Bail if the condition leading to the unreachable edge has 2 ssa-names.
+  // See PR 125501.
+  if ((TREE_CODE (gimple_cond_lhs (stmt)) == SSA_NAME
+      && TREE_CODE (gimple_cond_rhs (stmt)) == SSA_NAME))
+    return;
+
   tree name;
   FOR_EACH_GORI_EXPORT_NAME (m_ranger->gori_ssa (), pred_e->src, name)
     if (all_uses_feed_or_dominated_by_stmt (name, stmt)
@@ -1787,7 +1801,8 @@ dom_opt_dom_walker::before_dom_children (basic_block bb)
 void
 dom_opt_dom_walker::after_dom_children (basic_block bb)
 {
-  m_threader->thread_outgoing_edges (bb);
+  if (param_dom_jump_threading)
+    m_threader->thread_outgoing_edges (bb);
   bitmap_clear_bit (m_state->get_blocks_on_stack (), bb->index);
   m_avail_exprs_stack->pop_to_marker ();
   m_const_and_copies->pop_to_marker ();
@@ -2040,11 +2055,6 @@ cprop_operand (gimple *stmt, use_operand_p op_p, range_query *query)
 
   if (val && val != op)
     {
-      /* Do not replace hard register operands in asm statements.  */
-      if (gimple_code (stmt) == GIMPLE_ASM
-	  && !may_propagate_copy_into_asm (op))
-	return;
-
       /* Certain operands are not allowed to be copy propagated due
 	 to their interaction with exception handling and some GCC
 	 extensions.  */

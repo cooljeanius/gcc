@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2025 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -17,6 +17,7 @@
 // <http://www.gnu.org/licenses/>.
 
 #include "rust-compile-implitem.h"
+#include "rust-rib.h"
 
 namespace Rust {
 namespace Compile {
@@ -27,22 +28,11 @@ CompileTraitItem::visit (HIR::TraitItemConst &constant)
   rust_assert (concrete != nullptr);
   TyTy::BaseType *resolved_type = concrete;
 
-  tl::optional<Resolver::CanonicalPath> canonical_path;
-  if (flag_name_resolution_2_0)
-    {
-      auto &nr_ctx
-	= Resolver2_0::ImmutableNameResolutionContext::get ().resolver ();
+  auto &nr_ctx = Resolver2_0::FinalizedNameResolutionContext::get ();
 
-      canonical_path = nr_ctx.values.to_canonical_path (
-	constant.get_mappings ().get_nodeid ());
-    }
-  else
-    {
-      canonical_path = ctx->get_mappings ().lookup_canonical_path (
-	constant.get_mappings ().get_nodeid ());
-    }
-
-  rust_assert (canonical_path);
+  Resolver::CanonicalPath canonical_path
+    = nr_ctx.to_canonical_path (constant.get_mappings ().get_nodeid (),
+				Resolver2_0::Namespace::Values);
 
   HIR::Expr &const_value_expr = constant.get_expr ();
   TyTy::BaseType *expr_type = nullptr;
@@ -52,11 +42,15 @@ CompileTraitItem::visit (HIR::TraitItemConst &constant)
 
   tree const_expr
     = compile_constant_item (constant.get_mappings ().get_hirid (), expr_type,
-			     resolved_type, *canonical_path, const_value_expr,
+			     resolved_type, canonical_path, const_value_expr,
 			     constant.get_locus (),
 			     const_value_expr.get_locus ());
-  ctx->push_const (const_expr);
-  ctx->insert_const_decl (constant.get_mappings ().get_hirid (), const_expr);
+  if (const_expr != error_mark_node)
+    {
+      ctx->push_const (const_expr);
+      ctx->insert_const_decl (constant.get_mappings ().get_hirid (),
+			      const_expr);
+    }
 
   reference = const_expr;
 }
@@ -96,32 +90,21 @@ CompileTraitItem::visit (HIR::TraitItemFunc &func)
       fntype->override_context ();
     }
 
-  tl::optional<Resolver::CanonicalPath> canonical_path;
-  if (flag_name_resolution_2_0)
-    {
-      auto &nr_ctx
-	= Resolver2_0::ImmutableNameResolutionContext::get ().resolver ();
+  auto &nr_ctx = Resolver2_0::FinalizedNameResolutionContext::get ();
 
-      canonical_path
-	= nr_ctx.values.to_canonical_path (func.get_mappings ().get_nodeid ());
-    }
-  else
-    {
-      canonical_path = ctx->get_mappings ().lookup_canonical_path (
-	func.get_mappings ().get_nodeid ());
-    }
-
-  rust_assert (canonical_path);
+  Resolver::CanonicalPath canonical_path
+    = nr_ctx.to_canonical_path (func.get_mappings ().get_nodeid (),
+				Resolver2_0::Namespace::Values);
 
   // FIXME: How do we get the proper visibility here?
-  auto vis = HIR::Visibility (HIR::Visibility::VisType::PUBLIC);
+  auto vis = HIR::Visibility (HIR::Visibility::VisType::Public);
   HIR::TraitFunctionDecl &function = func.get_decl ();
   tree fndecl
-    = compile_function (function.get_function_name ().as_string (),
+    = compile_function (false, function.get_function_name ().as_string (),
 			function.get_self (), function.get_function_params (),
 			function.get_qualifiers (), vis,
 			func.get_outer_attrs (), func.get_locus (),
-			&func.get_block_expr (), *canonical_path, fntype);
+			&func.get_block_expr (), canonical_path, fntype);
   reference = address_expression (fndecl, ref_locus);
 }
 

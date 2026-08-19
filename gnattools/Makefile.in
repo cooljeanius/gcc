@@ -33,15 +33,14 @@ INSTALL_PROGRAM = @INSTALL_PROGRAM@
 # Nonstandard autoconf-set variables.
 LN_S=@LN_S@
 target_noncanonical=@target_noncanonical@
-host_noncanonical=@host_noncanonical@
+GNATMAKE=@GNATMAKE@
+GNATBIND=@GNATBIND@
 
 # Variables for the user (or the top level) to override.
 exeext = @EXEEXT@
 objext=.o
 TRACE=no
-ADA_FOR_BUILD=
-ADA_FOR_TARGET=
-LDFLAGS=
+LDFLAGS= @LDFLAGS@
 PWD_COMMAND = $${PWDCMD-pwd}
 
 # The tedious process of getting CFLAGS right.
@@ -115,17 +114,11 @@ TOOLS_FLAGS_TO_PASS_RE= \
 	"TOOLSCASE=cross"
 
 # Variables for gnattools, cross
-ifeq ($(build), $(host))
-  GNATMAKE_FOR_HOST=gnatmake
-  GNATLINK_FOR_HOST=gnatlink
-  GNATBIND_FOR_HOST=gnatbind
-  GNATLS_FOR_HOST=gnatls
-else
-  GNATMAKE_FOR_HOST=$(host_noncanonical)-gnatmake
-  GNATLINK_FOR_HOST=$(host_noncanonical)-gnatlink
-  GNATBIND_FOR_HOST=$(host_noncanonical)-gnatbind
-  GNATLS_FOR_HOST=$(host_noncanonical)-gnatls
-endif
+# See configure.ac for what "cross" means here.
+GNATMAKE_FOR_HOST = $(GNATMAKE)
+GNATBIND_FOR_HOST = $(GNATBIND)
+GNATLINK_FOR_HOST = $(subst gnatmake,gnatlink,$(GNATMAKE))
+GNATLS_FOR_HOST   = $(subst gnatmake,gnatls,$(GNATMAKE))
 
 # Put the host RTS dir first in the PATH to hide the default runtime
 # files that are among the sources
@@ -134,8 +127,8 @@ RTS_DIR:=$(strip $(subst \,/,$(shell $(GNATLS_FOR_HOST) -v | grep adalib )))
 TOOLS_FLAGS_TO_PASS_CROSS= \
 	"CC=$(CC)" \
 	"CXX=$(CXX)" \
-	"CFLAGS=$(CFLAGS) $(WARN_CFLAGS)" \
-	"LDFLAGS=$(LDFLAGS)" \
+	"CFLAGS=$(CFLAGS) $(WARN_CFLAGS) $(PICFLAG)" \
+	"LDFLAGS=$(LDFLAGS) $(LD_PICFLAG)" \
 	"ADAFLAGS=$(ADAFLAGS)"	\
 	"ADA_CFLAGS=$(ADA_CFLAGS)" \
 	"INCLUDES=$(INCLUDES_FOR_SUBDIR)" \

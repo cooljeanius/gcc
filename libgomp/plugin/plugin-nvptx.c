@@ -1,6 +1,6 @@
 /* Plugin for NVPTX execution.
 
-   Copyright (C) 2013-2025 Free Software Foundation, Inc.
+   Copyright (C) 2013-2026 Free Software Foundation, Inc.
 
    Contributed by Mentor Embedded.
 
@@ -59,6 +59,14 @@
 #include <assert.h>
 #include <errno.h>
 #include <stdlib.h>
+
+/* Create hash-table for declare target's indirect clause on the host;
+   see build-target-indirect-htab.h for details.  */
+#define USE_HASHTAB_LOOKUP_FOR_INDIRECT
+#ifdef USE_HASHTAB_LOOKUP_FOR_INDIRECT
+static void* create_target_indirect_map (size_t *, size_t,
+					 uint64_t *, uint64_t *);
+#endif
 
 /* An arbitrary fixed limit (128MB) for the size of the OpenMP soft stacks
    block to cache between kernel invocations.  For soft-stacks blocks bigger
@@ -320,6 +328,7 @@ struct ptx_device
   int warp_size;
   int max_threads_per_block;
   int max_threads_per_multiprocessor;
+  int numa_node;
   int default_dims[GOMP_DIM_MAX];
 
   /* Length as used by the CUDA Runtime API ('struct cudaDeviceProp').  */
@@ -344,6 +353,8 @@ struct ptx_device
 };
 
 static struct ptx_device **ptx_devices;
+
+static int using_usm = -1;
 
 /* "Native" GPU thread stack size.  */
 static unsigned native_gpu_thread_stack_size = 0;
@@ -549,6 +560,8 @@ nvptx_open_device (int n)
   r = CUDA_CALL_NOCHECK (cuDeviceGetAttribute, &pi,
 			 CU_DEVICE_ATTRIBUTE_UNIFIED_ADDRESSING, dev);
   assert (r == CUDA_SUCCESS && pi);
+
+  ptx_dev->numa_node = 0;
 
   for (int i = 0; i != GOMP_DIM_MAX; i++)
     ptx_dev->default_dims[i] = 0;
@@ -816,6 +829,33 @@ link_ptx (CUmodule *module, const struct targ_ptx_obj *ptx_objs,
   CUDA_CALL (cuModuleLoadData, module, linkout);
   CUDA_CALL (cuLinkDestroy, linkstate);
   return true;
+}
+
+/* The NVPTX plugin can't make much use of this abstraction, so it has the bare
+   minimum possible.  */
+struct gomp_offload_session
+{
+  int device;
+  void **target_var_table;
+};
+GOMP_OFFLOAD_session_boilerplate();
+
+void
+GOMP_OFFLOAD_session_start (struct gomp_offload_session *session, int device)
+{
+  assert ((((uintptr_t) session) % __BIGGEST_ALIGNMENT__) == 0);
+  *session = (struct gomp_offload_session) {
+    .device = device,
+    .target_var_table = NULL,
+  };
+}
+
+void
+GOMP_OFFLOAD_session_set_target_var_table (struct gomp_offload_session *session,
+					   void **table)
+{
+  assert (!session->target_var_table);
+  session->target_var_table = table;
 }
 
 static void
@@ -1125,11 +1165,13 @@ nvptx_stacks_free (struct ptx_device *ptx_dev, bool force)
 }
 
 static void *
-nvptx_alloc (size_t s, bool suppress_errors)
+nvptx_alloc (size_t s, bool suppress_errors, bool managed)
 {
   CUdeviceptr d;
 
-  CUresult r = CUDA_CALL_NOCHECK (cuMemAlloc, &d, s);
+  CUresult r = (managed ? CUDA_CALL_NOCHECK (cuMemAllocManaged, &d, s,
+					     CU_MEM_ATTACH_GLOBAL)
+		: CUDA_CALL_NOCHECK (cuMemAlloc, &d, s));
   if (suppress_errors && r == CUDA_ERROR_OUT_OF_MEMORY)
     return NULL;
   else if (r != CUDA_SUCCESS)
@@ -1238,6 +1280,24 @@ nvptx_get_current_cuda_context (void)
   return nvthd->ptx_dev->ctx;
 }
 
+#if 0  /* TODO: Use to enable self-mapping/USM automatically.  */
+/* FIXME: The auto-self-map feature depends on still mapping 'declare target'
+   variables, even if ignoring all other mappings. Cf. PR 115279.  */
+
+/* Return TRUE if the GPU is integrated with host memory, i.e. GPU and
+   host share the same memory controller.  As of Oct 2025, no such
+   Nvidia GPU seems to exist.  */
+static bool
+is_integrated_apu (struct ptx_device *ptx_dev)
+{
+  int pi;
+  CUresult r;
+  r = CUDA_CALL_NOCHECK (cuDeviceGetAttribute, &pi,
+			 CU_DEVICE_ATTRIBUTE_INTEGRATED, ptx_dev->dev);
+  return (r == CUDA_SUCCESS && pi == 1);
+}
+#endif
+
 /* Plugin entry points.  */
 
 const char *
@@ -1247,7 +1307,7 @@ GOMP_OFFLOAD_get_name (void)
 }
 
 /* Return the UID; if not available return NULL.
-   Returns freshly allocated memoy.  */
+   Returns freshly allocated memory.  */
 
 const char *
 GOMP_OFFLOAD_get_uid (int ord)
@@ -1283,10 +1343,147 @@ GOMP_OFFLOAD_get_uid (int ord)
   return str;
 }
 
+/* Return the NUMA node of the GPU identified by ORD; returns -1 when
+   an error occurred; this value might also be returned if on
+   virtualized systems.
+   The implementation assumes that the Linux /sys is available.  */
+
+int
+GOMP_OFFLOAD_get_numa_node (int ord)
+{
+  CUresult r = CUDA_ERROR_NOT_FOUND;
+  char bus_id[14] = {};
+  struct ptx_device *dev = ptx_devices[ord];
+
+  /* Initialized to 0; to distinguish, save with offset.  */
+  if (dev->numa_node != 0)
+    return dev->numa_node > 0 ? dev->numa_node - 1 : dev->numa_node;
+
+  dev->numa_node = -1;
+
+  if (CUDA_CALL_EXISTS (cuDeviceGetPCIBusId))
+    r = CUDA_CALL_NOCHECK (cuDeviceGetPCIBusId, bus_id, sizeof (bus_id)-1,
+			   dev->dev);
+  if (bus_id[0] == '\0' || r != CUDA_SUCCESS)
+    return -1;
+
+  constexpr int len = (sizeof("/sys/bus/pci/devices//numa_node")
+		       + sizeof (bus_id));
+  char filename[len];
+  if (len < snprintf (filename, sizeof (filename),
+		     "/sys/bus/pci/devices/%s/numa_node", bus_id))
+    return -1;
+
+  FILE *in = fopen (filename, "r");
+  if (!in)
+    return -1;
+  int numa_node = -1;
+  fscanf (in, "%d", &numa_node);
+  fclose (in);
+
+  dev->numa_node = numa_node >= 0 ? numa_node + 1 : numa_node;
+  return numa_node;
+}
+
+/* Number of teams supported (by dimension) as reported by OpenMP.
+   For dim < 0 (invalid) and for dim > supported dims, return 1. */
+
+int
+GOMP_OFFLOAD_supported_teams_dim (int ord, int dim)
+{
+  if (dim > 0 /* max supported dims */ || dim < 0)
+    return 1;
+
+  struct ptx_device *ptx_dev = ptx_devices[ord];
+
+  /* Keep in sync with nvptx_adjust_launch_bounds; assume 1 for the
+     following as upper bound.  */
+  int num_threads = 1, regs_per_thread = 1;
+
+  int regs_per_block = regs_per_thread * 32 * num_threads;
+
+  int max_blocks = ptx_dev->regs_per_sm / regs_per_block * ptx_dev->num_sms;
+  /* This is an estimate of how many blocks the device can host simultaneously.
+     Actual limit, which may be lower, can be queried with "occupancy control"
+     driver interface (since CUDA 6.0).  */
+  return max_blocks;
+}
+
+/* Number of threads supported (by dimension) as reported by OpenMP.
+   For dim < 0 (invalid) and for dim > supported dims, return 1. */
+
+int
+GOMP_OFFLOAD_supported_threads_dim (int ord, int dim)
+{
+  if (dim > 0 /* max supported dims */ || dim < 0)
+    return 1;
+
+  /* Keep in sync with nvptx_adjust_launch_bounds.  */
+  struct ptx_device *ptx_dev = ptx_devices[ord];
+
+  int max_warps_block = ptx_dev->max_threads_per_block / 32;
+  /* Maximum 32 warps per block is an implementation limit in NVPTX backend
+     and libgcc, which matches documented limit of all GPUs as of 2015.  */
+
+  return max_warps_block;
+}
+
 unsigned int
 GOMP_OFFLOAD_get_caps (void)
 {
-  return GOMP_OFFLOAD_CAP_OPENACC_200 | GOMP_OFFLOAD_CAP_OPENMP_400;
+  /* For unified-shared address: see comment in
+     nvptx_open_device for CU_DEVICE_ATTRIBUTE_UNIFIED_ADDRESSING.  */
+
+  return (GOMP_OFFLOAD_CAP_OPENMP_400 | GOMP_OFFLOAD_CAP_OPENACC_200
+	  | GOMP_OFFLOAD_CAP_UNIFIED_ADDR | GOMP_OFFLOAD_CAP_REV_OFFLOAD);
+}
+
+/* Return any additional capabilities that are specific to the specified
+   device.  Currently returns:
+   * GOMP_OFFLOAD_CAP_SHARED_MEM
+       when USM is supported
+   * GOMP_OFFLOAD_CAP_APU_SHARED_MEM
+       when USM is supported and CPU and GPU are integrated using the
+       same memory controller. As of July 2026 no such Nvidia GPU seems
+       to exist.  */
+
+unsigned int
+GOMP_OFFLOAD_get_dev_caps (int n)
+{
+  unsigned int caps = 0;
+
+  /* Check for USM.  */
+
+  int pi;
+  CUresult r;
+  r = CUDA_CALL_NOCHECK (cuDeviceGetAttribute, &pi,
+			 CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS,
+			 n);
+  if (r != CUDA_SUCCESS)
+    return 0;
+
+  if (pi)
+    {
+      caps |= GOMP_OFFLOAD_CAP_SHARED_MEM;
+      if (using_usm == -1)
+	using_usm = true;
+    }
+  else
+    using_usm = false;
+
+#if 0
+  int pi;
+  CUresult r;
+  r = CUDA_CALL_NOCHECK (cuDeviceGetAttribute, &pi,
+			 CU_DEVICE_ATTRIBUTE_INTEGRATED, n);
+  if (r == CUDA_SUCCESS && pi != 0)
+    {
+      caps |= GOMP_OFFLOAD_CAP_SHARED_MEM;
+      caps |= GOMP_OFFLOAD_CAP_APU_SHARED_MEM;
+    }
+#endif
+
+  return caps;
 }
 
 int
@@ -1296,35 +1493,9 @@ GOMP_OFFLOAD_get_type (void)
 }
 
 int
-GOMP_OFFLOAD_get_num_devices (unsigned int omp_requires_mask)
+GOMP_OFFLOAD_get_num_devices ()
 {
-  int num_devices = nvptx_get_num_devices ();
-  /* Return -1 if no omp_requires_mask cannot be fulfilled but
-     devices were present.  Unified-shared address: see comment in
-     nvptx_open_device for CU_DEVICE_ATTRIBUTE_UNIFIED_ADDRESSING.  */
-  if (num_devices > 0
-      && ((omp_requires_mask
-	   & ~(GOMP_REQUIRES_UNIFIED_ADDRESS
-	       | GOMP_REQUIRES_SELF_MAPS
-	       | GOMP_REQUIRES_UNIFIED_SHARED_MEMORY
-	       | GOMP_REQUIRES_REVERSE_OFFLOAD)) != 0))
-    return -1;
-  /* Check whether host page access (direct or via migration) is supported;
-     if so, enable USM.  Currently, capabilities is per device type, hence,
-     check all devices.  */
-  if (num_devices > 0
-      && (omp_requires_mask
-	  & (GOMP_REQUIRES_UNIFIED_SHARED_MEMORY | GOMP_REQUIRES_SELF_MAPS)))
-    for (int dev = 0; dev < num_devices; dev++)
-      {
-	int pi;
-	CUresult r;
-	r = CUDA_CALL_NOCHECK (cuDeviceGetAttribute, &pi,
-			       CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS, dev);
-	if (r != CUDA_SUCCESS || pi == 0)
-	  return -1;
-      }
-  return num_devices;
+  return nvptx_get_num_devices ();
 }
 
 bool
@@ -1626,39 +1797,71 @@ GOMP_OFFLOAD_load_image (int ord, unsigned version, const void *target_data,
       if (r != CUDA_SUCCESS)
 	GOMP_PLUGIN_fatal ("cuMemcpyDtoH error: %s", cuda_error (r));
 
-      /* Build host->target address map for indirect functions.  */
-      uint64_t ind_fn_map[ind_fn_entries * 2 + 1];
-      for (unsigned k = 0; k < ind_fn_entries; k++)
-	{
-	  ind_fn_map[k * 2] = host_ind_fn_table[k];
-	  ind_fn_map[k * 2 + 1] = ind_fn_table[k];
-	  GOMP_PLUGIN_debug (0, "Indirect function %d: %lx->%lx\n",
-			     k, host_ind_fn_table[k], ind_fn_table[k]);
-	}
-      ind_fn_map[ind_fn_entries * 2] = 0;
+      /* For newer binaries, the hash table for 'indirect' is created on the
+	 host. Older binaries don't have GOMP_INDIRECT_ADDR_HMAP on the
+	 device side - and have to create the table themselves using
+	 GOMP_INDIRECT_ADDR_MAP.  */
 
-      /* Write the map onto the target.  */
-      void *map_target_addr
-	= GOMP_OFFLOAD_alloc (ord, sizeof (ind_fn_map));
-      GOMP_PLUGIN_debug (0, "Allocated indirect map at %p\n", map_target_addr);
-
-      GOMP_OFFLOAD_host2dev (ord, map_target_addr,
-			     (void*) ind_fn_map,
-			     sizeof (ind_fn_map));
-
-      /* Write address of the map onto the target.  */
       CUdeviceptr varptr;
       size_t varsize;
+      bool host_init_htab = true;
+      #ifdef USE_HASHTAB_LOOKUP_FOR_INDIRECT
       r = CUDA_CALL_NOCHECK (cuModuleGetGlobal, &varptr, &varsize,
-			     module, XSTRING (GOMP_INDIRECT_ADDR_MAP));
+			     module, XSTRING (GOMP_INDIRECT_ADDR_HMAP));
+      if (r != CUDA_SUCCESS)
+      #endif
+	{
+	  host_init_htab = false;
+	  r = CUDA_CALL_NOCHECK (cuModuleGetGlobal, &varptr, &varsize,
+				 module, XSTRING (GOMP_INDIRECT_ADDR_MAP));
+	}
       if (r != CUDA_SUCCESS)
 	GOMP_PLUGIN_fatal ("Indirect map variable not found in image: %s",
 			   cuda_error (r));
-
       GOMP_PLUGIN_debug (0,
-			 "Indirect map variable found at %llx with size %ld\n",
+			 "%s-style indirect map variable found at %llx with "
+			 "size %ld\n", host_init_htab ? "New" : "Old",
 			 varptr, varsize);
 
+      void *map_target_addr;
+      if (!host_init_htab)
+	{
+	  /* Build host->target address map for indirect functions.  */
+	  uint64_t ind_fn_map[ind_fn_entries * 2 + 1];
+	  for (unsigned k = 0; k < ind_fn_entries; k++)
+	    {
+	      ind_fn_map[k * 2] = host_ind_fn_table[k];
+	      ind_fn_map[k * 2 + 1] = ind_fn_table[k];
+	      GOMP_PLUGIN_debug (0, "Indirect function %d: %lx->%lx\n",
+				 k, host_ind_fn_table[k], ind_fn_table[k]);
+	    }
+	  ind_fn_map[ind_fn_entries * 2] = 0;
+	  /* Write the map onto the target.  */
+	  map_target_addr = GOMP_OFFLOAD_alloc (ord, sizeof (ind_fn_map));
+	  GOMP_OFFLOAD_host2dev (ord, map_target_addr,
+				 (void *) ind_fn_map, sizeof (ind_fn_map));
+	}
+      #ifdef USE_HASHTAB_LOOKUP_FOR_INDIRECT
+      else
+	{
+	  /* FIXME: Handle multi-kernel load and unload, cf. PR 114690.  */
+	  size_t host_map_size;
+	  void *host_map;
+	  host_map = create_target_indirect_map (&host_map_size, ind_fn_entries,
+						 host_ind_fn_table,
+						 ind_fn_table);
+	  for (unsigned k = 0; k < ind_fn_entries; k++)
+	    GOMP_PLUGIN_debug (0, "Indirect function %d: %lx->%lx\n",
+			       k, host_ind_fn_table[k], ind_fn_table[k]);
+	  /* Write the map onto the target.  */
+	  map_target_addr = GOMP_OFFLOAD_alloc (ord, host_map_size);
+	  GOMP_OFFLOAD_host2dev (ord, map_target_addr, host_map, host_map_size);
+	}
+      #endif
+
+      GOMP_PLUGIN_debug (0, "Allocated indirect map at %p\n", map_target_addr);
+
+      /* Write address of the map onto the target.  */
       GOMP_OFFLOAD_host2dev (ord, (void *) varptr, &map_target_addr,
 			     sizeof (map_target_addr));
     }
@@ -1785,8 +1988,8 @@ GOMP_OFFLOAD_unload_image (int ord, unsigned version, const void *target_data)
   return ret;
 }
 
-void *
-GOMP_OFFLOAD_alloc (int ord, size_t size)
+static void *
+cleanup_and_alloc (int ord, size_t size, bool managed)
 {
   if (!nvptx_attach_host_thread_to_device (ord))
     return NULL;
@@ -1809,7 +2012,7 @@ GOMP_OFFLOAD_alloc (int ord, size_t size)
       blocks = tmp;
     }
 
-  void *d = nvptx_alloc (size, true);
+  void *d = nvptx_alloc (size, true, managed);
   if (d)
     return d;
   else
@@ -1817,8 +2020,20 @@ GOMP_OFFLOAD_alloc (int ord, size_t size)
       /* Memory allocation failed.  Try freeing the stacks block, and
 	 retrying.  */
       nvptx_stacks_free (ptx_dev, true);
-      return nvptx_alloc (size, false);
+      return nvptx_alloc (size, false, managed);
     }
+}
+
+void *
+GOMP_OFFLOAD_alloc (int ord, size_t size)
+{
+  return cleanup_and_alloc (ord, size, false);
+}
+
+void *
+GOMP_OFFLOAD_managed_alloc (int ord, size_t size)
+{
+  return cleanup_and_alloc (ord, size, true);
 }
 
 bool
@@ -1828,16 +2043,100 @@ GOMP_OFFLOAD_free (int ord, void *ptr)
 	  && nvptx_free (ptr, ptx_devices[ord]));
 }
 
+bool
+GOMP_OFFLOAD_managed_free (int ord, void *ptr)
+{
+  return GOMP_OFFLOAD_free (ord, ptr);
+}
+
+int
+GOMP_OFFLOAD_is_accessible_ptr (int ord,
+				const void *ptr, size_t size)
+{
+  struct ptx_device *ptx_dev = ptx_devices[ord];
+
+  /* USM implies access.  */
+  if (using_usm > 0)
+    return 1;
+
+  CUcontext old_ctx;
+  CUDA_CALL_ERET (false, cuCtxPushCurrent, ptx_dev->ctx);
+
+  /* The Cuda API does not permit testing a whole range, so we test each
+     4K page within the range.  If any page is inaccessible return false.  */
+  const void *p = ptr;
+  int result = 1;  /* All pages accessible.  */
+  do
+    {
+      CUmemorytype mem_type;
+      CUresult res = CUDA_CALL_NOCHECK (cuPointerGetAttribute, &mem_type,
+					CU_POINTER_ATTRIBUTE_MEMORY_TYPE,
+					(CUdeviceptr)p);
+      if (res != CUDA_SUCCESS)
+	/* Memory is not registered, and therefore not accessible.  */
+	result = 0;
+
+      switch (mem_type)
+	{
+	case CU_MEMORYTYPE_HOST:
+	case CU_MEMORYTYPE_UNIFIED:
+	case CU_MEMORYTYPE_DEVICE:
+	  break;
+	case CU_MEMORYTYPE_ARRAY:
+	default:
+	  result = 0;  /* This page isn't accessible.  */
+	}
+
+      p = (void*)(((uintptr_t)p + 4096) & ~0xfffUL);
+    } while (result && p < ptr + size);
+
+  CUDA_CALL_ASSERT (cuCtxPopCurrent, &old_ctx);
+  return result;
+}
+
+bool
+GOMP_OFFLOAD_page_locked_host_alloc (void **ptr, size_t size)
+{
+  if (size == 0)
+    {
+      /* Special case to ensure omp_alloc specification compliance.  */
+      *ptr = NULL;
+      return true;
+    }
+
+  CUresult r;
+
+  unsigned int flags = 0;
+  /* Given 'CU_DEVICE_ATTRIBUTE_UNIFIED_ADDRESSING', we don't need
+     'flags |= CU_MEMHOSTALLOC_PORTABLE;' here.  */
+  r = CUDA_CALL_NOCHECK (cuMemHostAlloc, ptr, size, flags);
+  if (r == CUDA_ERROR_OUT_OF_MEMORY)
+    *ptr = NULL;
+  else if (r != CUDA_SUCCESS)
+    {
+      GOMP_PLUGIN_error ("cuMemHostAlloc error: %s", cuda_error (r));
+      return false;
+    }
+  return true;
+}
+
+bool
+GOMP_OFFLOAD_page_locked_host_free (void *ptr)
+{
+  CUDA_CALL (cuMemFreeHost, ptr);
+  return true;
+}
+
 void
-GOMP_OFFLOAD_openacc_exec (void (*fn) (void *),
+GOMP_OFFLOAD_openacc_exec (struct gomp_offload_session *session,
+			   void (*fn) (void *),
 			   size_t mapnum  __attribute__((unused)),
 			   void **hostaddrs __attribute__((unused)),
-			   void **devaddrs,
 			   unsigned *dims, void *targ_mem_desc)
 {
   GOMP_PLUGIN_debug (0, "nvptx %s\n", __FUNCTION__);
 
-  CUdeviceptr dp = (CUdeviceptr) devaddrs;
+  CUdeviceptr dp = (CUdeviceptr) session->target_var_table;
   nvptx_exec (fn, dims, targ_mem_desc, dp, NULL);
 
   CUresult r = CUDA_CALL_NOCHECK (cuStreamSynchronize, NULL);
@@ -1850,16 +2149,16 @@ GOMP_OFFLOAD_openacc_exec (void (*fn) (void *),
 }
 
 void
-GOMP_OFFLOAD_openacc_async_exec (void (*fn) (void *),
+GOMP_OFFLOAD_openacc_async_exec (struct gomp_offload_session *session,
+				 void (*fn) (void *),
 				 size_t mapnum __attribute__((unused)),
 				 void **hostaddrs __attribute__((unused)),
-				 void **devaddrs,
 				 unsigned *dims, void *targ_mem_desc,
 				 struct goacc_asyncqueue *aq)
 {
   GOMP_PLUGIN_debug (0, "nvptx %s\n", __FUNCTION__);
 
-  CUdeviceptr dp = (CUdeviceptr) devaddrs;
+  CUdeviceptr dp = (CUdeviceptr) session->target_var_table;
   nvptx_exec (fn, dims, targ_mem_desc, dp, aq->cuda_stream);
 }
 
@@ -2019,6 +2318,34 @@ GOMP_OFFLOAD_openacc_async_queue_callback (struct goacc_asyncqueue *aq,
 }
 
 static bool
+cuda_memcpy_dev_sanity_check (const void *d1, const void *d2, size_t s)
+{
+  CUdeviceptr pb1, pb2;
+  size_t ps1, ps2;
+  if (!s)
+    return true;
+  if (!d1 || !d2)
+    {
+      GOMP_PLUGIN_error ("invalid device address");
+      return false;
+    }
+  CUDA_CALL (cuMemGetAddressRange, &pb1, &ps1, (CUdeviceptr) d1);
+  CUDA_CALL (cuMemGetAddressRange, &pb2, &ps2, (CUdeviceptr) d2);
+  if (!pb1 || !pb2)
+    {
+      GOMP_PLUGIN_error ("invalid device address");
+      return false;
+    }
+  if ((void *)(d1 + s) > (void *)(pb1 + ps1)
+      || (void *)(d2 + s) > (void *)(pb2 + ps2))
+    {
+      GOMP_PLUGIN_error ("invalid size");
+      return false;
+    }
+  return true;
+}
+
+static bool
 cuda_memcpy_sanity_check (const void *h, const void *d, size_t s)
 {
   CUdeviceptr pb;
@@ -2077,6 +2404,9 @@ GOMP_OFFLOAD_dev2host (int ord, void *dst, const void *src, size_t n)
 bool
 GOMP_OFFLOAD_dev2dev (int ord, void *dst, const void *src, size_t n)
 {
+  if (!nvptx_attach_host_thread_to_device (ord)
+      || !cuda_memcpy_dev_sanity_check (dst, src, n))
+    return false;
   CUDA_CALL (cuMemcpyDtoDAsync, (CUdeviceptr) dst, (CUdeviceptr) src, n, NULL);
   return true;
 }
@@ -2267,6 +2597,33 @@ GOMP_OFFLOAD_memcpy3d (int dst_ord, int src_ord, size_t dim2_size,
 }
 
 bool
+GOMP_OFFLOAD_memset (int ord, void *ptr, int val, size_t count)
+{
+  if (!nvptx_attach_host_thread_to_device (ord))
+    return false;
+  CUDA_CALL (cuMemsetD8, (CUdeviceptr) ptr, (unsigned char) val, count);
+  return true;
+}
+
+/* This plugin hook function should be kept in sync with nvptx_memspace_validate
+   in config/nvptx/allocator.c.  */
+
+int
+GOMP_OFFLOAD_memspace_validate (omp_memspace_handle_t memspace, unsigned access)
+{
+  /* Disallow use of low-latency memory when it must be accessible by
+     all threads.  */
+  if (memspace == omp_low_lat_mem_space
+      && access == omp_atv_all)
+    return false;
+
+  /* Otherwise, standard memspaces are accepted, even when we don't have
+     anything special to do with them, and non-standard memspaces are assumed
+     to need explicit support.  */
+  return (memspace <= GOMP_OMP_PREDEF_MEMSPACE_MAX);
+}
+
+bool
 GOMP_OFFLOAD_openacc_async_host2dev (int ord, void *dst, const void *src,
 				     size_t n, struct goacc_asyncqueue *aq)
 {
@@ -2285,6 +2642,18 @@ GOMP_OFFLOAD_openacc_async_dev2host (int ord, void *dst, const void *src,
       || !cuda_memcpy_sanity_check (dst, src, n))
     return false;
   CUDA_CALL (cuMemcpyDtoHAsync, dst, (CUdeviceptr) src, n, aq->cuda_stream);
+  return true;
+}
+
+bool
+GOMP_OFFLOAD_openacc_async_dev2dev (int ord, void *dst, const void *src,
+				    size_t n, struct goacc_asyncqueue *aq)
+{
+  if (!nvptx_attach_host_thread_to_device (ord)
+      || !cuda_memcpy_dev_sanity_check (dst, src, n))
+    return false;
+  CUDA_CALL (cuMemcpyDtoDAsync, (CUdeviceptr) dst, (CUdeviceptr) src, n,
+	     aq->cuda_stream);
   return true;
 }
 
@@ -2360,7 +2729,9 @@ GOMP_OFFLOAD_openacc_get_property (int n, enum goacc_property prop)
 
 /* Adjust launch dimensions: pick good values for number of blocks and warps
    and ensure that number of warps does not exceed CUDA limits as well as GCC's
-   own limits.  */
+   own limits.
+   Keep in sync with GOMP_OFFLOAD_supported_teams_dims and
+   GOMP_OFFLOAD_supported_threads_dim.  */
 
 static void
 nvptx_adjust_launch_bounds (struct targ_fn_descriptor *fn,
@@ -2534,7 +2905,7 @@ GOMP_OFFLOAD_get_interop_int (struct interop_obj_t *obj,
     case omp_ipr_vendor:
       if (ret_code)
 	*ret_code = omp_irc_success;
-      return 11; /* nvidia */
+      return 5; /* gnu */
     case omp_ipr_vendor_name:
       if (ret_code)
 	*ret_code = omp_irc_type_str;
@@ -2681,7 +3052,7 @@ GOMP_OFFLOAD_get_interop_str (struct interop_obj_t *obj,
     case omp_ipr_vendor_name:
       if (ret_code)
 	*ret_code = omp_irc_success;
-      return "nvidia";
+      return "gnu";
     case omp_ipr_device_num:
       if (ret_code)
 	*ret_code = omp_irc_type_int;
@@ -2743,7 +3114,7 @@ GOMP_OFFLOAD_get_interop_type_desc (struct interop_obj_t *obj,
 }
 
 void
-GOMP_OFFLOAD_run (int ord, void *tgt_fn, void *tgt_vars, void **args)
+GOMP_OFFLOAD_run (struct gomp_offload_session *session, void *tgt_fn, void **args)
 {
   struct targ_fn_descriptor *tgt_fn_desc
     = (struct targ_fn_descriptor *) tgt_fn;
@@ -2751,7 +3122,7 @@ GOMP_OFFLOAD_run (int ord, void *tgt_fn, void *tgt_vars, void **args)
   const struct targ_fn_launch *launch = tgt_fn_desc->launch;
   const char *fn_name = launch->fn;
   CUresult r;
-  struct ptx_device *ptx_dev = ptx_devices[ord];
+  struct ptx_device *ptx_dev = ptx_devices[session->device];
   const char *maybe_abort_msg = "(perhaps abort was called)";
   int teams = 0, threads = 0;
 
@@ -2789,7 +3160,7 @@ GOMP_OFFLOAD_run (int ord, void *tgt_fn, void *tgt_vars, void **args)
 
   pthread_mutex_lock (&ptx_dev->omp_stacks.lock);
   void *stacks = nvptx_stacks_acquire (ptx_dev, stack_size, teams * threads);
-  void *fn_args[] = {tgt_vars, stacks, (void *) stack_size};
+  void *fn_args[] = {session->target_var_table, stacks, (void *) stack_size};
   size_t fn_args_size = sizeof fn_args;
   void *config[] = {
     CU_LAUNCH_PARAM_BUFFER_POINTER, fn_args,
@@ -2846,3 +3217,7 @@ GOMP_OFFLOAD_run (int ord, void *tgt_fn, void *tgt_vars, void **args)
 }
 
 /* TODO: Implement GOMP_OFFLOAD_async_run. */
+
+#ifdef USE_HASHTAB_LOOKUP_FOR_INDIRECT
+  #include "build-target-indirect-htab.h"
+#endif

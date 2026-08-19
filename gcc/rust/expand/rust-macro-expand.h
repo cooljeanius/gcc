@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2025 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -27,10 +27,8 @@
 #include "rust-ast.h"
 #include "rust-macro.h"
 #include "rust-hir-map.h"
-#include "rust-early-name-resolver.h"
 #include "rust-name-resolver.h"
 #include "rust-macro-invoc-lexer.h"
-#include "rust-proc-macro-invoc-lexer.h"
 #include "rust-token-converter.h"
 #include "rust-ast-collector.h"
 #include "rust-system.h"
@@ -291,16 +289,17 @@ struct MacroExpander
     TRAIT,
     IMPL,
     TRAIT_IMPL,
+    PATTERN,
   };
 
   ExpansionCfg cfg;
   unsigned int expansion_depth = 0;
 
   MacroExpander (AST::Crate &crate, ExpansionCfg cfg, Session &session)
-    : cfg (cfg), crate (crate), session (session),
-      sub_stack (SubstitutionScope ()),
+    : cfg (cfg), session (session), sub_stack (SubstitutionScope ()),
       expanded_fragment (AST::Fragment::create_error ()),
-      has_changed_flag (false), resolver (Resolver::Resolver::get ()),
+      has_changed_flag (false), had_duplicate_error (false), crate (crate),
+      resolver (Resolver::Resolver::get ()),
       mappings (Analysis::Mappings::get ())
   {}
 
@@ -358,7 +357,7 @@ struct MacroExpander
    *
    * @param parser Parser to use for matching
    * @param rep Repetition to try and match
-   * @param match_amount Reference in which to store the ammount of succesful
+   * @param match_amount Reference in which to store the amount of successful
    * and valid matches
    *
    * @param lo_bound Lower bound of the matcher. When specified, the matcher
@@ -502,7 +501,6 @@ struct MacroExpander
 private:
   AST::Fragment parse_proc_macro_output (ProcMacro::TokenStream ts);
 
-  AST::Crate &crate;
   Session &session;
   SubstitutionScope sub_stack;
   std::vector<ContextType> context;
@@ -512,7 +510,13 @@ private:
   tl::optional<AST::MacroRulesDefinition &> last_def;
   tl::optional<AST::MacroInvocation &> last_invoc;
 
+  // used to avoid emitting excess errors
+  bool had_duplicate_error;
+
 public:
+  /* The current crate we are expanding within */
+  AST::Crate &crate;
+
   Resolver::Resolver *resolver;
   Analysis::Mappings &mappings;
 };

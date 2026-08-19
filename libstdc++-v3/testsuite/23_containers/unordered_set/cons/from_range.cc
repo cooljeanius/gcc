@@ -1,7 +1,12 @@
 // { dg-do run { target c++23 } }
 
-#include <algorithm>
 #include <unordered_set>
+
+#if __cpp_lib_containers_ranges != 202202L
+# error "Feature-test macro __cpp_lib_containers_ranges has wrong value in <unordered_set>"
+#endif
+
+#include <algorithm>
 #include <span>
 #include <testsuite_allocator.h>
 #include <testsuite_hooks.h>
@@ -79,11 +84,11 @@ constexpr bool is_equal(std::equal_to<T>, std::equal_to<U>)
 { return true; }
 
 constexpr bool is_equal(StateHash lhs, StateHash rhs)
-{ return lhs.state = rhs.state; }
+{ return lhs.state == rhs.state; }
 
 
 constexpr bool is_equal(StateEq lhs, StateEq rhs)
-{ return lhs.state = rhs.state; }
+{ return lhs.state == rhs.state; }
 
 template<typename Range, typename Alloc, typename Hash, typename Equal>
 constexpr void

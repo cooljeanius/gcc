@@ -1,5 +1,5 @@
 /* A type-safe hash table template.
-   Copyright (C) 2012-2025 Free Software Foundation, Inc.
+   Copyright (C) 2012-2026 Free Software Foundation, Inc.
    Contributed by Lawrence Crowl <crowl@google.com>
 
 This file is part of GCC.
@@ -636,7 +636,11 @@ private:
 #include "mem-stats.h"
 #include "hash-map.h"
 
-extern mem_alloc_description<mem_usage>& hash_table_usage (void);
+inline auto &
+hash_table_usage ()
+{
+  return mem_alloc_description<mem_usage>::instance<HASH_TABLE_ORIGIN> ();
+}
 
 /* Support function for statistics.  */
 extern void dump_hash_table_loc_statistics (void);

@@ -1,5 +1,5 @@
 ;; Faraday FA726TE Pipeline Description
-;; Copyright (C) 2010-2025 Free Software Foundation, Inc.
+;; Copyright (C) 2010-2026 Free Software Foundation, Inc.
 ;; Written by I-Jui Sung, based on ARM926EJ-S Pipeline Description.
 ;;
 ;; This file is part of GCC.
@@ -140,7 +140,7 @@
 ;; Here we model the resource conflict between Load@E3-stage & Store@W-stage.
 ;; The 2nd LSU (lsu1) is to model the fact that if 2 loads are scheduled in the
 ;; same "bundle", and the 2nd load will introudce another ISSUE stall but is
-;; still ok to execute (and may be benefical sometimes).
+;; still ok to execute (and may be beneficial sometimes).
 
 (define_insn_reservation "726te_load1_op" 3
  (and (eq_attr "tune" "fa726te")

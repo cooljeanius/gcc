@@ -1,17 +1,21 @@
-mod core {
-    mod cmp {
-        #[lang = "eq"]
-        pub trait PartialEq<Rhs: ?Sized = Self> {
-            fn eq(&self, other: &Rhs) -> bool;
+#![feature(no_core)]
+#![feature(lang_items)]
+#![no_core]
 
-            fn ne(&self, other: &Rhs) -> bool {
-                !self.eq(other)
-            }
-        }
+mod cmp {
+    use crate::Sized;
 
-        pub trait Eq: PartialEq<Self> {
-            fn assert_receiver_is_total_eq(&self) {}
+    #[lang = "eq"]
+    pub trait PartialEq<Rhs: ?Sized = Self> {
+        fn eq(&self, other: &Rhs) -> bool;
+
+        fn ne(&self, other: &Rhs) -> bool {
+            !self.eq(other)
         }
+    }
+
+    pub trait Eq: PartialEq<Self> {
+        fn assert_receiver_is_total_eq(&self) {}
     }
 }
 

@@ -1,6 +1,6 @@
 // The template and inlines for the -*- C++ -*- valarray class.
 
-// Copyright (C) 1997-2025 Free Software Foundation, Inc.
+// Copyright (C) 1997-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -43,7 +43,12 @@
 #include <debug/debug.h>
 #if __cplusplus >= 201103L
 #include <initializer_list>
+#include <bits/range_access.h>
 #endif
+
+#define __glibcxx_want_hardened_valarray
+#define __glibcxx_want_valarray
+#include <bits/version.h>
 
 namespace std _GLIBCXX_VISIBILITY(default)
 {
@@ -138,6 +143,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	};
     public:
       typedef _Tp value_type;
+#if __glibcxx_valarray >= 202511L
+      typedef _Tp* iterator;
+      typedef const _Tp* const_iterator;
+#endif
 
 	// _lib.valarray.cons_ construct/destroy:
       ///  Construct an empty array.
@@ -571,6 +580,36 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        */
       void resize(size_t __size, _Tp __c = _Tp());
 
+#if __glibcxx_valarray >= 202511L
+      /**
+        *  @brief  Return an iterator pointing to the first element of
+        *          the valarray.
+        */
+      [[nodiscard]]
+      iterator
+      begin() noexcept
+      { return _M_data; }
+
+      [[nodiscard]]
+      const_iterator
+      begin() const noexcept
+      { return _M_data; }
+
+      /**
+        *  @brief  Return an iterator pointing to one past the last element of
+        *          the valarray.
+        */
+      [[nodiscard]]
+      iterator
+      end() noexcept
+      { return _M_data + _M_size; }
+
+      [[nodiscard]]
+      const_iterator
+      end() const noexcept
+      { return _M_data + _M_size; }
+#endif
+
     private:
       size_t _M_size;
       _Tp* __restrict__ _M_data;
@@ -720,7 +759,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     valarray<_Tp>::~valarray() _GLIBCXX_NOEXCEPT
     {
       std::__valarray_destroy_elements(_M_data, _M_data + _M_size);
-      std::__valarray_release_memory(_M_data);
+      std::__valarray_release_memory(_M_data, _M_size);
     }
 
   template<typename _Tp>
@@ -736,7 +775,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  if (_M_data)
 	    {
 	      std::__valarray_destroy_elements(_M_data, _M_data + _M_size);
-	      std::__valarray_release_memory(_M_data);
+	      std::__valarray_release_memory(_M_data, _M_size);
 	    }
 	  _M_size = __v._M_size;
 	  _M_data = __valarray_get_storage<_Tp>(_M_size);
@@ -754,7 +793,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       if (_M_data)
 	{
 	  std::__valarray_destroy_elements(_M_data, _M_data + _M_size);
-	  std::__valarray_release_memory(_M_data);
+	  std::__valarray_release_memory(_M_data, _M_size);
 	}
       _M_size = __v._M_size;
       _M_data = __v._M_data;
@@ -776,7 +815,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  if (_M_data)
 	    {
 	      std::__valarray_destroy_elements(_M_data, _M_data + _M_size);
-	      std::__valarray_release_memory(_M_data);
+	      std::__valarray_release_memory(_M_data, _M_size);
 	    }
 	  _M_size = __l.size();
 	  _M_data = __valarray_get_storage<_Tp>(_M_size);
@@ -854,7 +893,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  if (_M_data)
 	    {
 	      std::__valarray_destroy_elements(_M_data, _M_data + _M_size);
-	      std::__valarray_release_memory(_M_data);
+	      std::__valarray_release_memory(_M_data, _M_size);
 	    }
 	  _M_size = __e.size();
 	  _M_data = __valarray_get_storage<_Tp>(_M_size);
@@ -1049,7 +1088,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       std::__valarray_destroy_elements(_M_data, _M_data + _M_size);
       if (_M_size != __n)
 	{
-	  std::__valarray_release_memory(_M_data);
+	  std::__valarray_release_memory(_M_data, _M_size);
 	  _M_size = __n;
 	  _M_data = __valarray_get_storage<_Tp>(__n);
 	}
@@ -1217,7 +1256,7 @@ _DEFINE_BINARY_OPERATOR(>=, __greater_equal)
 #undef _DEFINE_BINARY_OPERATOR
   /// @endcond
 
-#if __cplusplus >= 201103L
+#if (__cplusplus >= 201103L) && (__glibcxx_valarray < 202511L)
   /**
    *  @brief  Return an iterator pointing to the first element of
    *          the valarray.
@@ -1271,7 +1310,7 @@ _DEFINE_BINARY_OPERATOR(>=, __greater_equal)
       else
 	return nullptr;
     }
-#endif // C++11
+#endif // C++11 to C++23
 
   /// @} group numeric_arrays
 

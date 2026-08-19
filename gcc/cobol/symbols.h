@@ -1,5 +1,5 @@
  /*
- * Copyright (c) 2021-2025 Symas Corporation
+ * Copyright (c) 2021-2026 Symas Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -32,11 +32,11 @@
 #else
 #define _SYMBOLS_H_
 
-#include <assert.h>
-#include <limits.h>
-#include <stdint.h>
-#include <stdlib.h>
-#include <string.h>
+#include <cassert>
+#include <climits>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
 
 #include <algorithm>
 #include <list>
@@ -50,36 +50,52 @@
 
 extern const char *numed_message;
 
-enum cbl_dialect_t {
-  dialect_gcc_e = 0x00,
-  dialect_ibm_e = 0x01,
-  dialect_mf_e  = 0x02,
-  dialect_gnu_e = 0x04,
-};
+static inline const char *
+cbl_dialect_str(cbl_dialect_t dialect)  {
+  switch(dialect) {
+  case dialect_iso_e: return "iso";
+  case dialect_gcc_e: return "gcc";
+  case dialect_ibm_e: return "ibm";
+  case dialect_mf_e:  return "mf";
+  case dialect_gnu_e: return "gnu";
+  }
 
-extern cbl_dialect_t cbl_dialect;
-void cobol_dialect_set( cbl_dialect_t dialect );
-cbl_dialect_t dialect_is();
-
-static inline bool dialect_gcc() {
-  return dialect_gcc_e  == cbl_dialect;
+  switch(size_t(dialect)) {
+  case dialect_mf_e | dialect_gnu_e:  return "mf or gnu";
+  case dialect_ibm_e | dialect_mf_e | dialect_gnu_e:  return "ibm or mf or gnu";
+  }
+  
+  return "???";
 }
 
+// Dialects may be combined. 
+extern unsigned int cbl_dialects;
+void cobol_dialect_set( cbl_dialect_t dialect );
+
+// GCC dialect means no other dialects
+static inline bool dialect_gcc() {
+  return dialect_gcc_e == cbl_dialects;
+}
 static inline bool dialect_ibm() {
-  return dialect_ibm_e == (cbl_dialect & dialect_ibm_e);
+  return dialect_ibm_e == (cbl_dialects & dialect_ibm_e);
 }
 static inline bool dialect_mf() {
-  return dialect_mf_e  == (cbl_dialect & dialect_mf_e );
+  return dialect_mf_e  == (cbl_dialects & dialect_mf_e );
+}
+static inline bool dialect_gnu() {
+  return dialect_gnu_e  == (cbl_dialects & dialect_gnu_e );
 }
 
-enum cbl_gcobol_feature_t {
-  feature_gcc_e = 0x00,
-  feature_internal_ebcdic_e = 0x01,
-  feature_embiggen_e        = 0x02, // widen numeric that redefine POINTER
-};
+static inline bool dialect_has( cbl_dialect_t dialect) {
+  return 0 < (cbl_dialects & dialect);
+}
+
+#ifdef GCC_DIAGNOSTIC_H
+bool cbl_diagnostic_kind( cbl_diag_id_t id, diagnostics::kind kind );
+bool cbl_dialect_kind( cbl_dialect_t dialect, diagnostics::kind kind );
+#endif
 
 extern size_t cbl_gcobol_features;
-bool cobol_gcobol_feature_set( cbl_gcobol_feature_t gcobol_feature, bool on = true );
 
 static inline bool gcobol_feature_internal_ebcdic() {
   return feature_internal_ebcdic_e ==
@@ -90,12 +106,89 @@ static inline bool gcobol_feature_embiggen() {
     (cbl_gcobol_features & feature_embiggen_e);
 }
 
+bool cobol_alpha_encoding( const char name[] );
+bool cobol_national_encoding( const char name[] );
+
 enum cbl_division_t {
   identification_div_e,
   environment_div_e,
   data_div_e,
   procedure_div_e,
 };
+
+/*
+ * The term "dspc" stands for Division, Section, Paragraph, or Clause because
+ * there is no official overarching term for them. We don't use the cbl prefix
+ * because this enum is used only by the parser.
+ *
+ * These represent all possible standard titles in a COBOL program.  Those that
+ * are allowed in a prototype are in a set, which the parser tests for
+ * validity.
+ */
+enum dspc_t {
+  dspc_identification_div_e,
+  dspc_options_para_e, 
+  dspc_arithmetic_clause_e, 
+  dspc_default_rounded_clause_e, 
+  dspc_entry_convention_clause_e, 
+  dspc_float_binary_clause_e, 
+  dspc_float_decimal_clause_e, 
+  dspc_initialize_clause_e, 
+  dspc_intermediate_rounding_clause_e, 
+
+  dspc_environment_div_e,
+  dspc_configuration_section_e, 
+  dspc_source_computer_paragraph_e, 
+  dspc_object_computer_paragraph_e,
+  
+  dspc_i_o_section_e, 
+
+  // special names clauses
+  dspc_special_names_paragraph_e, 
+  dspc_alphabet_name_clause_e, 
+  dspc_class_clause_e,
+  dspc_crt_status_clause_e,
+  dspc_currency_sign_clause_e, 
+  dspc_cursor_clause_e,
+  dspc_decimal_point_is_comma_clause_e, 
+  dspc_device_clause_e, 
+  dspc_dynamic_length_structure_clause_e,
+  dspc_feature_clause_e, 
+  dspc_locale_clause_e, 
+  dspc_order_table_clause_e,
+  dspc_switch_clause_e, 
+  dspc_symbolic_characters_clause_e, 
+
+  dspc_repository_paragraph_e, 
+  dspc_input_output_section_e,
+  dspc_file_control_paragraph_e, 
+  dspc_i_o_control_paragraph_e, 
+
+  dspc_data_div_e, // sorted by alphabetically by section and clause
+  dspc_linkage_section_e, 
+
+  dspc_file_section_e, 
+  dspc_local_storage_section_e, 
+  dspc_report_section_e, 
+  dspc_screen_section_e, 
+  dspc_working_storage_section_e, 
+
+  // not used: parser checks only the Data Division Section.
+  dspc_77_level_description_entry_e, 
+  dspc_constant_entry_e, 
+  dspc_file_description_entry_e, 
+  dspc_record_description_entry_e, 
+  dspc_report_group_description_entry_e, 
+  dspc_screen_description_entry_e, 
+  dspc_sort_merge_file_description_entry_e, 
+  dspc_type_declaration_entry_e, 
+
+  dspc_procedure_div_e,
+  dspc_procedure_header_e,
+  dspc_procedure_body_e,
+};
+
+bool cbl_prototype_ok( const cbl_loc_t& loc, size_t program, dspc_t clause );
 
 void mode_syntax_only( cbl_division_t division );
 bool mode_syntax_only();
@@ -115,7 +208,6 @@ is_numeric( cbl_field_type_t type ) {
   case FldSwitch:
   case FldDisplay:
   case FldPointer: // not numeric because not computable, only settable
-  case FldBlob:
     return false;
   // These types are computable or, in the case of FldIndex, may be
   // arbitrarily set and incremented.
@@ -128,28 +220,22 @@ is_numeric( cbl_field_type_t type ) {
   case FldIndex:
     return true;
   }
-  yywarn( "%s:%d: invalid symbol_type_t %d", __func__, __LINE__, type );
+  cbl_internal_error( "%s:%d: invalid %<symbol_type_t%> %d", __func__, __LINE__, type );
   return false;
 }
 
 struct os_locale_t {
   char assumed[16];
-  char *codeset;
+  const char *codeset;
 };
 
 const char * cbl_field_attr_str( cbl_field_attr_t attr );
 
 cbl_field_attr_t literal_attr( const char prefix[] );
 
-static inline bool
-is_working_storage(uint32_t attr) {
-  return 0 == (attr & (linkage_e | local_e));
-}
-
+int cbl_figconst_tok( const char *value );
 enum cbl_figconst_t cbl_figconst_of( const char *value );
 const char * cbl_figconst_str( cbl_figconst_t fig );
-
-const char * consistent_encoding_check( const YYLTYPE& loc, const char input[] );
 
 class cbl_domain_elem_t {
   uint32_t length;
@@ -160,16 +246,14 @@ class cbl_domain_elem_t {
   cbl_domain_elem_t()
     : length(0), value(NULL), is_numeric(false), all(false)
   {}
-  cbl_domain_elem_t( const YYLTYPE& loc,
-                     bool all,
+  cbl_domain_elem_t( bool all,
                      uint32_t length,
                      const char *value,
                      bool is_numeric = false )
     : length(length), value(value), is_numeric(is_numeric), all(all)
   {
     if( value && ! is_numeric ) {
-      auto s = consistent_encoding_check(loc, value);
-      if( s ) value = s;
+      this->value = value;
     }
   }
   const char *name() const { return value; }
@@ -180,12 +264,11 @@ struct cbl_domain_t {
   cbl_domain_elem_t first, last;
   cbl_domain_t() : first(), last(first)
   {}
-  cbl_domain_t( const YYLTYPE& loc,
-                bool all,
+  cbl_domain_t( bool all,
                 uint32_t length,
                 const char * value,
                 bool is_numeric = false )
-    : first(loc, all, length, value, is_numeric), last(first)
+    : first(all, length, value, is_numeric), last(first)
   {}
   cbl_domain_t( const cbl_domain_elem_t& a, const cbl_domain_elem_t& z )
     : first(a)
@@ -215,33 +298,57 @@ bool decimal_is_comma();
 
 enum symbol_type_t {
   SymFilename,
-  SymFunction,
   SymField,
   SymLabel,                     // section, paragraph, or label
   SymSpecial,
   SymAlphabet,
   SymFile,
   SymDataSection,
+  SymLocale, 
 };
 
-struct cbl_field_data_t {
+// From Enterprise COBOL for z/OS 6.4 Language Reference, Appendix B.
+// ISO specifies no limit in 13.18.40.3 Syntax rules.
+// CobolCraft sometimes needs 2,100,000 or about 2 MB. 
+#ifdef COBOL_MAXIMUM_ALPHA_LENGTH
+# define MAXIMUM_ALPHA_LENGTH size_t(COBOL_MAXIMUM_ALPHA_LENGTH)
+#else 
+# define IBM_MAXIMUM_ALPHA_LENGTH (size_t(1) << 31)
+# define MAXIMUM_ALPHA_LENGTH IBM_MAXIMUM_ALPHA_LENGTH
+#endif
+
+class cbl_field_data_t {
+  uint32_t nbyte;            // allocated space
+  struct orig_t {
+    bool all;
+    const char *data;
+    REAL_VALUE_TYPE value;
+    orig_t() : all(false), data(nullptr), value{} {}
+    explicit orig_t( const char *data, bool all = false )
+      : all(all), data(data), value{}
+    {}
+    explicit orig_t( REAL_VALUE_TYPE value )
+      : all(false), data(nullptr), value(value)
+    {}
+  } orig;
+public:
   uint32_t memsize;             // nonzero if larger subsequent redefining field
-  uint32_t capacity,            // allocated space
-           digits;              // magnitude: total digits (or characters)
+  uint32_t digits;              // magnitude: total digits (or characters)
   int32_t  rdigits;             // digits to the right
   const char *initial, *picture;
-
-  enum etc_type_t { val88_e, upsi_e, value_e } etc_type;
+  enum etc_type_t { no_value_e, val88_e, upsi_e, value_e } etc_type;
   const char *
   etc_type_str() const {
     switch(etc_type) {
     case val88_e: return "val88_e";
     case upsi_e: return "upsi_e";
-    case value_e: return "value_e";
+    case no_value_e: return "no value";
+    case  value_e: return  "value_e";
     }
     return "???";
   }
-  
+  bool etc_ok() const { return etc_type != no_value_e; }
+
   union etc_t {
     // "Domain" is an array representing the VALUE of CLASS or 88 type.
     struct val88_t {
@@ -255,30 +362,47 @@ struct cbl_field_data_t {
     explicit etc_t( tree v = build_zero_cst (float128_type_node)) : value(v) {}
   } etc;
 
-  cbl_field_data_t( uint32_t memsize=0,  uint32_t capacity=0 )
-    : memsize(memsize)
-    , capacity(capacity)
+  cbl_field_data_t()
+    : nbyte(0)
+    , memsize(0)
     , digits(0)
     , rdigits(0)
     , initial(0)
     , picture(0)
-    , etc_type(value_e)
+    , etc_type(no_value_e)
     , etc()
   {}
 
-  cbl_field_data_t( uint32_t memsize,  uint32_t capacity,
+  cbl_field_data_t( uint32_t memsize,  uint32_t nbyte )
+    : nbyte(nbyte)
+    , memsize(memsize)
+    , digits(0)
+    , rdigits(0)
+    , initial(0)
+    , picture(0)
+    , etc_type(no_value_e)
+    , etc()
+  {}
+
+  cbl_field_data_t( uint32_t memsize,  uint32_t nbyte,
                     uint32_t digits,  uint32_t rdigits,
                     const char *initial,
                     const char *picture = NULL ) 
-    : memsize(memsize)
-    , capacity(capacity)
+    : nbyte(nbyte)
+    , orig(initial)
+    , memsize(memsize)
     , digits(digits)
     , rdigits(rdigits)
-    , initial(initial)
+    , initial(initial) // initial == data.orig.data
     , picture(picture)
-    , etc_type(value_e)
+    , etc_type(no_value_e)
     , etc()
   {}
+
+  inline uint32_t capacity( uint32_t size ) { return nbyte = size; }
+  inline uint32_t capacity() const          { return nbyte; }
+  
+  inline uint32_t add_capacity( uint32_t size ) { return nbyte += size; }
 
   cbl_field_data_t( const cbl_field_data_t& that ) {
     copy_self(that);
@@ -318,9 +442,55 @@ struct cbl_field_data_t {
     etc_type = value_e;
     return etc.value = v;
   } 
+  tree& operator=(int i) {
+    etc_type = value_e;
+    return etc.value = build_int_cst_type(integer_type_node, i);
+  } 
+
+  tree_code value_type() const {
+    gcc_assert(etc_type == value_e);
+    tree_node *node = TREE_TYPE(etc.value);
+    tree_code  code = TREE_CODE(node);
+    return code;
+  }
+  bool value_is_float() const {
+    gcc_assert(etc_type == value_e);
+    tree_node *node = TREE_TYPE(etc.value);
+    return SCALAR_FLOAT_TYPE_P(node);
+  }
+  bool value_is_fixed() const {
+    gcc_assert(etc_type == value_e);
+    tree_node *node = TREE_TYPE(etc.value);
+    return FIXED_POINT_TYPE_P(node);
+  }
+  bool value_is_integer() const {
+    gcc_assert(etc_type == value_e);
+    tree_node *node = TREE_TYPE(etc.value);
+    return INTEGRAL_TYPE_P(node);
+  }
+
+  // verify is numeric and zero fraction 
+  std::pair<int64_t, bool> int64_of() const {
+    if( etc_type == value_e ) {
+      auto r = TREE_REAL_CST_PTR( value_of() );
+      auto n = real_to_integer(r);
+      REAL_VALUE_TYPE r2;
+      real_from_integer (&r2, VOIDmode, n, SIGNED);
+      // If the original value r is equal to r2, derived from its integer
+      // part n, then the fractional component is zero.
+      if( real_identical (r, &r2) ) {
+        return std::make_pair( int64_t(n), true );
+      }
+    }
+    return std::make_pair(int64_t(0), false);
+  }
+
+  bool has_initial_value() const {
+    return orig.data || etc_type != no_value_e;
+  }
 
   void set_real_from_capacity( REAL_VALUE_TYPE *r ) const {
-    real_from_integer (r, VOIDmode, capacity, SIGNED);
+    real_from_integer (r, VOIDmode, nbyte, SIGNED);
   }
 
   time_now_f time_func;
@@ -336,10 +506,8 @@ struct cbl_field_data_t {
   int32_t ldigits() const { return std::max(int(digits), int(digits - rdigits)); }
 
   cbl_field_data_t& valify() {
-    assert(initial);
-    const size_t len = strlen(initial);
-    std::string input(len + 1, '\0'); // add a NUL
-    std::copy(initial, initial + len, input.begin()); 
+    assert(orig.data);
+    std::string input(orig.data);
     if( decimal_is_comma() ) {
       std::replace(input.begin(), input.end(), ',', '.');
     }
@@ -356,27 +524,45 @@ struct cbl_field_data_t {
     REAL_VALUE_TYPE r;
     real_from_string (&r, input.c_str());
     r = real_value_truncate (TYPE_MODE (float128_type_node), r);
-    etc.value = build_real (float128_type_node, r);
+    *this = build_real (float128_type_node, r);
     return *this;
   }
   cbl_field_data_t& valify( const char *input ) {
     assert(input);
-    initial = input;
-    capacity = strlen(initial);
+    original(input);
     return valify();
   }
 
+  bool all() const { return orig.data? orig.all : false; }
+  bool is_alpha_edited() const;
+  const char *original() const { return orig.data? orig.data : nullptr; }
+  const REAL_VALUE_TYPE& original_numeric() const { return orig.value; }
+
+  // Set the original string, and set the capacity to its length if nothing
+  // else already did.  This function is used only for VALUE numeric literal,
+  // to preserve the VALUE clause until the field is fully defined.
+  const char *original( const char *orig, bool all = false) {
+    if( nbyte == 0 ) nbyte = strlen(orig);
+    this->orig = orig_t( orig, all );
+    return this->orig.data;
+  }
+  // Set the computed cce value.  Do not impute capacity. 
+  void original( REAL_VALUE_TYPE value ) {
+    orig = orig_t(value);
+  }
  protected:
   cbl_field_data_t& copy_self( const cbl_field_data_t& that ) {
     memsize = that.memsize;
-    capacity = that.capacity;
+    nbyte = that.nbyte;
     digits = that.digits;
     rdigits = that.rdigits;
+    orig = that.orig;
     initial = that.initial;
     picture = that.picture;
     etc_type = that.etc_type;
 
     switch(etc_type) {
+      case no_value_e:
       case value_e:
         etc.value = that.etc.value;
         break;
@@ -405,8 +591,11 @@ struct cbl_occurs_bounds_t {
   // variable size table.  lower can be zero.
   size_t lower, upper;
 
-  cbl_occurs_bounds_t(size_t lower=0, size_t upper=0)
+  cbl_occurs_bounds_t()
+    : lower(0), upper(0) {}
+  explicit cbl_occurs_bounds_t(size_t lower, size_t upper=0)
     : lower(lower), upper(upper) {}
+
   size_t ntimes() const {
     return upper;
   }
@@ -439,12 +628,12 @@ struct cbl_occurs_t {
 
   void key_alloc( bool ascending );
   void key_field_add( cbl_field_t *field );
-  void index_add( cbl_field_t *field );
+  void index_add( const cbl_field_t *field );
   cbl_occurs_key_t * key_of( cbl_field_t *field );
   bool subscript_ok( const cbl_field_t *subscript ) const;
 
 protected:
-  void field_add( cbl_field_list_t& fields, cbl_field_t *field );
+  void field_add( cbl_field_list_t& fields, const cbl_field_t *field );
 };
 
 /*
@@ -475,17 +664,149 @@ struct cbl_subtable_t {
   size_t offset, isym;
 };
 
+const encodings_t *
+             __gg__encoding_iconv_descr( cbl_encoding_t encoding );
+const encodings_t *
+             __gg__encoding_iconv_descr( const char name[] );
+const char * __gg__encoding_iconv_name( cbl_encoding_t encoding );
+bool         __gg__encoding_iconv_valid( cbl_encoding_t encoding );
+
 bool is_elementary( enum cbl_field_type_t type );
+
+// These were introduced to discourage the use of 
+//    current_encoding('A') and current_encoding('N')
+enum
+  {
+  display_encoding_e  = 'A',
+  national_encoding_e = 'N'
+  };
+cbl_encoding_t current_encoding( char a_or_n );
+
+/*  In cbl_field_t:
+ *  'offset' is overloaded for FldAlphanumeric/temporary/intermediate variables
+ *  For such variables, offset is a copy of the initial capacity.  This is in
+ *  support of the FUNCTION TRIM function, which both needs to be able to
+ *  reduce the capacity of the target variable, and then to reset it back to
+ *  the original value
+ */
 
 struct cbl_field_t {
   size_t offset;
-  enum cbl_field_type_t type, usage;
-  size_t attr;
+  cbl_field_type_t type, usage;
+  uint64_t attr;
   static_assert(sizeof(attr) == sizeof(cbl_field_attr_t), "wrong attr size");
   size_t parent;    // symbols[] index of our parent
   size_t our_index; // symbols[] index of this field, set in symbol_add()
   uint32_t level;
-  struct cbl_occurs_t occurs;
+  cbl_occurs_t occurs;
+  struct codeset_t {
+    struct default_encodings_t {
+      friend bool cobol_alpha_encoding( const char name[] );
+      friend bool cobol_national_encoding( const char name[] );
+      encodings_t alpha, national;
+      const encodings_t possible_sources[2] = {}, *source = 0;
+      
+      default_encodings_t( const encodings_t& alpha,
+                           const std::vector<encodings_t>& possible_sources )
+        : alpha(alpha)
+        , national(alpha)
+      {
+        std::copy(possible_sources.begin(),
+                  possible_sources.end(),
+                  const_cast<encodings_t*>(this->possible_sources));
+        source = this->possible_sources;
+      }
+      const encodings_t *next_source_encoding() {
+        if( ++source < possible_sources + COUNT_OF(possible_sources) ) {
+          return source;
+        }
+        return nullptr;
+      }
+      const encodings_t *current_source_encoding() const {
+        return
+          source < possible_sources + COUNT_OF(possible_sources) ?
+          source : nullptr;
+      }
+
+    };
+    static default_encodings_t default_encodings;
+
+    cbl_encoding_t encoding;
+    size_t alphabet;  // unlikely
+    explicit codeset_t(cbl_encoding_t encoding = custom_encoding_e,
+                       size_t alphabet = 0) // combination means "not set"
+      : encoding(encoding), alphabet(alphabet)
+    {}
+    bool valid() const {
+      switch(encoding) {
+      case no_encoding_e:
+        return false;
+      case custom_encoding_e:
+        return alphabet != 0;
+      default:
+        break;
+      }
+      return alphabet == 0;
+    }
+    bool consistent() const {
+      return valid() && ( encoding == current_encoding('A')
+                          ||
+                          encoding == current_encoding('N')
+                          ||
+                          encoding == UTF8_e );
+    }
+    // set_explicit overrides an encoding inferred via e.g. PIC 999.
+    bool set_explicit( cbl_encoding_t encoding ) {
+      assert(valid_encoding(encoding));
+      this->encoding = encoding;
+      this->alphabet = 0;
+      return valid();
+    }
+    bool set_per_source() {
+      return set_explicit( default_encodings.source->type );
+    }
+    bool set( cbl_encoding_t encoding, size_t alphabet = 0 ) {
+      assert(valid_encoding(encoding));
+      if( ! valid() ) { // setting first time
+        return set_explicit(encoding);
+      }
+      return this->encoding == encoding && this->alphabet == alphabet;
+    }
+    bool set( const char picture_fragment[] = nullptr) {
+      if( ! picture_fragment ) {
+        cbl_encoding_t enc = current_encoding('A');
+        bool retval = set(enc);
+        return retval;
+      }
+      size_t len = strlen(picture_fragment);
+      std::vector<char> frag(len);
+      std::transform(picture_fragment, picture_fragment + len,
+                     frag.begin(), ftoupper);
+      switch(frag[0]) { 
+      case 'A': case 'X': case '9':
+        return set(current_encoding(display_encoding_e));
+      case 'N': case 'U': 
+        if( std::all_of(frag.begin(), frag.end(),
+                        [first = frag[0]]( char ch ) {
+                          return first == ch;
+                        } ) ) {
+          // All N's indicates National; all U's indicates UTF-8.
+          auto enc = frag[0] == 'N' ? current_encoding(national_encoding_e)
+                                    : UTF8_e;
+          return set(enc);
+        }
+        return false; // They all must be the same. 
+      }
+      gcc_unreachable();
+    }
+    cbl_encoding_t set() const {
+      return valid()? encoding : cbl_encoding_t(-1);
+    }
+    uint8_t stride() const;
+    inline const char *name() const {
+      return valid()? __gg__encoding_iconv_name(encoding) : "nocoding";
+    }
+  } codeset;
   int line;                     // Where it appears in the file.
   cbl_name_t name;              // Appears in the GIMPLE dump.
   size_t file;                  // nonzero if field is 01 record for a file
@@ -494,18 +815,57 @@ struct cbl_field_t {
     cbl_ffi_crv_t crv;            // Using by C/R/V in Linkage
     linkage_t() : optional(false), crv(by_default_e) {}
   } linkage;
-  struct cbl_field_data_t data;
+  cbl_field_data_t data;
   tree var_decl_node;   // Reference to the pointer to the cblc_field_t structure
   tree data_decl_node;  // Reference to the run-time data of the COBOL variable
   //                    // For linkage_e variables, data_decl_node is a pointer
   //                    // to the data, rather than the actual data
-  tree literal_decl_node; // This is a FLOAT128 version of data.value
 
+  cbl_field_t()
+    : offset(0), type(FldInvalid), usage(FldInvalid), attr(0)
+    , parent(0), our_index(0), level(0)
+    , line(0), name(""), file(0)
+    , var_decl_node(nullptr), data_decl_node(nullptr)
+  {}
+
+  cbl_field_t( cbl_field_type_t type, uint64_t attr,
+               const cbl_field_data_t& data,
+               uint32_t level = 0, const cbl_name_t name = "", int line = 0 )
+    : offset(0), type(type), usage(FldInvalid), attr(attr)
+    , parent(0), our_index(0), level(level)
+    , line(line), name(""), file(0), data(data)
+    , var_decl_node(nullptr), data_decl_node(nullptr)
+  {
+    gcc_assert(strlen(name) < sizeof this->name);
+    strcpy(this->name, name);
+  }
+
+  cbl_field_t( cbl_field_type_t type, uint64_t attr,
+               const cbl_field_data_t& data,
+               uint32_t level, const cbl_name_t name, 
+               const cbl_field_t::codeset_t& codeset )
+    : offset(0), type(type), usage(FldInvalid), attr(attr)
+    , parent(0), our_index(0), level(level), codeset(codeset)
+    , line(0), name(""), file(0), data(data)
+    , var_decl_node(nullptr), data_decl_node(nullptr)
+  {
+    gcc_assert(strlen(name) < sizeof this->name);
+    strcpy(this->name, name);
+  }
+
+  cbl_field_t( cbl_field_type_t type, uint32_t level, int line, uint64_t attr = 0 )
+    : offset(0), type(type), usage(FldInvalid), attr(attr)
+    , parent(0), our_index(0), level(level)
+    , line(line), name(""), file(0)
+    , var_decl_node(nullptr), data_decl_node(nullptr)
+  {}
   void set_linkage( cbl_ffi_crv_t crv, bool optional ) {
     linkage.optional = optional;
     linkage.crv = crv;
     assert(crv != by_content_e);
   }
+
+  bool holds_ascii() const;
 
   inline bool is_typedef() const {
     return has_attr(typedef_e);
@@ -515,7 +875,7 @@ struct cbl_field_t {
   }
 
   bool is_valid() const {
-    return data.capacity > 0
+    return data.capacity() > 0
       || level == 88
       || level == 66
       || type == FldClass
@@ -541,7 +901,7 @@ struct cbl_field_t {
   }
 
   bool reasonable_capacity() const {
-    return data.capacity <= MAX_FIXED_POINT_DIGITS;
+    return data.capacity() <= MAX_FIXED_POINT_DIGITS * codeset.stride();
   }
 
   cbl_field_t& same_as( const cbl_field_t& that, bool is_typedef ) {
@@ -550,7 +910,8 @@ struct cbl_field_t {
     attr |= same_as_e;
 
     data  = that.data;
-
+    codeset = that.codeset;
+    
     if( ! (is_typedef || that.type == FldClass) ) {
       data.initial = NULL;
       data = build_zero_cst (float128_type_node);
@@ -558,13 +919,18 @@ struct cbl_field_t {
     return *this;
   }
 
-  void report_invalid_initial_value(const YYLTYPE& loc) const;
+  bool report_invalid_initial_value(const cbl_loc_t& loc) const;
 
   bool is_ascii() const;
   bool is_integer() const { return is_numeric(type) && data.rdigits == 0; }
 
   bool is_binary_integer() const {
     return type == FldNumericBinary || type == FldNumericBin5;
+  }
+
+  bool is_numeric_constant() const {
+    return type == FldLiteralN
+      || (type == FldFloat && has_attr(constant_e));
   }
 
   HOST_WIDE_INT as_integer() const {
@@ -576,16 +942,17 @@ struct cbl_field_t {
 
     type = FldNumericBin5;
     attr |= embiggened_e;
-    data.capacity = eight;
+    data.capacity(eight);
     data.digits = 0;
   }
 
   bool has_attr( cbl_field_attr_t attr ) const {
     return cbl_field_attr_t(this->attr & attr) == attr;
   }
-  size_t set_attr( cbl_field_attr_t attr );
-  size_t clear_attr( cbl_field_attr_t attr );
+  uint64_t set_attr( cbl_field_attr_t attr );
+  uint64_t clear_attr( cbl_field_attr_t attr );
   const char * attr_str( const std::vector<cbl_field_attr_t>& attrs ) const;
+  uint64_t set_signable();
 
   bool is_justifiable() const {
     if( type == FldAlphanumeric ) return true;
@@ -595,7 +962,14 @@ struct cbl_field_t {
 
   bool has_subordinate( const cbl_field_t *that ) const;
 
-  const char * internalize();
+  uint32_t char_capacity() const;
+  void set_capacity(size_t cap);
+  void add_capacity(size_t cap);
+  void set_initial( const cbl_loc_t& loc );
+  void set_initial( size_t nchar, const cbl_loc_t& loc = cbl_loc_t() );
+  size_t source_code_check(const void *initial, size_t length);
+  const char * encode( size_t, cbl_loc_t loc = cbl_loc_t());
+  void encode_numeric( const char input[], cbl_loc_t loc );
   const char *value_str() const;
 
   bool is_key_name() const { return has_attr(record_key_e); }
@@ -604,19 +978,27 @@ struct cbl_field_t {
     return data.digits?
       long(data.digits) - data.rdigits
       :
-      data.capacity;
+      data.capacity();
   }
   uint32_t size() const; // table capacity or capacity
 
   const char * pretty_name() const {
-    if( name[0] == '_' && data.initial ) return data.initial;
+    if( name[0] == '_' && data.original() ) return data.original();
     return name;
   }
   static const char * level_str(uint32_t level );
   inline const char * level_str() const {
     return level_str(level);
   }
+  void blank_initial( size_t len, cbl_figconst_t figconst = normal_value_e );
 };
+
+const cbl_field_t * cbl_figconst_field_of( const char *value );
+
+typedef std::list<cbl_field_t*> symbol_temporaries_t;
+
+symbol_temporaries_t& symbol_temporaries();
+symbol_temporaries_t symbol_temporary_alphanumerics();
 
 // Necessary forward referencea
 struct cbl_label_t;
@@ -625,7 +1007,7 @@ struct cbl_refer_t;
 struct cbl_span_t {
   cbl_refer_t *from, *len;
 
-  cbl_span_t( cbl_refer_t *from, cbl_refer_t *len = NULL )
+  explicit cbl_span_t( cbl_refer_t *from, cbl_refer_t *len = NULL )
     : from(from), len(len) {};
   bool is_active() const { return !( from == NULL && len == NULL ); }
 
@@ -635,53 +1017,67 @@ struct cbl_span_t {
 
 
 struct cbl_refer_t {
-  YYLTYPE loc;
+  cbl_loc_t loc;
   cbl_field_t *field;
   cbl_label_t *prog_func;
   bool all, addr_of;
-  uint32_t nsubscript;
-  cbl_refer_t *subscripts;  // indices
+  std::vector<cbl_refer_t> subscripts;  // indices
   cbl_span_t refmod;        // substring bounds
 
   cbl_refer_t()
-    : field(NULL), prog_func(NULL)
+    : loc(), field(NULL), prog_func(NULL)
     , all(NULL), addr_of(false)
-    , nsubscript(0), subscripts(NULL), refmod(NULL)
+    , refmod(NULL)
   {}
+  // cppcheck-suppress noExplicitConstructor
   cbl_refer_t( cbl_field_t *field, bool all = false )
-    : field(field), prog_func(NULL)
+    : loc(), field(field), prog_func(NULL)
     , all(all), addr_of(false)
-    , nsubscript(0), subscripts(NULL), refmod(NULL)
+    , refmod(NULL)
   {}
-  cbl_refer_t( const YYLTYPE& loc, cbl_field_t *field, bool all = false )
+  cbl_refer_t( const cbl_loc_t& loc, cbl_field_t *field, bool all = false )
     : loc(loc), field(field), prog_func(NULL)
     , all(all), addr_of(false)
-    , nsubscript(0), subscripts(NULL), refmod(NULL)
+    , refmod(NULL)
   {}
   cbl_refer_t( cbl_field_t *field, cbl_span_t& refmod )
-    : field(field), prog_func(NULL)
+    : loc(), field(field), prog_func(NULL)
     , all(false), addr_of(false)
-    , nsubscript(0), subscripts(NULL), refmod(refmod)
+    , refmod(refmod)
   {}
   cbl_refer_t( cbl_field_t *field,
-               size_t nsubscript, cbl_refer_t *subscripts,
+               const std::vector<cbl_refer_t>& subscripts,
                cbl_span_t refmod = cbl_span_t(NULL) )
-    : field(field), prog_func(NULL)
+    : loc(), field(field), prog_func(NULL)
     , all(false), addr_of(false)
-    , nsubscript(nsubscript) , subscripts( new cbl_refer_t[nsubscript] )
+    , subscripts(subscripts)
     , refmod(refmod)
-  {
-    std::copy(subscripts, subscripts + nsubscript, this->subscripts);
-  }
+  {}
   explicit cbl_refer_t( cbl_label_t *prog_func, bool addr_of = true )
-    : field(NULL), prog_func(prog_func)
+    : loc(), field(NULL), prog_func(prog_func)
     , all(false), addr_of(addr_of)
-    , nsubscript(0), subscripts(NULL), refmod(cbl_span_t(NULL))
+    , refmod(cbl_span_t(NULL))
   {}
 
-  cbl_refer_t duplicate() const {
-    return cbl_refer_t( field, nsubscript, subscripts, refmod );
+  cbl_refer_t( const cbl_refer_t& that ) = default;
+
+  cbl_refer_t& operator=( const cbl_refer_t& that ) {
+    loc = that.loc;
+    field = that.field;
+    prog_func = that.prog_func;
+    all = that.all;
+    addr_of = that.addr_of;
+    subscripts = that.subscripts;
+    refmod = that.refmod;
+    return *this;
   }
+    
+  
+  cbl_refer_t duplicate() const {
+    return cbl_refer_t( field, subscripts, refmod );
+  }
+
+  uint32_t nsubscript() const { return subscripts.size(); }
 
   static cbl_refer_t *empty();
 
@@ -693,8 +1089,8 @@ struct cbl_refer_t {
   }
 
   bool is_pointer() const { return addr_of || field->type == FldPointer; }
-  bool is_reference() const { return nsubscript > 0 || refmod.is_active(); }
-  bool is_table_reference() const  { return nsubscript > 0; }
+  bool is_reference() const { return nsubscript() > 0 || refmod.is_active(); }
+  bool is_table_reference() const  { return nsubscript() > 0; }
   bool is_refmod_reference() const  { return refmod.is_active(); }
 
   size_t subscripts_set( const std::list<cbl_refer_t>& subs );
@@ -711,6 +1107,34 @@ struct cbl_refer_t {
     assert( FldConditional == field->type);
     return field;
   }
+};
+
+/*
+ * An element in the RPN stack for expression evaluation, either an operation
+ * or an operand.  A NUL operator indicates an operand. 
+ */
+struct rpn_t {
+  char op;
+  cbl_refer_t term;
+  rpn_t( char op ) : op(op) { // cppcheck-suppress noExplicitConstructor
+    static const char ops[] = "+-*/^!";
+    gcc_assert( std::any_of(ops, ops + sizeof(ops),
+                            [op]( char ch ) { return op == ch; }) );
+  }
+  rpn_t( const cbl_refer_t &term ) // cppcheck-suppress noExplicitConstructor
+    : op('\0'), term(term)
+  {}
+};
+
+struct expr_t {
+  char op;
+  cbl_refer_t lhs, rhs;
+  cbl_label_t *lbl;
+  expr_t( char op,
+          const cbl_refer_t& lhs, const cbl_refer_t& rhs,
+          cbl_label_t *lbl )
+    : op(op), lhs(lhs), rhs(rhs), lbl(lbl)
+  {}
 };
 
 struct elem_key_t {
@@ -759,7 +1183,7 @@ struct field_key_t {
   }
 };
 
-bool valid_move( const struct cbl_field_t *tgt, const struct cbl_field_t *src );
+bool valid_move( const cbl_refer_t& tgt, const cbl_refer_t& src );
 
 #define record_area_name_stem "_ra_"
 
@@ -768,9 +1192,6 @@ is_record_area( const cbl_field_t *field ) {
   static const char stem[] = record_area_name_stem;
   return 0 == memcmp(field->name, stem, sizeof(stem)-1);
 }
-
-bool
-is_register_field(cbl_field_t *field);
 
 static inline bool
 is_constant( const cbl_field_t *field ) {
@@ -787,18 +1208,23 @@ bool
 symbol_field_type_update( cbl_field_t *field,
                           cbl_field_type_t type, bool is_usage );
 
+void symbol_field_capacity_set( cbl_field_t *field );
+
+struct sort_key_t;
 struct sort_key_t;
 
 struct cbl_key_t {
   bool ascending;
-  size_t nfield;
-  cbl_field_t **fields;
+  std::vector<const cbl_field_t*> fields;
 
-  cbl_key_t() : ascending(false), nfield(0), fields(0) {}
-  cbl_key_t( size_t nfield, cbl_field_t **fields, bool ascending = true )
-    : ascending(ascending), nfield(nfield), fields(fields) {}
-  cbl_key_t( const sort_key_t& src );
+  cbl_key_t() : ascending(true) {}
+  explicit cbl_key_t( sort_key_t src );
   explicit cbl_key_t( const cbl_occurs_key_t& that );
+  cbl_key_t( size_t nfield, cbl_field_t **fields, bool ascending = true )
+    : ascending(ascending)
+    , fields(fields, fields + nfield)
+  {}
+  cbl_key_t& operator=( const sort_key_t& that );
 };
 
 enum cbl_label_type_t {
@@ -819,6 +1245,7 @@ enum cbl_label_type_t {
   LblString,
   LblArith,
   LblCompute,
+  LblXml,
 };
 
 struct cbl_proc_addresses_t {
@@ -835,7 +1262,24 @@ struct cbl_proc_t {
   struct cbl_proc_addresses_t top;
   struct cbl_proc_addresses_t exit;
   struct cbl_proc_addresses_t bottom;
-  tree alter_location;  // The altered value if this paragraph is the target of an ALTER
+
+  // The following members implement the return location for a PERFORM to this
+  // procedure.  The dispatch_switch_label is where the switch() statement for
+  // this procedure is found; the dispatch_switch_goto is how you get there.
+  // The switch statement itself is made up of GOTO statements built from the
+  // label_decls found in pseudo_return_decls.
+  tree dispatch_switch_goto;
+  tree dispatch_switch_label;
+  std::vector<tree> pseudo_return_decls;
+
+  // The following members do the analogous process for a paragraph that is
+  // the target of an ALTER statement
+  tree alter_switch_goto;
+  tree alter_switch_label;
+  tree no_alter_goto;
+  tree no_alter_label;
+  std::vector<tree> alter_decls;
+  tree alter_index;  // The integer index to the switch statement
 };
 
 struct cbl_label_addresses_t {
@@ -895,8 +1339,12 @@ struct cbl_substitute_t {
   subst_fl_t first_last;
   cbl_refer_t orig, replacement;
 
-  cbl_substitute_t( bool anycase = false, char first_last = 0,
-                    cbl_refer_t *orig = NULL, cbl_refer_t *replacement = NULL )
+  cbl_substitute_t()
+    : anycase(false)
+    , first_last(subst_all_e)
+  {}
+  cbl_substitute_t( bool anycase, char first_last,
+                    cbl_refer_t *orig, cbl_refer_t *replacement )
     : anycase(anycase)
     , first_last(subst_fl_t(first_last))
     , orig( orig? *orig : cbl_refer_t() )
@@ -929,8 +1377,30 @@ struct cbl_num_result_t {
   enum cbl_round_t rounded;
   struct cbl_refer_t refer;
 
-  static cbl_refer_t refer_of( const cbl_num_result_t& res ) { return res.refer; }
+  static const cbl_refer_t&
+  refer_of( const cbl_num_result_t& res ) {
+    return res.refer;
+  }
 };
+
+struct parameter_t {
+  bool optional;
+  cbl_ffi_crv_t crv; // by content not applicable
+  cbl_field_t field;
+  parameter_t( const cbl_field_t& field, // cppcheck-suppress noExplicitConstructor
+               cbl_ffi_crv_t crv = by_default_e,
+               bool optional = false )
+    : optional(optional)
+    , crv(crv)
+    , field(field)
+  {}
+};
+
+/*
+ * Map symbol table index of procedure/function to formal parameters.
+ * Index may refer to definition or prototype. 
+ */
+typedef std::map<size_t, std::vector<parameter_t>> parameter_map;
 
 void parser_symbol_add( struct cbl_field_t *new_var );
 void parser_local_add( struct cbl_field_t *new_var );
@@ -941,12 +1411,15 @@ struct cbl_ffi_arg_t {
   cbl_ffi_arg_attr_t attr;
   cbl_refer_t refer; // refer::field == NULL is OMITTED
 
-  cbl_ffi_arg_t( cbl_refer_t* refer = NULL,
-                 cbl_ffi_arg_attr_t attr = none_of_e );
+  cbl_ffi_arg_t();
+  cbl_ffi_arg_t( cbl_refer_t* refer,
+                 cbl_ffi_arg_attr_t attr );
   cbl_ffi_arg_t( cbl_ffi_crv_t crv,
                  cbl_refer_t* refer,
                  cbl_ffi_arg_attr_t attr = none_of_e );
   cbl_field_t *field() { return refer.field; }
+  const cbl_field_t *field() const { return refer.field; }
+  bool matches( const cbl_ffi_arg_t& that ) const;
   void validate() const {
     if( refer.is_reference() ) {
       yyerror("%s is a reference", refer.field->name);
@@ -967,6 +1440,12 @@ protected:
   bool by_value() const {
     if( crv == by_reference_e ) return false;
     return refer.field != NULL;
+  }
+  static bool capacity_ok( const cbl_field_t *formal, const cbl_field_t *actual ) {
+    if( formal->data.capacity() == actual->data.capacity() ) return true;
+    if( formal->data.capacity() == 1 && formal->has_attr(any_length_e) ) return true;
+    if( actual->data.capacity() == 1 && actual->has_attr(any_length_e) ) return true;
+    return false;
   }
 };
 
@@ -1000,7 +1479,6 @@ struct cbl_bsearch_t {
     tree right; // This is a long
     tree middle; // This is our copy of the index, so we only need to write
                  // it and never read it.
-    tree compare_result; // This is an int, and avoids
     struct cbl_field_t *index;
     bool first_when;
 };
@@ -1030,16 +1508,29 @@ struct cbl_arith_error_t {
     cbl_label_addresses_t bottom;
 };
 
+struct cbl_delete_file_t {
+    cbl_label_addresses_t over;
+    cbl_label_addresses_t exception;
+    cbl_label_addresses_t no_exception;
+    cbl_label_addresses_t bottom;
+};
+
 struct cbl_compute_error_t {
     // This is an int.  The value is a cbl_compute_error_code_t
     tree compute_error_code;
+};
+
+struct cbl_xml_parse_t {
+    cbl_label_addresses_t over;
+    cbl_label_addresses_t exception;
+    cbl_label_addresses_t no_exception;
 };
 
 struct cbl_label_t {
   enum cbl_label_type_t type;
   size_t parent;
   int line, used, lain;
-  bool common, initial, recursive;
+  bool common, initial, recursive, prototype;
   size_t initial_section, returning;
   cbl_name_t name;
   const char *os_name, *mangled_name;
@@ -1068,6 +1559,13 @@ struct cbl_label_t {
 
     // for parser_op/parser_assign error tracking
     struct cbl_compute_error_t *compute_error;
+    
+    // for parse_xml processing:
+    struct cbl_xml_parse_t *xml_parse;
+
+    // For parser_file_delete_file
+    struct cbl_delete_file_t *delete_file;
+
     } structs;
 
   bool is_function() const { return type == LblFunction; }
@@ -1086,6 +1584,7 @@ struct cbl_label_t {
     case LblString: return "LblString";
     case LblArith: return "LblArith";
     case LblCompute: return "LblCompute";
+    case LblXml: return "LblXml";
     }
     gcc_unreachable();
   }
@@ -1095,26 +1594,6 @@ struct cbl_label_t {
 };
 
 struct parser_tgt_t;
-
-class cbl_label_ref_t {
-  bool qualified;             // caller mentioned paragraph & section
-  cbl_label_t *target;
-  const cbl_label_t& context; // section called from
-  int line;                   // point of reference
-  parser_tgt_t *handle;
-public:
-  cbl_label_ref_t( size_t program, const cbl_label_t& context, int line,
-                   const char name[], size_t isect = 0 );
-
-  cbl_label_t * target_of() { return target; }
-
-  parser_tgt_t * handle_of(parser_tgt_t *parser_tgt) {
-    return this->handle = parser_tgt;
-  }
-  parser_tgt_t * handle_of() {
-    return this->handle;
-  }
-};
 
 static inline bool
 label_lessthan( const cbl_label_t & a, const cbl_label_t & b ) {
@@ -1140,45 +1619,90 @@ struct label_cmp_lessthan {
 
 size_t field_index( const cbl_field_t *f );
 
-cbl_field_t * new_temporary( enum cbl_field_type_t type, const char initial[] = NULL );
+cbl_field_t * new_literal_float( const cbl_loc_t& loc, const char initial[] );
+
+cbl_field_t * new_temporary( enum cbl_field_type_t type,
+                             const char initial[] = NULL,
+                             cbl_field_attr_t = none_e );
 cbl_field_t * new_temporary_like( cbl_field_t skel );
 cbl_field_t * new_temporary_clone( const cbl_field_t *orig);
 cbl_field_t * keep_temporary( cbl_field_type_t type );
 
+cbl_field_t * new_literal_2( uint32_t len, const char initial[],
+                             cbl_field_attr_t attr,
+                             cbl_encoding_t encoding = ASCII_e );
+
 cbl_field_t * new_literal( uint32_t len, const char initial[],
-                           enum cbl_field_attr_t attr = none_e );
+                           cbl_field_attr_t attr,
+                           cbl_encoding_t encoding = ASCII_e );
+
+static inline cbl_field_t *
+new_literal( uint32_t len, const char initial[] ) {
+  return new_literal(len, initial, none_e);
+}
 
 void symbol_temporaries_free();
+void symbol_temporary_location( const cbl_field_t *field,
+                                const cbl_loc_t& loc);
+cbl_loc_t symbol_temporary_location( const cbl_field_t *field );
 
 class temporaries_t {
-  friend void symbol_temporaries_free();
-  struct literal_an {
-    bool is_quoted;
+  friend void symbol_temporaries_free();    
+  friend void symbol_temporary_location( const cbl_field_t *field,
+                                         const cbl_loc_t& loc);
+  friend cbl_loc_t symbol_temporary_location( const cbl_field_t *field );
+
+  class literal_an {
+    bool is_quoted, is_verbatim; // verbatim: don't use codeset
+   public:
     std::string value;
-    literal_an( const char value[] = "???", bool is_quoted = false )
-      : is_quoted(is_quoted), value(value) {}
+    literal_an() : is_quoted(false), is_verbatim(false), value("???") {}
+    literal_an( const char value[], bool is_quoted, bool is_verbatim = false )
+      : is_quoted(is_quoted), is_verbatim(is_verbatim), value(value) {}
+    literal_an( size_t len, const char value[] )
+      : is_quoted(true), is_verbatim(false), value(value, len)
+    {
+      gcc_assert(0 < len);
+      gcc_assert(value[len-1] == '\0');
+      gcc_assert(this->value.back() == '\0');
+    }
+    literal_an( const literal_an& that )
+      : is_quoted(that.is_quoted)
+      , is_verbatim(that.is_verbatim)
+      , value(that.value)
+    {}
     literal_an& operator=( const literal_an& that ) {
       is_quoted = that.is_quoted;
+      is_verbatim = that.is_verbatim;
       value = that.value;
       return *this;
     }
     bool operator<( const literal_an& that ) const {
       if( value == that.value ) { // alpha before numeric
-        return (is_quoted? 0 : 1)  < (that.is_quoted? 0 : 1);
+        if( is_quoted == that.is_quoted ) { // non-verbatim first
+          return that.is_verbatim;
+        }
+        return that.is_quoted; // unquoted first
       }
       return value < that.value;
+    }
+    bool terminated() const {
+      // Z strings include the NUL terminator.   
+      return !is_verbatim && is_quoted && !value.empty() && '\0' == value.back();
     }
   };
 
   std::map<literal_an, cbl_field_t *> literals;
+  std::map<const cbl_field_t*, cbl_loc_t> locs;
   typedef std::set<cbl_field_t *> fieldset_t;
   typedef std::map<cbl_field_type_t, fieldset_t> fieldmap_t;
   fieldmap_t used, freed;
 
 public:
-  cbl_field_t * literal( const char value[], uint32_t len, cbl_field_attr_t attr  = none_e );
+  cbl_field_t * literal( uint32_t len, const char value[], 
+                         cbl_field_attr_t attr, cbl_encoding_t encoding );
   cbl_field_t * reuse( cbl_field_type_t type );
-  cbl_field_t * acquire( cbl_field_type_t type );
+  cbl_field_t * acquire( cbl_field_type_t type, const cbl_name_t name = nullptr );
   cbl_field_t *  add( cbl_field_t *field );
   bool keep( cbl_field_t *field ) { return 1 == used[field->type].erase(field); }
   void dump() const;
@@ -1208,33 +1732,6 @@ enum cbl_intrinsic_trim_t {
   trim_trailing_e = 2,
 };
 
-enum cbl_ctype_t {
-  c_unknown,
-  c_bool,
-  c_char,
-  c_wchar,
-  c_byte,
-  c_ubyte,
-  c_short,
-  c_ushort,
-  c_int,
-  c_uint,
-  c_long,
-  c_ulong,
-  c_longlong,
-  c_ulonglong,
-  c_size_t,
-  c_ssize_t,
-  c_int128,
-  c_float,
-  c_double,
-  c_longdouble,
-  c_char_p,
-  c_wchar_p,
-  c_void_p,
-  c_nts,      // this is a null-terminated-string char_p
-};
-
 struct function_descr_arg_t {
   size_t isym;
   cbl_ffi_crv_t crv;
@@ -1254,16 +1751,20 @@ struct function_descr_t {
   char cname[48];
   char types[8];
   std::vector<function_descr_arg_t> linkage_fields;
-  cbl_field_type_t ret_type;
-
-  static function_descr_t init( const char name[] ) {
+  cbl_field_type_t ret_type;  // When the ret_type is FldInvalid, that
+                              // indicates the function takes on the type of
+                              // the first argument.
+  bool prototype;
+  static function_descr_t init( const char name[], bool prototype = false ) {
     function_descr_t descr = {};
     if( -1 == snprintf( descr.name, sizeof(descr.name), "%s", name ) ) {
-      dbgmsg("name truncated to '%s' (max %zu characters)", name);
+      dbgmsg("name truncated to '%s' (max " HOST_SIZE_T_PRINT_UNSIGNED
+             " characters)", name, (fmt_size_t)sizeof(descr.name));
     }
+    descr.prototype = prototype;
     return descr;  // truncation also reported elsewhere ?
   }
-  static function_descr_t init( int isym );
+  static function_descr_t init( int isym, bool prototype = false );
 
   static char
   parameter_type( const cbl_field_t& field ) {
@@ -1278,7 +1779,6 @@ struct function_descr_t {
     case FldForward:
     case FldIndex:
     case FldSwitch:
-    case FldBlob:
       return '?';
     case FldPointer:
       return 'O';
@@ -1298,10 +1798,12 @@ struct function_descr_t {
   }
 
   bool operator<( const function_descr_t& that ) const {
-    return strcasecmp(name, that.name) < 0;
+    return strcasecmp(name, that.name) < 0
+        || prototype != that.prototype;
   }
   bool operator==( const function_descr_t& that ) const {
-    return strcasecmp(name, that.name) == 0;
+    return strcasecmp(name, that.name) == 0
+        && prototype == that.prototype;
   }
   bool operator==( const char *name ) const {
     return strcasecmp(this->name, name) == 0;
@@ -1329,99 +1831,140 @@ struct cbl_section_t {
     }
     gcc_unreachable();
   }
-  uint32_t attr() const {
-    switch(type) {
-    case file_sect_e:
-    case working_sect_e: return 0;
-    case linkage_sect_e: return linkage_e;
-    case local_sect_e:   return local_e;
-    }
-    gcc_unreachable();
+};
+
+struct cbl_locale_t {
+  cbl_name_t name;
+  cbl_encoding_t encoding;
+  cbl_name_t collation;
+
+  explicit cbl_locale_t(const cbl_name_t name,
+                        const char iconv_name[] = nullptr );
+
+  bool operator<( const cbl_locale_t& that ) const {
+    return strcmp(name, that.name) < 0;
   }
 };
 
+/*
+ * If SELECT name ASSIGN TO DEVICE is used, the index of the special name is
+ * assigned to cbl_file_t::device.  The device itself never changes. 
+ */
 struct cbl_special_name_t {
   int token;
   enum special_name_t id;
   cbl_name_t name;
-  size_t filename;
   char os_filename[16]; // short because always in /dev
 };
 
 char * hex_decode( const char text[] );
 
+/*
+ * An alphabet may just name an encoding, which implies binary collation.
+ *
+ * An alphabet may reference a Special-Names LOCALE, which defines an encoding
+ * and a collation (perhaps by default).
+ * 
+ * During Special-Names parsing, an Alphabet may reference an as-yet undefined
+ * LOCALE with an as-yet unknown encoding. As a placeholder it inserts a named,
+ * undefined cbl_locale_t symbol, which the Alphabet references.  If that
+ * locale is never defined, the encoding remains unknown, resulting in an error
+ * diagnostic at the end of Special-Names.
+ *
+ * For a custom alphabet of single-byte encoding, cbl_alphabet_t::collation_sequence
+ * holds the collation position of each encoded value.  
+ * If 'A' sorts first (after LOW-VALUE), then collation_sequence['A'] == 1. 
+ * If the encoding is ASCII,         then 'A' is  65 and collation_sequence[ 65] == 1.
+ * If the encoding is EBCDIC CP1140, then 'A' is 193 and collation_sequence[193] == 1.
+ */
 struct cbl_alphabet_t {
-  YYLTYPE loc;
+  cbl_loc_t loc;
   cbl_name_t name;
   cbl_encoding_t encoding;
-  unsigned char low_index, high_index, last_index, alphabet[256];
+  size_t locale;  // index to cbl_locale_t symbol
+  unsigned char low_index, high_index, last_index, collation_sequence[256];
+  unsigned char low_char, high_char;
 
   cbl_alphabet_t()
     : loc { 1,1, 1,1 }
     , encoding(ASCII_e)
+    , locale(0)
     , low_index(0)
     , high_index(255)
     , last_index(0)
+    , low_char(0)
+    , high_char(0)
   {
     memset(name, '\0', sizeof(name));
-    memset(alphabet, 0xFF, sizeof(alphabet));
+    memset(collation_sequence, 0xFF, sizeof(collation_sequence));
   }
 
-  cbl_alphabet_t(const YYLTYPE& loc, cbl_encoding_t enc)
+  cbl_alphabet_t(const cbl_loc_t& loc, cbl_encoding_t enc)
     : loc(loc)
     , encoding(enc)
+    , locale(0)
     , low_index(0)
     , high_index(255)
     , last_index(0)
+    , low_char(0)
+    , high_char(0)
   {
     memset(name, '\0', sizeof(name));
-    memset(alphabet, 0xFF, sizeof(alphabet));
+    memset(collation_sequence, 0xFF, sizeof(collation_sequence));
   }
 
-  cbl_alphabet_t( const YYLTYPE& loc, const cbl_name_t name,
+  cbl_alphabet_t(const cbl_loc_t& loc, size_t locale, cbl_name_t name );
+
+  cbl_alphabet_t( const cbl_loc_t& loc, const cbl_name_t name,
                   unsigned char low_index, unsigned char high_index,
-                  unsigned char alphabet[] )
+                  unsigned char collation_sequence[] )
     : loc(loc)
     , encoding(custom_encoding_e)
+    , locale(0)
     , low_index(low_index), high_index(high_index)
     , last_index(high_index)
+    , low_char(low_index)
+    , high_char(high_index)
   {
     assert(strlen(name) < sizeof(this->name));
     strcpy(this->name, name);
-    std::copy(alphabet, alphabet + sizeof(this->alphabet), this->alphabet);
+    std::copy(collation_sequence,
+              collation_sequence + sizeof(this->collation_sequence),
+              this->collation_sequence);
   }
 
   unsigned char low_value() const {
-    return alphabet[low_index];
+    return collation_sequence[low_index];
   }
   unsigned char high_value() const {
-    return alphabet[high_index];
+    return collation_sequence[high_index];
   }
 
   void
-  add_sequence( const YYLTYPE& loc, const unsigned char seq[] ) {
+  add_sequence( const cbl_loc_t& loc, const unsigned char seq[] ) {
     if( low_index == 0 ) low_index = seq[0];
 
-    unsigned char high_value = last_index > 0? alphabet[last_index] + 1 : 0;
+    unsigned char last = last_index > 0? collation_sequence[last_index] + 1 : 0;
 
     for( const unsigned char *p = seq; !end_of_string(p); p++  ) {
-      assign(loc, *p, high_value++);
+      assign(loc, *p, last++);
     }
   }
 
   void
-  add_interval( const YYLTYPE& loc, unsigned char low, unsigned char high ) {
+  add_interval( const cbl_loc_t& loc, unsigned char low, unsigned char high ) {
     if( low_index == 0 ) low_index = low;
 
-    unsigned char high_value = alphabet[last_index];
+    unsigned char last = collation_sequence[last_index];
 
     for( unsigned char ch = low; ch < high; ch++  ) {
-      assign(loc, ch, high_value++);
+      assign(loc, ch, last++);
     }
   }
 
-  void also( const YYLTYPE& loc, size_t ch );
-  bool assign( const YYLTYPE& loc, unsigned char ch, unsigned char value );
+  void also( const cbl_loc_t& loc, size_t ch );
+  bool assign( const cbl_loc_t& loc, unsigned char ch, unsigned char value );
+  bool reencode( const cbl_loc_t& loc );
 
   static const char *
   encoding_str( cbl_encoding_t encoding ) {
@@ -1429,22 +1972,31 @@ struct cbl_alphabet_t {
     case ASCII_e:  return "ascii";
     case iso646_e: return "iso646";
     case EBCDIC_e: return "ebcdic";
+    case UTF8_e:   return "utf8";
     case custom_encoding_e: return "custom";
+    default:
+      {
+        auto p = __gg__encoding_iconv_name( encoding );
+        if( p ) return p;
+      }
     }
     return "???";
   }
 
   void dump() const {
-    yywarn("'%s': %s, '%c' to '%c' (low 0x%02x, high 0x%02x)",
-          name, encoding_str(encoding),
-          low_index, last_index, low_index, high_index);
+    dbgmsg("%s: '%s', '%c' to '%c' (low 0x%x, high 0x%x)",
+           name, encoding_str(encoding),
+           low_index, last_index, low_index, high_index);
     if( encoding == custom_encoding_e ) {
       fprintf(stderr, "\t"
                "  0   1   2   3   4   5   6   7"
               "   8   9   A   B   C   C   E   F");
       unsigned int row = 0;
-      for( auto p = alphabet; p < alphabet + sizeof(alphabet); p++ ) {
-        if( (p - alphabet) % 16 == 0 ) fprintf(stderr, "\n%4X\t", row++);
+      for( auto p = collation_sequence;
+           p < collation_sequence + sizeof(collation_sequence); p++ ) {
+        if( (p - collation_sequence) % 16 == 0 ) {
+          fprintf(stderr, "\n%4X\t", row++);
+        }
         fprintf(stderr, "%3u ", *p);
       }
       fprintf(stderr, "\n");
@@ -1456,14 +2008,6 @@ struct cbl_alphabet_t {
   static inline bool end_of_string( const unsigned char *p ) {
     return p != nul_string && *p == '\0';
   }
-};
-
-// a function pointer
-typedef void ( *cbl_function_ptr ) ( void );
-
-struct cbl_function_t {
-  char name[NAME_MAX];
-  cbl_function_ptr func;
 };
 
 static inline const char *
@@ -1504,9 +2048,19 @@ struct cbl_file_key_t {
   cbl_name_t name;
   size_t leftmost; // START or READ named leftmost field in key
   size_t nfield;
-  size_t *fields;
+  size_t *fields; // cppcheck-suppress unsafeClassCanLeak
 
-  cbl_file_key_t( size_t field = 0, bool unique = true )
+  cbl_file_key_t()
+    : unique(true)
+    , leftmost(0)
+    , nfield(0)
+    , fields(nullptr)
+  {
+    memset(name, '\0', sizeof(name));
+  }
+
+  // Construct a key of length 1 having a single field. 
+  explicit cbl_file_key_t( size_t field, bool unique = true )
     : unique(unique)
     , leftmost(0)
     , nfield(1)
@@ -1515,19 +2069,33 @@ struct cbl_file_key_t {
     fields[0] = field;
     memset(name, '\0', sizeof(name));
   }
-  cbl_file_key_t( const cbl_file_key_t *that )
-    : unique(that->unique)
-    , leftmost(that->leftmost)
-    , nfield(that->nfield)
-  {
-    memcpy(name, that->name, sizeof(name));
-    fields = new size_t[nfield];
-    std::copy( that->fields, that->fields + that->nfield, fields );
-  }
 
   cbl_file_key_t( cbl_name_t name,
                   const std::list<cbl_field_t *>& fields,
                   bool is_unique );
+
+  // The copy constructor and assignment operator exist to quell reports from
+  // cppcheck. When these objects are copied, the copy still points to the
+  // original data.
+  cbl_file_key_t( const cbl_file_key_t& that )
+    : unique(that.unique)
+    , leftmost(that.leftmost)
+    , nfield(that.nfield)
+      // cppcheck-suppress copyCtorPointerCopying
+    , fields(that.fields)
+  {
+    strcpy(name, that.name);
+  }
+  ~cbl_file_key_t() {}
+  cbl_file_key_t& operator=( const cbl_file_key_t& that ) {
+    unique = that.unique;
+    leftmost = that.leftmost;
+    nfield = that.nfield;
+    // cppcheck-suppress copyCtorPointerCopying
+    fields = that.fields;
+    strcpy(name, that.name);
+    return *this;
+  }
 
   uint32_t size();
   void deforward( size_t ifile );
@@ -1542,12 +2110,12 @@ struct cbl_file_key_t {
 struct cbl_file_lock_t {
   bool multiple;
   enum lock_mode_t { unlocked_e, manual_e, record_e, automatic_e } mode;
+  cbl_file_lock_t() : multiple(false), mode(unlocked_e) {}
   bool mode_set( int token );
   bool locked() const { return mode != unlocked_e; }
 };
 
 struct cbl_file_t {
-  static cbl_file_key_t no_key;
   enum cbl_file_org_t org;
   enum file_entry_type_t entry_type;
   uint32_t attr;
@@ -1560,7 +2128,7 @@ struct cbl_file_t {
   // "The RECORD DELIMITER clause is syntax checked, but has no effect
   //  on the execution of the program."
   enum cbl_file_access_t access;
-  size_t filename;      //
+  size_t filename, device;
   size_t default_record;
   size_t nkey;          // 1st key is primary & unique
   cbl_file_key_t *keys; // indexes into symbol table for key field(s)
@@ -1568,21 +2136,52 @@ struct cbl_file_t {
   size_t user_status;   // index into symbol table for file status
   size_t vsam_status;   // index into symbol table for vsam status PIC X(6)
   size_t record_length; // DEPENDS ON
+  struct codeset_t {
+    cbl_encoding_t encoding;
+    size_t alphabet;  // unlikely
+    explicit codeset_t(cbl_encoding_t encoding = CP1252_e, size_t alphabet = 0)
+      : encoding(encoding), alphabet(alphabet)
+    {}
+  } codeset;
+  struct linage_t {
+    cbl_refer_t *nline, *footing, *top, *bottom;
+    linage_t()
+      : nline(nullptr), footing(nullptr), top(nullptr), bottom(nullptr)
+    {}           
+  } linage;
   int line;
   cbl_name_t name;
   cbl_sortreturn_t *addresses; // Used during parser_return_start, et al.
   tree var_decl_node;           // GENERIC tag for the run-time FIELD structure
 
   cbl_file_t()
-    : org(file_disorganized_e),
-      access(file_access_seq_e)
+    : org(file_disorganized_e)
+    , entry_type(fd_e)
+    , attr(0), reserve(0), same_record_as(0)
+    , padding('\0')
+    , optional(false)
+    , varying_size{ false, 0, 0 }
+    , access(file_access_seq_e)
+    , filename(0), device(0)
+    , default_record(0)
+    , nkey(0)
+    , keys(nullptr)
+    , password(0), user_status(0), vsam_status(0), record_length(0)
+    , line(0)
+    , addresses(nullptr)
+    , var_decl_node(nullptr)
   {
-    keys = &no_key;
+    memset(name, '\0', sizeof(name));
   }
   
   bool varies() const { return varying_size.min != varying_size.max; }
+  void assign( special_name_t device ) { this->device = special_index(device); }
   bool validate() const;
   void deforward();
+  cbl_file_key_t * keys_update( cbl_file_key_t * keys ) {
+    if( this->keys ) delete[] this->keys;
+    return this->keys = keys;
+  }
   char * keys_str() const;
   int  key_one( cbl_field_t *field ) const {
     auto ekey = keys + nkey, p = ekey;
@@ -1596,9 +2195,11 @@ struct cbl_file_t {
     return org == file_indexed_e && access == file_access_seq_e;
   }
   void consider_for_default( const cbl_field_t *record );
+  const char * filename_of() const;
  protected:
   bool validate_forward( size_t isym ) const;
   bool validate_key( const cbl_file_key_t& key ) const;
+  static size_t special_index( special_name_t device );
 };
 
 static inline bool
@@ -1621,20 +2222,18 @@ struct symbol_elem_t {
   size_t program;
   union symbol_elem_u {
     char *filename;
-    cbl_function_t     function;
     cbl_field_t        field;
     cbl_label_t        label;
     cbl_special_name_t special;
+    cbl_locale_t       locale;
     cbl_alphabet_t     alphabet;
     cbl_file_t         file;
     cbl_section_t      section;
-    symbol_elem_u() {
-      static const cbl_field_t empty = {};
-      field = empty;
-    }
+    symbol_elem_u() : field() {}
   } elem;
   
-  symbol_elem_t( symbol_type_t type = SymField, size_t program = 0 )
+  symbol_elem_t() : type(SymField), program(0) {}
+  explicit symbol_elem_t( symbol_type_t type, size_t program = 0 )
     : type(type), program(program)
   {}
 
@@ -1675,9 +2274,6 @@ struct symbol_elem_t {
     case SymFilename:
       elem.filename = that.elem.filename;
       break;
-    case SymFunction:
-      elem.function = that.elem.function;
-      break;
     case SymField:
       elem.field = that.elem.field;
       break;
@@ -1686,6 +2282,9 @@ struct symbol_elem_t {
       break;
     case SymSpecial:
       elem.special = that.elem.special;
+      break;
+    case SymLocale:
+      elem.locale = that.elem.locale;
       break;
     case SymAlphabet:
       elem.alphabet = that.elem.alphabet;
@@ -1701,12 +2300,15 @@ struct symbol_elem_t {
   }
 };
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Winvalid-offsetof"
 # define offsetof(TYPE, MEMBER)  __builtin_offsetof (TYPE, MEMBER)
 
 static inline symbol_elem_t *
 symbol_elem_of( cbl_label_t *label ) {
   size_t n = offsetof(struct symbol_elem_t, elem.label);
   return
+    // cppcheck-suppress cstyleCast
     reinterpret_cast<struct symbol_elem_t *>((char*)label - n);
 }
 
@@ -1714,6 +2316,7 @@ static inline const symbol_elem_t *
 symbol_elem_of( const cbl_label_t *label ) {
   size_t n = offsetof(symbol_elem_t, elem.label);
   return
+    // cppcheck-suppress cstyleCast
     reinterpret_cast<const symbol_elem_t *>((const char*)label - n);
 }
 
@@ -1721,6 +2324,7 @@ static inline symbol_elem_t *
 symbol_elem_of( cbl_special_name_t *special ) {
   size_t n = offsetof(symbol_elem_t, elem.special);
   return
+    // cppcheck-suppress cstyleCast
     reinterpret_cast<symbol_elem_t *>((char*)special - n);
 }
 
@@ -1728,19 +2332,30 @@ static inline symbol_elem_t *
 symbol_elem_of( cbl_alphabet_t *alphabet ) {
   size_t n = offsetof(symbol_elem_t, elem.alphabet);
   return
+    // cppcheck-suppress cstyleCast
     reinterpret_cast<symbol_elem_t *>((char*)alphabet - n);
+}
+
+static inline const symbol_elem_t *
+symbol_elem_of( const cbl_alphabet_t *alphabet ) {
+  size_t n = offsetof(symbol_elem_t, elem.alphabet);
+  return
+    // cppcheck-suppress cstyleCast
+    reinterpret_cast<const symbol_elem_t *>((const char*)alphabet - n);
 }
 
 static inline symbol_elem_t *
 symbol_elem_of( cbl_file_t *file ) {
   size_t n = offsetof(struct symbol_elem_t, elem.file);
   return
+    // cppcheck-suppress cstyleCast
     reinterpret_cast<struct symbol_elem_t *>((char*)file - n);
 }
 static inline const symbol_elem_t *
 symbol_elem_of( const cbl_file_t *file ) {
   size_t n = offsetof(symbol_elem_t, elem.file);
   return
+    // cppcheck-suppress cstyleCast
     reinterpret_cast<const symbol_elem_t *>((const char*)file - n);
 }
 
@@ -1748,25 +2363,32 @@ static inline symbol_elem_t *
 symbol_elem_of( cbl_field_t *field ) {
   size_t n = offsetof(struct symbol_elem_t, elem.field);
   return
+    // cppcheck-suppress cstyleCast
     reinterpret_cast<struct symbol_elem_t *>((char*)field - n);
 }
 static inline const symbol_elem_t *
 symbol_elem_of( const cbl_field_t *field ) {
   size_t n = offsetof(symbol_elem_t, elem.field);
   return
+    // cppcheck-suppress cstyleCast
     reinterpret_cast<const symbol_elem_t *>((const char*)field - n);
 }
+#pragma GCC diagnostic pop
 
 symbol_elem_t * symbols_begin( size_t first = 0 );
 symbol_elem_t * symbols_end(void);
-cbl_field_t   * symbol_redefines( const struct cbl_field_t *field );
+cbl_field_t   * symbol_redefines( const cbl_field_t *field );
+cbl_field_t   * symbol_redefines_root( const cbl_field_t *field );
 
 void build_symbol_map();
 bool update_symbol_map( symbol_elem_t *e );
 
 void update_symbol_map2( const symbol_elem_t *elem );
+void update_symbol_map2( const cbl_file_t& file );
 void finalize_symbol_map2();
 void dump_symbol_map2();
+
+bool was_fd_name( const cbl_field_t * field ); // uses symbol_map2, sort of
 
 symbol_elem_t * symbol_register( const char name[] );
 
@@ -1775,7 +2397,14 @@ symbol_find( size_t program, std::list<const char *> names );
 symbol_elem_t * symbol_find_of( size_t program,
                                 std::list<const char *> names, size_t group );
 
-struct cbl_field_t *symbol_find_odo( cbl_field_t * field );
+std::pair<std::vector<cbl_ffi_arg_t>, bool>
+prototype_args( const cbl_label_t *L, size_t esym );
+
+std::pair<std::vector<cbl_ffi_arg_t>, bool>
+prototype_args( const char *name,
+                size_t esym = symbols_end() - symbols_begin());
+
+struct cbl_field_t *symbol_find_odo( const cbl_field_t * field );
 size_t dimensions( const cbl_field_t *field );
 
 const symbol_elem_t * symbol_field_current_record();
@@ -1797,65 +2426,84 @@ const cbl_label_t * symbol_program_local( const char called[] );
 
 bool redefine_field( cbl_field_t *field );
 
-// Functions to correctly extract the underlying type.
-static inline struct cbl_function_t *
-cbl_function_of( struct symbol_elem_t *e ) {
-  assert(e->type == SymFunction);
-  return &e->elem.function;
-}
+const cbl_field_t * 
+symbol_unresolved_file_key( const cbl_file_t * file,
+                            const cbl_name_t key_field_name );
 
-static inline struct cbl_section_t *
-cbl_section_of( struct symbol_elem_t *e ) {
-  assert(e->type == SymDataSection);
+static inline cbl_section_t *
+cbl_section_of( symbol_elem_t *e ) {
+  assert(e && e->type == SymDataSection);
   return &e->elem.section;
 }
 
-static inline struct cbl_field_t *
-cbl_field_of( struct symbol_elem_t *e ) {
-  assert(e->type == SymField);
+static inline cbl_field_t *
+cbl_field_of( symbol_elem_t *e ) {
+  assert(e && e->type == SymField);
   return &e->elem.field;
 }
-static inline const struct cbl_field_t *
-cbl_field_of( const struct symbol_elem_t *e ) {
-  assert(e->type == SymField);
+static inline const cbl_field_t *
+cbl_field_of( const symbol_elem_t *e ) {
+  assert(e && e->type == SymField);
   return &e->elem.field;
 }
 
-static inline struct cbl_label_t *
-cbl_label_of( struct symbol_elem_t *e ) {
-  assert(e->type == SymLabel);
+static inline cbl_label_t *
+cbl_label_of( symbol_elem_t *e ) {
+  assert(e && e->type == SymLabel);
   return &e->elem.label;
 }
 
-static inline const struct cbl_label_t *
-cbl_label_of( const struct symbol_elem_t *e ) {
-  assert(e->type == SymLabel);
+static inline const cbl_label_t *
+cbl_label_of( const symbol_elem_t *e ) {
+  assert(e && e->type == SymLabel);
   return &e->elem.label;
 }
 
-static inline struct cbl_special_name_t *
-cbl_special_name_of( struct symbol_elem_t *e ) {
-  assert(e->type == SymSpecial);
+static inline cbl_special_name_t *
+cbl_special_name_of( symbol_elem_t *e ) {
+  assert(e && e->type == SymSpecial);
   return &e->elem.special;
 }
 
-static inline struct cbl_alphabet_t *
-cbl_alphabet_of( struct symbol_elem_t *e ) {
-  assert(e->type == SymAlphabet);
+static inline cbl_locale_t *
+cbl_locale_of( symbol_elem_t *e ) {
+  assert(e && e->type == SymLocale);
+  return &e->elem.locale;
+}
+
+static inline const cbl_locale_t *
+cbl_locale_of( const symbol_elem_t *e ) {
+  assert(e && e->type == SymLocale);
+  return &e->elem.locale;
+}
+
+static inline cbl_alphabet_t *
+cbl_alphabet_of( symbol_elem_t *e ) {
+  assert(e && e->type == SymAlphabet);
   return &e->elem.alphabet;
 }
 
-static inline struct cbl_file_t *
-cbl_file_of( struct symbol_elem_t *e ) {
-  assert(e->type == SymFile);
+static inline const cbl_alphabet_t *
+cbl_alphabet_of( const symbol_elem_t *e ) {
+  assert(e && e->type == SymAlphabet);
+  return &e->elem.alphabet;
+}
+
+
+static inline cbl_file_t *
+cbl_file_of( symbol_elem_t *e ) {
+  assert(e && e->type == SymFile);
   return &e->elem.file;
 }
 
-static inline const struct cbl_file_t *
-cbl_file_of( const struct symbol_elem_t *e ) {
-  assert(e->type == SymFile);
+static inline const cbl_file_t *
+cbl_file_of( const symbol_elem_t *e ) {
+  assert(e && e->type == SymFile);
   return &e->elem.file;
 }
+
+// does the element part of a prototype ?
+bool is_prototypical( size_t isym ); 
 
 static inline bool
 is_program( const symbol_elem_t& e ) {
@@ -1872,43 +2520,43 @@ is_procedure( const symbol_elem_t& e ) {
 }
 
 static inline bool
-is_figconst(const struct cbl_field_t *field ) {
-    return ((field->attr & FIGCONST_MASK) != 0 );
+is_figconst(const cbl_field_t *field ) {
+    return (field->attr & FIGCONST_MASK) != 0;
 }
 
 static inline bool
-is_figconst_low( const struct cbl_field_t *field ) {
-  return ((field->attr & FIGCONST_MASK) == low_value_e );
+is_figconst_low( const cbl_field_t *field ) {
+  return (field->attr & FIGCONST_MASK) == low_value_e;
 }
 
 static inline bool
-is_figconst_zero( const struct cbl_field_t *field ) {
-  return ((field->attr & FIGCONST_MASK) == zero_value_e );
+is_figconst_zero( const cbl_field_t *field ) {
+  return (field->attr & FIGCONST_MASK) == zero_value_e;
 }
 
 static inline bool
-is_figconst_space( const struct cbl_field_t *field ) {
-  return ((field->attr & FIGCONST_MASK) == space_value_e );
+is_figconst_space( const cbl_field_t *field ) {
+  return (field->attr & FIGCONST_MASK) == space_value_e;
 }
 
 static inline bool
-is_figconst_quote( const struct cbl_field_t *field ) {
-  return ((field->attr & FIGCONST_MASK) == quote_value_e );
+is_figconst_quote( const cbl_field_t *field ) {
+  return (field->attr & FIGCONST_MASK) == quote_value_e;
 }
 
 static inline bool
-is_figconst_high( const struct cbl_field_t *field ) {
-  return ((field->attr & FIGCONST_MASK) == high_value_e );
+is_figconst_high( const cbl_field_t *field ) {
+  return (field->attr & FIGCONST_MASK) == high_value_e;
 }
 
 static inline bool
-is_space_value( const struct cbl_field_t *field ) {
-  return( (strcmp(field->name, "SPACE") == 0)
-            || (strcmp(field->name, "SPACES") == 0) );
+is_space_value( const cbl_field_t *field ) {
+  return (strcmp(field->name, "SPACE") == 0)
+      || (strcmp(field->name, "SPACES") == 0);
 }
 
 static inline bool
-is_quoted( const struct cbl_field_t *field ) {
+is_quoted( const cbl_field_t *field ) {
   return field->has_attr(quoted_e);
 }
 
@@ -1928,7 +2576,7 @@ struct cbl_until_addresses_t {
     struct cbl_label_addresses_t test;  // The test at the bottom of the body
     struct cbl_label_addresses_t testA; // Starting point of a TEST_AFTER loop
     struct cbl_label_addresses_t setup; // The actual entry point
-    size_t number_of_conditionals;
+    unsigned int number_of_conditionals;
     struct cbl_label_addresses_t condover[MAXIMUM_UNTILS];  // Jumping over the conditional
     struct cbl_label_addresses_t condinto[MAXIMUM_UNTILS];  // Jumping into the conditional
     struct cbl_label_addresses_t condback[MAXIMUM_UNTILS];  // Jumping back from the conditional
@@ -1936,7 +2584,9 @@ struct cbl_until_addresses_t {
 };
 
 size_t symbol_index(); // nth after first program symbol
-size_t symbol_index( const struct symbol_elem_t *e );
+size_t symbol_index( const symbol_elem_t *e );
+uint64_t symbol_unique_index( const struct symbol_elem_t *e );
+
 struct symbol_elem_t * symbol_at( size_t index );
 
 struct cbl_options_t {
@@ -1988,17 +2638,20 @@ symbol_field_forward_add( size_t program, size_t parent,
 struct cbl_field_t * symbol_field_forward( size_t index );
 
 struct cbl_prog_hier_t {
-  size_t nlabel;
   struct program_label_t {
     size_t ordinal;
     cbl_label_t label;
-    program_label_t() : ordinal(0) {}
-    program_label_t( const symbol_elem_t& e ) {
+    program_label_t() : ordinal(0), label() {}
+    // because std::copy_if:
+    // cppcheck-suppress noExplicitConstructor 
+    program_label_t( const symbol_elem_t& e ) { 
+      assert(is_program(e));
       ordinal = symbol_index(&e);
       label = e.elem.label;
     }
-  } *labels;
-
+  };
+  std::vector<program_label_t> labels;
+  
   cbl_prog_hier_t();
 };
 
@@ -2010,13 +2663,12 @@ struct cbl_prog_hier_t {
 struct cbl_perform_tgt_t {
   struct cbl_until_addresses_t addresses;
 
-  cbl_perform_tgt_t() : ifrom(0), ito(0) {}
-  cbl_perform_tgt_t( cbl_label_t * from, cbl_label_t *to = NULL )
-    : ifrom( from? symbol_index(symbol_elem_of(from)) : 0 )
+  cbl_perform_tgt_t() : addresses(), ifrom(0), ito(0) {}
+  explicit cbl_perform_tgt_t( cbl_label_t * from, cbl_label_t *to = NULL )
+    : addresses()
+    , ifrom( from? symbol_index(symbol_elem_of(from)) : 0 )
     , ito( to? symbol_index(symbol_elem_of(to)) : 0 )
-  {
-    addresses = {};
-  }
+  {}
 
   cbl_label_t * from( cbl_label_t * label ) {
     ifrom = symbol_index(symbol_elem_of(label));
@@ -2031,15 +2683,17 @@ struct cbl_perform_tgt_t {
     return ito? cbl_label_of(symbol_at(ito)) : NULL;
   }
 
-
+  const cbl_label_t * recurses( const cbl_label_t *para,
+                                const cbl_label_t *sect ) const;
   void dump() const {
     assert(ifrom);
     if( !ito ) {
-      dbgmsg( "%s:%d: #%3zu %s", __PRETTY_FUNCTION__, __LINE__,
-             ifrom, from()->str() );
+      dbgmsg( "%s:%d: #%3" GCC_PRISZ "u %s", __PRETTY_FUNCTION__, __LINE__,
+             (fmt_size_t)ifrom, from()->str() );
     } else {
-      dbgmsg( "%s:%d: #%3zu %s THRU #%3zu %s", __PRETTY_FUNCTION__, __LINE__,
-             ifrom, from()->str(), ito, to()->str() );
+      dbgmsg( "%s:%d: #%3" GCC_PRISZ "u %s THRU #%3" GCC_PRISZ "u %s",
+             __PRETTY_FUNCTION__, __LINE__,
+             (fmt_size_t)ifrom, from()->str(), (fmt_size_t)ito, to()->str() );
     }
   }
 
@@ -2053,10 +2707,11 @@ struct cbl_perform_vary_t {
   struct cbl_refer_t  by;       // numeric
   struct cbl_field_t *until;    // FldConditional
 
-  cbl_perform_vary_t( const cbl_refer_t& varying = cbl_refer_t(),
-                      const cbl_refer_t& from = cbl_refer_t(),
-                      const cbl_refer_t& by = cbl_refer_t(),
-                      cbl_field_t *until = NULL )
+  cbl_perform_vary_t() : until(nullptr) {}
+  cbl_perform_vary_t( const cbl_refer_t& varying,
+                      const cbl_refer_t& from,
+                      const cbl_refer_t& by,
+                      cbl_field_t *until )
     : varying(varying)
     , from(from)
     , by(by)
@@ -2078,12 +2733,12 @@ is_literal( const cbl_field_t *field ) {
 }
 
 static inline bool
-is_signable( const struct cbl_field_t *field ) {
+is_signable( const cbl_field_t *field ) {
   return field->attr & signable_e;
 }
 
 static inline bool
-is_temporary( const struct cbl_field_t *field ) {
+is_temporary( const cbl_field_t *field ) {
   return field->attr & intermediate_e;
 }
 
@@ -2097,6 +2752,15 @@ is_numeric( const cbl_field_t *field ) {
   return is_zero || is_numeric(field->type);
 }
 
+static inline bool
+is_numeric( const cbl_refer_t& r ) {
+  assert( r.field );
+  if( r.field->type == FldNumericDisplay && r.is_refmod_reference() ) {
+    return false;
+  }
+  return is_numeric(r.field);
+}
+
 /*
  * Public functions
  */
@@ -2104,7 +2768,7 @@ is_numeric( const cbl_field_t *field ) {
 bool cobol_filename( const char *name );
 const char * cobol_filename();
 
-const char * cobol_fileline_set( const char line[] );
+int cobol_fileline_set( const char line[] );
 
 char *cobol_name_mangler(const char *cobol_name);
 
@@ -2119,11 +2783,11 @@ size_t current_program_index();
 const char * current_declarative_section_name();
 
 struct cbl_nameloc_t {
-  YYLTYPE loc;
+  cbl_loc_t loc;
   const char *name;
 
   cbl_nameloc_t() : loc{ 1,1, 1,1 }, name(NULL) {}
-  cbl_nameloc_t( const YYLTYPE& loc, const char *name )
+  cbl_nameloc_t( const cbl_loc_t& loc, const char *name )
     : loc(loc), name(name)
   {}
 };
@@ -2156,13 +2820,13 @@ class name_queue_t : private std::queue<cbl_namelocs_t>
                     } );
     return names;
   }
-  size_t push( const YYLTYPE& loc, const char name[] ) {
+  size_t push( const cbl_loc_t& loc, const char name[] ) {
     assert( !empty() );
     back().push_front( cbl_nameloc_t(loc, name) );
     dump(__func__);
     return size();
   }
-  void qualify( const YYLTYPE& loc, const char name[] ) {
+  void qualify( const cbl_loc_t& loc, const char name[] ) {
     if( empty() ) {
       allocate();
       push(loc, name);
@@ -2191,40 +2855,48 @@ class name_queue_t : private std::queue<cbl_namelocs_t>
 
 };
 
+const std::string& keyword_alias_add( const std::string& keyword,
+				      const std::string& alias );
+int binary_integer_usage_of( const char name[] );
+  
 void tee_up_empty();
-void tee_up_name( const YYLTYPE& loc, const char name[] );
+void tee_up_name( const cbl_loc_t& loc, const char name[] );
 cbl_namelist_t teed_up_names();
 
 size_t end_of_group( size_t igroup );
 
-struct symbol_elem_t * symbol_typedef( size_t program, std::list<const char *> names );
-struct symbol_elem_t * symbol_typedef( size_t program, const char name[] );
-struct symbol_elem_t * symbol_field( size_t program,
-                                     size_t parent, const char name[] );
-struct cbl_label_t *   symbol_program( size_t parent, const char name[] );
-struct cbl_label_t *   symbol_label( size_t program, cbl_label_type_t type,
-                                     size_t section, const char name[],
-                                     const char os_name[] = NULL );
-struct symbol_elem_t * symbol_function( size_t parent, const char name[] );
+symbol_elem_t * symbol_typedef( size_t program, const char name[] );
+symbol_elem_t * symbol_field( size_t program, size_t parent, const char name[] );
+cbl_label_t *   symbol_label( size_t program, cbl_label_type_t type,
+                              size_t section, const char name[],
+                              const char os_name[] = NULL );
+symbol_elem_t * symbol_function( size_t parent,
+                                 const char name[], bool prototype = false );
+cbl_label_t *   symbol_function_any( size_t parent, const char name[] );
+cbl_label_t *   symbol_program( size_t parent,
+                                const char name[], bool prototype = false );
 
-struct symbol_elem_t * symbol_literalA( size_t program, const char name[] );
+symbol_elem_t * symbol_literalA( size_t program, const char name[] );
 
-struct cbl_special_name_t * symbol_special( special_name_t id );
-struct symbol_elem_t * symbol_special( size_t program, const char name[] );
-struct symbol_elem_t * symbol_alphabet( size_t program, const char name[] );
+cbl_special_name_t * symbol_special( special_name_t id );
+symbol_elem_t * symbol_special( size_t program, const char name[] );
+size_t symbol_special_index( special_name_t device );
 
-struct symbol_elem_t * symbol_file( size_t program, const char name[] );
-struct cbl_field_t   * symbol_file_record( struct cbl_file_t *file );
+symbol_elem_t * symbol_locale( size_t program, const char name[] );
+symbol_elem_t * symbol_alphabet( size_t program, const char name[] );
+
+symbol_elem_t * symbol_file( size_t program, const char name[] );
+cbl_field_t   * symbol_file_record( const cbl_file_t *file );
 cbl_file_t::varying_t symbol_file_record_sizes( struct cbl_file_t *file );
-struct cbl_section_t * symbol_section( size_t program,
-                                       struct cbl_section_t *section );
+cbl_section_t * symbol_section( size_t program,
+                                struct cbl_section_t *section );
 
 size_t symbol_label_id( const cbl_label_t *label );
 
-struct cbl_field_t * parent_of( const cbl_field_t *f );
+cbl_field_t * parent_of( const cbl_field_t *f );
  const cbl_field_t * occurs_in( const cbl_field_t *f );
 
-cbl_field_t *rename_not_ok( cbl_field_t *first, cbl_field_t *last);
+cbl_field_t *rename_not_ok( const cbl_field_t *first, const cbl_field_t *last);
 bool immediately_follows( const cbl_field_t *first );
 bool is_variable_length( const cbl_field_t *field );
 
@@ -2232,12 +2904,12 @@ cbl_file_t * symbol_record_file( const cbl_field_t *f );
 
 struct cbl_field_t * symbol_find_odo( const cbl_field_t * field );
 
-size_t numeric_group_attrs( const cbl_field_t *field );
+uint64_t numeric_group_attrs( const cbl_field_t *field );
 
 static inline struct cbl_field_t *
 field_at( size_t index ) {
   struct symbol_elem_t *e = symbol_at(index);
-  assert(e->type == SymField);
+  assert(e && e->type == SymField);
 
   return &e->elem.field;
 }
@@ -2249,24 +2921,27 @@ size_t symbols_update( size_t first, bool parsed_ok = true );
 void symbol_table_init(void);
 void symbol_table_check(void);
 
-struct symbol_elem_t * symbol_typedef_add( size_t program,
-                                           struct cbl_field_t *field );
-struct symbol_elem_t * symbol_field_add( size_t program,
-                                         struct cbl_field_t *field );
-struct cbl_label_t *   symbol_label_add( size_t program,
-                                         struct cbl_label_t *label );
-struct cbl_label_t *   symbol_program_add( size_t program, cbl_label_t *input );
-struct symbol_elem_t * symbol_special_add( size_t program,
-                                         struct cbl_special_name_t *special );
-struct symbol_elem_t * symbol_alphabet_add( size_t program,
-                                         struct cbl_alphabet_t *alphabet );
-struct symbol_elem_t * symbol_file_add( size_t program,
-                                         struct cbl_file_t *file );
-struct symbol_elem_t * symbol_section_add( size_t program,
-                                         struct cbl_section_t *section );
+symbol_elem_t * symbol_typedef_add( size_t program,
+                                    cbl_field_t *field );
+symbol_elem_t * symbol_field_add( size_t program,
+                                  cbl_field_t *field );
+cbl_label_t *   symbol_label_add( size_t program,
+                                  cbl_label_t *label );
+cbl_label_t *   symbol_program_add( size_t program, cbl_label_t *input );
+symbol_elem_t * symbol_special_add( size_t program,
+				    cbl_special_name_t *special );
+symbol_elem_t * symbol_locale_add( size_t program, const cbl_locale_t *locale );
+symbol_elem_t * symbol_alphabet_add( size_t program,
+				     const cbl_alphabet_t *alphabet );
+symbol_elem_t * symbol_file_add( size_t program,
+				 cbl_file_t *file );
+symbol_elem_t * symbol_section_add( size_t program,
+				    cbl_section_t *section );
 
-void symbol_field_location( size_t ifield, const YYLTYPE& loc );
-YYLTYPE symbol_field_location( size_t ifield );
+void symbol_registers_add();
+
+void symbol_field_location( size_t ifield, const cbl_loc_t& loc );
+cbl_loc_t symbol_field_location( size_t ifield );
 
 bool symbol_label_section_exists( size_t program );
 
@@ -2282,25 +2957,177 @@ static inline size_t upsi_register() {
   return symbol_index(symbol_field(0,0,"UPSI-0"));
 }
 
-void wsclear( char ch);
-const char *wsclear();
+void wsclear( uint32_t ch);
+const uint32_t *wsclear();
 
-enum cbl_call_convention_t {
-  cbl_call_verbatim_e = 'V',
-  cbl_call_cobol_e = 'N', // native
+int keyword_tok( const char * text, bool include_intrinsics = false );
+int redefined_token( const cbl_name_t name );
+
+class current_tokens_t {
+  class tokenset_t {
+    // token_names is initialized from a generated header file. 
+    std::vector<const char *>token_names;  // position indicates token value
+    std::map <std::string, int> tokens;    // aliases
+    std::set<std::string> cobol_words;  // Anything in COBOL-WORDS may appear only once. 
+  public:
+    static std::string
+    lowercase( const cbl_name_t name ) {
+      cbl_name_t lname;
+      std::transform(name, name + strlen(name) + 1, lname, ftolower);
+      return lname;
+    }
+    static std::string
+    uppercase( const cbl_name_t name ) {
+      cbl_name_t uname;
+      std::transform(name, name + strlen(name) + 1, uname, ftoupper);
+      return uname;
+    }
+
+  public:
+    tokenset_t();
+    int find( const cbl_name_t name, bool include_intrinsics );
+
+    bool equate( const cbl_loc_t& loc, int token,
+                 const cbl_name_t name, const cbl_name_t verb = "EQUATE") {
+      auto lname( lowercase(name) );
+      auto cw = cobol_words.insert(lname);
+      if( ! cw.second ) {
+        error_msg(loc, "COBOL-WORDS %s: %s may appear but once", verb, name);
+        return false;
+      }
+      auto p = tokens.find(lowercase(name));
+      bool fOK = p == tokens.end();
+      if( fOK ) { // name not already in use
+        tokens[lname] = token;
+        dbgmsg("%s:%d: %d has alias %s", __func__, __LINE__, token, name);
+      } else {
+        error_msg(loc, "%s: %s already defined as a token", verb, name);
+      }
+      return fOK;
+    }
+    bool undefine( const cbl_loc_t& loc,
+                   const cbl_name_t name, const cbl_name_t verb = "UNDEFINE" ) {
+      auto lname( lowercase(name) );
+      auto cw = cobol_words.insert(lname);
+      if( ! cw.second ) {
+        error_msg(loc, "COBOL-WORDS %s: %s may appear but once", verb, name);
+        return false;
+      }
+
+      // Do not erase generic, multi-type tokens COMPUTATIONAL and BINARY_INTEGER.
+      if( binary_integer_usage_of(name) ) {
+        dbgmsg("%s:%d: generic %s remains valid as a token", __func__, __LINE__, name);
+        return true;
+      }
+
+      auto p = tokens.find(lname);
+      bool fOK = p != tokens.end();
+      if( fOK ) { // name in use
+        tokens.erase(p);
+      } else {
+        error_msg(loc, "%s: %s not defined as a token", verb, name);
+      }
+      dbgmsg("%s:%d: %s removed as a valid token name", __func__, __LINE__, name);
+      return fOK;
+    }
+  
+    bool substitute( const cbl_loc_t& loc,
+                     const cbl_name_t extant, int token, const cbl_name_t name ) {
+      return
+        equate( loc, token, name, "SUBSTITUTE" )
+        &&
+        undefine( loc, extant, "SUBSTITUTE" );
+    }
+    bool reserve( const cbl_loc_t& loc, const cbl_name_t name ) {
+      auto lname( lowercase(name) );
+      auto cw = cobol_words.insert(lname);
+      if( ! cw.second ) {
+        error_msg(loc, "COBOL-WORDS RESERVE: %s may appear but once", name);
+        return false;
+      }
+      tokens[lname] = -42;
+      return true;
+    }
+    int redefined_as( const cbl_name_t name ) {
+      auto lname( lowercase(name) );
+      if( cobol_words.find(lname) != cobol_words.end() ) {
+        auto p = tokens.find(lname);
+        if( p != tokens.end() ) {
+          return p->second;
+        }
+      }
+      return 0;
+    }
+    const char * name_of( int tok ) const {
+      tok -= (255 + 3);
+      gcc_assert(0 <= tok && size_t(tok) < token_names.size());
+      return tok < 0? "???" : token_names[tok];
+    }
+  };
+
+  tokenset_t tokens;
+ public:
+  current_tokens_t() {}
+  int find( const cbl_name_t name, bool include_intrinsics ) {
+    return tokens.find(name, include_intrinsics);
+  }
+  bool equate( const cbl_loc_t& loc, const cbl_name_t keyword, const cbl_name_t alias ) {
+    int token; 
+    if( 0 == (token = binary_integer_usage_of(keyword)) ) {
+      if( 0 == (token = keyword_tok(keyword)) ) {
+	error_msg(loc, "EQUATE %s: not a valid token", keyword);
+	return false;
+      }
+    }
+    auto name = keyword_alias_add(tokens.uppercase(keyword),
+				  tokens.uppercase(alias));
+    if( name != keyword ) {
+      error_msg(loc, "EQUATE: %s is already an alias for %s", alias, name.c_str());
+      return false;
+    } 
+    return tokens.equate(loc, token, alias);
+  }
+  bool undefine( const cbl_loc_t& loc, cbl_name_t keyword ) {
+    return tokens.undefine(loc, keyword);
+  }
+  bool substitute( const cbl_loc_t& loc, const cbl_name_t keyword, const cbl_name_t alias ) {
+    int token; 
+    if( 0 == (token = binary_integer_usage_of(keyword)) ) {
+      if( 0 == (token = keyword_tok(keyword)) ) {
+	error_msg(loc, "SUBSTITUTE %s: not a valid token", keyword);
+	return false;
+      }
+    }
+    auto name = keyword_alias_add(tokens.uppercase(keyword),
+				  tokens.uppercase(alias));
+    if( name != keyword ) {
+      error_msg(loc, "SUBSTITUTE: %s is already an alias for %s", alias, name.c_str());
+      return false;
+    } 
+
+    dbgmsg("%s:%d: %s (%d) will have alias %s", __func__, __LINE__, keyword, token, alias);
+    return tokens.substitute(loc, keyword, token, alias);
+  }
+  bool reserve( const cbl_loc_t& loc, const cbl_name_t name ) {
+    return tokens.reserve(loc, name);
+  }
+  int redefined_as( const cbl_name_t name ) {
+    return tokens.redefined_as(name);
+  }
+  const char * name_of( int tok ) const {
+    return tokens.name_of(tok);
+  }
 };
 
-cbl_call_convention_t current_call_convention();
-
-cbl_call_convention_t
-current_call_convention( cbl_call_convention_t convention);
+current_tokens_t& cdf_current_tokens();
 
 class procref_base_t {
 private:
   const char *section_name, *paragraph_name;
 public:
-  procref_base_t( const char *section_name = NULL,
-                  const char *paragraph_name = NULL )
+  procref_base_t() : section_name(nullptr) , paragraph_name(nullptr) {}
+  procref_base_t( const char *section_name,
+                  const char *paragraph_name )
     : section_name(section_name)
     , paragraph_name(paragraph_name)
   {}
@@ -2333,10 +3160,10 @@ public:
   }
 
   int line_number() const { return line; }
+  const char *called_from() const {
+    return context? cbl_label_of(symbol_at(context))->name : "";
+  }
 };
-
-int keyword_tok( const char * text, bool include_intrinsics = false );
-int redefined_token( const cbl_name_t name );
 
 void procedure_definition_add( size_t program, const cbl_label_t *procedure );
 void procedure_reference_add( const char *sect, const char *para,
@@ -2353,16 +3180,14 @@ symbol_field_same_as( cbl_field_t *tgt, const cbl_field_t *src );
 
 size_t symbol_file_same_record_area( std::list<cbl_file_t*>& files );
 
-cbl_field_t *
-symbol_valid_udf_args( size_t function,
-                       std::list<cbl_refer_t> args = std::list<cbl_refer_t>() );
-
 bool symbol_currency_add( const char symbol[], const char sign[] = NULL );
-const char * symbol_currency( char symbol );
+const char * symbol_currency( char symbol = '\0' );
 
 const char * symbol_type_str( enum symbol_type_t type );
 const char * cbl_field_type_str( enum cbl_field_type_t type );
 const char * cbl_logop_str( enum logop_t op );
+
+const char * cbl_field_type_name( enum cbl_field_type_t type ); // for messages
 
 static inline const char *
 refer_type_str( const cbl_refer_t *r ) {
@@ -2371,19 +3196,30 @@ refer_type_str( const cbl_refer_t *r ) {
 
 enum cbl_field_type_t symbol_field_type( size_t program, const char name[] );
 
-struct symbol_elem_t * symbol_parent( const struct symbol_elem_t *e );
+struct symbol_elem_t * symbol_parent( const symbol_elem_t *e );
 
 int length_of_picture(const char *picture);
 int rdigits_of_picture(const char *picture);
 int  digits_of_picture(const char *picture, bool for_rdigits);
 bool is_picture_scaled(const char *picture);
 
-template <typename LOC>
-void gcc_location_set( const LOC& loc );
+void gcc_location_set( const cbl_loc_t& loc );
 
 // This is slightly oddball.  This is an entry point in the charutf8.cc module.
 // It's the only entry point in the module, and so it seemed to me wasteful to
 //  create an entire .h module.  So, I stuck it here.
 size_t count_characters(const char *in, size_t length);
+
+void current_enabled_ecs( tree ena );
+
+bool validate_numeric_edited(cbl_field_t *field);
+
+cbl_field_t *new_alphanumeric(const cbl_name_t name=nullptr,
+                              cbl_encoding_t encoding=no_encoding_e );
+
+// ENABLE_HIJACKING allows for code generation to be "hijacked" when the
+// program-id is "dubner_h" or "hijack_h".  See the mainline code in genapi.cc.
+
+#define ENABLE_HIJACKING
 
 #endif

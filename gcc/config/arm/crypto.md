@@ -1,5 +1,5 @@
 ;; ARMv8-A crypto patterns.
-;; Copyright (C) 2013-2025 Free Software Foundation, Inc.
+;; Copyright (C) 2013-2026 Free Software Foundation, Inc.
 ;; Contributed by ARM Ltd.
 
 ;; This file is part of GCC.
@@ -130,7 +130,7 @@
 
 ;; When AESE/AESMC fusion is enabled we really want to keep the two together
 ;; and enforce the register dependency without scheduling or register
-;; allocation messing up the order or introducing moves inbetween.
+;; allocation messing up the order or introducing moves in between.
 ;; Mash the two together during combine.
 
 (define_insn "*aarch32_crypto_aese_fused"
@@ -169,7 +169,7 @@
 
 ;; When AESD/AESIMC fusion is enabled we really want to keep the two together
 ;; and enforce the register dependency without scheduling or register
-;; allocation messing up the order or introducing moves inbetween.
+;; allocation messing up the order or introducing moves in between.
 ;; Mash the two together during combine.
 
 (define_insn "*aarch32_crypto_aesd_fused"

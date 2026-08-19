@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2024 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -44,19 +44,7 @@ public:
   {}
 
   // Returns true if the lifetime is in an error state.
-  bool is_error () const
-  {
-    return lifetime_type == AST::Lifetime::LifetimeType::NAMED
-	   && lifetime_name.empty ();
-  }
-
-  static Lifetime error ()
-  {
-    return Lifetime (Analysis::NodeMapping::get_error (),
-		     AST::Lifetime::LifetimeType::NAMED, "", UNDEF_LOCATION);
-  }
-
-  std::string as_string () const override;
+  std::string to_string () const override;
 
   void accept_vis (HIRFullVisitor &vis) override;
 

@@ -1,5 +1,5 @@
 /* Subroutines for gcc2 for pdp11.
-   Copyright (C) 1994-2025 Free Software Foundation, Inc.
+   Copyright (C) 1994-2026 Free Software Foundation, Inc.
    Contributed by Michael K. Gschwind (mike@vlsivie.tuwien.ac.at).
 
 This file is part of GCC.
@@ -1228,7 +1228,7 @@ pdp11_insn_cost (rtx_insn *insn, bool speed)
     default:
       break;
     }
-  /* There are some other cases where souce and dest are distinct.  */
+  /* There are some other cases where source and dest are distinct.  */
   if (FLOAT_MODE_P (mode) &&
       (op == FLOAT_TRUNCATE || op == FLOAT_EXTEND || op == FIX || op == FLOAT))
     {
@@ -2209,13 +2209,13 @@ pdp11_function_arg_advance (cumulative_args_t cum_v,
 static void
 pdp11_conditional_register_usage (void)
 {
-  int i;
+  unsigned int i;
   HARD_REG_SET x;
   if (!TARGET_FPU)
     {
       x = reg_class_contents[FPU_REGS];
-      for (i = 0; i < FIRST_PSEUDO_REGISTER; i++ )
-       if (TEST_HARD_REG_BIT (x, i))
+      hard_reg_set_iterator hrsi;
+      EXECUTE_IF_SET_IN_HARD_REG_SET (x, 0, i, hrsi)
 	fixed_regs[i] = call_used_regs[i] = 1;
     }
 

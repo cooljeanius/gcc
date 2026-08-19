@@ -1,3 +1,101 @@
+2026-08-04  Kyrylo Tkachov  <ktkachov@nvidia.com>
+
+	* acx.m4 (ACX_PROG_CMP_IGNORE_INITIAL): Use process-specific temporary
+	files and clean them on exit.  Diagnose tail failures as errors.
+
+2026-07-31  Pietro Monteiro  <pietro@sociotechnical.xyz>
+
+	PR bootstrap/103459
+	* clang-plugin.m4: Update AC_TRY_COMPILE to AC_COMPILE_IFELSE.
+	* gcc-plugin.m4: Likewise.
+
+2026-07-12  Manuel Jacob  <me@manueljacob.de>
+
+	* acx.m4 (ACX_CHECK_INSTALLED_TARGET_TOOL): Fix handling of
+	environment variables.
+
+2026-07-01  Rainer Orth  <ro@CeBiTec.Uni-Bielefeld.DE>
+
+	* ax_pthread.m4 (ax_pthread_check_macro) <solaris*>: Only require
+	_REENTRANT before Solaris 11.4
+
+2026-06-29  Pietro Monteiro  <pietro@sociotechnical.xyz>
+
+	PR bootstrap/103459
+	* acx.m4: Remove uses of AC_CHECK_TOOL_PREFIX.  Replace AC_TRY_COMPILE
+	with AC_COMPILE_IFELSE.
+	* asmcfi.m4: Replace AC_TRY_COMPILE with AC_COMPILE_IFELSE.
+	* bitfields.m4: Likewise.
+	* cet.m4: Replace AC_TRY_LINK with AC_LINK_IFELSE.  Replace AC_TRY_RUN
+	with AC_RUN_IFELSE.
+	* codeset.m4: Replace AC_TRY_LINK with AC_LINK_IFELSE.
+	* enable.m4: Replace AC_HELP_STRING with AS_HELP_STRING.
+	* gcc-plugin.m4: Replace AC_TRY_LINK with AC_LINK_IFELSE.
+	* hwcaps.m4: Replace AC_TRY_COMPILE with AC_COMPILE_IFELSE.  Replace
+	AC_TRY_LINK with AC_LINK_IFELSE.
+	* isl.m4: Replace AC_TRY_LINK with AC_LINK_IFELSE.
+	* lcmessage.m4: Replace AC_TRY_LINK with AC_LINK_IFELSE.
+	* no-executables.m4: Replace AC_TRY_COMPILE with AC_COMPILE_IFELSE.
+	Replace AC_TRY_LINK with AC_LINK_IFELSE.
+	* po.m4: Replace AC_OUTPUT_COMMANDS with AC_CONFIG_COMMANDS.
+	* tls.m4: Add explicit 4th argument to AC_LINK_IFELSE.
+
+2026-05-05  Pietro Monteiro  <pietro@sociotechnical.xyz>
+
+	* visibility.m4: New file.
+
+2026-04-13  Torbjörn SVENSSON  <torbjorn.svensson@foss.st.com>
+
+	PR target/69639
+	* mh-cygwin: Increase to 64MB stack reserve.
+	* mh-mingw: Likewise.
+
+2026-02-04  Prachi Godbole  <pgodbole@nvidia.com>
+
+	* bootstrap-lto-locality.mk (STAGEprofile_CFLAGS): Remove
+	-fipa-reorder-for-locality.
+	(STAGEtrain_CFLAGS): Ditto.
+
+2026-01-20  Prachi Godbole  <pgodbole@nvidia.com>
+
+	* bootstrap-lto-locality-cpp-template.mk: New file.
+
+2025-12-30  Jose E. Marchesi  <jose.marchesi@oracle.com>
+
+	* acx.m4: Define ACX_PROG_A68 rather than ACX_PROG_GA68.
+	(ACX_PROG_A68): Set A68 rather than GA68.
+
+2025-12-09  John Ericson  <git@johnericson.me>
+
+	* gthr.m4: Create new GCC_AC_THREAD_MODEL macro
+
+2025-11-30  Jose E. Marchesi  <jose.marchesi@oracle.com>
+
+	* acx.m4 (ACX_PROG_GA68): New defun.
+
+2025-11-03  Sam James  <sam@gentoo.org>
+
+	* clang-plugin.m4: Sync with binutils.
+	* gcc-plugin.m4: Ditto.
+
+2025-10-02  H.J. Lu  <hjl.tools@gmail.com>
+
+	* clang-plugin.m4: Synced from binutils-gdb.
+	* gcc-plugin.m4: Likewise.
+
+2025-08-10  Ijaz, Abdul B  <abdul.b.ijaz@intel.com>
+
+	* lib-link.m4: Handle dash in the library name for
+	AC_LIB_LINKFLAGS_BODY.
+
+2025-05-23  Andi Kleen  <ak@gcc.gnu.org>
+
+	* bootstrap-native.mk: New file.
+
+2025-04-15  Kyrylo Tkachov  <ktkachov@nvidia.com>
+
+	* bootstrap-lto-locality.mk: New file.
+
 2024-11-25  Sandra Loosemore  <sloosemore@baylibre.com>
 
 	* mt-nios2-elf: Deleted.

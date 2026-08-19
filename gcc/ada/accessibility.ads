@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 S p e c                                  --
 --                                                                          --
---          Copyright (C) 2022-2025, Free Software Foundation, Inc.         --
+--          Copyright (C) 2022-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -35,22 +35,25 @@ package Accessibility is
    --  rules of 3.10.2 are violated.
 
    type Accessibility_Level_Kind is
-     (Dynamic_Level,
-      Object_Decl_Level,
-      Zero_On_Dynamic_Level);
-   --  Accessibility_Level_Kind is an enumerated type which captures the
-   --  different modes in which an accessibility level could be obtained for
-   --  a given expression.
+     (Dynamic_Level, Object_Decl_Level, Zero_On_Dynamic_Level);
+   --  Captures the different modes in which an accessibility level could be
+   --  obtained for a given expression. In the context of Accessibility_Level
+   --  function, Accessibility_Level_Kind signals what type of accessibility
+   --  level to obtain.
 
-   --  When in the context of the function Accessibility_Level,
-   --  Accessibility_Level_Kind signals what type of accessibility level to
-   --  obtain. For example, when Level is Dynamic_Level, a defining identifier
-   --  associated with a SAOOAAT may be returned or an N_Integer_Literal node.
-   --  When the level is Object_Decl_Level, an N_Integer_Literal node is
-   --  returned containing the level of the declaration of the object if
-   --  relevant (be it a SAOOAAT or otherwise). Finally, Zero_On_Dynamic_Level
-   --  returns library level for all cases where the accessibility level is
-   --  dynamic (used to bypass static accessibility checks in dynamic cases).
+   --  When Level is Dynamic_Level, a defining identifier associated with an
+   --  access parameter, an access result, or an SAOOAAAT, may be returned,
+   --  and an N_Integer_Literal node in the other cases.
+
+   --  When Level is Object_Decl_Level, an N_Integer_Literal node whose value
+   --  is the level of the declaration of the object is returned in the cases
+   --  where Dynamic_Level returns a defining identifier; in the other cases,
+   --  the same N_Integer_Literal node as Dynamic_Level is returned.
+
+   --  When Level is Zero_On_Dynamic_Level, an N_Integer_Literal node whose
+   --  value is zero (i.e. that of the library level) is returned in the cases
+   --  where Dynamic_Level returns a defining identifier; in the other cases,
+   --  the same N_Integer_Literal node as Dynamic_Level is returned.
 
    function Accessibility_Level
      (Expr              : Node_Id;
@@ -68,17 +71,7 @@ package Accessibility is
    --  The Allow_Alt_Model parameter allows the alternative level calculation
    --  under the restriction No_Dynamic_Accessibility_Checks to be performed.
 
-   procedure Apply_Accessibility_Check
-     (N           : Node_Id;
-      Typ         : Entity_Id;
-      Insert_Node : Node_Id);
-   --  Given a name N denoting an access parameter, emits a run-time
-   --  accessibility check (if necessary), checking that the level of
-   --  the object denoted by the access parameter is not deeper than the
-   --  level of the type Typ. Program_Error is raised if the check fails.
-   --  Insert_Node indicates the node where the check should be inserted.
-
-   procedure Apply_Accessibility_Check_For_Allocator
+   procedure Apply_Accessibility_Check_For_Class_Wide_Allocator
      (N              : Node_Id;
       Exp            : Node_Id;
       Ref            : Node_Id;
@@ -109,11 +102,33 @@ package Accessibility is
    --  case seems to be an actual gap in the language rules that needs to
    --  be fixed by the ARG. ???
 
+   procedure Apply_Accessibility_Check_For_Conversion
+     (N           : Node_Id;
+      Typ         : Entity_Id;
+      Insert_Node : Node_Id);
+   --  Given a name N denoting an access parameter or an SAOOAAAT, insert a
+   --  run-time check that the accessibility level of the anonymous access
+   --  type of the object is not deeper than the level of Typ. Insert_Node
+   --  indicates the node where the check should be inserted.
+
+   procedure Apply_Accessibility_Check_For_Discriminated_Allocator
+     (N : Node_Id);
+   --  If the subtype determined by the subtype indication or the qualified
+   --  expression of an allocator N has access discriminants, insert checks
+   --  that the accessibility level of each entity designated by an access
+   --  discriminant is not deeper than the level of the allocator.
+
+   procedure Apply_Accessibility_Check_For_Return
+     (Exp  : Node_Id;
+      Func : Entity_Id);
+   --  Insert the required run-time accessibility checks for an expression Exp
+   --  that is being returned from function Func.
+
    procedure Check_Return_Construct_Accessibility
      (Return_Stmt : Node_Id;
       Stm_Entity  : Entity_Id);
-   --  Apply legality rule of 6.5 (5.9) to the access discriminants of an
-   --  aggregate in a return statement.
+   --  Apply legality rules of 6.5(5.9) and 6.8(5) to the access discriminants
+   --  of an identifier or aggregate in a return statement.
 
    function Deepest_Type_Access_Level
      (Typ             : Entity_Id;
@@ -130,9 +145,9 @@ package Accessibility is
    --  The Allow_Alt_Model parameter allows the alternative level calculation
    --  under the restriction No_Dynamic_Accessibility_Checks to be performed.
 
-   function Effective_Extra_Accessibility (Id : Entity_Id) return Entity_Id;
-   --  Same as Einfo.Extra_Accessibility except thtat object renames
-   --  are looked through.
+   function Extra_Accessibility (Id : Entity_Id) return Entity_Id;
+   --  Same as Extra_Accessibility_Of_Object in Einfo, but looks through object
+   --  renamings per the RM 3.10.2(8) rule.
 
    function Get_Dynamic_Accessibility (E : Entity_Id) return Entity_Id;
    --  Obtain the accessibility level for a given entity formal taking into
@@ -149,6 +164,26 @@ package Accessibility is
 
    function Has_Anonymous_Access_Discriminant (Typ : Entity_Id) return Boolean;
    --  Returns True if Typ has one or more anonymous access discriminants
+
+   function Has_Unconstrained_Access_Discriminants
+     (Subtyp : Entity_Id) return Boolean;
+   --  Returns True if the given subtype is unconstrained and has one or more
+   --  access discriminants.
+
+   function Needs_Accessibility_Level_Temp_Or_Check
+     (Conditional_Expr : Node_Id) return Boolean;
+   --  Determine whether a conditional expression occurs in a context that
+   --  requires either an associated accessibility-level-valued temp (which
+   --  is assigned to in each arm of the conditional expression) or an
+   --  accessibility level check (which is pushed down into each arm of the
+   --  conditional expression).
+
+   function Needs_Result_Accessibility_Level
+     (Func_Id : Entity_Id) return Boolean;
+   --  Ada 2012 (AI05-0234): Return True if the function needs an implicit
+   --  parameter to identify the accessibility level of the function result
+   --  "determined by the point of call". Return False if the type of the
+   --  function result is a private type and its completion is unavailable.
 
    function Prefix_With_Safe_Accessibility_Level
      (N   : Node_Id;
@@ -173,39 +208,12 @@ package Accessibility is
    --  integer for use in compile-time checking. Note: Level is restricted to
    --  be non-dynamic.
 
-   function Has_Unconstrained_Access_Discriminants
-     (Subtyp : Entity_Id) return Boolean;
-   --  Returns True if the given subtype is unconstrained and has one or more
-   --  access discriminants.
-
-   function Is_Anonymous_Access_Actual (N : Node_Id) return Boolean;
-   --  Determine if N is used as an actual for a call whose corresponding
-   --  formal is of an anonymous access type.
-
-   function Is_Special_Aliased_Formal_Access
-     (Exp               : Node_Id;
-      In_Return_Context : Boolean := False) return Boolean;
-   --  Determines whether a dynamic check must be generated for explicitly
-   --  aliased formals within a function Scop for the expression Exp.
-
-   --  In_Return_Context forces Is_Special_Aliased_Formal_Access to assume
-   --  that Exp is within a return value which is useful for checking
-   --  expressions within discriminant associations of return objects.
-
-   --  More specially, Is_Special_Aliased_Formal_Access checks that Exp is a
-   --  'Access attribute reference within a return statement where the ultimate
-   --  prefix is an aliased formal of Scop and that Scop returns an anonymous
-   --  access type. See RM 3.10.2 for more details.
-
-   function Needs_Result_Accessibility_Level
-     (Func_Id : Entity_Id) return Boolean;
-   --  Ada 2012 (AI05-0234): Return True if the function needs an implicit
-   --  parameter to identify the accessibility level of the function result
-   --  "determined by the point of call". Return False if the type of the
-   --  function result is a private type and its completion is unavailable.
-
    function Subprogram_Access_Level (Subp : Entity_Id) return Uint;
-   --  Return the accessibility level of the view denoted by Subp
+   --  Return the accessibility level of Subp. Note that this is the level of
+   --  the innermost master of the declaration of Subp (modulo renaming) and,
+   --  in particular, is *not* the level of the entities declared within Subp.
+   --  It is used to enforce the accessibility rules for access-to-subprogram
+   --  types, results of function calls, and formal objects of generic units.
 
    function Type_Access_Level
      (Typ             : Entity_Id;

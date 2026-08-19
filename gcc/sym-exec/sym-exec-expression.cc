@@ -1,7 +1,7 @@
 /* Every class defined here represents a single bit value of a variable.
    Every variable will be represented as a vector of these classes which later
    will be used for bit-level symbolic execution.
-   Copyright (C) 2022-2025 Free Software Foundation, Inc.
+   Copyright (C) 2022-2026 Free Software Foundation, Inc.
    Contributed by Matevos Mehrabyan <matevosmehrabyan@gmail.com>
 
 This file is part of GCC.
@@ -400,7 +400,8 @@ symbolic_bit::print ()
   if (dump_file)
     {
       print_generic_expr (dump_file, m_origin, dump_flags);
-      fprintf (dump_file, "[%zu]", m_index);
+      fprintf (dump_file, "[" HOST_SIZE_T_PRINT_UNSIGNED "]",
+	       (fmt_size_t) m_index);
     }
 }
 

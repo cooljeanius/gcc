@@ -1,6 +1,6 @@
 /* Helper function for function multi-versioning for RISC-V.
 
-   Copyright (C) 2024-2025 Free Software Foundation, Inc.
+   Copyright (C) 2024-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -38,12 +38,18 @@ struct {
 
 #define A_GROUPID 0
 #define A_BITMASK (1ULL << 0)
+#define B_GROUPID 0
+#define B_BITMASK (1ULL << 1)
 #define C_GROUPID 0
 #define C_BITMASK (1ULL << 2)
 #define D_GROUPID 0
 #define D_BITMASK (1ULL << 3)
+#define E_GROUPID 0
+#define E_BITMASK (1ULL << 4)
 #define F_GROUPID 0
 #define F_BITMASK (1ULL << 5)
+#define H_GROUPID 0
+#define H_BITMASK (1ULL << 7)
 #define I_GROUPID 0
 #define I_BITMASK (1ULL << 8)
 #define M_GROUPID 0
@@ -142,6 +148,44 @@ struct {
 #define ZCMOP_BITMASK (1ULL << 6)
 #define ZAWRS_GROUPID 1
 #define ZAWRS_BITMASK (1ULL << 7)
+#define ZILSD_GROUPID 1
+#define ZILSD_BITMASK (1ULL << 8)
+#define ZCLSD_GROUPID 1
+#define ZCLSD_BITMASK (1ULL << 9)
+#define ZCMP_GROUPID 1
+#define ZCMP_BITMASK (1ULL << 10)
+#define ZIFENCEI_GROUPID 1
+#define ZIFENCEI_BITMASK (1ULL << 11)
+#define ZMMUL_GROUPID 1
+#define ZMMUL_BITMASK (1ULL << 12)
+#define SUPM_GROUPID 1
+#define SUPM_BITMASK (1ULL << 14)
+#define ZICNTR_GROUPID 1
+#define ZICNTR_BITMASK (1ULL << 15)
+#define ZIHPM_GROUPID 1
+#define ZIHPM_BITMASK (1ULL << 16)
+#define ZFBFMIN_GROUPID 1
+#define ZFBFMIN_BITMASK (1ULL << 17)
+#define ZVFBFMIN_GROUPID 1
+#define ZVFBFMIN_BITMASK (1ULL << 18)
+#define ZVFBFWMA_GROUPID 1
+#define ZVFBFWMA_BITMASK (1ULL << 19)
+#define ZICBOM_GROUPID 1
+#define ZICBOM_BITMASK (1ULL << 20)
+#define ZAAMO_GROUPID 1
+#define ZAAMO_BITMASK (1ULL << 21)
+#define ZALRSC_GROUPID 1
+#define ZALRSC_BITMASK (1ULL << 22)
+#define ZABHA_GROUPID 1
+#define ZABHA_BITMASK (1ULL << 23)
+#define ZALASR_GROUPID 1
+#define ZALASR_BITMASK (1ULL << 24)
+#define ZICBOP_GROUPID 1
+#define ZICBOP_BITMASK (1ULL << 25)
+#define ZICFILP_GROUPID 1
+#define ZICFILP_BITMASK (1ULL << 26)
+#define ZICFISS_GROUPID 1
+#define ZICFISS_BITMASK (1ULL << 27)
 
 #define SET_EXT(EXT) features[EXT##_GROUPID] |= EXT##_BITMASK
 
@@ -203,6 +247,21 @@ struct {
 #define RISCV_HWPROBE_EXT_ZCF    (1ULL << 46)
 #define RISCV_HWPROBE_EXT_ZCMOP  (1ULL << 47)
 #define RISCV_HWPROBE_EXT_ZAWRS  (1ULL << 48)
+#define RISCV_HWPROBE_EXT_SUPM   (1ULL << 49)
+#define RISCV_HWPROBE_EXT_ZICNTR (1ULL << 50)
+#define RISCV_HWPROBE_EXT_ZIHPM  (1ULL << 51)
+#define RISCV_HWPROBE_EXT_ZFBFMIN (1ULL << 52)
+#define RISCV_HWPROBE_EXT_ZVFBFMIN (1ULL << 53)
+#define RISCV_HWPROBE_EXT_ZVFBFWMA (1ULL << 54)
+#define RISCV_HWPROBE_EXT_ZICBOM (1ULL << 55)
+#define RISCV_HWPROBE_EXT_ZAAMO  (1ULL << 56)
+#define RISCV_HWPROBE_EXT_ZALRSC (1ULL << 57)
+#define RISCV_HWPROBE_EXT_ZABHA  (1ULL << 58)
+#define RISCV_HWPROBE_EXT_ZALASR (1ULL << 59)
+#define RISCV_HWPROBE_EXT_ZICBOP (1ULL << 60)
+#define RISCV_HWPROBE_EXT_ZILSD  (1ULL << 61)
+#define RISCV_HWPROBE_EXT_ZCLSD  (1ULL << 62)
+#define RISCV_HWPROBE_EXT_ZICFILP (1ULL << 63)
 #define RISCV_HWPROBE_KEY_CPUPERF_0 5
 #define RISCV_HWPROBE_MISALIGNED_UNKNOWN (0 << 0)
 #define RISCV_HWPROBE_MISALIGNED_EMULATED (1ULL << 0)
@@ -211,6 +270,8 @@ struct {
 #define RISCV_HWPROBE_MISALIGNED_UNSUPPORTED (4 << 0)
 #define RISCV_HWPROBE_MISALIGNED_MASK (7 << 0)
 #define RISCV_HWPROBE_KEY_ZICBOZ_BLOCK_SIZE 6
+#define RISCV_HWPROBE_KEY_IMA_EXT_1 16
+#define RISCV_HWPROBE_EXT_ZICFISS (1ULL << 0)
 
 struct riscv_hwprobe {
   long long key;
@@ -240,6 +301,9 @@ static long syscall_5_args (long number, long arg1, long arg2, long arg3,
 #define SET_FROM_IMA_EXT(EXT) \
   SET_FROM_HWPROBE (hwprobe_ima_ext, EXT)
 
+#define SET_FROM_IMA_EXT_1(EXT) \
+  SET_FROM_HWPROBE (hwprobe_ima_ext_1, EXT)
+
 static void __init_riscv_features_bits_linux ()
 {
   struct riscv_hwprobe hwprobes[] = {
@@ -248,6 +312,7 @@ static void __init_riscv_features_bits_linux ()
     {RISCV_HWPROBE_KEY_MIMPID, 0},
     {RISCV_HWPROBE_KEY_BASE_BEHAVIOR, 0},
     {RISCV_HWPROBE_KEY_IMA_EXT_0, 0},
+    {RISCV_HWPROBE_KEY_IMA_EXT_1, 0},
   };
 
   long res = syscall_5_args (__NR_riscv_hwprobe, (long)&hwprobes,
@@ -370,6 +435,24 @@ static void __init_riscv_features_bits_linux ()
   SET_FROM_IMA_EXT (ZCF);
   SET_FROM_IMA_EXT (ZCMOP);
   SET_FROM_IMA_EXT (ZAWRS);
+  SET_FROM_IMA_EXT (SUPM);
+  SET_FROM_IMA_EXT (ZICNTR);
+  SET_FROM_IMA_EXT (ZIHPM);
+  SET_FROM_IMA_EXT (ZFBFMIN);
+  SET_FROM_IMA_EXT (ZVFBFMIN);
+  SET_FROM_IMA_EXT (ZVFBFWMA);
+  SET_FROM_IMA_EXT (ZICBOM);
+  SET_FROM_IMA_EXT (ZAAMO);
+  SET_FROM_IMA_EXT (ZALRSC);
+  SET_FROM_IMA_EXT (ZABHA);
+  SET_FROM_IMA_EXT (ZALASR);
+  SET_FROM_IMA_EXT (ZICBOP);
+  SET_FROM_IMA_EXT (ZILSD);
+  SET_FROM_IMA_EXT (ZCLSD);
+  SET_FROM_IMA_EXT (ZICFILP);
+
+  const struct riscv_hwprobe hwprobe_ima_ext_1 = hwprobes[5];
+  SET_FROM_IMA_EXT_1 (ZICFISS);
 
   for (i = 0; i < RISCV_FEATURE_BITS_LENGTH; ++i)
     __riscv_feature_bits.features[i] = features[i];

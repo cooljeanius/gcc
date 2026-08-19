@@ -1,5 +1,5 @@
 /* real.cc - software floating point emulation.
-   Copyright (C) 1993-2025 Free Software Foundation, Inc.
+   Copyright (C) 1993-2026 Free Software Foundation, Inc.
    Contributed by Stephen L. Moshier (moshier@world.std.com).
    Re-written by Richard Henderson <rth@redhat.com>
 
@@ -22,9 +22,13 @@
 #include "config.h"
 #include "system.h"
 #include "coretypes.h"
+#include "bitmap.h"
+#include "function.h"
 #include "tm.h"
 #include "rtl.h"
 #include "tree.h"
+#include "value-range.h"
+#include "vr-values.h"
 #include "realmpfr.h"
 #include "dfp.h"
 
@@ -101,7 +105,7 @@ static int do_compare (const REAL_VALUE_TYPE *, const REAL_VALUE_TYPE *, int);
 static void do_fix_trunc (REAL_VALUE_TYPE *, const REAL_VALUE_TYPE *);
 
 static unsigned long rtd_divmod (REAL_VALUE_TYPE *, REAL_VALUE_TYPE *);
-static void decimal_from_integer (REAL_VALUE_TYPE *);
+static void decimal_from_integer (REAL_VALUE_TYPE *, int);
 static void decimal_integer_string (char *, const REAL_VALUE_TYPE *,
 				    size_t);
 
@@ -395,6 +399,7 @@ cmp_significand_0 (const REAL_VALUE_TYPE *a)
 static inline void
 set_significand_bit (REAL_VALUE_TYPE *r, unsigned int n)
 {
+  gcc_checking_assert (n < SIGNIFICAND_BITS);
   r->sig[n / HOST_BITS_PER_LONG]
     |= (unsigned long)1 << (n % HOST_BITS_PER_LONG);
 }
@@ -404,6 +409,7 @@ set_significand_bit (REAL_VALUE_TYPE *r, unsigned int n)
 static inline void
 clear_significand_bit (REAL_VALUE_TYPE *r, unsigned int n)
 {
+  gcc_checking_assert (n < SIGNIFICAND_BITS);
   r->sig[n / HOST_BITS_PER_LONG]
     &= ~((unsigned long)1 << (n % HOST_BITS_PER_LONG));
 }
@@ -416,6 +422,7 @@ test_significand_bit (REAL_VALUE_TYPE *r, unsigned int n)
   /* ??? Compiler bug here if we return this expression directly.
      The conversion to bool strips the "&1" and we wind up testing
      e.g. 2 != 0 -> true.  Seen in gcc version 3.2 20020520.  */
+  gcc_checking_assert (n < SIGNIFICAND_BITS);
   int t = (r->sig[n / HOST_BITS_PER_LONG] >> (n % HOST_BITS_PER_LONG)) & 1;
   return t;
 }
@@ -427,6 +434,7 @@ clear_significand_below (REAL_VALUE_TYPE *r, unsigned int n)
 {
   int i, w = n / HOST_BITS_PER_LONG;
 
+  gcc_checking_assert (n <= SIGNIFICAND_BITS);
   for (i = 0; i < w; ++i)
     r->sig[i] = 0;
 
@@ -1629,6 +1637,11 @@ real_to_decimal_for_mode (char *str, const REAL_VALUE_TYPE *r_orig,
       strcpy (str, (r.sign ? "-0.0" : "0.0"));
       return;
     case rvc_normal:
+      /*  When r_orig is a positive value that converts to all nines and is
+          rounded up to 1.0, str[0] is harmlessly accessed before being set to
+          '1'.  That read access triggers a valgrind warning.  Setting str[0]
+          to any value quiets the warning. */
+      str[0] = ' ';
       break;
     case rvc_inf:
       strcpy (str, (r.sign ? "-Inf" : "+Inf"));
@@ -2230,19 +2243,12 @@ real_from_integer (REAL_VALUE_TYPE *r, format_helper fmt,
     {
       unsigned int len = val_in.get_precision ();
       int i, j, e = 0;
-      int maxbitlen = MAX_BITSIZE_MODE_ANY_INT + HOST_BITS_PER_WIDE_INT;
       const unsigned int realmax = (SIGNIFICAND_BITS / HOST_BITS_PER_WIDE_INT
 				    * HOST_BITS_PER_WIDE_INT);
 
       memset (r, 0, sizeof (*r));
       r->cl = rvc_normal;
       r->sign = wi::neg_p (val_in, sgn);
-
-      /* We have to ensure we can negate the largest negative number.  */
-      wide_int val = wide_int::from (val_in, maxbitlen, sgn);
-
-      if (r->sign)
-	val = -val;
 
       /* Ensure a multiple of HOST_BITS_PER_WIDE_INT, ceiling, as elt
 	 won't work with precisions that are not a multiple of
@@ -2252,7 +2258,13 @@ real_from_integer (REAL_VALUE_TYPE *r, format_helper fmt,
       /* Ensure we can represent the largest negative number.  */
       len += 1;
 
-      len = len/HOST_BITS_PER_WIDE_INT * HOST_BITS_PER_WIDE_INT;
+      len = len / HOST_BITS_PER_WIDE_INT * HOST_BITS_PER_WIDE_INT;
+
+      /* We have to ensure we can negate the largest negative number.  */
+      wide_int val = wide_int::from (val_in, len, sgn);
+
+      if (r->sign)
+	val = -val;
 
       /* Cap the size to the size allowed by real.h.  */
       if (len > realmax)
@@ -2260,14 +2272,18 @@ real_from_integer (REAL_VALUE_TYPE *r, format_helper fmt,
 	  HOST_WIDE_INT cnt_l_z;
 	  cnt_l_z = wi::clz (val);
 
-	  if (maxbitlen - cnt_l_z > realmax)
+	  if (len - cnt_l_z > realmax)
 	    {
-	      e = maxbitlen - cnt_l_z - realmax;
+	      e = len - cnt_l_z - realmax;
 
 	      /* This value is too large, we must shift it right to
 		 preserve all the bits we can, and then bump the
-		 exponent up by that amount.  */
-	      val = wi::lrshift (val, e);
+		 exponent up by that amount, but or in 1 if any of
+		 the shifted out bits are non-zero.  */
+	      if (wide_int::from (val, e, UNSIGNED) != 0)
+		val = wi::set_bit (wi::lrshift (val, e), 0);
+	      else
+		val = wi::lrshift (val, e);
 	    }
 	  len = realmax;
 	}
@@ -2306,7 +2322,9 @@ real_from_integer (REAL_VALUE_TYPE *r, format_helper fmt,
     }
 
   if (fmt.decimal_p ())
-    decimal_from_integer (r);
+    /* We need at most one decimal digits for each 3 bits of input
+       precision.  */
+    decimal_from_integer (r, val_in.get_precision () / 3);
   if (fmt)
     real_convert (r, fmt, r);
 }
@@ -2361,12 +2379,21 @@ decimal_integer_string (char *str, const REAL_VALUE_TYPE *r_orig,
 /* Convert a real with an integral value to decimal float.  */
 
 static void
-decimal_from_integer (REAL_VALUE_TYPE *r)
+decimal_from_integer (REAL_VALUE_TYPE *r, int digits)
 {
   char str[256];
 
-  decimal_integer_string (str, r, sizeof (str) - 1);
-  decimal_real_from_string (r, str);
+  if (digits <= 256)
+    {
+      decimal_integer_string (str, r, sizeof (str) - 1);
+      decimal_real_from_string (r, str);
+    }
+  else
+    {
+      char *s = XALLOCAVEC (char, digits);
+      decimal_integer_string (s, r, digits - 1);
+      decimal_real_from_string (r, s);
+    }
 }
 
 /* Returns 10**2**N.  */
@@ -3167,7 +3194,7 @@ const struct real_format motorola_single_format =
       - Denormals can be represented, but are treated as +0.0 when
 	used as an operand and are never generated as a result.
       - -0.0 can be represented, but a zero result is always +0.0.
-      - the only supported rounding mode is trunction (towards zero).  */
+      - the only supported rounding mode is truncation (towards zero).  */
 const struct real_format spu_single_format =
   {
     encode_ieee_single,
@@ -5491,6 +5518,26 @@ bool format_helper::can_represent_integral_type_p (tree type) const
      only one mantissa bit.  */
   bool signed_p = TYPE_SIGN (type) == SIGNED;
   return TYPE_PRECISION (type) - signed_p <= significand_size (*this);
+}
+
+/* True if all values in integer range *VR can be represented by this
+   floating-point type exactly.  */
+
+bool
+format_helper::can_represent_range_value_p (const irange *vr) const
+{
+  gcc_assert (!decimal_p ());
+
+  if (vr->undefined_p () || vr->varying_p ())
+    return false;
+
+  tree type = vr->type ();
+  unsigned precision = significand_size (*this);
+
+  if (TYPE_SIGN (type) == SIGNED)
+    precision++;
+
+  return range_fits_type_p (vr, precision, TYPE_SIGN (type));
 }
 
 /* True if mode M has a NaN representation and

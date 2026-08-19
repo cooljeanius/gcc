@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2025, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -214,7 +214,7 @@ package body Stringt is
    procedure Store_String_Chars (S : String) is
    begin
       for J in S'First .. S'Last loop
-         Store_String_Char (Get_Char_Code (S (J)));
+         Store_String_Char (S (J));
       end loop;
    end Store_String_Chars;
 

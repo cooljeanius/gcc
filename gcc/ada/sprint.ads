@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 S p e c                                  --
 --                                                                          --
---          Copyright (C) 1992-2025, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -125,7 +125,7 @@ package Sprint is
    --  Like Sprint_Node_List, but prints nothing if List = No_List
 
    procedure Sprint_Indented_List (List : List_Id);
-   --  Like Sprint_Line_List, except that the indentation level is increased
+   --  Like Sprint_Node_List, except that the indentation level is increased
    --  before outputting the list of items, and then decremented (back to its
    --  original level) before returning to the caller.
 

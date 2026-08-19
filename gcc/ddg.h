@@ -1,5 +1,5 @@
 /* DDG - Data Dependence Graph - interface.
-   Copyright (C) 2004-2025 Free Software Foundation, Inc.
+   Copyright (C) 2004-2026 Free Software Foundation, Inc.
    Contributed by Ayal Zaks and Mustafa Hagog <zaks,mustafa@il.ibm.com>
 
 This file is part of GCC.
@@ -20,8 +20,6 @@ along with GCC; see the file COPYING3.  If not see
 
 #ifndef GCC_DDG_H
 #define GCC_DDG_H
-
-/* For sbitmap.  */
 
 typedef struct ddg_node *ddg_node_ptr;
 typedef struct ddg_edge *ddg_edge_ptr;

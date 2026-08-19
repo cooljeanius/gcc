@@ -1,5 +1,5 @@
 /* Loop invariant motion.
-   Copyright (C) 2003-2025 Free Software Foundation, Inc.
+   Copyright (C) 2003-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -30,7 +30,6 @@ along with GCC; see the file COPYING3.  If not see
 #include "fold-const.h"
 #include "cfganal.h"
 #include "tree-eh.h"
-#include "gimplify.h"
 #include "gimple-iterator.h"
 #include "tree-cfg.h"
 #include "tree-ssa-loop-manip.h"
@@ -143,6 +142,8 @@ public:
 				   different modes.  */
 };
 
+static bool in_loop_pipeline;
+
 /* We use six bits per loop in the ref->dep_loop bitmap to record
    the dep_kind x dep_state combinations.  */
 
@@ -201,34 +202,43 @@ mem_ref_hasher::hash (const im_mem_ref *mem)
 inline bool
 mem_ref_hasher::equal (const im_mem_ref *mem1, const ao_ref *obj2)
 {
-  if (obj2->max_size_known_p ())
-    return (mem1->ref_decomposed
-	    && ((TREE_CODE (mem1->mem.base) == MEM_REF
-		 && TREE_CODE (obj2->base) == MEM_REF
-		 && operand_equal_p (TREE_OPERAND (mem1->mem.base, 0),
-				     TREE_OPERAND (obj2->base, 0), 0)
-		 && known_eq (mem_ref_offset (mem1->mem.base) * BITS_PER_UNIT + mem1->mem.offset,
-			      mem_ref_offset (obj2->base) * BITS_PER_UNIT + obj2->offset))
-		|| (operand_equal_p (mem1->mem.base, obj2->base, 0)
-		    && known_eq (mem1->mem.offset, obj2->offset)))
-	    && known_eq (mem1->mem.size, obj2->size)
-	    && known_eq (mem1->mem.max_size, obj2->max_size)
-	    && mem1->mem.volatile_p == obj2->volatile_p
-	    && (mem1->mem.ref_alias_set == obj2->ref_alias_set
-		/* We are not canonicalizing alias-sets but for the
-		   special-case we didn't canonicalize yet and the
-		   incoming ref is a alias-set zero MEM we pick
-		   the correct one already.  */
-		|| (!mem1->ref_canonical
-		    && (TREE_CODE (obj2->ref) == MEM_REF
-			|| TREE_CODE (obj2->ref) == TARGET_MEM_REF)
-		    && obj2->ref_alias_set == 0)
-		/* Likewise if there's a canonical ref with alias-set zero.  */
-		|| (mem1->ref_canonical && mem1->mem.ref_alias_set == 0))
-	    && types_compatible_p (TREE_TYPE (mem1->mem.ref),
-				   TREE_TYPE (obj2->ref)));
-  else
+  if (!obj2->max_size_known_p ())
     return operand_equal_p (mem1->mem.ref, obj2->ref, 0);
+
+  if (!mem1->ref_decomposed)
+    return false;
+
+  /* obj2 is now known decomposable and the hash is based on offset,
+     size and base, matching gather_mem_refs_stmt.  */
+  bool refs_equal
+    = ((TREE_CODE (mem1->mem.base) == MEM_REF
+	&& TREE_CODE (obj2->base) == MEM_REF
+	&& operand_equal_p (TREE_OPERAND (mem1->mem.base, 0),
+			    TREE_OPERAND (obj2->base, 0), 0)
+	&& known_eq (mem_ref_offset (mem1->mem.base) * BITS_PER_UNIT
+		     + mem1->mem.offset,
+		     mem_ref_offset (obj2->base) * BITS_PER_UNIT
+		     + obj2->offset))
+       || (operand_equal_p (mem1->mem.base, obj2->base, 0)
+	   && known_eq (mem1->mem.offset, obj2->offset)));
+
+  return (refs_equal
+	  && known_eq (mem1->mem.size, obj2->size)
+	  && known_eq (mem1->mem.max_size, obj2->max_size)
+	  && mem1->mem.volatile_p == obj2->volatile_p
+	  && (mem1->mem.ref_alias_set == obj2->ref_alias_set
+	      /* We are not canonicalizing alias-sets but for the
+		 special-case we didn't canonicalize yet and the
+		 incoming ref is a alias-set zero MEM we pick
+		 the correct one already.  */
+	      || (!mem1->ref_canonical
+		  && (TREE_CODE (obj2->ref) == MEM_REF
+		      || TREE_CODE (obj2->ref) == TARGET_MEM_REF)
+		  && obj2->ref_alias_set == 0)
+	      /* Likewise if there's a canonical ref with alias-set zero.  */
+	      || (mem1->ref_canonical && mem1->mem.ref_alias_set == 0))
+	  && types_compatible_p (TREE_TYPE (mem1->mem.ref),
+				 TREE_TYPE (obj2->ref)));
 }
 
 
@@ -260,7 +270,7 @@ static bitmap_obstack lim_bitmap_obstack;
 static obstack mem_ref_obstack;
 
 static bool ref_indep_loop_p (class loop *, im_mem_ref *, dep_kind);
-static bool ref_always_accessed_p (class loop *, im_mem_ref *, bool);
+static bool ref_always_stored_p (class loop *, im_mem_ref *);
 static bool refs_independent_p (im_mem_ref *, im_mem_ref *, bool = true);
 
 /* Minimum cost of an expensive expression.  */
@@ -492,7 +502,7 @@ get_coldest_out_loop (class loop *outermost_loop, class loop *loop,
 	      || flow_loop_nested_p (outermost_loop, loop));
 
   /* If bb_colder_than_loop_preheader returns false due to three-state
-    comparision, OUTERMOST_LOOP is returned finally to preserve the behavior.
+    comparison, OUTERMOST_LOOP is returned finally to preserve the behavior.
     Otherwise, return the coldest loop between OUTERMOST_LOOP and LOOP.  */
   if (curr_bb && bb_colder_than_loop_preheader (curr_bb, loop))
     return NULL;
@@ -854,7 +864,7 @@ determine_max_movement (gimple *stmt, bool must_preserve_exec)
 	  if (!extract_true_false_args_from_phi (dom, phi, NULL, NULL))
 	    return false;
 
-	/* Check if one of the depedent statement is a vector compare whether
+	/* Check if one of the dependent statement is a vector compare whether
 	   the target supports it,  otherwise it's invalid to hoist it out of
 	   the gcond it belonged to.  */
 	if (VECTOR_TYPE_P (TREE_TYPE (gimple_cond_lhs (cond))))
@@ -1241,6 +1251,22 @@ compute_invariantness (basic_block bb)
 
       if (lim_data->cost >= LIM_EXPENSIVE)
 	set_profitable_level (stmt);
+      /* When we run before PRE and PRE is active hoist all expressions
+	 to the always executed loop since PRE would do so anyway
+	 and we can preserve range info while PRE cannot.  */
+      else if (flag_tree_pre && !in_loop_pipeline
+	       && outermost)
+	{
+	  class loop *mloop = lim_data->max_loop;
+	  if (loop_depth (outermost) > loop_depth (mloop))
+	    {
+	      mloop = outermost;
+	      if (dump_file && (dump_flags & TDF_DETAILS))
+		fprintf (dump_file, "  constraining to loop depth %d\n\n\n",
+			 loop_depth (mloop));
+	    }
+	  set_level (stmt, bb->loop_father, mloop);
+	}
     }
 }
 
@@ -1365,7 +1391,7 @@ move_computations_worker (basic_block bb)
 
       if (dump_file && (dump_flags & TDF_DETAILS))
 	{
-	  fprintf (dump_file, "Moving statement\n");
+	  fprintf (dump_file, "Moving statement ");
 	  print_gimple_stmt (dump_file, stmt, 0);
 	  fprintf (dump_file, "(cost %u) out of loop %d.\n\n",
 		   cost, level->num);
@@ -1401,15 +1427,11 @@ move_computations_worker (basic_block bb)
          when the target loop header is executed and the stmt may
 	 invoke undefined integer or pointer overflow rewrite it to
 	 unsigned arithmetic.  */
-      if (is_gimple_assign (stmt)
-	  && INTEGRAL_TYPE_P (TREE_TYPE (gimple_assign_lhs (stmt)))
-	  && TYPE_OVERFLOW_UNDEFINED (TREE_TYPE (gimple_assign_lhs (stmt)))
-	  && arith_code_with_undefined_signed_overflow
-	       (gimple_assign_rhs_code (stmt))
+      if (gimple_needing_rewrite_undefined (stmt)
 	  && (!ALWAYS_EXECUTED_IN (bb)
 	      || !(ALWAYS_EXECUTED_IN (bb) == level
 		   || flow_loop_nested_p (ALWAYS_EXECUTED_IN (bb), level))))
-	gsi_insert_seq_on_edge (e, rewrite_to_defined_overflow (stmt));
+	gsi_insert_seq_on_edge (e, rewrite_to_defined_unconditional (stmt));
       else
 	gsi_insert_on_edge (e, stmt);
     }
@@ -2306,10 +2328,17 @@ execute_sm (class loop *loop, im_mem_ref *ref,
   fmt_data.orig_loop = loop;
   for_each_index (&ref->mem.ref, force_move_till, &fmt_data);
 
-  bool always_stored = ref_always_accessed_p (loop, ref, true);
+  bool always_stored = ref_always_stored_p (loop, ref);
   if (maybe_mt
       && (bb_in_transaction (loop_preheader_edge (loop)->src)
-	  || (ref_can_have_store_data_races (ref->mem.ref) && ! always_stored)))
+	  || (ref_can_have_store_data_races (ref->mem.ref) && ! always_stored)
+	  /* Do not speculate a load/store when that's not a noop, either
+	     because the mode cannot be transferred or because there's
+	     UB involved for out-of-bound values.  */
+	  || !mode_can_transfer_bits (TYPE_MODE (TREE_TYPE (ref->mem.ref)))
+	  || TREE_CODE (TREE_TYPE (ref->mem.ref)) == BOOLEAN_TYPE
+	  || (TREE_CODE (ref->mem.ref) == COMPONENT_REF
+	      && DECL_BIT_FIELD (TREE_OPERAND (ref->mem.ref, 1)))))
     multi_threaded_model_p = true;
 
   if (multi_threaded_model_p && !use_other_flag_var)
@@ -2341,6 +2370,7 @@ execute_sm (class loop *loop, im_mem_ref *ref,
 	 loop entry as not to be warned for.  */
       tree uninit = create_tmp_reg (TREE_TYPE (aux->tmp_var));
       suppress_warning (uninit, OPT_Wuninitialized);
+      uninit = get_or_create_ssa_default_def (cfun, uninit);
       load = gimple_build_assign (aux->tmp_var, uninit);
     }
   lim_data = init_lim_data (load);
@@ -2395,7 +2425,7 @@ execute_sm_exit (class loop *loop, edge ex, vec<seq_entry> &seq,
 	      tree lhs = gimple_assign_lhs (ref->accesses_in_loop[0].stmt);
 	      if (dump_file && (dump_flags & TDF_DETAILS))
 		{
-		  fprintf (dump_file, "Re-issueing dependent ");
+		  fprintf (dump_file, "Re-issuing dependent ");
 		  print_generic_expr (dump_file, unshare_expr (seq[i-1].from));
 		  fprintf (dump_file, " of ");
 		  print_generic_expr (dump_file, lhs);
@@ -2410,7 +2440,7 @@ execute_sm_exit (class loop *loop, edge ex, vec<seq_entry> &seq,
 	    {
 	      if (dump_file && (dump_flags & TDF_DETAILS))
 		{
-		  fprintf (dump_file, "Re-issueing dependent store of ");
+		  fprintf (dump_file, "Re-issuing dependent store of ");
 		  print_generic_expr (dump_file, ref->mem.ref);
 		  fprintf (dump_file, " from loop %d on exit %d -> %d\n",
 			   loop->num, ex->src->index, ex->dest->index);
@@ -2441,7 +2471,7 @@ execute_sm_exit (class loop *loop, edge ex, vec<seq_entry> &seq,
 
 /* Push the SM candidate at index PTR in the sequence SEQ down until
    we hit the next SM candidate.  Return true if that went OK and
-   false if we could not disambiguate agains another unrelated ref.
+   false if we could not disambiguate against another unrelated ref.
    Update *AT to the index where the candidate now resides.  */
 
 static bool
@@ -2757,7 +2787,7 @@ hoist_memory_references (class loop *loop, bitmap mem_refs,
   bitmap_iterator bi;
 
   /* There's a special case we can use ordered re-materialization for
-     conditionally excuted stores which is when all stores in the loop
+     conditionally executed stores which is when all stores in the loop
      happen in the same basic-block.  In that case we know we'll reach
      all stores and thus can simply process that BB and emit a single
      conditional block of ordered materializations.  See PR102436.  */
@@ -3083,36 +3113,29 @@ hoist_memory_references (class loop *loop, bitmap mem_refs,
     delete (*iter).second;
 }
 
-class ref_always_accessed
+class ref_always_stored
 {
 public:
-  ref_always_accessed (class loop *loop_, bool stored_p_)
-      : loop (loop_), stored_p (stored_p_) {}
+  ref_always_stored (class loop *loop_)
+      : loop (loop_) {}
   bool operator () (mem_ref_loc *loc);
   class loop *loop;
-  bool stored_p;
 };
 
 bool
-ref_always_accessed::operator () (mem_ref_loc *loc)
+ref_always_stored::operator () (mem_ref_loc *loc)
 {
-  class loop *must_exec;
+  /* Make sure the statement is a store.  */
+  tree lhs = gimple_get_lhs (loc->stmt);
+  if (!lhs
+      || !(DECL_P (lhs) || REFERENCE_CLASS_P (lhs)))
+    return false;
 
   struct lim_aux_data *lim_data = get_lim_data (loc->stmt);
   if (!lim_data)
     return false;
 
-  /* If we require an always executed store make sure the statement
-     is a store.  */
-  if (stored_p)
-    {
-      tree lhs = gimple_get_lhs (loc->stmt);
-      if (!lhs
-	  || !(DECL_P (lhs) || REFERENCE_CLASS_P (lhs)))
-	return false;
-    }
-
-  must_exec = lim_data->always_executed_in;
+  class loop *must_exec = lim_data->always_executed_in;
   if (!must_exec)
     return false;
 
@@ -3123,14 +3146,61 @@ ref_always_accessed::operator () (mem_ref_loc *loc)
   return false;
 }
 
-/* Returns true if REF is always accessed in LOOP.  If STORED_P is true
-   make sure REF is always stored to in LOOP.  */
+/* Returns true if REF is always stored in LOOP.  */
 
 static bool
-ref_always_accessed_p (class loop *loop, im_mem_ref *ref, bool stored_p)
+ref_always_stored_p (class loop *loop, im_mem_ref *ref)
 {
-  return for_all_locs_in_loop (loop, ref,
-			       ref_always_accessed (loop, stored_p));
+  return for_all_locs_in_loop (loop, ref, ref_always_stored (loop));
+}
+
+/* Returns true if LOAD_REF and STORE_REF form a "self write" pattern
+   where the stored value comes from the loaded value via SSA.
+   Example: a[i] = a[0] is safe to hoist a[0] even when i==0.  */
+
+static bool
+is_self_write (im_mem_ref *load_ref, im_mem_ref *store_ref)
+{
+  /* Only handle the simple case with a single access per ref.
+     Bail out on multiple accesses to be conservative.  */
+  if (load_ref->accesses_in_loop.length () != 1
+      || store_ref->accesses_in_loop.length () != 1)
+    return false;
+
+  gimple *load_stmt = load_ref->accesses_in_loop[0].stmt;
+  gimple *store_stmt = store_ref->accesses_in_loop[0].stmt;
+
+  if (!is_gimple_assign (load_stmt) || !is_gimple_assign (store_stmt))
+    return false;
+
+  tree loaded_val = gimple_assign_lhs (load_stmt);
+  tree stored_val = gimple_assign_rhs1 (store_stmt);
+
+  if (TREE_CODE (loaded_val) != SSA_NAME || TREE_CODE (stored_val) != SSA_NAME)
+    return false;
+
+  /* Self write: stored value is the loaded value.  */
+  if (stored_val != loaded_val)
+    return false;
+
+
+  /* TODO: Try to factor this out with mem_ref_hasher::equal
+     into im_compare_access_position_and_size
+     or a similar helper to centralize this delicate handling
+     complete for MEM_REF offsets and base pointer equality.
+
+     TODO: Also ensure max_size_known_p agrees or resort to
+     alignment considerations to rule out partial overlaps.
+
+     See:
+     https://gcc.gnu.org/pipermail/gcc-patches/2025-December/704155.html
+     For more context on TODOs above.  */
+
+  /* They may alias.  Verify exact same location.  */
+  return (operand_equal_p (load_ref->mem.base, store_ref->mem.base, 0)
+	  && known_eq (load_ref->mem.size, store_ref->mem.size)
+	  && known_eq (load_ref->mem.offset, store_ref->mem.offset));
+
 }
 
 /* Returns true if REF1 and REF2 are independent.  */
@@ -3187,7 +3257,7 @@ ref_indep_loop_p (class loop *loop, im_mem_ref *ref, dep_kind kind)
       /* tri-state, { unknown, independent, dependent }  */
       dep_state state = query_loop_dependence (loop, ref, kind);
       if (state != dep_unknown)
-	return state == dep_independent ? true : false;
+	return state == dep_independent;
 
       class loop *inner = loop->inner;
       while (inner)
@@ -3220,6 +3290,20 @@ ref_indep_loop_p (class loop *loop, im_mem_ref *ref, dep_kind kind)
 		      break;
 		    }
 		}
+	      /* For hoisting loads (lim_raw), allow "self write": the store
+		 writes back the loaded value.  Example: a[i] = a[0]
+		 is safe even when i==0 causes aliasing.  */
+	      else if (kind == lim_raw
+		       && ref->loaded && aref->stored
+		       && is_self_write (ref, aref))
+		{
+		  if (dump_file && (dump_flags & TDF_DETAILS))
+		    fprintf (dump_file,
+			     "Dependency of refs %u and %u: "
+			     "independent (self write).\n",
+			     ref->id, aref->id);
+		}
+
 	      else if (!refs_independent_p (ref, aref, kind != sm_waw))
 		{
 		  indep_p = false;
@@ -3293,13 +3377,14 @@ can_sm_ref_p (class loop *loop, im_mem_ref *ref)
      explicitly.  */
   base = get_base_address (ref->mem.ref);
   if ((tree_could_trap_p (ref->mem.ref)
-       || (DECL_P (base) && TREE_READONLY (base)))
+       || (DECL_P (base) && TREE_READONLY (base))
+       || TREE_CODE (base) == STRING_CST)
       /* ???  We can at least use false here, allowing loads?  We
 	 are forcing conditional stores if the ref is not always
 	 stored to later anyway.  So this would only guard
 	 the load we need to emit.  Thus when the ref is not
 	 loaded we can elide this completely?  */
-      && !ref_always_accessed_p (loop, ref, true))
+      && !ref_always_stored_p (loop, ref))
     return false;
 
   /* Verify all loads of ref can be hoisted.  */
@@ -3414,94 +3499,96 @@ fill_always_executed_in_1 (class loop *loop, sbitmap contains_call)
   edge e;
   class loop *inn_loop = loop;
 
-  if (ALWAYS_EXECUTED_IN (loop->header) == NULL)
+  for (class loop *inner = loop->inner; inner; inner = inner->next)
+    fill_always_executed_in_1 (inner, contains_call);
+
+  auto_vec<basic_block, 64> worklist;
+  worklist.reserve_exact (loop->num_nodes);
+  worklist.quick_push (loop->header);
+  do
     {
-      auto_vec<basic_block, 64> worklist;
-      worklist.reserve_exact (loop->num_nodes);
-      worklist.quick_push (loop->header);
-      do
+      edge_iterator ei;
+      bb = worklist.pop ();
+
+      if (!flow_bb_inside_loop_p (inn_loop, bb))
 	{
-	  edge_iterator ei;
-	  bb = worklist.pop ();
-
-	  if (!flow_bb_inside_loop_p (inn_loop, bb))
-	    {
-	      /* When we are leaving a possibly infinite inner loop
-		 we have to stop processing.  */
-	      if (!finite_loop_p (inn_loop))
-		break;
-	      /* If the loop was finite we can continue with processing
-		 the loop we exited to.  */
-	      inn_loop = bb->loop_father;
-	    }
-
-	  if (dominated_by_p (CDI_DOMINATORS, loop->latch, bb))
-	    last = bb;
-
-	  if (bitmap_bit_p (contains_call, bb->index))
+	  /* When we are leaving a possibly infinite inner loop
+	     we have to stop processing.  */
+	  if (!finite_loop_p (inn_loop))
 	    break;
-
-	  /* If LOOP exits from this BB stop processing.  */
-	  FOR_EACH_EDGE (e, ei, bb->succs)
-	    if (!flow_bb_inside_loop_p (loop, e->dest))
-	      break;
-	  if (e)
-	    break;
-
-	  /* A loop might be infinite (TODO use simple loop analysis
-	     to disprove this if possible).  */
-	  if (bb->flags & BB_IRREDUCIBLE_LOOP)
-	    break;
-
-	  if (bb->loop_father->header == bb)
-	    /* Record that we enter into a subloop since it might not
-	       be finite.  */
-	    /* ???  Entering into a not always executed subloop makes
-	       fill_always_executed_in quadratic in loop depth since
-	       we walk those loops N times.  This is not a problem
-	       in practice though, see PR102253 for a worst-case testcase.  */
-	    inn_loop = bb->loop_father;
-
-	  /* Walk the body of LOOP sorted by dominance relation.  Additionally,
-	     if a basic block S dominates the latch, then only blocks dominated
-	     by S are after it.
-	     This is get_loop_body_in_dom_order using a worklist algorithm and
-	     stopping once we are no longer interested in visiting further
-	     blocks.  */
-	  unsigned old_len = worklist.length ();
-	  unsigned postpone = 0;
-	  for (basic_block son = first_dom_son (CDI_DOMINATORS, bb);
-	       son;
-	       son = next_dom_son (CDI_DOMINATORS, son))
-	    {
-	      if (!flow_bb_inside_loop_p (loop, son))
-		continue;
-	      if (dominated_by_p (CDI_DOMINATORS, loop->latch, son))
-		postpone = worklist.length ();
-	      worklist.quick_push (son);
-	    }
-	  if (postpone)
-	    /* Postponing the block that dominates the latch means
-	       processing it last and thus putting it earliest in the
-	       worklist.  */
-	    std::swap (worklist[old_len], worklist[postpone]);
+	  /* If the loop was finite we can continue with processing
+	     the loop we exited to.  */
+	  inn_loop = bb->loop_father;
 	}
-      while (!worklist.is_empty ());
 
-      while (1)
+      if (dominated_by_p (CDI_DOMINATORS, loop->latch, bb))
+	last = bb;
+
+      if (bitmap_bit_p (contains_call, bb->index))
+	break;
+
+      /* If LOOP exits from this BB stop processing.  */
+      FOR_EACH_EDGE (e, ei, bb->succs)
+	if (!flow_bb_inside_loop_p (loop, e->dest))
+	  break;
+      if (e)
+	break;
+
+      /* A loop might be infinite (TODO use simple loop analysis
+	 to disprove this if possible).  */
+      if (bb->flags & BB_IRREDUCIBLE_LOOP)
+	break;
+
+      if (bb->loop_father->header == bb)
+	/* Record that we enter into a subloop since it might not
+	   be finite.  */
+	/* ???  Entering into a not always executed subloop makes
+	   fill_always_executed_in quadratic in loop depth since
+	   we walk those loops N times.  This is not a problem
+	   in practice though, see PR102253 for a worst-case testcase.  */
+	inn_loop = bb->loop_father;
+
+      /* Walk the body of LOOP sorted by dominance relation.  Additionally,
+	 if a basic block S dominates the latch, then only blocks dominated
+	 by S are after it.
+	 This is get_loop_body_in_dom_order using a worklist algorithm and
+	 stopping once we are no longer interested in visiting further
+	 blocks.  */
+      unsigned old_len = worklist.length ();
+      unsigned postpone = 0;
+      for (basic_block son = first_dom_son (CDI_DOMINATORS, bb);
+	   son;
+	   son = next_dom_son (CDI_DOMINATORS, son))
+	{
+	  if (!flow_bb_inside_loop_p (loop, son))
+	    continue;
+	  if (dominated_by_p (CDI_DOMINATORS, loop->latch, son))
+	    postpone = worklist.length ();
+	  worklist.quick_push (son);
+	}
+      if (postpone)
+	/* Postponing the block that dominates the latch means
+	   processing it last and thus putting it earliest in the
+	   worklist.  */
+	std::swap (worklist[old_len], worklist[postpone]);
+    }
+  while (!worklist.is_empty ());
+
+  while (1)
+    {
+      if (last->loop_father == loop
+	  || (ALWAYS_EXECUTED_IN (last)
+	      && loop_outer (ALWAYS_EXECUTED_IN (last)) == loop))
 	{
 	  if (dump_enabled_p ())
 	    dump_printf (MSG_NOTE, "BB %d is always executed in loop %d\n",
 			 last->index, loop->num);
 	  SET_ALWAYS_EXECUTED_IN (last, loop);
-	  if (last == loop->header)
-	    break;
-	  last = get_immediate_dominator (CDI_DOMINATORS, last);
 	}
+      if (last == loop->header)
+	break;
+      last = get_immediate_dominator (CDI_DOMINATORS, last);
     }
-
-  for (loop = loop->inner; loop; loop = loop->next)
-    fill_always_executed_in_1 (loop, contains_call);
 }
 
 /* Fills ALWAYS_EXECUTED_IN information for basic blocks, i.e.
@@ -3518,6 +3605,12 @@ fill_always_executed_in (void)
   bitmap_clear (contains_call);
   FOR_EACH_BB_FN (bb, cfun)
     {
+      if (loop_depth (bb->loop_father) == 0)
+	{
+	  /* Outside of loops we can skip scanning all stmts.  */
+	  bitmap_set_bit (contains_call, bb->index);
+	  continue;
+	}
       gimple_stmt_iterator gsi;
       for (gsi = gsi_start_bb (bb); !gsi_end_p (gsi); gsi_next (&gsi))
 	{
@@ -3759,7 +3852,7 @@ public:
 unsigned int
 pass_lim::execute (function *fun)
 {
-  bool in_loop_pipeline = scev_initialized_p ();
+  in_loop_pipeline = scev_initialized_p ();
   if (!in_loop_pipeline)
     loop_optimizer_init (LOOPS_NORMAL | LOOPS_HAVE_RECORDED_EXITS);
 
@@ -3781,5 +3874,4 @@ make_pass_lim (gcc::context *ctxt)
 {
   return new pass_lim (ctxt);
 }
-
 

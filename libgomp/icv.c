@@ -1,4 +1,4 @@
-/* Copyright (C) 2005-2025 Free Software Foundation, Inc.
+/* Copyright (C) 2005-2026 Free Software Foundation, Inc.
    Contributed by Richard Henderson <rth@redhat.com>.
 
    This file is part of the GNU Offloading and Multi Processing Library
@@ -53,8 +53,6 @@ omp_get_dynamic (void)
   return icv->dyn_var;
 }
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 void
 omp_set_nested (int val)
 {
@@ -72,7 +70,6 @@ omp_get_nested (void)
   return (icv->max_active_levels_var > 1
 	  && icv->max_active_levels_var > omp_get_active_level ());
 }
-#pragma GCC diagnostic pop
 
 void
 omp_set_schedule (omp_sched_t kind, int chunk_size)
@@ -119,6 +116,14 @@ omp_get_thread_limit (void)
 {
   struct gomp_task_icv *icv = gomp_icv (false);
   return icv->thread_limit_var > INT_MAX ? INT_MAX : icv->thread_limit_var;
+}
+
+int
+omp_get_thread_limit_dim (int dim)
+{
+  if (dim == 0)
+    return omp_get_thread_limit ();
+  return 1;
 }
 
 void
@@ -235,16 +240,14 @@ omp_get_default_allocator (void)
 
 ialias (omp_set_dynamic)
 ialias (omp_get_dynamic)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 ialias (omp_set_nested)
 ialias (omp_get_nested)
-#pragma GCC diagnostic pop
 ialias (omp_set_num_threads)
 ialias (omp_set_schedule)
 ialias (omp_get_schedule)
 ialias (omp_get_max_threads)
 ialias (omp_get_thread_limit)
+ialias (omp_get_thread_limit_dim)
 ialias (omp_set_max_active_levels)
 ialias (omp_get_max_active_levels)
 ialias (omp_get_supported_active_levels)

@@ -1,4 +1,4 @@
-// Copyright (C) 2021-2025 Free Software Foundation, Inc.
+// Copyright (C) 2021-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -26,12 +26,12 @@
 namespace Rust {
 namespace Resolver {
 
-TypeBoundsProbe::TypeBoundsProbe (const TyTy::BaseType *receiver)
+TypeBoundsProbe::TypeBoundsProbe (TyTy::BaseType *receiver)
   : TypeCheckBase (), receiver (receiver)
 {}
 
 std::vector<std::pair<TraitReference *, HIR::ImplBlock *>>
-TypeBoundsProbe::Probe (const TyTy::BaseType *receiver)
+TypeBoundsProbe::Probe (TyTy::BaseType *receiver)
 {
   TypeBoundsProbe probe (receiver);
   probe.scan ();
@@ -61,6 +61,35 @@ TypeBoundsProbe::is_bound_satisfied_for_type (TyTy::BaseType *receiver,
   return false;
 }
 
+bool
+TypeBoundsProbe::process_impl_block (
+  HirId id, HIR::ImplBlock *impl,
+  std::vector<std::pair<HIR::TypePath *, HIR::ImplBlock *>>
+    &possible_trait_paths)
+{
+  // we are filtering for trait-impl-blocks
+  if (!impl->has_trait_ref ())
+    return true;
+
+  // can be recursive trait resolution
+  HIR::Trait *t = TraitResolver::ResolveHirItem (impl->get_trait_ref ());
+  if (t == nullptr)
+    return true;
+
+  HirId impl_ty_id = impl->get_type ().get_mappings ().get_hirid ();
+  TyTy::BaseType *impl_type = nullptr;
+  if (!query_type (impl_ty_id, &impl_type))
+    return true;
+
+  if (!types_compatable (TyTy::TyWithLocation (receiver),
+			 TyTy::TyWithLocation (impl_type), impl->get_locus (),
+			 false /*emit_errors*/, false /*check-bounds*/))
+    return true;
+
+  possible_trait_paths.emplace_back (&impl->get_trait_ref (), impl);
+  return true;
+}
+
 void
 TypeBoundsProbe::scan ()
 {
@@ -68,31 +97,7 @@ TypeBoundsProbe::scan ()
     possible_trait_paths;
   mappings.iterate_impl_blocks (
     [&] (HirId id, HIR::ImplBlock *impl) mutable -> bool {
-      // we are filtering for trait-impl-blocks
-      if (!impl->has_trait_ref ())
-	return true;
-
-      // can be recursive trait resolution
-      HIR::Trait *t = TraitResolver::ResolveHirItem (impl->get_trait_ref ());
-      if (t == nullptr)
-	return true;
-      DefId trait_id = t->get_mappings ().get_defid ();
-      if (context->trait_query_in_progress (trait_id))
-	return true;
-
-      HirId impl_ty_id = impl->get_type ().get_mappings ().get_hirid ();
-      TyTy::BaseType *impl_type = nullptr;
-      if (!query_type (impl_ty_id, &impl_type))
-	return true;
-
-      if (!receiver->can_eq (impl_type, false))
-	{
-	  if (!impl_type->can_eq (receiver, false))
-	    return true;
-	}
-
-      possible_trait_paths.push_back ({&impl->get_trait_ref (), impl});
-      return true;
+      return process_impl_block (id, impl, possible_trait_paths);
     });
 
   for (auto &path : possible_trait_paths)
@@ -101,11 +106,11 @@ TypeBoundsProbe::scan ()
       TraitReference *trait_ref = TraitResolver::Resolve (*trait_path);
 
       if (!trait_ref->is_error ())
-	trait_references.push_back ({trait_ref, path.second});
+	trait_references.emplace_back (trait_ref, path.second);
     }
 
   // marker traits...
-  assemble_sized_builtin ();
+  assemble_marker_builtins ();
 
   // add auto trait bounds
   for (auto *auto_trait : mappings.get_auto_traits ())
@@ -113,7 +118,7 @@ TypeBoundsProbe::scan ()
 }
 
 void
-TypeBoundsProbe::assemble_sized_builtin ()
+TypeBoundsProbe::assemble_marker_builtins ()
 {
   const TyTy::BaseType *raw = receiver->destructure ();
 
@@ -132,7 +137,6 @@ TypeBoundsProbe::assemble_sized_builtin ()
     case TyTy::POINTER:
     case TyTy::PARAM:
     case TyTy::FNDEF:
-    case TyTy::FNPTR:
     case TyTy::BOOL:
     case TyTy::CHAR:
     case TyTy::INT:
@@ -140,13 +144,20 @@ TypeBoundsProbe::assemble_sized_builtin ()
     case TyTy::FLOAT:
     case TyTy::USIZE:
     case TyTy::ISIZE:
-    case TyTy::CLOSURE:
     case TyTy::INFER:
     case TyTy::NEVER:
     case TyTy::PLACEHOLDER:
     case TyTy::PROJECTION:
     case TyTy::OPAQUE:
       assemble_builtin_candidate (LangItem::Kind::SIZED);
+      break;
+
+    case TyTy::FNPTR:
+    case TyTy::CLOSURE:
+      assemble_builtin_candidate (LangItem::Kind::SIZED);
+      assemble_builtin_candidate (LangItem::Kind::FN_ONCE);
+      assemble_builtin_candidate (LangItem::Kind::FN);
+      assemble_builtin_candidate (LangItem::Kind::FN_MUT);
       break;
 
       // FIXME str and slice need to be moved and test cases updated
@@ -158,6 +169,7 @@ TypeBoundsProbe::assemble_sized_builtin ()
       assemble_builtin_candidate (LangItem::Kind::SIZED);
       break;
 
+    case TyTy::CONST:
     case TyTy::DYNAMIC:
     case TyTy::ERROR:
       break;
@@ -169,7 +181,7 @@ TypeBoundsProbe::add_trait_bound (HIR::Trait *trait)
 {
   auto trait_ref = TraitResolver::Resolve (*trait);
 
-  trait_references.push_back ({trait_ref, mappings.lookup_builtin_marker ()});
+  trait_references.emplace_back (trait_ref, mappings.lookup_builtin_marker ());
 }
 
 void
@@ -206,7 +218,7 @@ TyTy::TypeBoundPredicate
 TypeCheckBase::get_predicate_from_bound (
   HIR::TypePath &type_path,
   tl::optional<std::reference_wrapper<HIR::Type>> associated_self,
-  BoundPolarity polarity, bool is_qualified_type_path)
+  BoundPolarity polarity, bool is_qualified_type_path, bool is_super_trait)
 {
   TyTy::TypeBoundPredicate lookup = TyTy::TypeBoundPredicate::error ();
   bool already_resolved
@@ -226,7 +238,8 @@ TypeCheckBase::get_predicate_from_bound (
   auto &final_seg = type_path.get_final_segment ();
   switch (final_seg.get_type ())
     {
-      case HIR::TypePathSegment::SegmentType::GENERIC: {
+    case HIR::TypePathSegment::SegmentType::GENERIC:
+      {
 	auto &final_generic_seg
 	  = static_cast<HIR::TypePathSegmentGeneric &> (final_seg);
 	if (final_generic_seg.has_generic_args ())
@@ -251,7 +264,8 @@ TypeCheckBase::get_predicate_from_bound (
       }
       break;
 
-      case HIR::TypePathSegment::SegmentType::FUNCTION: {
+    case HIR::TypePathSegment::SegmentType::FUNCTION:
+      {
 	auto &final_function_seg
 	  = static_cast<HIR::TypePathSegmentFunction &> (final_seg);
 	auto &fn = final_function_seg.get_function_path ();
@@ -288,11 +302,9 @@ TypeCheckBase::get_predicate_from_bound (
 
 	std::vector<HIR::GenericArgsBinding> bindings;
 	location_t output_locus = fn.get_return_type ().get_locus ();
-	HIR::GenericArgsBinding binding (Identifier (
-					   trait_item->trait_identifier ()),
-					 fn.get_return_type ().clone_type (),
-					 output_locus);
-	bindings.push_back (std::move (binding));
+	bindings.emplace_back (Identifier (trait_item->trait_identifier ()),
+			       fn.get_return_type ().clone_type (),
+			       output_locus);
 
 	args = HIR::GenericArgs ({} /* lifetimes */,
 				 std::move (inputs) /* type_args*/,
@@ -327,7 +339,8 @@ TypeCheckBase::get_predicate_from_bound (
   if (!args.is_empty () || predicate.requires_generic_args ())
     {
       // this is applying generic arguments to a trait reference
-      predicate.apply_generic_arguments (&args, associated_self.has_value ());
+      predicate.apply_generic_arguments (&args, associated_self.has_value (),
+					 is_super_trait);
     }
 
   context->insert_resolved_predicate (type_path.get_mappings ().get_hirid (),
@@ -413,7 +426,8 @@ TypeBoundPredicate::TypeBoundPredicate (const TypeBoundPredicate &other)
     }
 
   used_arguments
-    = SubstitutionArgumentMappings (copied_arg_mappings, {},
+    = SubstitutionArgumentMappings (copied_arg_mappings,
+				    other.used_arguments.get_binding_args (),
 				    other.used_arguments.get_regions (),
 				    other.used_arguments.get_locus ());
 }
@@ -449,12 +463,13 @@ TypeBoundPredicate::operator= (const TypeBoundPredicate &other)
     {
       TyTy::BaseType *argument
 	= m.get_tyty () == nullptr ? nullptr : m.get_tyty ()->clone ();
-      SubstitutionArg c (&substitutions.at (i++), argument);
-      copied_arg_mappings.push_back (std::move (c));
+
+      copied_arg_mappings.emplace_back (&substitutions.at (i++), argument);
     }
 
   used_arguments
-    = SubstitutionArgumentMappings (copied_arg_mappings, {},
+    = SubstitutionArgumentMappings (copied_arg_mappings,
+				    other.used_arguments.get_binding_args (),
 				    other.used_arguments.get_regions (),
 				    other.used_arguments.get_locus ());
   super_traits = other.super_traits;
@@ -508,7 +523,8 @@ TypeBoundPredicate::is_object_safe (bool emit_error, location_t locus) const
 
 void
 TypeBoundPredicate::apply_generic_arguments (HIR::GenericArgs *generic_args,
-					     bool has_associated_self)
+					     bool has_associated_self,
+					     bool is_super_trait)
 {
   rust_assert (!substitutions.empty ());
   if (has_associated_self)
@@ -529,44 +545,36 @@ TypeBoundPredicate::apply_generic_arguments (HIR::GenericArgs *generic_args,
     Resolver::TypeCheckContext::get ()->regions_from_generic_args (
       *generic_args));
 
-  apply_argument_mappings (args);
+  apply_argument_mappings (args, is_super_trait);
 }
 
 void
 TypeBoundPredicate::apply_argument_mappings (
-  SubstitutionArgumentMappings &arguments)
+  SubstitutionArgumentMappings &arguments, bool is_super_trait)
 {
   used_arguments = arguments;
   error_flag |= used_arguments.is_error ();
   auto &subst_mappings = used_arguments;
+
+  bool substs_need_bounds_check = !is_super_trait;
   for (auto &sub : get_substs ())
     {
       SubstitutionArg arg = SubstitutionArg::error ();
       bool ok
 	= subst_mappings.get_argument_for_symbol (sub.get_param_ty (), &arg);
       if (ok && arg.get_tyty () != nullptr)
-	sub.fill_param_ty (subst_mappings, subst_mappings.get_locus ());
+	sub.fill_param_ty (subst_mappings, subst_mappings.get_locus (),
+			   substs_need_bounds_check);
     }
 
-  // associated argument mappings
-  for (auto &it : subst_mappings.get_binding_args ())
-    {
-      std::string identifier = it.first;
-      TyTy::BaseType *type = it.second;
-
-      TypeBoundPredicateItem item = lookup_associated_item (identifier);
-      rust_assert (!item.is_error ());
-
-      const auto item_ref = item.get_raw_item ();
-      item_ref->associated_type_set (type);
-    }
-
+  // Associated type binding args (Iterator<Item = i32>) are consumed
+  // by BaseType::satisfies_bound at check time
   for (auto &super_trait : super_traits)
     {
       auto adjusted
 	= super_trait.adjust_mappings_for_this (used_arguments,
 						true /*trait mode*/);
-      super_trait.apply_argument_mappings (adjusted);
+      super_trait.apply_argument_mappings (adjusted, is_super_trait);
     }
 }
 
@@ -578,7 +586,7 @@ TypeBoundPredicate::contains_item (const std::string &search) const
   return trait_ref->lookup_trait_item (search, &trait_item_ref);
 }
 
-TypeBoundPredicateItem
+tl::optional<TypeBoundPredicateItem>
 TypeBoundPredicate::lookup_associated_item (const std::string &search) const
 {
   auto trait_ref = get ();
@@ -590,11 +598,11 @@ TypeBoundPredicate::lookup_associated_item (const std::string &search) const
   for (auto &super_trait : super_traits)
     {
       auto lookup = super_trait.lookup_associated_item (search);
-      if (!lookup.is_error ())
+      if (lookup.has_value ())
 	return lookup;
     }
 
-  return TypeBoundPredicateItem::error ();
+  return tl::nullopt;
 }
 
 TypeBoundPredicateItem::TypeBoundPredicateItem (
@@ -635,7 +643,7 @@ TypeBoundPredicateItem::get_parent () const
   return &parent;
 }
 
-TypeBoundPredicateItem
+tl::optional<TypeBoundPredicateItem>
 TypeBoundPredicate::lookup_associated_item (
   const Resolver::TraitItemReference *ref) const
 {
@@ -645,20 +653,31 @@ TypeBoundPredicate::lookup_associated_item (
 BaseType *
 TypeBoundPredicateItem::get_tyty_for_receiver (const TyTy::BaseType *receiver)
 {
+  auto ctx = Resolver::TypeCheckContext::get ();
+
   TyTy::BaseType *trait_item_tyty = get_raw_item ()->get_tyty ();
   if (parent.get_substitution_arguments ().is_empty ())
-    return trait_item_tyty;
-
-  const Resolver::TraitItemReference *tref = get_raw_item ();
-  bool is_associated_type = tref->get_trait_item_type ();
-  if (is_associated_type)
     return trait_item_tyty;
 
   // set up the self mapping
   SubstitutionArgumentMappings gargs = parent.get_substitution_arguments ();
   rust_assert (!gargs.is_empty ());
 
-  // setup the adjusted mappings
+  // The associated-type projection we are rebasing is stored in trait
+  // coordinates
+  //
+  //   Self/X for trait SliceIndex<X>
+  //
+  // The predicate's own  SubstitutionParamMappings may have already been
+  // mutated by SubstitutionParamMapping::fill_param_ty when the bound is a
+  // where-clause like I: SliceIndex<[T]>: substituting Self with the
+  // ParamType I rebinds the predicate's first param from Self to I.
+  // Building adjusted_mappings from those renamed mappings would make
+  // name-based lookup (get_argument_for_symbol) miss the trait's Self/X
+  // symbols inside the projection.
+  const auto &trait_substs = parent.get ()->get_trait_substs ();
+  rust_assert (gargs.get_mappings ().size () <= trait_substs.size ());
+
   std::vector<SubstitutionArg> adjusted_mappings;
   for (size_t i = 0; i < gargs.get_mappings ().size (); i++)
     {
@@ -668,8 +687,7 @@ TypeBoundPredicateItem::get_tyty_for_receiver (const TyTy::BaseType *receiver)
       TyTy::BaseType *argument
 	= is_implicit_self ? receiver->clone () : mapping.get_tyty ();
 
-      SubstitutionArg arg (mapping.get_param_mapping (), argument);
-      adjusted_mappings.push_back (std::move (arg));
+      adjusted_mappings.emplace_back (&trait_substs.at (i), argument);
     }
 
   SubstitutionArgumentMappings adjusted (adjusted_mappings, {},
@@ -677,7 +695,19 @@ TypeBoundPredicateItem::get_tyty_for_receiver (const TyTy::BaseType *receiver)
 					 gargs.get_locus (),
 					 gargs.get_subst_cb (),
 					 true /* trait-mode-flag */);
-  return Resolver::SubstMapperInternal::Resolve (trait_item_tyty, adjusted);
+  TyTy::BaseType *res
+    = Resolver::SubstMapperInternal::Resolve (trait_item_tyty, adjusted);
+
+  if (res != trait_item_tyty)
+    {
+      auto &mappings = Analysis::Mappings::get ();
+      HirId fresh = mappings.get_next_hir_id ();
+      res->set_ref (fresh);
+      res->set_ty_ref (fresh);
+      ctx->insert_implicit_type (fresh, res);
+    }
+
+  return res;
 }
 bool
 TypeBoundPredicate::is_error () const
@@ -699,25 +729,11 @@ TypeBoundPredicate::handle_substitions (
       if (sub.get_param_ty () == nullptr)
 	continue;
 
-      ParamType *p = sub.get_param_ty ();
+      auto p = sub.get_param_ty ();
       BaseType *r = p->resolve ();
       BaseType *s = Resolver::SubstMapperInternal::Resolve (r, subst_mappings);
 
       p->set_ty_ref (s->get_ty_ref ());
-    }
-
-  // associated argument mappings
-  for (auto &it : subst_mappings.get_binding_args ())
-    {
-      std::string identifier = it.first;
-      TyTy::BaseType *type = it.second;
-
-      TypeBoundPredicateItem item = lookup_associated_item (identifier);
-      if (!item.is_error ())
-	{
-	  const auto item_ref = item.get_raw_item ();
-	  item_ref->associated_type_set (type);
-	}
     }
 
   // FIXME more error handling at some point
@@ -746,33 +762,51 @@ size_t
 TypeBoundPredicate::get_num_associated_bindings () const
 {
   size_t count = 0;
-  auto trait_ref = get ();
-  for (const auto &trait_item : trait_ref->get_trait_items ())
-    {
-      bool is_associated_type
-	= trait_item.get_trait_item_type ()
-	  == Resolver::TraitItemReference::TraitItemType::TYPE;
-      if (is_associated_type)
-	count++;
-    }
+
+  get_trait_hierachy ([&count] (const Resolver::TraitReference &ref) {
+    for (const auto &trait_item : ref.get_trait_items ())
+      {
+	bool is_associated_type
+	  = trait_item.get_trait_item_type ()
+	    == Resolver::TraitItemReference::TraitItemType::TYPE;
+	if (is_associated_type)
+	  count++;
+      }
+  });
+
   return count;
+}
+
+void
+TypeBoundPredicate::get_trait_hierachy (
+  std::function<void (const Resolver::TraitReference &)> callback) const
+{
+  auto trait_ref = get ();
+  callback (*trait_ref);
+
+  for (auto &super : super_traits)
+    {
+      const auto &super_trait_ref = *super.get ();
+      callback (super_trait_ref);
+      super.get_trait_hierachy (callback);
+    }
 }
 
 TypeBoundPredicateItem
 TypeBoundPredicate::lookup_associated_type (const std::string &search)
 {
-  TypeBoundPredicateItem item = lookup_associated_item (search);
+  tl::optional<TypeBoundPredicateItem> item = lookup_associated_item (search);
 
   // only need to check that it is infact an associated type because other
   // wise if it was not found it will just be an error node anyway
-  if (!item.is_error ())
+  if (item.has_value ())
     {
-      const auto raw = item.get_raw_item ();
+      const auto raw = item->get_raw_item ();
       if (raw->get_trait_item_type ()
 	  != Resolver::TraitItemReference::TraitItemType::TYPE)
 	return TypeBoundPredicateItem::error ();
     }
-  return item;
+  return item.value ();
 }
 
 std::vector<TypeBoundPredicateItem>
@@ -786,10 +820,7 @@ TypeBoundPredicate::get_associated_type_items ()
 	= trait_item.get_trait_item_type ()
 	  == Resolver::TraitItemReference::TraitItemType::TYPE;
       if (is_associated_type)
-	{
-	  TypeBoundPredicateItem item (*this, &trait_item);
-	  items.push_back (std::move (item));
-	}
+	items.emplace_back (*this, &trait_item);
     }
   return items;
 }
@@ -808,24 +839,81 @@ TypeBoundPredicate::is_equal (const TypeBoundPredicate &other) const
   // then match the generics applied
   for (size_t i = 0; i < get_num_substitutions (); i++)
     {
-      const SubstitutionParamMapping &a = substitutions.at (i);
-      const SubstitutionParamMapping &b = other.substitutions.at (i);
+      SubstitutionParamMapping a = substitutions.at (i);
+      SubstitutionParamMapping b = other.substitutions.at (i);
 
-      const ParamType *ap = a.get_param_ty ();
-      const ParamType *bp = b.get_param_ty ();
+      auto ap = a.get_param_ty ();
+      auto bp = b.get_param_ty ();
 
-      const BaseType *apd = ap->destructure ();
-      const BaseType *bpd = bp->destructure ();
+      BaseType *apd = ap->destructure ();
+      BaseType *bpd = bp->destructure ();
 
-      // FIXME use the unify_and infer inteface or try coerce
-      if (!apd->can_eq (bpd, false /*emit_errors*/))
-	{
-	  if (!bpd->can_eq (apd, false /*emit_errors*/))
-	    return false;
-	}
+      if (!Resolver::types_compatable (TyTy::TyWithLocation (apd),
+				       TyTy::TyWithLocation (bpd),
+				       UNKNOWN_LOCATION, false))
+	return false;
     }
 
   return true;
+}
+
+bool
+TypeBoundPredicate::validate_type_implements_super_traits (
+  TyTy::BaseType &self, HIR::Type &impl_type, HIR::Type &trait) const
+{
+  if (get_polarity () != BoundPolarity::RegularBound)
+    return true;
+
+  auto &ptref = *get ();
+  for (auto &super : super_traits)
+    {
+      if (super.get_polarity () != BoundPolarity::RegularBound)
+	continue;
+
+      if (!super.validate_type_implements_this (self, impl_type, trait))
+	{
+	  auto &sptref = *super.get ();
+
+	  // emit error
+	  std::string fixit1
+	    = "required by this bound in: " + ptref.get_name ();
+	  std::string fixit2 = "the trait " + sptref.get_name ()
+			       + " is not implemented for "
+			       + impl_type.to_string ();
+
+	  rich_location r (line_table, trait.get_locus ());
+	  r.add_fixit_insert_after (super.get_locus (), fixit1.c_str ());
+	  r.add_fixit_insert_after (trait.get_locus (), fixit2.c_str ());
+	  rust_error_at (r, ErrorCode::E0277,
+			 "the trait bound %<%s: %s%> is not satisfied",
+			 impl_type.to_string ().c_str (),
+			 sptref.get_name ().c_str ());
+
+	  return false;
+	}
+
+      if (!super.validate_type_implements_super_traits (self, impl_type, trait))
+	return false;
+    }
+
+  return true;
+}
+
+bool
+TypeBoundPredicate::validate_type_implements_this (TyTy::BaseType &self,
+						   HIR::Type &impl_type,
+						   HIR::Type &trait) const
+{
+  const auto &ptref = *get ();
+  auto probed_bounds = Resolver::TypeBoundsProbe::Probe (&self);
+  for (auto &elem : probed_bounds)
+    {
+      auto &tref = *(elem.first);
+      if (ptref.is_equal (tref))
+	return true;
+    }
+
+  return false;
 }
 
 // trait item reference

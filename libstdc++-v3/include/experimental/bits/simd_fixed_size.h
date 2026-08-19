@@ -1,6 +1,6 @@
 // Simd fixed_size ABI specific implementations -*- C++ -*-
 
-// Copyright (C) 2020-2025 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -734,7 +734,7 @@ template <typename _Tp, size_t _Np,
 		    __to_simd_tuple<_Tp, _Np - _R::_S_first_size, 0>(
 		      __fromX...)};
 
-	// ill-formed if some unforseen pattern is needed
+	// ill-formed if some unforeseen pattern is needed
 	else
 	  __assert_unreachable<_Tp>();
       }

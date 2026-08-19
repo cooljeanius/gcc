@@ -1,5 +1,5 @@
 /* Definitions for CPP library.
-   Copyright (C) 1995-2025 Free Software Foundation, Inc.
+   Copyright (C) 1995-2026 Free Software Foundation, Inc.
    Written by Per Bothner, 1994-95.
 
 This program is free software; you can redistribute it and/or modify it
@@ -101,6 +101,8 @@ class rich_location;
   OP(CLOSE_SQUARE,	"]")						\
   OP(OPEN_BRACE,	"{")						\
   OP(CLOSE_BRACE,	"}")						\
+  OP(OPEN_SPLICE,	"[:")						\
+  OP(CLOSE_SPLICE,	":]")						\
   /* The remainder of the punctuation.	Order is not significant.  */	\
   OP(SEMICOLON,		";")	/* structure */				\
   OP(ELLIPSIS,		"...")						\
@@ -111,6 +113,7 @@ class rich_location;
   OP(SCOPE,		"::")						\
   OP(DEREF_STAR,	"->*")						\
   OP(DOT_STAR,		".*")						\
+  OP(REFLECT_OP,	"^^")						\
   OP(ATSIGN,		"@")  /* used in Objective-C */			\
 									\
   TK(NAME,		IDENT)	 /* word */				\
@@ -180,7 +183,8 @@ enum c_lang {CLK_GNUC89 = 0, CLK_GNUC99, CLK_GNUC11, CLK_GNUC17, CLK_GNUC23,
 	     CLK_GNUCXX, CLK_CXX98, CLK_GNUCXX11, CLK_CXX11,
 	     CLK_GNUCXX14, CLK_CXX14, CLK_GNUCXX17, CLK_CXX17,
 	     CLK_GNUCXX20, CLK_CXX20, CLK_GNUCXX23, CLK_CXX23,
-	     CLK_GNUCXX26, CLK_CXX26, CLK_ASM};
+	     CLK_GNUCXX26, CLK_CXX26, CLK_GNUCXX29, CLK_CXX29,
+	     CLK_ASM};
 
 /* Payload of a NUMBER, STRING, CHAR or COMMENT token.  */
 struct GTY(()) cpp_string {
@@ -198,7 +202,7 @@ struct GTY(()) cpp_string {
 #define STRINGIFY_ARG	(1 << 2) /* If macro argument to be stringified.  */
 #define PASTE_LEFT	(1 << 3) /* If on LHS of a ## operator.  */
 #define NAMED_OP	(1 << 4) /* C++ named operators.  */
-#define PREV_FALLTHROUGH (1 << 5) /* On a token preceeded by FALLTHROUGH
+#define PREV_FALLTHROUGH (1 << 5) /* On a token preceded by FALLTHROUGH
 				     comment.  */
 #define DECIMAL_INT     (1 << 6) /* Decimal integer, set in c-lex.cc.  */
 #define PURE_ZERO	(1 << 7) /* Single 0 digit, used by the C++ frontend,
@@ -435,6 +439,10 @@ struct cpp_options
      Presumably the usage is protected by the appropriate #ifdef.  */
   unsigned char warn_variadic_macros;
 
+  /* Non-zero means suppress diagnostics for NODE_WARN #define or #undef.
+     Used for cpp_define/cpp_undef.  */
+  unsigned char suppress_builtin_macro_warnings;
+
   /* Nonzero means warn about builtin macros that are redefined or
      explicitly undefined.  */
   unsigned char warn_builtin_macro_redefined;
@@ -508,7 +516,7 @@ struct cpp_options
   unsigned char user_literals;
 
   /* Nonzero means warn when a string or character literal is followed by a
-     ud-suffix which does not beging with an underscore.  */
+     ud-suffix which does not begin with an underscore.  */
   unsigned char warn_literal_suffix;
 
   /* Nonzero means interpret imaginary, fixed-point, or other gnu extension
@@ -619,6 +627,9 @@ struct cpp_options
 
   /* True if -finput-charset= option has been used explicitly.  */
   bool cpp_input_charset_explicit;
+
+  /* True if -Wkeyword-macro.  */
+  bool cpp_warn_keyword_macro;
 
   /* -Wleading-whitespace= value.  */
   unsigned char cpp_warn_leading_whitespace;
@@ -750,6 +761,7 @@ enum cpp_warning_reason {
   CPP_W_CXX20_EXTENSIONS,
   CPP_W_CXX23_EXTENSIONS,
   CPP_W_CXX26_EXTENSIONS,
+  CPP_W_CXX29_EXTENSIONS,
   CPP_W_EXPANSION_TO_DEFINED,
   CPP_W_BIDIRECTIONAL,
   CPP_W_INVALID_UTF8,
@@ -757,7 +769,8 @@ enum cpp_warning_reason {
   CPP_W_HEADER_GUARD,
   CPP_W_PRAGMA_ONCE_OUTSIDE_HEADER,
   CPP_W_LEADING_WHITESPACE,
-  CPP_W_TRAILING_WHITESPACE
+  CPP_W_TRAILING_WHITESPACE,
+  CPP_W_KEYWORD_MACRO
 };
 
 /* Callback for header lookup for HEADER, which is the name of a
@@ -852,7 +865,8 @@ struct cpp_callbacks
   /* Maybe translate a #include into something else.  Return a
      cpp_buffer containing the translation if translating.  */
   char *(*translate_include) (cpp_reader *, line_maps *, location_t,
-			      const char *path);
+			      _cpp_file *file, bool angle_brackets,
+			      const char **alternate);
 };
 
 #ifdef VMS
@@ -1169,6 +1183,8 @@ extern const char *cpp_probe_header_unit (cpp_reader *, const char *file,
 extern const char *cpp_get_narrow_charset_name (cpp_reader *) ATTRIBUTE_PURE;
 extern const char *cpp_get_wide_charset_name (cpp_reader *) ATTRIBUTE_PURE;
 
+extern location_t cpp_get_diagnostic_override_loc (const cpp_reader *);
+
 /* This function reads the file, but does not start preprocessing.  It
    returns the name of the original file; this is the same as the
    input file, except for preprocessed input.  This will generate at
@@ -1248,6 +1264,17 @@ inline bool cpp_fun_like_macro_p (cpp_hashnode *node)
   return cpp_user_macro_p (node) && node->value.macro->fun_like;
 }
 
+/* Return true for nodes marked for -Wkeyword-macro diagnostics.  */
+inline bool cpp_keyword_p (cpp_hashnode *node)
+{
+  /* As keywords are marked identifiers which don't start with underscore
+     or start with underscore followed by capital letter (except for
+     _Pragma).  */
+  return ((node->flags & NODE_WARN)
+	  && (NODE_NAME (node)[0] != '_'
+	      || (NODE_NAME (node)[1] != '_' && NODE_NAME (node)[1] != 'P')));
+}
+
 extern const unsigned char *cpp_macro_definition (cpp_reader *, cpp_hashnode *);
 extern const unsigned char *cpp_macro_definition (cpp_reader *, cpp_hashnode *,
 						  const cpp_macro *);
@@ -1284,6 +1311,9 @@ extern const char *cpp_interpret_string_ranges (cpp_reader *pfile,
 extern bool cpp_interpret_string_notranslate (cpp_reader *,
 					      const cpp_string *, size_t,
 					      cpp_string *, enum cpp_ttype);
+extern bool cpp_translate_string (cpp_reader *, const cpp_string *,
+				  cpp_string *, enum cpp_ttype, bool);
+extern bool cpp_valid_identifier (cpp_reader *, const unsigned char *);
 
 /* Convert a host character constant to the execution character set.  */
 extern cppchar_t cpp_host_to_exec_charset (cpp_reader *, cppchar_t);
@@ -1509,6 +1539,21 @@ extern cpp_comment_table *cpp_get_comments (cpp_reader *);
 extern cpp_hashnode *cpp_lookup (cpp_reader *, const unsigned char *,
 				 unsigned int);
 
+/* Set NODE_WARN flag for NAME, such that there will be diagnostics
+   for #define or #undef of NAME.  */
+
+inline void
+cpp_warn (cpp_reader *pfile, const char *name, unsigned int len)
+{
+  cpp_lookup (pfile, (const unsigned char *) name, len)->flags |= NODE_WARN;
+}
+
+inline void
+cpp_warn (cpp_reader *pfile, const char *name)
+{
+  cpp_warn (pfile, name, strlen (name));
+}
+
 typedef int (*cpp_cb) (cpp_reader *, cpp_hashnode *, void *);
 extern void cpp_forall_identifiers (cpp_reader *, cpp_cb, void *);
 
@@ -1527,8 +1572,10 @@ extern void cpp_make_system_header (cpp_reader *, int, int);
 extern bool cpp_push_include (cpp_reader *, const char *);
 extern bool cpp_push_default_include (cpp_reader *, const char *);
 extern void cpp_change_file (cpp_reader *, enum lc_reason, const char *);
-extern const char *cpp_get_path (struct _cpp_file *);
-extern cpp_dir *cpp_get_dir (struct _cpp_file *);
+extern const char *_cpp_get_file_path (_cpp_file *);
+extern const char *_cpp_get_file_name (_cpp_file *);
+extern struct stat *_cpp_get_file_stat (_cpp_file *);
+extern struct cpp_dir *_cpp_get_file_dir (_cpp_file *);
 extern cpp_buffer *cpp_get_buffer (cpp_reader *);
 extern struct _cpp_file *cpp_get_file (cpp_buffer *);
 extern cpp_buffer *cpp_get_prev (cpp_buffer *);
@@ -1608,7 +1655,8 @@ struct cpp_decoded_char
    This is a tabstop value, along with a callback for getting the
    widths of characters.  Normally this callback is cpp_wcwidth, but we
    support other schemes for escaping non-ASCII unicode as a series of
-   ASCII chars when printing the user's source code in diagnostic-show-locus.cc
+   ASCII chars when printing the user's source code in
+   gcc/diagnostics/source-printing.cc
 
    For example, consider:
    - the Unicode character U+03C0 "GREEK SMALL LETTER PI" (UTF-8: 0xCF 0x80)

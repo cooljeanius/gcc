@@ -1,4 +1,4 @@
-// Copyright (C) 2025 Free Software Foundation, Inc.
+// Copyright (C) 2025-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -28,7 +28,9 @@
 namespace Rust {
 namespace AST {
 
-DeriveHash::DeriveHash (location_t loc) : DeriveVisitor (loc) {}
+DeriveHash::DeriveHash (location_t loc, Builder::Source item_source)
+  : DeriveVisitor (loc, item_source)
+{}
 
 std::unique_ptr<AST::Item>
 DeriveHash::go (Item &item)
@@ -41,8 +43,9 @@ DeriveHash::go (Item &item)
 std::unique_ptr<Expr>
 DeriveHash::hash_call (std::unique_ptr<Expr> &&value)
 {
-  auto hash
-    = builder.path_in_expression ({"core", "hash", "Hash", "hash"}, true);
+  auto hash = builder.path_in_expression ({builder.get_path_start (), "hash",
+					   "Hash", "hash"},
+					  true);
 
   return builder.call (ptrify (hash),
 		       vec (std::move (value),
@@ -63,8 +66,8 @@ DeriveHash::hash_fn (std::unique_ptr<BlockExpr> &&block)
 						    true));
 
   auto params = vec (builder.self_ref_param (), std::move (state_param));
-  auto bounds = vec (
-    builder.trait_bound (builder.type_path ({"core", "hash", "Hasher"}, true)));
+  auto bounds = vec (builder.trait_bound (
+    builder.type_path ({builder.get_path_start (), "hash", "Hasher"}, true)));
   auto generics = vec (
     builder.generic_type_param (DeriveHash::state_type, std::move (bounds)));
 
@@ -77,14 +80,18 @@ DeriveHash::hash_impl (
   std::unique_ptr<AssociatedItem> &&hash_fn, std::string name,
   const std::vector<std::unique_ptr<GenericParam>> &type_generics)
 {
-  auto hash_path = builder.type_path ({"core", "hash", "Hash"}, true);
+  auto hash_path = [this] () {
+    return builder.type_path ({builder.get_path_start (), "hash", "Hash"},
+			      true);
+  };
 
   auto trait_items = vec (std::move (hash_fn));
 
-  auto generics = setup_impl_generics (name, type_generics,
-				       builder.trait_bound (hash_path));
+  auto generics = setup_impl_generics (name, type_generics, [&, this] () {
+    return builder.trait_bound (hash_path ());
+  });
 
-  return builder.trait_impl (hash_path, std::move (generics.self_type),
+  return builder.trait_impl (hash_path (), std::move (generics.self_type),
 			     std::move (trait_items),
 			     std::move (generics.impl));
 }
@@ -151,7 +158,7 @@ DeriveHash::match_enum_tuple (PathInExpression variant_path,
     }
 
   auto patterns_elts = std::unique_ptr<TupleStructItems> (
-    new TupleStructItemsNoRange (std::move (self_patterns)));
+    new TupleStructItemsNoRest (std::move (self_patterns)));
   auto pattern = std::unique_ptr<Pattern> (
     new ReferencePattern (std::unique_ptr<Pattern> (new TupleStructPattern (
 			    variant_path, std::move (patterns_elts))),
@@ -231,14 +238,7 @@ DeriveHash::visit_enum (Enum &item)
   auto cases = std::vector<MatchCase> ();
   auto type_name = item.get_identifier ().as_string ();
 
-  auto intrinsic = ptrify (
-    builder.path_in_expression ({"core", "intrinsics", "discriminant_value"},
-				true));
-
-  auto let_discr
-    = builder.let (builder.identifier_pattern (DeriveHash::discr), nullptr,
-		   builder.call (std::move (intrinsic),
-				 builder.identifier ("self")));
+  auto let_discr = builder.discriminant_value (DeriveHash::discr);
 
   auto discr_hash = builder.statementify (
     hash_call (builder.ref (builder.identifier (DeriveHash::discr))));

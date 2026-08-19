@@ -1,6 +1,6 @@
 // { dg-do run { target c++11 } }
 
-// Copyright (C) 2016-2025 Free Software Foundation, Inc.
+// Copyright (C) 2016-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -51,11 +51,12 @@ void test02()
     };
 
   // Make sure we will reallocate for insertion.
-  VERIFY( vv.capacity() == 3 );
+  const auto n = vv.capacity();
+  vv.resize(n);
 
   vv.insert(vv.begin(), vv[0]);
 
-  VERIFY( vv.size() == 4 );
+  VERIFY( vv.size() == (n + 1) );
   VERIFY( vv[0].size() == 2 );
   VERIFY( vv[0][0] == 2 );
   VERIFY( vv[0][1] == 3 );

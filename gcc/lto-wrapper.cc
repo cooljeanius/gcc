@@ -1,5 +1,5 @@
 /* Wrapper to call lto.  Used by collect2 and the linker plugin.
-   Copyright (C) 2009-2025 Free Software Foundation, Inc.
+   Copyright (C) 2009-2026 Free Software Foundation, Inc.
 
    Factored out of collect2 by Rafael Espindola <espindola@google.com>
 
@@ -55,7 +55,6 @@ along with GCC; see the file COPYING3.  If not see
 #include "opts-diagnostic.h"
 #include "opt-suggestions.h"
 #include "opts-jobserver.h"
-#include "make-unique.h"
 #include "lto-ltrans-cache.h"
 
 /* Environment variable, used for passing the names of offload targets from GCC
@@ -258,7 +257,7 @@ merge_flto_options (vec<cl_decoded_option> &decoded_options,
 }
 
 /* Try to merge and complain about options FDECODED_OPTIONS when applied
-   ontop of DECODED_OPTIONS.  */
+   on top of DECODED_OPTIONS.  */
 
 static void
 merge_and_complain (vec<cl_decoded_option> &decoded_options,
@@ -321,6 +320,9 @@ merge_and_complain (vec<cl_decoded_option> &decoded_options,
 	case OPT_fdiagnostics_show_line_numbers:
 	case OPT_fdiagnostics_show_option:
 	case OPT_fdiagnostics_show_location_:
+	case OPT_fdiagnostics_show_nesting:
+	case OPT_fdiagnostics_show_nesting_locations:
+	case OPT_fdiagnostics_show_nesting_levels:
 	case OPT_fshow_column:
 	case OPT_fcommon:
 	case OPT_fgnu_tm:
@@ -740,6 +742,9 @@ append_compiler_options (obstack *argv_obstack, vec<cl_decoded_option> opts)
 	case OPT_fdiagnostics_show_line_numbers:
 	case OPT_fdiagnostics_show_option:
 	case OPT_fdiagnostics_show_location_:
+	case OPT_fdiagnostics_show_nesting:
+	case OPT_fdiagnostics_show_nesting_locations:
+	case OPT_fdiagnostics_show_nesting_levels:
 	case OPT_fshow_column:
 	case OPT_fPIC:
 	case OPT_fpic:
@@ -802,6 +807,9 @@ append_diag_options (obstack *argv_obstack, vec<cl_decoded_option> opts)
 	case OPT_fdiagnostics_show_line_numbers:
 	case OPT_fdiagnostics_show_option:
 	case OPT_fdiagnostics_show_location_:
+	case OPT_fdiagnostics_show_nesting:
+	case OPT_fdiagnostics_show_nesting_locations:
+	case OPT_fdiagnostics_show_nesting_levels:
 	case OPT_fshow_column:
 	  break;
 	default:
@@ -1206,18 +1214,16 @@ debug_objcopy (const char *infile, bool rename)
 
   const char *p;
   const char *orig_infile = infile;
-  off_t inoff = 0;
-  long loffset;
+  int64_t inoff = 0;
   int consumed;
   if ((p = strrchr (infile, '@'))
       && p != infile
-      && sscanf (p, "@%li%n", &loffset, &consumed) >= 1
+      && sscanf (p, "@%" PRIi64 "%n", &inoff, &consumed) >= 1
       && strlen (p) == (unsigned int) consumed)
     {
       char *fname = xstrdup (infile);
       fname[p - infile] = '\0';
       infile = fname;
-      inoff = (off_t) loffset;
     }
   int infd = open (infile, O_RDONLY | O_BINARY);
   if (infd == -1)
@@ -1375,7 +1381,7 @@ init_num_threads (void)
 void
 print_lto_docs_link ()
 {
-  label_text url = label_text::take (global_dc->make_option_url (OPT_flto));
+  label_text url = global_dc->get_option_url (OPT_flto);
   inform (UNKNOWN_LOCATION,
 	  "see the %{%<-flto%> option documentation%} for more information",
 	  url.get ());
@@ -1395,7 +1401,7 @@ make_exists (void)
   int exit_status = 0;
   int err = 0;
   const char *errmsg
-    = pex_one (PEX_SEARCH, make_args[0], CONST_CAST (char **, make_args),
+    = pex_one (PEX_SEARCH, make_args[0], const_cast<char **> (make_args),
 	       "make", NULL, NULL, &exit_status, &err);
   freeargv (make_argv);
   return errmsg == NULL && exit_status == 0 && err == 0;
@@ -1446,7 +1452,7 @@ run_gcc (unsigned argc, char *argv[])
   if (!collect_gcc)
     fatal_error (input_location,
 		 "environment variable %<COLLECT_GCC%> must be set");
-  collect_gcc_options = getenv ("COLLECT_GCC_OPTIONS");
+  collect_gcc_options = const_cast<char *> (read_collect_gcc_options ());
   if (!collect_gcc_options)
     fatal_error (input_location,
 		 "environment variable %<COLLECT_GCC_OPTIONS%> must be set");
@@ -1483,8 +1489,7 @@ run_gcc (unsigned argc, char *argv[])
     {
       char *p;
       int fd;
-      off_t file_offset = 0;
-      long loffset;
+      int64_t file_offset = 0;
       int consumed;
       char *filename = argv[i];
 
@@ -1498,13 +1503,12 @@ run_gcc (unsigned argc, char *argv[])
 
       if ((p = strrchr (argv[i], '@'))
 	  && p != argv[i]
-	  && sscanf (p, "@%li%n", &loffset, &consumed) >= 1
+	  && sscanf (p, "@%" PRIi64 "%n", &file_offset, &consumed) >= 1
 	  && strlen (p) == (unsigned int) consumed)
 	{
 	  filename = XNEWVEC (char, p - argv[i] + 1);
 	  memcpy (filename, argv[i], p - argv[i]);
 	  filename[p - argv[i]] = '\0';
-	  file_offset = (off_t) loffset;
 	}
       fd = open (filename, O_RDONLY | O_BINARY);
       /* Linker plugin passes -fresolution and -flinker-output options.
@@ -1531,7 +1535,7 @@ run_gcc (unsigned argc, char *argv[])
       close (fd);
     }
 
-  /* Initalize the common arguments for the driver.  */
+  /* Initialize the common arguments for the driver.  */
   obstack_init (&argv_obstack);
   obstack_ptr_grow (&argv_obstack, collect_gcc);
   obstack_ptr_grow (&argv_obstack, "-xlto");
@@ -1801,20 +1805,18 @@ cont1:
       for (i = 0; i < num_offload_files; i++)
 	{
 	  char *p;
-	  long loffset;
 	  int fd, consumed;
-	  off_t file_offset = 0;
+	  int64_t file_offset = 0;
 	  char *filename = offload_argv[i];
 
 	  if ((p = strrchr (offload_argv[i], '@'))
 	      && p != offload_argv[i]
-	      && sscanf (p, "@%li%n", &loffset, &consumed) >= 1
+	      && sscanf (p, "@%" PRIi64 "%n", &file_offset, &consumed) >= 1
 	      && strlen (p) == (unsigned int) consumed)
 	    {
 	      filename = XNEWVEC (char, p - offload_argv[i] + 1);
 	      memcpy (filename, offload_argv[i], p - offload_argv[i]);
 	      filename[p - offload_argv[i]] = '\0';
-	      file_offset = (off_t) loffset;
 	    }
 	  fd = open (filename, O_RDONLY | O_BINARY);
 	  if (fd == -1)
@@ -1924,10 +1926,11 @@ cont1:
   for (i = 0; i < ltoobj_argc; ++i)
     obstack_ptr_grow (&argv_obstack, ltoobj_argv[i]);
   obstack_ptr_grow (&argv_obstack, NULL);
+  obstack_ptr_grow (&argv_obstack, NULL);
 
   new_argv = XOBFINISH (&argv_obstack, const char **);
   argv_ptr = &new_argv[new_head_argc];
-  fork_execute (new_argv[0], CONST_CAST (char **, new_argv), true,
+  fork_execute (new_argv[0], const_cast<char **> (new_argv), true,
 		"ltrans_args");
 
   /* Copy the early generated debug info from the objects to temporary
@@ -1973,6 +1976,8 @@ cont1:
       /* Parse the list of LTRANS inputs from the WPA stage.  */
       obstack_init (&env_obstack);
       nr = 0;
+      const char *linemap_name = nullptr;
+      char *linemap_arg = nullptr;
       for (;;)
 	{
 	  const unsigned piece = 32;
@@ -2000,6 +2005,15 @@ cont:
 	      goto cont;
 	    }
 	  input_name[len - 1] = '\0';
+
+	  if (!linemap_arg)
+	    {
+	      constexpr auto lf_opt = "-fltrans-linemap-file=";
+	      linemap_arg = concat (lf_opt, input_name, nullptr);
+	      free (input_name);
+	      linemap_name = linemap_arg + strlen (lf_opt);
+	      continue;
+	    }
 
 	  if (input_name[0] == '*')
 	    output_name = &input_name[1];
@@ -2131,7 +2145,8 @@ cont:
 	  argv_ptr[2] = "-o";
 	  argv_ptr[3] = output_name;
 	  argv_ptr[4] = input_name;
-	  argv_ptr[5] = NULL;
+	  argv_ptr[5] = linemap_arg;
+	  argv_ptr[6] = NULL;
 	  if (parallel)
 	    {
 	      fprintf (mstream, "%s:\n\t@%s ", output_name, new_argv[0]);
@@ -2152,7 +2167,7 @@ cont:
 		snprintf (argsuffix,
 			  sizeof (DUMPBASE_SUFFIX) + sizeof (".ltrans_args"),
 			  "ltrans%u.ltrans_args", i);
-	      fork_execute (new_argv[0], CONST_CAST (char **, new_argv),
+	      fork_execute (new_argv[0], const_cast<char **> (new_argv),
 			    true, save_temps ? argsuffix : NULL);
 	      if (!ltrans_cache)
 		maybe_unlink (input_names[i]);
@@ -2204,7 +2219,7 @@ cont:
 	  obstack_ptr_grow (&argv_obstack, NULL);
 	  new_argv = XOBFINISH (&argv_obstack, const char **);
 
-	  pex = collect_execute (new_argv[0], CONST_CAST (char **, new_argv),
+	  pex = collect_execute (new_argv[0], const_cast<char **> (new_argv),
 				 NULL, NULL, PEX_SEARCH, false, NULL);
 	  do_wait (new_argv[0], pex);
 	  freeargv (make_argv);
@@ -2250,6 +2265,16 @@ cont:
 	    if (early_debug_object_names[i] != NULL)
 	      printf ("%s\n", early_debug_object_names[i]);
 	}
+
+      if (linemap_arg)
+	{
+	  /* This should be done even if(ltrans_cache), since the linemap file
+	     changes when any of the inputs changes and is not part of the
+	     cache.  */
+	  maybe_unlink (linemap_name);
+	  free (linemap_arg);
+	}
+
       nr = 0;
       free (ltrans_priorities);
       free (output_names);
@@ -2266,24 +2291,26 @@ cont:
   obstack_free (&argv_obstack, NULL);
 }
 
-/* Concrete implementation of diagnostic_option_manager for LTO.  */
+/* Concrete implementation of diagnostics::option_id_manager for LTO.  */
 
-class lto_diagnostic_option_manager : public gcc_diagnostic_option_manager
+class lto_diagnostic_option_id_manager
+  : public gcc_diagnostic_option_id_manager
 {
 public:
-  lto_diagnostic_option_manager ()
-  : gcc_diagnostic_option_manager (0 /* lang_mask */)
+  lto_diagnostic_option_id_manager ()
+  : gcc_diagnostic_option_id_manager (0 /* lang_mask */)
   {
   }
-  int option_enabled_p (diagnostic_option_id) const final override
+  int option_enabled_p (diagnostics::option_id) const final override
   {
     return true;
   }
-  char *make_option_name (diagnostic_option_id,
-			  diagnostic_t,
-			  diagnostic_t) const final override
+  label_text
+  get_option_name (diagnostics::option_id,
+		   enum diagnostics::kind,
+		   enum diagnostics::kind) const final override
   {
-    return nullptr;
+    return label_text::borrow (nullptr);
   }
 };
 
@@ -2308,8 +2335,8 @@ main (int argc, char *argv[])
   diagnostic_initialize (global_dc, 0);
   diagnostic_color_init (global_dc);
   diagnostic_urls_init (global_dc);
-  global_dc->set_option_manager
-    (::make_unique<lto_diagnostic_option_manager> (), 0);
+  global_dc->set_option_id_manager
+    (::make_unique<lto_diagnostic_option_id_manager> (), 0);
 
   if (atexit (lto_wrapper_cleanup) != 0)
     fatal_error (input_location, "%<atexit%> failed");

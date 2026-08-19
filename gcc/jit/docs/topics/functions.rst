@@ -1,4 +1,4 @@
-.. Copyright (C) 2014-2025 Free Software Foundation, Inc.
+.. Copyright (C) 2014-2026 Free Software Foundation, Inc.
    Originally contributed by David Malcolm <dmalcolm@redhat.com>
 
    This is free software: you can redistribute it and/or modify it
@@ -502,7 +502,7 @@ Statements
                                              int num_cases,\
                                              gcc_jit_case **cases)
 
-   Terminate a block by adding evalation of an rvalue, then performing
+   Terminate a block by adding evaluation of an rvalue, then performing
    a multiway branch.
 
    This is roughly equivalent to this C code:

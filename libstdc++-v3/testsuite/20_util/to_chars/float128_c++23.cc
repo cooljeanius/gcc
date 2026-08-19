@@ -1,4 +1,4 @@
-// Copyright (C) 2022-2025 Free Software Foundation, Inc.
+// Copyright (C) 2022-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -52,10 +52,7 @@ test(std::chars_format fmt = std::chars_format{})
     std::numbers::inv_sqrt3_v<std::float128_t>,
     std::numbers::egamma_v<std::float128_t>,
     std::numbers::phi_v<std::float128_t>,
-// Solaris has non-conforming printf, see PR98384 and PR107815.
-#if !(defined(__sun__) && defined(__svr4__))
     std::numeric_limits<std::float128_t>::max()
-#endif
   };
   char str1[10000], str2[10000];
   for (auto u : tests)

@@ -1,5 +1,5 @@
-// Implementation of instruction-related RTL SSA functions          -*- C++ -*-
-// Copyright (C) 2020-2025 Free Software Foundation, Inc.
+// Implementation of instruction-related RTL SSA functions.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 //
 // This file is part of GCC.
 //
@@ -482,15 +482,11 @@ function_info::create_reg_use (build_info &bi, insn_info *insn,
       if (insn->is_debug_insn ())
 	value = look_through_degenerate_phi (value);
       else if (bitmap_bit_p (bi.potential_phi_regs, resource.regno))
-	{
-	  // VALUE is defined by a previous EBB and RESOURCE has multiple
-	  // definitions.  Create a degenerate phi in the current EBB
-	  // so that all definitions and uses follow a linear RPO view;
-	  // see rtl.texi for details.
-	  access_info *inputs[] = { look_through_degenerate_phi (value) };
-	  value = create_phi (bi.current_ebb, value->resource (), inputs, 1);
-	  bi.record_reg_def (value);
-	}
+	// VALUE is defined by a previous EBB and RESOURCE has multiple
+	// definitions.  Create a degenerate phi in the current EBB
+	// so that all definitions and uses follow a linear RPO view;
+	// see rtl.texi for details.
+	value = create_degenerate_phi (bi, value);
     }
   auto *use = allocate<use_info> (insn, resource, value);
   add_use (use);
@@ -527,7 +523,7 @@ function_info::record_use (build_info &bi, insn_info *insn,
       // actually correct.
       auto value_is_valid = [&]()
 	{
-	  // Memmory always has a valid definition.
+	  // Memory always has a valid definition.
 	  if (ref.is_mem ())
 	    return true;
 
@@ -632,8 +628,11 @@ function_info::record_call_clobbers (build_info &bi, insn_info *insn,
       m_clobbered_by_calls |= abi.full_and_partial_reg_clobbers ();
     }
   else
-    for (unsigned int regno = 0; regno < FIRST_PSEUDO_REGISTER; ++regno)
-      if (TEST_HARD_REG_BIT (abi.full_reg_clobbers (), regno))
+    {
+      hard_reg_set_iterator hrsi;
+      unsigned int regno = 0;
+      HARD_REG_SET full_reg_clobbers = abi.full_reg_clobbers ();
+      EXECUTE_IF_SET_IN_HARD_REG_SET (full_reg_clobbers, 0, regno, hrsi)
 	{
 	  def_info *def = m_defs[regno + 1];
 	  if (!def || def->last_def ()->insn () != insn)
@@ -645,6 +644,7 @@ function_info::record_call_clobbers (build_info &bi, insn_info *insn,
 	      bi.record_reg_def (def);
 	    }
 	}
+    }
 }
 
 // Called while building SSA form using BI.  Record that INSN contains

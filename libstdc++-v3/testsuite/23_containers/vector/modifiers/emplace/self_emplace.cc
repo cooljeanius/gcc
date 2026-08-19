@@ -1,6 +1,6 @@
 // { dg-do run { target c++11 } }
 
-// Copyright (C) 2016-2025 Free Software Foundation, Inc.
+// Copyright (C) 2016-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -31,11 +31,12 @@ test01()
     };
 
   // Make sure emplace will imply reallocation.
-  VERIFY( vv.capacity() == 3 );
+  const auto n = vv.capacity();
+  vv.resize(n);
 
   vv.emplace(vv.begin(), vv[0]);
 
-  VERIFY( vv.size() == 4 );
+  VERIFY( vv.size() == (n + 1) );
   VERIFY( vv[0].size() == 2 );
   VERIFY( vv[0][0] == 2 );
   VERIFY( vv[0][1] == 3 );
@@ -99,37 +100,37 @@ struct A
 void
 test03()
 {
-  std::vector<A> va =
-    {
-      { A(1) },
-      { A(2) },
-      { A(3) }
-    };
-
-  // Make sure emplace will imply reallocation.
-  VERIFY( va.capacity() == 3 );
+#ifdef __glibcxx_allocate_at_least
+  unsigned fit = __STDCPP_DEFAULT_NEW_ALIGNMENT__ / sizeof(A);
+#else
+  unsigned fit = 4;
+#endif
+  std::vector<A> va; va.reserve(fit);
+  for (int i = 1; va.size() < va.capacity(); ++i)
+      va.push_back(A(i));
 
   va.emplace(va.begin(), va.begin());
 
-  VERIFY( va.size() == 4 );
+  VERIFY( va.size() == fit + 1 );
   VERIFY( va[0]._i == 1 );
 }
 
 void
 test04()
 {
-  std::vector<A> va =
-    {
-      { A(1) },
-      { A(2) },
-      { A(3) }
-    };
+#ifdef __glibcxx_allocate_at_least
+  unsigned fit = __STDCPP_DEFAULT_NEW_ALIGNMENT__ / sizeof(A);
+#else
+  unsigned fit = 4;
+#endif
+  std::vector<A> va; va.reserve(fit);
+  for (int i = 1; va.size() < va.capacity() - 1; ++i)
+      va.push_back(A(i));
 
   // Make sure emplace won't reallocate.
-  va.reserve(4);
   va.emplace(va.begin(), va.begin());
 
-  VERIFY( va.size() == 4 );
+  VERIFY( va.size() == fit );
   VERIFY( va[0]._i == 1 );
 }
 

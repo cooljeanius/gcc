@@ -1,6 +1,6 @@
 // { dg-do run { target c++17 } }
 
-// Copyright (C) 2014-2025 Free Software Foundation, Inc.
+// Copyright (C) 2014-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -33,7 +33,7 @@ test01()
   path p = "foo.bar.baz.tar";
   std::vector<std::string> v;
   for (; !p.extension().empty(); p = p.stem())
-    v.push_back(p.extension().string());
+    v.push_back(p.extension().string()); // { dg-warning "deprecated" "" { target c++26 } }
   VERIFY( v.at(0) == ".tar" );
   VERIFY( v.at(1) == ".baz" );
   VERIFY( v.at(2) == ".bar" );

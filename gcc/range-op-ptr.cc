@@ -1,5 +1,5 @@
 /* Code for range operators.
-   Copyright (C) 2017-2025 Free Software Foundation, Inc.
+   Copyright (C) 2017-2026 Free Software Foundation, Inc.
    Contributed by Andrew MacLeod <amacleod@redhat.com>
    and Aldy Hernandez <aldyh@redhat.com>.
 
@@ -218,6 +218,15 @@ range_operator::lhs_op1_relation (const prange &lhs ATTRIBUTE_UNUSED,
   return VREL_VARYING;
 }
 
+relation_kind
+range_operator::lhs_op1_relation (const prange &lhs ATTRIBUTE_UNUSED,
+				  const prange &op1 ATTRIBUTE_UNUSED,
+				  const irange &op2 ATTRIBUTE_UNUSED,
+				  relation_kind rel ATTRIBUTE_UNUSED) const
+{
+  return VREL_VARYING;
+}
+
 void
 range_operator::update_bitmask (irange &,
 				const prange &,
@@ -293,6 +302,7 @@ class pointer_plus_operator : public range_operator
   using range_operator::update_bitmask;
   using range_operator::fold_range;
   using range_operator::op2_range;
+  using range_operator::lhs_op1_relation;
 public:
   virtual bool fold_range (prange &r, tree type,
 			   const prange &op1,
@@ -302,9 +312,14 @@ public:
 			  const prange &lhs,
 			  const prange &op1,
 			  relation_trio = TRIO_VARYING) const final override;
+  virtual relation_kind lhs_op1_relation (const prange &lhs,
+					  const prange &op1,
+					  const irange &op2,
+					  relation_kind) const final override;
   void update_bitmask (prange &r, const prange &lh, const irange &rh) const
     { update_known_bitmask (r, POINTER_PLUS_EXPR, lh, rh); }
-} op_pointer_plus;
+};
+static const pointer_plus_operator op_pointer_plus;
 
 bool
 pointer_plus_operator::fold_range (prange &r, tree type,
@@ -355,28 +370,78 @@ pointer_plus_operator::fold_range (prange &r, tree type,
   else
    r.set_varying (type);
 
+  // If op1 refers to an object, op1 + 0 will also refer to the object.
+  if (rh_lb == rh_ub && rh_lb == 0)
+    r.set_pt (op1);
+
   update_known_bitmask (r, POINTER_PLUS_EXPR, op1, op2);
   return true;
 }
 
 bool
 pointer_plus_operator::op2_range (irange &r, tree type,
-				  const prange &lhs ATTRIBUTE_UNUSED,
-				  const prange &op1 ATTRIBUTE_UNUSED,
+				  const prange &lhs,
+				  const prange &op1,
 				  relation_trio trio) const
 {
   relation_kind rel = trio.lhs_op1 ();
   r.set_varying (type);
 
   // If the LHS and OP1 are equal, the op2 must be zero.
-  if (rel == VREL_EQ)
+  if (rel == VREL_EQ || lhs.pt_invariant_p (op1))
     r.set_zero (type);
   // If the LHS and OP1 are not equal, the offset must be non-zero.
-  else if (rel == VREL_NE)
+  // AWM: Check if aliasing may mean we can't do the not_equal check.
+  else if (rel == VREL_NE || lhs.pt_inverted_p (op1))
     r.set_nonzero (type);
   else
     return false;
   return true;
+}
+
+// Return the relation between the LHS and OP1 based on the value of the
+// operand being added.  Pointer_plus is define to have a size_type for
+// operand 2 which can be interpreted as negative, so always used SIGNED.
+// Any overflow is considered UB and thus ignored.
+
+relation_kind
+pointer_plus_operator::lhs_op1_relation (const prange &lhs,
+					 const prange &op1,
+					 const irange &op2,
+					 relation_kind) const
+{
+  if (lhs.undefined_p () || op1.undefined_p () || op2.undefined_p ())
+    return VREL_VARYING;
+
+  unsigned prec = TYPE_PRECISION (op2.type ());
+
+  // LHS = OP1 + 0  indicates LHS == OP1.
+  if (op2.zero_p ())
+    return VREL_EQ;
+
+  tree val;
+  // Only deal with singletons for now.
+  if (TYPE_OVERFLOW_UNDEFINED (lhs.type ()) && op2.singleton_p (&val))
+    {
+      // Always interpret VALUE as a signed value.  Positive will increase
+      // the pointer value, and negative will decrease the poiinter value.
+      // It cannot be zero or the earlier zero_p () condition will catch it.
+      wide_int value = wi::to_wide (val);
+
+      // Positive op2 means lhs > op1.
+      if (wi::gt_p (value, wi::zero (prec), SIGNED))
+	return VREL_GT;
+
+      // Negative op2 means lhs < op1.
+      if (wi::lt_p (value, wi::zero (prec), SIGNED))
+	return VREL_LT;
+    }
+
+  // If op2 does not contain 0, then LHS and OP1 can never be equal.
+  if (!range_includes_zero_p (op2))
+    return VREL_NE;
+
+  return VREL_VARYING;
 }
 
 bool
@@ -416,7 +481,8 @@ class operator_pointer_diff : public range_operator
   void update_bitmask (irange &r,
 		       const prange &lh, const prange &rh) const final override
   { update_known_bitmask (r, POINTER_DIFF_EXPR, lh, rh); }
-} op_pointer_diff;
+};
+static const operator_pointer_diff op_pointer_diff;
 
 bool
 operator_pointer_diff::fold_range (irange &r, tree type,
@@ -429,6 +495,9 @@ operator_pointer_diff::fold_range (irange &r, tree type,
   r.set_varying (type);
   relation_kind rel = trio.op1_op2 ();
   op1_op2_relation_effect (r, type, op1, op2, rel);
+  // if op1 and op2 point to the same object, the diff is 0.
+  if (op1.pt_invariant_p (op2))
+    r.set_zero (type);
   update_bitmask (r, op1, op2);
   return true;
 }
@@ -503,6 +572,10 @@ operator_cast::fold_range (prange &r, tree type,
     return true;
 
   r.set (type, inner.lower_bound (), inner.upper_bound ());
+
+  // The resulting pointer still points to the same object.
+  r.set_pt (inner);
+
   r.update_bitmask (inner.get_bitmask ());
   return true;
 }
@@ -543,8 +616,14 @@ operator_cast::fold_range (prange &r, tree type,
   int_range<2> tmp = inner;
   tree pointer_uint_type = make_unsigned_type (TYPE_PRECISION (type));
   range_cast (tmp, pointer_uint_type);
-  r.set (type, tmp.lower_bound (), tmp.upper_bound ());
-  r.update_bitmask (tmp.get_bitmask ());
+  // Casts may cause ranges to become UNDEFINED based on bitmasks.
+  if (tmp.undefined_p ())
+    r.set_varying (type);
+  else
+    {
+      r.set (type, tmp.lower_bound (), tmp.upper_bound ());
+      r.update_bitmask (tmp.get_bitmask ());
+    }
   return true;
 }
 
@@ -658,6 +737,15 @@ operator_cast::lhs_op1_relation (const prange &lhs,
 	return VREL_VARYING;
     }
 
+  // If the pointer precisions are the same, check for equality and
+  // inequality in the points to fields.
+  if (lhs_prec == op1_prec)
+    {
+      if (lhs.pt_invariant_p (op1))
+	return VREL_EQ;
+      if (lhs.pt_inverted_p (op1))
+	return VREL_NE;
+    }
   unsigned prec = MIN (lhs_prec, op1_prec);
   return bits_to_pe (prec);
 }
@@ -811,7 +899,12 @@ operator_equal::fold_range (irange &r, tree type,
   // consist of a single value, and then compare them.
   bool op1_const = wi::eq_p (op1.lower_bound (), op1.upper_bound ());
   bool op2_const = wi::eq_p (op2.lower_bound (), op2.upper_bound ());
-  if (op1_const && op2_const)
+  // Check for points to equality and inequality first.
+  if (op1.pt_invariant_p (op2))
+    r = range_true (type);
+  else if (op1.pt_inverted_p (op2))
+    r = range_false (type);
+  else if (op1_const && op2_const)
     {
       if (wi::eq_p (op1.lower_bound (), op2.upper_bound()))
 	r = range_true (type);
@@ -859,7 +952,8 @@ operator_equal::op1_range (prange &r, tree type,
 	  && wi::eq_p (op2.lower_bound(), op2.upper_bound()))
 	{
 	  r = op2;
-	  r.invert ();
+	  if (!r.invert ())
+	    return false;
 	}
       else
 	r.set_varying (type);
@@ -910,7 +1004,12 @@ operator_not_equal::fold_range (irange &r, tree type,
   // consist of a single value, and then compare them.
   bool op1_const = wi::eq_p (op1.lower_bound (), op1.upper_bound ());
   bool op2_const = wi::eq_p (op2.lower_bound (), op2.upper_bound ());
-  if (op1_const && op2_const)
+  // Check for points to equality and inequality first.
+  if (op1.pt_inverted_p (op2))
+    r = range_true (type);
+  else if (op1.pt_invariant_p (op2))
+    r = range_false (type);
+  else if (op1_const && op2_const)
     {
       if (wi::ne_p (op1.lower_bound (), op2.upper_bound()))
 	r = range_true (type);
@@ -953,7 +1052,8 @@ operator_not_equal::op1_range (prange &r, tree type,
 	  && wi::eq_p (op2.lower_bound(), op2.upper_bound()))
 	{
 	  r = op2;
-	  r.invert ();
+	  if (!r.invert ())
+	    return false;
 	}
       else
 	r.set_varying (type);

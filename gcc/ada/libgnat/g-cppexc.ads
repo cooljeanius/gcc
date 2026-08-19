@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 S p e c                                  --
 --                                                                          --
---                        Copyright (C) 2013-2025, AdaCore                  --
+--                        Copyright (C) 2013-2026, AdaCore                  --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -69,7 +69,7 @@ package GNAT.CPP_Exceptions is
    --  explicitly expected by the handler.
 
    generic
-      type T is abstract tagged limited private;
+      type T is tagged limited private;
    function Get_Access_To_Tagged_Object (X : Exception_Occurrence)
                                         return access T'Class;
    --  Extract the object associated with X. The exception of the

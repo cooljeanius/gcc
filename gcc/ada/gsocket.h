@@ -6,7 +6,7 @@
  *                                                                          *
  *                              C Header File                               *
  *                                                                          *
- *         Copyright (C) 2004-2025, Free Software Foundation, Inc.          *
+ *         Copyright (C) 2004-2026, Free Software Foundation, Inc.          *
  *                                                                          *
  * GNAT is free software;  you can  redistribute it  and/or modify it under *
  * terms of the  GNU General Public License as published  by the Free Soft- *
@@ -63,6 +63,12 @@
 #include <vxWorks.h>
 #include <ioLib.h>
 #include <hostLib.h>
+
+#if __has_include ("strings.h")
+/* On VxWorks6, FD_ZERO uses bzero, but since it's not a standard header, don't
+   require it.  */
+#include "strings.h"
+#endif
 
 #define SHUT_RD		0
 #define SHUT_WR		1
@@ -235,7 +241,7 @@
 #endif
 
 /*
- * Properties of the unerlying NetDB library:
+ * Properties of the underlying NetDB library:
  *   Need_Netdb_Buffer __gnat_getXXXbyYYY expects a caller-supplied buffer
  *   Need_Netdb_Lock   __gnat_getXXXbyYYY expects the caller to ensure
  *                     mutual exclusion

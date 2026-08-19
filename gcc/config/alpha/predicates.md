@@ -1,5 +1,5 @@
 ;; Predicate definitions for DEC Alpha.
-;; Copyright (C) 2004-2025 Free Software Foundation, Inc.
+;; Copyright (C) 2004-2026 Free Software Foundation, Inc.
 ;;
 ;; This file is part of GCC.
 ;;
@@ -169,7 +169,7 @@
     case CONST:
       if (TARGET_EXPLICIT_RELOCS)
 	{
-	  /* We don't split symbolic operands into something unintelligable
+	  /* We don't split symbolic operands into something unintelligible
 	     until after reload, but we do not wish non-small, non-global
 	     symbolic operands to be reconstructed from their high/lo_sum
 	     form.  */

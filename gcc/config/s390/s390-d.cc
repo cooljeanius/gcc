@@ -1,5 +1,5 @@
 /* Subroutines for the D front end on the IBM S/390 and zSeries architectures.
-   Copyright (C) 2017-2025 Free Software Foundation, Inc.
+   Copyright (C) 2017-2026 Free Software Foundation, Inc.
 
 GCC is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -30,13 +30,8 @@ along with GCC; see the file COPYING3.  If not see
 void
 s390_d_target_versions (void)
 {
-  if (TARGET_64BIT)
-    {
-      d_add_builtin_version ("S390X");
-      d_add_builtin_version ("SystemZ");
-    }
-  else
-    d_add_builtin_version ("S390");
+  d_add_builtin_version ("S390X");
+  d_add_builtin_version ("SystemZ");
 
   if (TARGET_SOFT_FLOAT)
     d_add_builtin_version ("D_SoftFloat");

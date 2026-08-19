@@ -1,5 +1,5 @@
 /* Defs for interface to demanglers.
-   Copyright (C) 1992-2025 Free Software Foundation, Inc.
+   Copyright (C) 1992-2026 Free Software Foundation, Inc.
 
    This program is free software; you can redistribute it and/or
    modify it under the terms of the GNU Library General Public License
@@ -314,7 +314,7 @@ enum demangle_component_type
   /* C++11: An rvalue reference modifying a member function.  The one
      subtree is the type which is being referenced.  */
   DEMANGLE_COMPONENT_RVALUE_REFERENCE_THIS,
-  /* C++23: A member function with explict object parameter.  */
+  /* C++23: A member function with explicit object parameter.  */
   DEMANGLE_COMPONENT_XOBJ_MEMBER_FUNCTION,
   /* A vendor qualifier.  The left subtree is the type which is being
      qualified, and the right subtree is the name of the
@@ -435,6 +435,8 @@ enum demangle_component_type
   DEMANGLE_COMPONENT_DEFAULT_ARG,
   /* An unnamed type.  */
   DEMANGLE_COMPONENT_UNNAMED_TYPE,
+  /* An unnamed enum.  */
+  DEMANGLE_COMPONENT_UNNAMED_ENUM,
   /* A transactional clone.  This has one subtree, the encoding for
      which it is providing alternative linkage.  */
   DEMANGLE_COMPONENT_TRANSACTION_CLONE,

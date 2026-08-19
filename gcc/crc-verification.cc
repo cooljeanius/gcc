@@ -3,7 +3,7 @@
    create LFSR state.
    After each iteration check that final states of calculated CRC values match
    determined LFSR.
-   Copyright (C) 2022-2025 Free Software Foundation, Inc.
+   Copyright (C) 2022-2026 Free Software Foundation, Inc.
    Contributed by Mariam Arutunian <mariamarutunian@gmail.com>
 
 This file is part of GCC.
@@ -58,7 +58,7 @@ crc_symbolic_execution::is_used_outside_the_loop (tree def)
   return false;
 }
 
-/* Calculate value of the rhs operation of GS assigment statement
+/* Calculate value of the rhs operation of GS assignment statement
    and assign it to lhs variable.  */
 
 bool
@@ -1026,7 +1026,8 @@ sb_match (const value *lfsr, const value *crc_value, size_t sb_index,
   else if (sb_index == 0)
     {
       if (dump_file && (dump_flags & TDF_DETAILS))
-	fprintf (dump_file, "Checking %zu bit.\n", it_end);
+	fprintf (dump_file, "Checking " HOST_SIZE_T_PRINT_UNSIGNED " bit.\n",
+		 (fmt_size_t) it_end);
 
       if (!given_sb_match ((*crc_value)[it_end], (*lfsr)[it_end], value))
 	return false;
@@ -1055,7 +1056,8 @@ lfsr_and_crc_bits_match (const value *lfsr, const value *crc_state,
   for (; i < it_end; i++)
     {
       if (dump_file && (dump_flags & TDF_DETAILS))
-	fprintf (dump_file, "Checking %zu bit.\n", i);
+	fprintf (dump_file, "Checking " HOST_SIZE_T_PRINT_UNSIGNED " bit.\n",
+		 (fmt_size_t) i);
 
       /* Check the case when in lfsr we have LFSR (i)^LFSR (SBi),
 	 where 0<i<LFSR_size and SBi is the index of MSB/LSB (LFSR_size-1/0).

@@ -1,5 +1,5 @@
 ; Options for the LTO front end.
-; Copyright (C) 2008-2025 Free Software Foundation, Inc.
+; Copyright (C) 2008-2026 Free Software Foundation, Inc.
 ;
 ; This file is part of GCC.
 ;
@@ -56,6 +56,10 @@ Run the link-time optimizer in local transformation (LTRANS) mode.
 fltrans-output-list=
 LTO Joined Var(ltrans_output_list)
 Specify a file to which a list of files output by LTRANS is written.
+
+fltrans-linemap-file=
+LTO Joined Var(ltrans_linemap_file)
+Specify the object file containing copied linemap sections; used internally during LTRANS phase.
 
 fresolution=
 LTO Joined

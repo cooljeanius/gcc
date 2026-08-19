@@ -1,4 +1,4 @@
-/* Copyright (C) 2005-2025 Free Software Foundation, Inc.
+/* Copyright (C) 2005-2026 Free Software Foundation, Inc.
    Contributed by Richard Henderson <rth@redhat.com>.
 
    This file is part of the GNU Offloading and Multi Processing Library
@@ -44,6 +44,18 @@ GOMP_atomic_start (void)
 
 void
 GOMP_atomic_end (void)
+{
+  gomp_mutex_unlock (&atomic_lock);
+}
+
+void
+GOMP_reduction_start (void)
+{
+  gomp_mutex_lock (&atomic_lock);
+}
+
+void
+GOMP_reduction_end (void)
 {
   gomp_mutex_unlock (&atomic_lock);
 }

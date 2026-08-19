@@ -1,5 +1,5 @@
 /* Rematerialize pseudos values.
-   Copyright (C) 2014-2025 Free Software Foundation, Inc.
+   Copyright (C) 2014-2026 Free Software Foundation, Inc.
    Contributed by Vladimir Makarov <vmakarov@redhat.com>.
 
 This file is part of GCC.
@@ -80,9 +80,11 @@ typedef struct cand *cand_t;
 typedef const struct cand *const_cand_t;
 
 /* Insn candidates for rematerialization.  The candidate insn should
-   have the following properies:
-   o no any memory (as access to memory is non-profitable)
+   have the following properties:
+   o no any memory (as access to memory is non-profitable) or
+     div/mod operations (as they are usually more expensive than loads)
    o no INOUT regs (it means no non-paradoxical subreg of output reg)
+   o no multiple output pseudos
    o one output spilled pseudo (or reload pseudo of a spilled pseudo)
    o all other pseudos are with assigned hard regs.  */
 struct cand
@@ -129,7 +131,7 @@ public:
   /* Registers becoming dead in the BB.  */
   bitmap_head dead_regs;
   /* Cands present in the BB whose in/out regs are not changed after
-     the cands occurence and are not dead (except the reload
+     the cands occurrence and are not dead (except the reload
      regno).  */
   bitmap_head gen_cands;
   bitmap_head livein_cands; /* cands whose inputs live at the BB start.  */
@@ -249,12 +251,12 @@ finish_cand_table (void)
 
 
 
-/* Return true if X contains memory or some UNSPEC.  We cannot just
-   check insn operands as memory or unspec might be not an operand
-   itself but contain an operand.  Insn with memory access is not
-   profitable for rematerialization.  Rematerialization of UNSPEC
-   might result in wrong code generation as the UNPEC effect is
-   unknown (e.g. generating a label).  */
+/* Return true if X contains memory, some UNSPEC, or expensive operations.  We
+   cannot just check insn operands as memory or unspec might be not an operand
+   itself but contain an operand.  Insns with memory access or expensive ones
+   are not profitable for rematerialization.  Rematerialization of UNSPEC might
+   result in wrong code generation as the UNPEC effect is unknown
+   (e.g. generating a label).  */
 static bool
 bad_for_rematerialization_p (rtx x)
 {
@@ -262,7 +264,11 @@ bad_for_rematerialization_p (rtx x)
   const char *fmt;
   enum rtx_code code;
 
-  if (MEM_P (x) || GET_CODE (x) == UNSPEC || GET_CODE (x) == UNSPEC_VOLATILE)
+  if (MEM_P (x) || GET_CODE (x) == UNSPEC || GET_CODE (x) == UNSPEC_VOLATILE
+      /* Usually the following operations are expensive and does not worth to
+	 rematerialize: */
+      || GET_CODE(x) == DIV || GET_CODE(x) == UDIV
+      || GET_CODE(x) == MOD || GET_CODE(x) == UMOD)
     return true;
   code = GET_CODE (x);
   fmt = GET_RTX_FORMAT (code);
@@ -308,8 +314,7 @@ operand_to_remat (rtx_insn *insn)
 	 cannot know sp offset at a rematerialization place.  */
       if (reg->regno == STACK_POINTER_REGNUM && frame_pointer_needed)
 	return -1;
-      else if (reg->type == OP_OUT && ! reg->subreg_p
-	       && find_regno_note (insn, REG_UNUSED, reg->regno) == NULL)
+      else if (reg->type == OP_OUT)
 	{
 	  /* We permits only one spilled reg.  */
 	  if (found_reg != NULL)
@@ -460,7 +465,7 @@ create_cands (void)
 		&& dst_regno >= FIRST_PSEUDO_REGISTER
 		&& reg_renumber[dst_regno] < 0
 		&& BLOCK_FOR_INSN (insn2) == BLOCK_FOR_INSN (insn)
-		&& insn2 == prev_nonnote_insn (insn))
+		&& insn2 == prev_nonnote_nondebug_insn (insn))
 	      {
 		create_cand (insn2, regno_potential_cand[src_regno].nop,
 			     dst_regno, insn);
@@ -692,7 +697,7 @@ reg_overlap_for_remat_p (lra_insn_reg *reg, rtx_insn *insn)
 	if (regno2 >= FIRST_PSEUDO_REGISTER)
 	  nregs2 = 1;
 	else
-	  nregs2 = hard_regno_nregs (regno2, reg->biggest_mode);
+	  nregs2 = hard_regno_nregs (regno2, reg2->biggest_mode);
 
 	if ((regno2 + nregs2 - 1 >= regno && regno2 < regno + nregs)
 	    || (regno + nregs - 1 >= regno2 && regno < regno2 + nregs2))
@@ -1068,11 +1073,17 @@ do_remat (void)
       CLEAR_HARD_REG_SET (live_hard_regs);
       EXECUTE_IF_SET_IN_BITMAP (df_get_live_in (bb), 0, regno, bi)
 	{
-	  int hard_regno = regno < FIRST_PSEUDO_REGISTER
-			   ? regno
-			   : reg_renumber[regno];
-	  if (hard_regno >= 0)
-	    SET_HARD_REG_BIT (live_hard_regs, hard_regno);
+	  int nregs = 1;
+	  int hard_regno = regno;
+	  if (regno >= FIRST_PSEUDO_REGISTER)
+	    {
+	      hard_regno = reg_renumber[regno];
+	      if (hard_regno < 0)
+		continue;
+	      nregs = hard_regno_nregs (hard_regno, PSEUDO_REGNO_MODE (regno));
+	    }
+	  for (int i = 0; i < nregs; i++)
+	    SET_HARD_REG_BIT (live_hard_regs, hard_regno + i);
 	}
       bitmap_and (avail_cands, &get_remat_bb_data (bb)->avin_cands,
 		  &get_remat_bb_data (bb)->livein_cands);
@@ -1180,8 +1191,7 @@ do_remat (void)
 
 		      start_sequence ();
 		      emit_insn (remat_pat);
-		      remat_insn = get_insns ();
-		      end_sequence ();
+		      remat_insn = end_sequence ();
 		      if (recog_memoized (remat_insn) < 0)
 			remat_insn = NULL;
 		      cand_sp_offset = cand_id->sp_offset;

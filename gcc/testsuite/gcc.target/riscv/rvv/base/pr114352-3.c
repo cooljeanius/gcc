@@ -1,5 +1,5 @@
 /* { dg-do compile } */
-/* { dg-options "-march=rv64gc -mabi=lp64 -O3 -fno-schedule-insns -fno-schedule-insns2" } */
+/* { dg-options "-march=rv64gc -mabi=lp64 -O3 -fno-schedule-insns -fno-schedule-insns2 -fno-unroll-loops" } */
 /* { dg-final { check-function-bodies "**" "" } } */
 
 /*
@@ -93,9 +93,9 @@ test_5 (_Float16 *a, _Float16 *b, _Float16 *out, unsigned count)
 /*
 ** test_6:
 ** ...
-** call\s+__extendhfsf2
+** call\s+__extendhfsf2(?:@plt)?
 ** ...
-** call\s+__truncsfhf2
+** call\s+__truncsfhf2(?:@plt)?
 ** ...
 */
 void

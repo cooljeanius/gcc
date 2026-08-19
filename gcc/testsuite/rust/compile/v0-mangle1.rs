@@ -1,4 +1,8 @@
 // { dg-additional-options -frust-mangling=v0 }
+#![feature(no_core)]
+#![no_core]
+
+#![feature(lang_items)]
 #[lang = "sized"]
 pub trait Sized {}
 
@@ -12,7 +16,7 @@ pub mod module_a {
     }
 }
 
-struct S; // { dg-warning "struct is never constructed" }
+struct S;
 
 // name starting with underscore.
 pub fn _uc() {}

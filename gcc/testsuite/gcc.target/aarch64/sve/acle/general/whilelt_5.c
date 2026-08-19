@@ -11,8 +11,7 @@ extern "C" {
 
 /*
 ** load_vl1:
-**	ptrue	(p[0-7])\.[bhsd], vl1
-**	ld1h	z0\.h, \1/z, \[x0\]
+**	ldr	h0, \[x0\]
 **	ret
 */
 svint16_t
@@ -22,7 +21,12 @@ load_vl1 (int16_t *ptr)
 }
 
 /*
-** load_vl2:
+** load_vl2: { target aarch64_little_endian }
+**	ldr	s0, \[x0\]
+**	ret
+*/
+/*
+** load_vl2: { target aarch64_big_endian }
 **	ptrue	(p[0-7])\.h, vl2
 **	ld1h	z0\.h, \1/z, \[x0\]
 **	ret
@@ -46,7 +50,12 @@ load_vl3 (int16_t *ptr)
 }
 
 /*
-** load_vl4:
+** load_vl4: { target aarch64_little_endian }
+**	ldr	d0, \[x0\]
+**	ret
+*/
+/*
+** load_vl4: { target aarch64_big_endian }
 **	ptrue	(p[0-7])\.h, vl4
 **	ld1h	z0\.h, \1/z, \[x0\]
 **	ret
@@ -94,7 +103,12 @@ load_vl7 (int16_t *ptr)
 }
 
 /*
-** load_vl8:
+** load_vl8: { target aarch64_little_endian }
+**	ldr	q0, \[x0\]
+**	ret
+*/
+/*
+** load_vl8: { target aarch64_big_endian }
 **	ptrue	(p[0-7])\.h, vl8
 **	ld1h	z0\.h, \1/z, \[x0\]
 **	ret
@@ -107,8 +121,8 @@ load_vl8 (int16_t *ptr)
 
 /*
 ** load_vl9:
-**	mov	(x[0-9]+), #?9
-**	whilelo	(p[0-7])\.h, xzr, \1
+**	mov	w([0-9]+), 9
+**	whilelo	(p[0-7])\.h, xzr, x\1
 **	ld1h	z0\.h, \2/z, \[x0\]
 **	ret
 */
@@ -120,8 +134,8 @@ load_vl9 (int16_t *ptr)
 
 /*
 ** load_vl15:
-**	mov	(x[0-9]+), #?15
-**	whilelo	(p[0-7])\.h, xzr, \1
+**	mov	w([0-9]+), 15
+**	whilelo	(p[0-7])\.h, xzr, x\1
 **	ld1h	z0\.h, \2/z, \[x0\]
 **	ret
 */
@@ -145,8 +159,8 @@ load_vl16 (int16_t *ptr)
 
 /*
 ** load_vl17:
-**	mov	(x[0-9]+), #?17
-**	whilelo	(p[0-7])\.h, xzr, \1
+**	mov	w([0-9]+), 17
+**	whilelo	(p[0-7])\.h, xzr, x\1
 **	ld1h	z0\.h, \2/z, \[x0\]
 **	ret
 */

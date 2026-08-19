@@ -1,6 +1,6 @@
 // -*- C++ -*-
 
-// Copyright (C) 2005-2025 Free Software Foundation, Inc.
+// Copyright (C) 2005-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the terms
@@ -253,7 +253,7 @@ namespace detail
       typedef ov_tree_set<Key, null_type, at0t, at1t, _Alloc> type;
   };
 
-    /// Specialization colision-chaining hash map.
+    /// Specialization collision-chaining hash map.
   template<typename Key, typename Mapped, typename _Alloc, typename Policy_Tl>
     struct container_base_dispatch<Key, Mapped, _Alloc, cc_hash_tag, Policy_Tl>
     {
@@ -275,7 +275,7 @@ namespace detail
 			at3t::value, at4t, at2t> 	       	type;
   };
 
-    /// Specialization colision-chaining hash set.
+    /// Specialization collision-chaining hash set.
   template<typename Key, typename _Alloc, typename Policy_Tl>
     struct container_base_dispatch<Key, null_type, _Alloc, cc_hash_tag,
 				   Policy_Tl>

@@ -1,6 +1,6 @@
 ; Options for the S/390 / zSeries port of the compiler.
 
-; Copyright (C) 2005-2025 Free Software Foundation, Inc.
+; Copyright (C) 2005-2026 Free Software Foundation, Inc.
 ;
 ; This file is part of GCC.
 ;
@@ -44,11 +44,13 @@ Variable
 long s390_cost_pointer
 
 m31
-Target RejectNegative Negative(m64) InverseMask(64BIT)
-31 bit ABI.
+Target Var(flag_m31) Undocumented
 
+; After removing -m31, -m64 is the only supported ABI.
+; Therefore, specifying -m64 doesn't have any additional effect.
+; However, keep it for backwards compatibility.
 m64
-Target RejectNegative Negative(m31) Mask(64BIT)
+Target Ignore
 64 bit ABI.
 
 march=
@@ -122,7 +124,10 @@ EnumValue
 Enum(processor_type) String(z16) Value(PROCESSOR_3931_Z16)
 
 EnumValue
-Enum(processor_type) String(arch15) Value(PROCESSOR_ARCH15)
+Enum(processor_type) String(arch15) Value(PROCESSOR_9175_Z17)
+
+EnumValue
+Enum(processor_type) String(z17) Value(PROCESSOR_9175_Z17)
 
 EnumValue
 Enum(processor_type) String(native) Value(PROCESSOR_NATIVE) DriverOnly
@@ -136,7 +141,7 @@ Target Mask(DEBUG_ARG) Save
 Additional debug prints.
 
 mesa
-Target RejectNegative Negative(mzarch) InverseMask(ZARCH)
+Target Var(flag_mesa) Undocumented
 ESA/390 architecture.
 
 mhard-dfp
@@ -193,6 +198,24 @@ mno-stack-guard
 Target RejectNegative Alias(mstack-guard=,0) Negative(mstack-guard=)
 Switches off the -mstack-guard= option.
 
+mstack-protector-guard=
+Target RejectNegative Joined Enum(stack_protector_guard) Var(s390_stack_protector_guard) Init(SP_TLS)
+Use given stack-protector guard.
+
+Enum
+Name(stack_protector_guard) Type(enum stack_protector_guard)
+Valid arguments to -mstack-protector-guard=:
+
+EnumValue
+Enum(stack_protector_guard) String(tls) Value(SP_TLS)
+
+EnumValue
+Enum(stack_protector_guard) String(global) Value(SP_GLOBAL)
+
+mstack-protector-guard-record
+Target Var(flag_s390_stack_protector_guard_record)
+Generate section __stack_protector_loc containing pointers to all instructions which load the address of the global guard.
+
 mstack-size=
 Target RejectNegative Joined UInteger Var(s390_stack_size) Save
 Emit extra code in the function prologue in order to trap if the stack size exceeds the given limit.
@@ -222,12 +245,16 @@ mwarn-framesize=
 Target RejectNegative Joined UInteger Var(s390_warn_framesize) Save
 Warn if a single function's framesize exceeds the given framesize.
 
+; After removing ESA/390 support, z/Architecture is the only supported
+; cpu mode.  Therefore, specifying -mzarch doesn't have any additional
+; effect.  However, keep it for backwards compatibility.
 mzarch
-Target RejectNegative Negative(mesa) Mask(ZARCH)
+Target Ignore
 z/Architecture.
 
+; This option was added to fix some testsuite failures.
 mbranch-cost=
-Target Joined RejectNegative UInteger Var(s390_branch_cost) Init(1) Save
+Target Undocumented Joined RejectNegative UInteger Var(s390_branch_cost) Init(1) Save
 Set the branch costs for conditional branch instructions.  Reasonable
 values are small, non-negative integers.  The default branch cost is
 1.

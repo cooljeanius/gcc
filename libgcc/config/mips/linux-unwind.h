@@ -1,5 +1,5 @@
 /* DWARF2 EH unwinding support for MIPS Linux.
-   Copyright (C) 2004-2025 Free Software Foundation, Inc.
+   Copyright (C) 2004-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -113,7 +113,7 @@ mips_fallback_frame_state (struct _Unwind_Context *context,
      address of the second byte of the faulting instruction.
 
      Note that setting fs->signal_frame would not work.  As the comment
-     above MASK_RETURN_ADDR explains, MIPS unwinders must earch for an
+     above MASK_RETURN_ADDR explains, MIPS unwinders must search for an
      odd-valued address.  */
   fs->regs.how[__LIBGCC_DWARF_ALT_FRAME_RETURN_COLUMN__]
     = REG_SAVED_VAL_OFFSET;

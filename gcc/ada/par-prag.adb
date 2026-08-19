@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2025, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -305,7 +305,7 @@ begin
    --  it is a semantic error, not a syntactic one (we have already checked
    --  the syntax for the unrecognized pragma as required by (RM 2.8(11)).
 
-   if Prag_Id = Unknown_Pragma then
+   if Prag_Id = Pragma_Unknown then
       return Pragma_Node;
    end if;
 
@@ -354,22 +354,18 @@ begin
       ------------
 
       when Pragma_Ada_83 =>
-         if not Latest_Ada_Only then
-            Ada_Version := Ada_83;
-            Ada_Version_Explicit := Ada_83;
-            Ada_Version_Pragma := Pragma_Node;
-         end if;
+         Ada_Version := Ada_83;
+         Ada_Version_Explicit := Ada_83;
+         Ada_Version_Pragma := Pragma_Node;
 
       ------------
       -- Ada_95 --
       ------------
 
       when Pragma_Ada_95 =>
-         if not Latest_Ada_Only then
-            Ada_Version := Ada_95;
-            Ada_Version_Explicit := Ada_95;
-            Ada_Version_Pragma := Pragma_Node;
-         end if;
+         Ada_Version := Ada_95;
+         Ada_Version_Explicit := Ada_95;
+         Ada_Version_Pragma := Pragma_Node;
 
       ---------------------
       -- Ada_05/Ada_2005 --
@@ -378,7 +374,7 @@ begin
       when Pragma_Ada_05
          | Pragma_Ada_2005
       =>
-         if Arg_Count = 0 and not Latest_Ada_Only then
+         if Arg_Count = 0 then
             Ada_Version := Ada_2005;
             Ada_Version_Explicit := Ada_2005;
             Ada_Version_Pragma := Pragma_Node;
@@ -1394,6 +1390,7 @@ begin
          | Pragma_Annotate
          | Pragma_Assert
          | Pragma_Assert_And_Cut
+         | Pragma_Assertion_Level
          | Pragma_Assertion_Policy
          | Pragma_Assume
          | Pragma_Assume_No_Invalid_Values
@@ -1489,6 +1486,7 @@ begin
          | Pragma_Interrupt_Handler
          | Pragma_Interrupt_Priority
          | Pragma_Interrupt_State
+         | Pragma_Interrupts_System_By_Default
          | Pragma_Invariant
          | Pragma_Keep_Names
          | Pragma_License
@@ -1509,6 +1507,7 @@ begin
          | Pragma_Max_Entry_Queue_Length
          | Pragma_Max_Queue_Length
          | Pragma_Memory_Size
+         | Pragma_Modifies
          | Pragma_No_Body
          | Pragma_No_Caching
          | Pragma_No_Component_Reordering
@@ -1518,7 +1517,6 @@ begin
          | Pragma_No_Raise
          | Pragma_No_Return
          | Pragma_No_Run_Time
-         | Pragma_Interrupts_System_By_Default
          | Pragma_No_Strict_Aliasing
          | Pragma_No_Tagged_Streams
          | Pragma_Normalize_Scalars
@@ -1548,6 +1546,7 @@ begin
          | Pragma_Priority_Specific_Dispatching
          | Pragma_Profile
          | Pragma_Profile_Warnings
+         | Pragma_Program_Exit
          | Pragma_Propagate_Exceptions
          | Pragma_Provide_Shift_Operators
          | Pragma_Psect_Object
@@ -1606,6 +1605,7 @@ begin
          | Pragma_Unreferenced
          | Pragma_Unreferenced_Objects
          | Pragma_Unreserve_All_Interrupts
+         | Pragma_Unsigned_Base_Range
          | Pragma_Unsuppress
          | Pragma_Unused
          | Pragma_Use_VADS_Size
@@ -1619,12 +1619,12 @@ begin
          null;
 
       --------------------
-      -- Unknown_Pragma --
+      -- Pragma_Unknown --
       --------------------
 
       --  Should be impossible, since we excluded this case earlier on
 
-      when Unknown_Pragma =>
+      when Pragma_Unknown =>
          raise Program_Error;
 
    end case;

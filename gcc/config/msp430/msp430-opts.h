@@ -1,5 +1,5 @@
 /* GCC option-handling definitions for the TI MSP430
-   Copyright (C) 2014-2025 Free Software Foundation, Inc.
+   Copyright (C) 2014-2026 Free Software Foundation, Inc.
 
    This file is part of GCC.
 
@@ -33,7 +33,7 @@ enum msp430_cpu_types
 {
   MSP430_CPU_MSP430,
   MSP430_CPU_430,
-  MSP430_CPU_MSP430X_DEFAULT, /* The default setting, which will be overriden
+  MSP430_CPU_MSP430X_DEFAULT, /* The default setting, which will be overridden
 				 by any other -mcpu= value.  */
   MSP430_CPU_MSP430X,
   MSP430_CPU_430X,

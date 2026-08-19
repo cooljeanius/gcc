@@ -1,4 +1,4 @@
-.. Copyright (C) 2014-2025 Free Software Foundation, Inc.
+.. Copyright (C) 2014-2026 Free Software Foundation, Inc.
    Originally contributed by David Malcolm <dmalcolm@redhat.com>
 
    This is free software: you can redistribute it and/or modify it
@@ -111,7 +111,7 @@ an assignment: a value that can be computed somehow, and assigned
 *to* a storage area (such as a variable).  It has a specific
 :type:`gccjit::type`.
 
-Anothe important class is :type:`gccjit::lvalue`.
+Another important class is :type:`gccjit::lvalue`.
 A :type:`gccjit::lvalue`. is something that can of the *left*-hand
 side of an assignment: a storage area (such as a variable).
 

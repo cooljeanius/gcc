@@ -1,5 +1,5 @@
 /* Declarations for the parser for C and Objective-C.
-   Copyright (C) 1987-2025 Free Software Foundation, Inc.
+   Copyright (C) 1987-2026 Free Software Foundation, Inc.
 
    Parser actions based on the old Bison parser; structure somewhat
    influenced by and fragments based on the C++ parser.
@@ -52,16 +52,16 @@ enum c_id_kind {
    of preprocessing tokens to tokens.  */
 struct GTY (()) c_token {
   /* The kind of token.  */
-  ENUM_BITFIELD (cpp_ttype) type : 8;
+  enum cpp_ttype type : 8;
   /* If this token is a CPP_NAME, this value indicates whether also
      declared as some kind of type.  Otherwise, it is C_ID_NONE.  */
-  ENUM_BITFIELD (c_id_kind) id_kind : 8;
+  enum c_id_kind id_kind : 8;
   /* If this token is a keyword, this value indicates which keyword.
      Otherwise, this value is RID_MAX.  */
-  ENUM_BITFIELD (rid) keyword : 8;
+  enum rid keyword : 8;
   /* If this token is a CPP_PRAGMA, this indicates the pragma that
      was seen.  Otherwise it is PRAGMA_NONE.  */
-  ENUM_BITFIELD (pragma_kind) pragma_kind : 8;
+  enum pragma_kind pragma_kind : 8;
   /* The location at which this token was found.  */
   location_t location;
   /* The value associated with this token, if any.  */
@@ -156,7 +156,8 @@ extern void c_parser_skip_until_found (c_parser *parser, enum cpp_ttype type,
 				       const char *msgid,
 				       location_t = UNKNOWN_LOCATION);
 extern bool c_parser_next_token_starts_declspecs (c_parser *parser);
-bool c_parser_next_tokens_start_declaration (c_parser *parser);
+bool c_parser_next_tokens_start_declaration (c_parser *parser,
+					     unsigned int n = 1);
 bool c_token_starts_typename (c_token *token);
 
 /* Abstraction to avoid defining c_parser here which messes up gengtype

@@ -1,6 +1,6 @@
 /* Definitions of target machine for GNU compiler,
    for 64 bit PowerPC linux.
-   Copyright (C) 2000-2025 Free Software Foundation, Inc.
+   Copyright (C) 2000-2026 Free Software Foundation, Inc.
 
    This file is part of GCC.
 
@@ -393,9 +393,9 @@ extern int dot_symbols;
 /* Use gnu-user.h LINK_GCC_SEQUENCE_SPEC for linux.  */
 #undef LINK_GCC_C_SEQUENCE_SPEC
 #define	LINK_GCC_C_SEQUENCE_SPEC \
-  "%{mads|myellowknife|mmvme|msim:%G %L %G;" \
+  "%{mads|myellowknife|mmvme|msim:%G" LINK_LIBATOMIC_SPEC "%L %G;" \
   "!mcall-*|mcall-linux:" GNU_USER_TARGET_LINK_GCC_C_SEQUENCE_SPEC ";" \
-  ":%G %L %G}"
+  ":%G" LINK_LIBATOMIC_SPEC "%L %G}"
 
 #undef  TOC_SECTION_ASM_OP
 #define TOC_SECTION_ASM_OP \
@@ -564,7 +564,8 @@ extern int dot_symbols;
 
 /* Enable using prefixed PC-relative addressing on POWER10 if the ABI
    supports it.  The ELF v2 ABI only supports PC-relative relocations for
-   the medium code model.  */
+   the medium/large code models.  */
 #define PCREL_SUPPORTED_BY_OS	(TARGET_POWER10 && TARGET_PREFIXED	\
 				 && ELFv2_ABI_CHECK			\
-				 && TARGET_CMODEL == CMODEL_MEDIUM)
+				 && (TARGET_CMODEL == CMODEL_MEDIUM	\
+				     || TARGET_CMODEL == CMODEL_LARGE))

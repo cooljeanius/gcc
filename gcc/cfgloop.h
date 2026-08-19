@@ -1,5 +1,5 @@
 /* Natural loop functions
-   Copyright (C) 1987-2025 Free Software Foundation, Inc.
+   Copyright (C) 1987-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -207,7 +207,7 @@ public:
 
   /* An integer estimation of the number of iterations.  Estimate_state
      describes what is the state of the estimation.  */
-  ENUM_BITFIELD(loop_estimation) estimate_state : 8;
+  enum loop_estimation estimate_state : 8;
 
   unsigned any_upper_bound : 1;
   unsigned any_estimate : 1;
@@ -370,8 +370,8 @@ extern int num_loop_insns (const class loop *);
 extern int average_num_loop_insns (const class loop *);
 extern unsigned get_loop_level (const class loop *);
 extern bool loop_exit_edge_p (const class loop *, const_edge);
-extern bool loop_exits_to_bb_p (class loop *, basic_block);
-extern bool loop_exits_from_bb_p (class loop *, basic_block);
+extern edge loop_exits_to_bb_p (class loop *, basic_block);
+extern edge loop_exits_from_bb_p (class loop *, basic_block);
 extern void mark_loop_exit_edges (void);
 extern dump_user_location_t get_loop_location (class loop *loop);
 

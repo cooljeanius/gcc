@@ -1,5 +1,5 @@
 /* Localize comdats.
-   Copyright (C) 2014-2025 Free Software Foundation, Inc.
+   Copyright (C) 2014-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -20,7 +20,7 @@ along with GCC; see the file COPYING3.  If not see
 /* This is very simple pass that looks for static symbols that are used
    exclusively by symbol within one comdat group.  In this case it makes
    sense to bring the symbol itself into the group to avoid dead code
-   that would arrise when the comdat group from current unit is replaced
+   that would arise when the comdat group from current unit is replaced
    by a different copy.  Consider for example:
 
     static int q(void)
@@ -262,6 +262,7 @@ ipa_comdats (void)
        user section names.  */
     else if (symbol->externally_visible
 	     || symbol->force_output
+	     || symbol->ref_by_asm
 	     || symbol->used_from_other_partition
 	     || TREE_THIS_VOLATILE (symbol->decl)
 	     || symbol->get_section ()

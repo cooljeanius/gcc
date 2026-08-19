@@ -1,5 +1,5 @@
 /* A splay-tree datatype.
-   Copyright (C) 1998-2025 Free Software Foundation, Inc.
+   Copyright (C) 1998-2026 Free Software Foundation, Inc.
    Contributed by Mark Mitchell (mark@markmitchell.com).
 
    This file is part of GCC.
@@ -105,7 +105,7 @@ struct splay_tree_s {
   /* The root of the tree.  */
   splay_tree_node root;
 
-  /* The comparision function.  */
+  /* The comparison function.  */
   splay_tree_compare_fn comp;
 
   /* The deallocate-key function.  NULL if no cleanup is necessary.  */

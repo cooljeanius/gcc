@@ -416,13 +416,15 @@ Attribute Finalization_Size
 .. index:: Finalization_Size
 
 The prefix of attribute ``Finalization_Size`` must be an object or
-a non-class-wide type. This attribute returns the size of any hidden data
+a type. This attribute returns the size of any hidden data
 reserved by the compiler to handle finalization-related actions. The type of
 the attribute is *universal_integer*.
 
 ``Finalization_Size`` yields a value of zero for a type with no controlled
 parts, an object whose type has no controlled parts, or an object of a
 class-wide type whose tag denotes a type with no controlled parts.
+For a class-wide type, ``Finalization_Size`` yields a non-zero value except
+if a No_Finalization restriction is in effect, in which case it yields zero.
 
 Note that only heap-allocated objects contain finalization data.
 
@@ -448,6 +450,43 @@ conversion to the fixed-point type.  The difference is
 that there are full range checks, to ensure that the result is in range.
 This attribute is primarily intended for use in implementation of the
 input-output functions for fixed-point values.
+
+Attribute From_Address
+======================
+.. index:: From_Address
+
+The prefix of this attribute must be a general access-to-array type (or
+subtype); the attribute takes a System.Address argument and possibly some
+additional arguments (described below) and yields a value of the given
+access type that designates an array object located at the given address.
+In the case of a non-null array this means that the given address is the
+address of the first element of the array object (not the address of any sort
+of bounds descriptor). This allows associating bounds with an address that is,
+for example, passed in from C code.
+
+If the designated array subtype is unconstrained (which is the usual case),
+then for each dimension (in order) the attribute takes either one or two
+additional arguments of the corresponding index type - one if the index
+subtype is a fixed lower bound subtype, two (low bound first) otherwise.
+In this case, the access type shall be an extended access type (see the
+description of the Extended_Access aspect). These additional arguments
+specify the bounds of the designated array object.
+
+If the designated array subtype is constrained then no additional arguments
+are provided and the bounds of the designated object are those of the
+designated subtype.
+
+Roughly speaking, My_Access_Type'From_Address (Addr, Lo, Hi) is equivalent to a
+declare expression:
+
+.. code-block:: ada
+
+   (declare
+      Obj : aliased Designated_Array_Type (Lo .. Hi)
+        with Import, Address => Addr;
+   begin
+      My_Access_Type'(Obj'Unchecked_Access)
+   end)
 
 Attribute From_Any
 ==================
@@ -653,11 +692,12 @@ Attribute Maximum_Alignment
 
 .. index:: Maximum_Alignment
 
-``Standard'Maximum_Alignment`` (``Standard`` is the only
-allowed prefix) provides the maximum useful alignment value for the
-target.  This is a static value that can be used to specify the alignment
-for an object, guaranteeing that it is properly aligned in all
-cases.
+``Standard'Maximum_Alignment`` (``Standard`` is the only allowed prefix)
+provides the maximum default alignment value for the target, that is to
+say the maximum alignment that the compiler may choose by default for a
+type or an object. Larger alignments are supported up to some maximum
+value dependent on the target, but may require specific mechanisms that
+are not needed up to ``Standard'Maximum_Alignment``.
 
 Attribute Max_Integer_Size
 ==========================
@@ -833,6 +873,13 @@ range).  The result is static for static subtypes.  ``Range_Length``
 applied to the index subtype of a one dimensional array always gives the
 same result as ``Length`` applied to the array itself.
 
+Attribute Ref
+=============
+
+``System.Address'Ref`` (``Address`` is the only permissible prefix) is
+equivalent to ``System'To_Address``, provided for compatibility with other
+compilers.
+
 Attribute Restriction_Set
 =========================
 .. index:: Restriction_Set
@@ -897,7 +944,7 @@ to set this restriction (if some unit does attempt to set it,
 the binder will refuse to bind the partition).
 
 Technical note: The restriction name and the unit name are
-intepreted entirely syntactically, as in the corresponding
+interpreted entirely syntactically, as in the corresponding
 Restrictions pragma, they are not analyzed semantically,
 so they do not have a type.
 
@@ -1027,7 +1074,7 @@ If the opposite storage order is specified, then whenever the value of
 a scalar component of an object of type ``S`` is read, the storage
 elements of the enclosing machine scalar are first reversed (before
 retrieving the component value, possibly applying some shift and mask
-operatings on the enclosing machine scalar), and the opposite operation
+operations on the enclosing machine scalar), and the opposite operation
 is done for writes.
 
 In that case, the restrictions set forth in 13.5.1(10.3/2) for scalar components
@@ -1049,7 +1096,7 @@ inheritance in the case of a derived type), then the default is normally
 the native ordering of the target, but this default can be overridden using
 pragma ``Default_Scalar_Storage_Order``.
 
-If a component of ``T`` is itself of a record or array type, the specfied
+If a component of ``T`` is itself of a record or array type, the specified
 ``Scalar_Storage_Order`` does *not* apply to that nested type: an explicit
 attribute definition clause must be provided for the component type as well
 if desired.
@@ -1264,7 +1311,7 @@ static expression and where the function call could not be used
 (since the function call is always nonstatic, even if its
 argument is static). The argument must be in the range
 -(2**(m-1)) .. 2**m-1, where m is the memory size
-(typically 32 or 64). Negative values are intepreted in a
+(typically 32 or 64). Negative values are interpreted in a
 modular manner (e.g., -1 means the same as 16#FFFF_FFFF# on
 a 32 bits machine).
 
@@ -1589,7 +1636,7 @@ begin unmodified. Similarly:
 
 
 yields a value for ``Rvar2`` of (A => 1, B => 20, C => 3),
-with ``Rvar1`` being unmodifed.
+with ``Rvar1`` being unmodified.
 Note that the value of the attribute reference is computed
 completely before it is used. This means that if you write:
 
@@ -1629,9 +1676,9 @@ Attribute Valid_Value
 .. index:: Valid_Value
 
 The ``'Valid_Value`` attribute is defined for enumeration types other than
-those in package Standard. This attribute is a function that takes
-a String, and returns Boolean. ``T'Valid_Value (S)`` returns True
-if and only if ``T'Value (S)`` would not raise Constraint_Error.
+those in package Standard or types derived from those types. This attribute is
+a function that takes a String, and returns Boolean. ``T'Valid_Value (S)``
+returns True if and only if ``T'Value (S)`` would not raise Constraint_Error.
 
 Attribute Valid_Scalars
 =======================
@@ -1640,8 +1687,8 @@ Attribute Valid_Scalars
 The ``'Valid_Scalars`` attribute is intended to make it easier to check the
 validity of scalar subcomponents of composite objects. The attribute is defined
 for any prefix ``P`` which denotes an object. Prefix ``P`` can be any type
-except for tagged private or ``Unchecked_Union`` types. The value of the
-attribute is of type ``Boolean``.
+except for ``Unchecked_Union`` types. The value of the attribute is of type
+``Boolean``.
 
 ``P'Valid_Scalars`` yields ``True`` if and only if the evaluation of
 ``C'Valid`` yields ``True`` for every scalar subcomponent ``C`` of ``P``, or if

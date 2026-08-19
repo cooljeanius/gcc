@@ -1,5 +1,5 @@
 /* Target Code for TI C6X
-   Copyright (C) 2010-2025 Free Software Foundation, Inc.
+   Copyright (C) 2010-2026 Free Software Foundation, Inc.
    Contributed by Andrew Jenner <andrew@codesourcery.com>
    Contributed by Bernd Schmidt <bernds@codesourcery.com>
 
@@ -415,7 +415,7 @@ c6x_file_start (void)
   asm_fprintf (asm_out_file,
 	       "\t.c6xabi_attribute Tag_ABI_stack_align_preserved, 0\n");
 
-#if 0 /* FIXME: Reenable when TI's tools are fixed.  */
+#if 0 /* FIXME: Re-enable when TI's tools are fixed.  */
   /* ??? Ideally we'd check flag_short_wchar somehow.  */
   asm_fprintf (asm_out_file, "\t.c6xabi_attribute Tag_ABI_wchar_t, %d\n", 2);
 #endif
@@ -1582,8 +1582,7 @@ c6x_expand_compare (rtx comparison, machine_mode mode)
 
 	  cmp = emit_library_call_value (libfunc, 0, LCT_CONST, SImode,
 					 op0, op_mode, op1, op_mode);
-	  insns = get_insns ();
-	  end_sequence ();
+	  insns = end_sequence ();
 
 	  emit_libcall_block (insns, cmp, cmp,
 			      gen_rtx_fmt_ee (code, SImode, op0, op1));
@@ -2037,7 +2036,7 @@ c6x_print_operand_address (FILE *file, machine_mode mode, rtx addr)
 
    Meaning of CODE:
    $ -- print the unit specifier field for the instruction.
-   . -- print the predicate for the instruction or an emptry string for an
+   . -- print the predicate for the instruction or an empty string for an
         unconditional one.
    | -- print "||" if the insn should be issued in parallel with the previous
         one.
@@ -5469,7 +5468,7 @@ c6x_asm_emit_except_personality (rtx personality)
   fputc ('\n', asm_out_file);
 }
 
-/* Use a special assembly directive rather than a regular setion for
+/* Use a special assembly directive rather than a regular section for
    unwind table data.  */
 
 static void

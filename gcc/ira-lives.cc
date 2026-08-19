@@ -1,5 +1,5 @@
 /* IRA processing allocno lives to build allocno live ranges.
-   Copyright (C) 2006-2025 Free Software Foundation, Inc.
+   Copyright (C) 2006-2026 Free Software Foundation, Inc.
    Contributed by Vladimir Makarov <vmakarov@redhat.com>.
 
 This file is part of GCC.
@@ -24,6 +24,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "backend.h"
 #include "target.h"
 #include "rtl.h"
+#include "stmt.h"
 #include "predict.h"
 #include "df.h"
 #include "memmodel.h"
@@ -955,12 +956,14 @@ ira_implicitly_set_insn_hard_regs (HARD_REG_SET *set,
 	  mode = (GET_CODE (op) == SCRATCH
 		  ? GET_MODE (op) : PSEUDO_REGNO_MODE (regno));
 	  cl = NO_REGS;
-	  for (; (c = *p); p += CONSTRAINT_LEN (c, p))
+	  for (alternative_mask curr_preferred = preferred;
+	       (c = *p);
+	       p += CONSTRAINT_LEN (c, p))
 	    if (c == '#')
-	      preferred &= ~ALTERNATIVE_BIT (0);
+	      curr_preferred &= ~ALTERNATIVE_BIT (0);
 	    else if (c == ',')
-	      preferred >>= 1;
-	    else if (preferred & 1)
+	      curr_preferred >>= 1;
+	    else if (curr_preferred & 1)
 	      {
 		cl = reg_class_for_constraint (lookup_constraint (p));
 		if (cl != NO_REGS)
@@ -970,6 +973,12 @@ ira_implicitly_set_insn_hard_regs (HARD_REG_SET *set,
 		    int regno = ira_class_singleton[cl][mode];
 		    if (regno >= 0)
 		      add_to_hard_reg_set (set, mode, regno);
+		  }
+		else if (c == '{')
+		  {
+		    int regno = decode_hard_reg_constraint (p);
+		    gcc_assert (regno >= 0 && regno < FIRST_PSEUDO_REGISTER);
+		    add_to_hard_reg_set (set, mode, regno);
 		  }
 	      }
 	}
@@ -1121,6 +1130,102 @@ process_register_constraint_filters ()
 
 	      filters |= ALLOCNO_REGISTER_FILTERS (a);
 	      ALLOCNO_SET_REGISTER_FILTERS (a, filters);
+	    }
+	}
+    }
+}
+
+/* Append a dependent filter ID with mode MODE, referenced allocno
+   REF_ALLOCNO, hardreg REF_HARD_REGNO, and REF_MODE to allocno A.  */
+
+void
+ira_add_dependent_filter (ira_allocno_t a, int id,
+			  machine_mode mode, ira_allocno_t ref_allocno,
+			  unsigned int ref_hard_regno, machine_mode ref_mode)
+{
+  /* Check if we already have the filter that should be added.
+     This is a linear search and the assumption is that we'll never
+     have more than a handful of dependent filters.  Right now, the
+     maximum is 32 (see gensupport.cc).  */
+  for (auto *filter = ALLOCNO_DEPENDENT_FILTERS (a);
+       filter;
+       filter = filter->next)
+    if (filter->id == id
+	&& filter->ref_allocno == ref_allocno
+	&& filter->ref_hard_regno == ref_hard_regno
+	&& filter->mode == mode
+	&& filter->ref_mode == ref_mode)
+      return;
+
+  auto *filter = (ira_dependent_filter *)
+    ira_allocate (sizeof (ira_dependent_filter));
+  filter->id = id;
+  filter->ref_allocno = ref_allocno;
+  filter->ref_hard_regno = ref_hard_regno;
+  filter->mode = mode;
+  filter->ref_mode = ref_mode;
+  filter->next = ALLOCNO_DEPENDENT_FILTERS (a);
+  ALLOCNO_DEPENDENT_FILTERS (a) = filter;
+}
+
+/* Walk the operand alternatives of the current insn.  For each
+   operand with a dependent-filter constraint, add one
+   ira_dependent_filter in the appropriate allocno.  */
+
+static void
+process_dependent_filters ()
+{
+  if (!NUM_DEPENDENT_FILTERS)
+    return;
+
+  for (int opno = 0; opno < recog_data.n_operands; ++opno)
+    {
+      rtx op = recog_data.operand[opno];
+      if (SUBREG_P (op))
+	op = SUBREG_REG (op);
+      if (!REG_P (op) || HARD_REGISTER_P (op))
+	continue;
+
+      ira_allocno_t a = ira_curr_regno_allocno_map[REGNO (op)];
+
+      for (int alt = 0; alt < recog_data.n_alternatives; alt++)
+	{
+	  if (!TEST_BIT (preferred_alternatives, alt))
+	    continue;
+
+	  auto *op_alt = &recog_op_alt[alt * recog_data.n_operands];
+	  auto cl = alternative_class (op_alt, opno);
+	  if (!ira_class_subset_p[ALLOCNO_CLASS (a)][cl])
+	    continue;
+
+	  auto dep_filter_mask = alternative_dependent_filters (op_alt, opno);
+	  if (!dep_filter_mask)
+	    continue;
+
+	  for (int id = 0; id < NUM_DEPENDENT_FILTERS; ++id)
+	    {
+	      if (!(dep_filter_mask & (1U << id)))
+		continue;
+
+	      int ref_opno = get_dependent_filter_ref (id);
+	      if (ref_opno < 0 || ref_opno >= recog_data.n_operands)
+		continue;
+	      rtx ref_op = recog_data.operand[ref_opno];
+	      if (SUBREG_P (ref_op))
+		ref_op = SUBREG_REG (ref_op);
+	      if (!REG_P (ref_op))
+		continue;
+
+	      ira_allocno_t ref_a = NULL;
+	      unsigned int ref_hard_regno = INVALID_REGNUM;
+	      if (HARD_REGISTER_P (ref_op))
+		ref_hard_regno = REGNO (ref_op);
+	      else
+		ref_a = ira_curr_regno_allocno_map[REGNO (ref_op)];
+
+	      ira_add_dependent_filter (a, id, GET_MODE (op),
+					ref_a, ref_hard_regno,
+					GET_MODE (ref_op));
 	    }
 	}
     }
@@ -1302,7 +1407,7 @@ static void
 process_bb_node_lives (ira_loop_tree_node_t loop_tree_node)
 {
   int i, freq;
-  unsigned int j;
+  unsigned int j, k;
   basic_block bb;
   rtx_insn *insn;
   bitmap_iterator bi;
@@ -1323,27 +1428,28 @@ process_bb_node_lives (ira_loop_tree_node_t loop_tree_node)
       sparseset_clear (objects_live);
       REG_SET_TO_HARD_REG_SET (hard_regs_live, reg_live_out);
       hard_regs_live &= ~(eliminable_regset | ira_no_alloc_regs);
-      for (i = 0; i < FIRST_PSEUDO_REGISTER; i++)
-	if (TEST_HARD_REG_BIT (hard_regs_live, i))
-	  {
-	    enum reg_class aclass, pclass, cl;
+      hard_reg_set_iterator hrsi;
+      k = 0;
+      EXECUTE_IF_SET_IN_HARD_REG_SET (hard_regs_live, 0, k, hrsi)
+	{
+	  enum reg_class aclass, pclass, cl;
 
-	    aclass = ira_allocno_class_translate[REGNO_REG_CLASS (i)];
-	    pclass = ira_pressure_class_translate[aclass];
-	    for (j = 0;
-		 (cl = ira_reg_class_super_classes[pclass][j])
-		   != LIM_REG_CLASSES;
-		 j++)
-	      {
-		if (! ira_reg_pressure_class_p[cl])
-		  continue;
-		curr_reg_pressure[cl]++;
-		if (curr_bb_node->reg_pressure[cl] < curr_reg_pressure[cl])
-		  curr_bb_node->reg_pressure[cl] = curr_reg_pressure[cl];
-		ira_assert (curr_reg_pressure[cl]
-			    <= ira_class_hard_regs_num[cl]);
-	      }
-	  }
+	  aclass = ira_allocno_class_translate[REGNO_REG_CLASS (k)];
+	  pclass = ira_pressure_class_translate[aclass];
+	  for (j = 0;
+	       (cl = ira_reg_class_super_classes[pclass][j])
+		 != LIM_REG_CLASSES;
+	       j++)
+	    {
+	      if (! ira_reg_pressure_class_p[cl])
+		continue;
+	      curr_reg_pressure[cl]++;
+	      if (curr_bb_node->reg_pressure[cl] < curr_reg_pressure[cl])
+		curr_bb_node->reg_pressure[cl] = curr_reg_pressure[cl];
+	      ira_assert (curr_reg_pressure[cl]
+			  <= ira_class_hard_regs_num[cl]);
+	    }
+	}
       EXECUTE_IF_SET_IN_BITMAP (reg_live_out, FIRST_PSEUDO_REGISTER, j, bi)
 	mark_pseudo_regno_live (j);
 
@@ -1433,6 +1539,7 @@ process_bb_node_lives (ira_loop_tree_node_t loop_tree_node)
 
 	  preferred_alternatives = ira_setup_alts (insn);
 	  process_register_constraint_filters ();
+	  process_dependent_filters ();
 	  process_single_reg_class_operands (false, freq);
 
 	  if (call_p)

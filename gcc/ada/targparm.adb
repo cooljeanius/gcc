@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1999-2025, Free Software Foundation, Inc.         --
+--          Copyright (C) 1999-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -307,7 +307,7 @@ package body Targparm is
 
          --  Test for type Address is private
 
-         elsif Looking_At_Skip ("   type Address is private;") then
+         elsif Looking_At_Skip ("   type Address is private") then
             Opt.Address_Is_Private := True;
             goto Line_Loop_Continue;
 
@@ -630,7 +630,6 @@ package body Targparm is
 
          elsif Looking_At_Skip ("pragma Normalize_Scalars;") then
             Opt.Normalize_Scalars := True;
-            Opt.Init_Or_Norm_Scalars := True;
             goto Line_Loop_Continue;
 
          --  Partition_Elaboration_Policy

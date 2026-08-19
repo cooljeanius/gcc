@@ -1,5 +1,5 @@
 /* UndefinedBehaviorSanitizer, undefined behavior detector.
-   Copyright (C) 2013-2025 Free Software Foundation, Inc.
+   Copyright (C) 2013-2026 Free Software Foundation, Inc.
    Contributed by Marek Polacek <polacek@redhat.com>
 
 This file is part of GCC.
@@ -127,7 +127,7 @@ tree
 ubsan_encode_value (tree t, enum ubsan_encode_value_phase phase)
 {
   tree type = TREE_TYPE (t);
-  if (TREE_CODE (type) == BITINT_TYPE)
+  if (BITINT_TYPE_P (type))
     {
       if (TYPE_PRECISION (type) <= POINTER_SIZE)
 	{
@@ -358,10 +358,6 @@ get_ubsan_type_info_for_type (tree type)
     return 0;
 }
 
-/* Counters for internal labels.  ubsan_ids[0] for Lubsan_type,
-   ubsan_ids[1] for Lubsan_data labels.  */
-static GTY(()) unsigned int ubsan_ids[2];
-
 /* Helper routine that returns ADDR_EXPR of a VAR_DECL of a type
    descriptor.  It first looks into the hash table; if not found,
    create the VAR_DECL, put it into the hash table and return the
@@ -378,8 +374,7 @@ ubsan_type_descriptor (tree type, enum ubsan_print_style pstyle)
     {
       /* Temporary hack for -fsanitize=shift with _BitInt(129) and more.
 	 libubsan crashes if it is not TK_Integer type.  */
-      if (TREE_CODE (type) == BITINT_TYPE
-	  && TYPE_PRECISION (type) > MAX_FIXED_MODE_SIZE)
+      if (BITINT_TYPE_P (type) && TYPE_PRECISION (type) > MAX_FIXED_MODE_SIZE)
 	type3 = build_qualified_type (type, TYPE_QUAL_CONST);
       if (type3 == type)
 	pstyle = UBSAN_PRINT_NORMAL;
@@ -436,7 +431,7 @@ ubsan_type_descriptor (tree type, enum ubsan_print_style pstyle)
 
   if (tname == NULL)
     {
-      if (TREE_CODE (type2) == BITINT_TYPE)
+      if (BITINT_TYPE_P (type2))
 	{
 	  snprintf (tname_bitint, sizeof (tname_bitint),
 	  	    "%s_BitInt(%d)", TYPE_UNSIGNED (type2) ? "unsigned " : "",
@@ -510,10 +505,16 @@ ubsan_type_descriptor (tree type, enum ubsan_print_style pstyle)
   switch (TREE_CODE (eltype))
     {
     case BOOLEAN_TYPE:
-    case ENUMERAL_TYPE:
     case INTEGER_TYPE:
       tkind = 0x0000;
       break;
+    case ENUMERAL_TYPE:
+      if (!BITINT_TYPE_P (eltype))
+	{
+	  tkind = 0x0000;
+	  break;
+	}
+      /* FALLTHRU */
     case BITINT_TYPE:
       if (TYPE_PRECISION (eltype) <= MAX_FIXED_MODE_SIZE)
 	tkind = 0x0000;
@@ -552,10 +553,8 @@ ubsan_type_descriptor (tree type, enum ubsan_print_style pstyle)
   TREE_READONLY (str) = 1;
   TREE_STATIC (str) = 1;
 
-  char tmp_name[32];
-  ASM_GENERATE_INTERNAL_LABEL (tmp_name, "Lubsan_type", ubsan_ids[0]++);
-  decl = build_decl (UNKNOWN_LOCATION, VAR_DECL, get_identifier (tmp_name),
-		     dtype);
+  decl = build_decl (UNKNOWN_LOCATION, VAR_DECL,
+		     generate_internal_label ("Lubsan_type"), dtype);
   TREE_STATIC (decl) = 1;
   TREE_PUBLIC (decl) = 0;
   DECL_ARTIFICIAL (decl) = 1;
@@ -659,10 +658,8 @@ ubsan_create_data (const char *name, int loccnt, const location_t *ploc, ...)
   layout_type (ret);
 
   /* Now, fill in the type.  */
-  char tmp_name[32];
-  ASM_GENERATE_INTERNAL_LABEL (tmp_name, "Lubsan_data", ubsan_ids[1]++);
-  tree var = build_decl (UNKNOWN_LOCATION, VAR_DECL, get_identifier (tmp_name),
-			 ret);
+  tree var = build_decl (UNKNOWN_LOCATION, VAR_DECL,
+			 generate_internal_label ("Lubsan_data"), ret);
   TREE_STATIC (var) = 1;
   TREE_PUBLIC (var) = 0;
   DECL_ARTIFICIAL (var) = 1;
@@ -1675,7 +1672,7 @@ instrument_si_overflow (gimple_stmt_iterator gsi)
      Also punt on bit-fields.  */
   if (!INTEGRAL_TYPE_P (lhsinner)
       || TYPE_OVERFLOW_WRAPS (lhsinner)
-      || (TREE_CODE (lhsinner) != BITINT_TYPE
+      || (!BITINT_TYPE_P (lhsinner)
 	  && maybe_ne (GET_MODE_BITSIZE (TYPE_MODE (lhsinner)),
 		       TYPE_PRECISION (lhsinner))))
     return;
@@ -1864,7 +1861,7 @@ instrument_bool_enum_load (gimple_stmt_iterator *gsi)
 }
 
 /* Determine if we can propagate given LOCATION to ubsan_data descriptor to use
-   new style handlers.  Libubsan uses heuristics to destinguish between old and
+   new style handlers.  Libubsan uses heuristics to distinguish between old and
    new styles and relies on these properties for filename:
 
    a) Location's filename must not be NULL.
@@ -2046,9 +2043,9 @@ instrument_nonnull_arg (gimple_stmt_iterator *gsi)
   for (unsigned int i = 0; i < gimple_call_num_args (stmt); i++)
     {
       tree arg = gimple_call_arg (stmt, i);
-      tree arg2;
+      tree arg2, arg3;
       if (POINTER_TYPE_P (TREE_TYPE (arg))
-	  && infer_nonnull_range_by_attribute (stmt, arg, &arg2))
+	  && infer_nonnull_range_by_attribute (stmt, arg, &arg2, &arg3))
 	{
 	  gimple *g;
 	  if (!is_gimple_val (arg))
@@ -2058,12 +2055,21 @@ instrument_nonnull_arg (gimple_stmt_iterator *gsi)
 	      gsi_safe_insert_before (gsi, g);
 	      arg = gimple_assign_lhs (g);
 	    }
+	  if (arg2 == arg3)
+	    arg3 = NULL_TREE;
 	  if (arg2 && !is_gimple_val (arg2))
 	    {
 	      g = gimple_build_assign (make_ssa_name (TREE_TYPE (arg2)), arg2);
 	      gimple_set_location (g, loc[0]);
 	      gsi_safe_insert_before (gsi, g);
 	      arg2 = gimple_assign_lhs (g);
+	    }
+	  if (arg3 && !is_gimple_val (arg3))
+	    {
+	      g = gimple_build_assign (make_ssa_name (TREE_TYPE (arg3)), arg3);
+	      gimple_set_location (g, loc[0]);
+	      gsi_safe_insert_before (gsi, g);
+	      arg3 = gimple_assign_lhs (g);
 	    }
 
 	  basic_block then_bb, fallthru_bb;
@@ -2082,6 +2088,18 @@ instrument_nonnull_arg (gimple_stmt_iterator *gsi)
 					       &then_bb, &fallthru_bb);
 	      g = gimple_build_cond (NE_EXPR, arg2,
 				     build_zero_cst (TREE_TYPE (arg2)),
+				     NULL_TREE, NULL_TREE);
+	      gimple_set_location (g, loc[0]);
+	      gsi_insert_after (gsi, g, GSI_NEW_STMT);
+
+	      *gsi = gsi_after_labels (then_bb);
+	    }
+	  if (arg3)
+	    {
+	      *gsi = create_cond_insert_point (gsi, true, false, true,
+					       &then_bb, &fallthru_bb);
+	      g = gimple_build_cond (NE_EXPR, arg3,
+				     build_zero_cst (TREE_TYPE (arg3)),
 				     NULL_TREE, NULL_TREE);
 	      gimple_set_location (g, loc[0]);
 	      gsi_insert_after (gsi, g, GSI_NEW_STMT);

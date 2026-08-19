@@ -1,5 +1,5 @@
 /* Utility functions for the analyzer.
-   Copyright (C) 2019-2025 Free Software Foundation, Inc.
+   Copyright (C) 2019-2026 Free Software Foundation, Inc.
    Contributed by David Malcolm <dmalcolm@redhat.com>.
 
 This file is part of GCC.
@@ -18,24 +18,26 @@ You should have received a copy of the GNU General Public License
 along with GCC; see the file COPYING3.  If not see
 <http://www.gnu.org/licenses/>.  */
 
-#include "config.h"
-#include "system.h"
-#include "coretypes.h"
-#include "tree.h"
-#include "function.h"
-#include "basic-block.h"
-#include "gimple.h"
-#include "diagnostic.h"
-#include "intl.h"
-#include "analyzer/analyzer.h"
+#include "analyzer/common.h"
+
 #include "tree-pretty-print.h"
-#include "diagnostic-event-id.h"
+#include "diagnostics/event-id.h"
 #include "tree-dfa.h"
-#include "make-unique.h"
+#include "intl.h"
 
 #if ENABLE_ANALYZER
 
 namespace ana {
+
+bool
+printable_expr_p (const_tree expr)
+{
+  if (TREE_CODE (expr) == SSA_NAME
+      && !SSA_NAME_VAR (expr))
+    return false;
+
+  return true;
+}
 
 /* Workaround for missing location information for some stmts,
    which ultimately should be solved by fixing the frontends
@@ -68,7 +70,7 @@ get_stmt_location (const gimple *stmt, function *fun)
 static tree
 fixup_tree_for_diagnostic_1 (tree expr, hash_set<tree> *visited);
 
-/* Attemp to generate a tree for the LHS of ASSIGN_STMT.
+/* Attempt to generate a tree for the LHS of ASSIGN_STMT.
    VISITED must be non-NULL; it is used to ensure termination.  */
 
 static tree
@@ -227,29 +229,29 @@ std::unique_ptr<json::value>
 tree_to_json (tree node)
 {
   if (!node)
-    return ::make_unique<json::literal> (json::JSON_NULL);
+    return std::make_unique<json::literal> (json::JSON_NULL);
 
   pretty_printer pp;
   dump_generic_node (&pp, node, 0, TDF_VOPS|TDF_MEMSYMS, false);
-  return ::make_unique<json::string> (pp_formatted_text (&pp));
+  return std::make_unique<json::string> (pp_formatted_text (&pp));
 }
 
 /* Generate a JSON value for EVENT_ID.
    This is intended for debugging the analyzer rather than serialization and
-   thus is a string matching those seen in event messags (or null,
+   thus is a string matching those seen in event messages (or null,
    for unknown).  */
 
 std::unique_ptr<json::value>
-diagnostic_event_id_to_json (const diagnostic_event_id_t &event_id)
+diagnostic_event_id_to_json (const diagnostics::paths::event_id_t &event_id)
 {
   if (event_id.known_p ())
     {
       pretty_printer pp;
       pp_printf (&pp, "%@", &event_id);
-      return ::make_unique<json::string> (pp_formatted_text (&pp));
+      return std::make_unique<json::string> (pp_formatted_text (&pp));
     }
   else
-    return ::make_unique<json::literal> (json::JSON_NULL);
+    return std::make_unique<json::literal> (json::JSON_NULL);
 }
 
 /* Generate a JSON value for OFFSET.
@@ -261,7 +263,7 @@ bit_offset_to_json (const bit_offset_t &offset)
 {
   pretty_printer pp;
   pp_wide_int_large (&pp, offset, SIGNED);
-  return ::make_unique<json::string> (pp_formatted_text (&pp));
+  return std::make_unique<json::string> (pp_formatted_text (&pp));
 }
 
 /* Generate a JSON value for OFFSET.
@@ -273,7 +275,7 @@ byte_offset_to_json (const byte_offset_t &offset)
 {
   pretty_printer pp;
   pp_wide_int_large (&pp, offset, SIGNED);
-  return ::make_unique<json::string> (pp_formatted_text (&pp));
+  return std::make_unique<json::string> (pp_formatted_text (&pp));
 }
 
 /* Workaround for lack of const-correctness of ssa_default_def.  */
@@ -298,12 +300,12 @@ get_ssa_default_def (const function &fun, tree var)
    If LOOK_IN_STD is true, then also look for within std:: for the name.  */
 
 bool
-is_special_named_call_p (const gcall *call, const char *funcname,
+is_special_named_call_p (const gcall &call, const char *funcname,
 			 unsigned int num_args, bool look_in_std)
 {
   gcc_assert (funcname);
 
-  tree fndecl = gimple_call_fndecl (call);
+  tree fndecl = gimple_call_fndecl (&call);
   if (!fndecl)
     return false;
 
@@ -347,27 +349,47 @@ is_named_call_p (const_tree fndecl, const char *funcname)
   return 0 == strcmp (tname, funcname);
 }
 
-/* Return true if FNDECL is within the namespace "std".
+/* Return true if FNDECL is declared directly within a top-level
+   namespace named NS_NAME (e.g. "std" or "__cxxabiv1").
    Compare with cp/typeck.cc: decl_in_std_namespace_p, but this doesn't
    rely on being the C++ FE (or handle inline namespaces inside of std).  */
 
 bool
-is_std_function_p (const_tree fndecl)
+is_fndecl_in_toplevel_namespace_p (const_tree fndecl, const char *ns_name)
 {
   tree name_decl = DECL_NAME (fndecl);
   if (!name_decl)
     return false;
+
   if (!DECL_CONTEXT (fndecl))
     return false;
   if (TREE_CODE (DECL_CONTEXT (fndecl)) != NAMESPACE_DECL)
     return false;
   tree ns = DECL_CONTEXT (fndecl);
+  /* Require the namespace itself to be at top level.  */
   if (!(DECL_CONTEXT (ns) == NULL_TREE
 	|| TREE_CODE (DECL_CONTEXT (ns)) == TRANSLATION_UNIT_DECL))
     return false;
   if (!DECL_NAME (ns))
     return false;
-  return id_equal ("std", DECL_NAME (ns));
+
+  return id_equal (ns_name, DECL_NAME (ns));
+}
+
+/* Return true if FNDECL is within the namespace "std".  */
+
+bool
+is_std_function_p (const_tree fndecl)
+{
+  return is_fndecl_in_toplevel_namespace_p (fndecl, "std");
+}
+
+/* Return true if FNDECL is within the namespace "__cxxabiv1".  */
+
+bool
+is_cxxabi_function_p (const_tree fndecl)
+{
+  return is_fndecl_in_toplevel_namespace_p (fndecl, "__cxxabiv1");
 }
 
 /* Like is_named_call_p, but look for std::FUNCNAME.  */
@@ -396,7 +418,7 @@ is_std_named_call_p (const_tree fndecl, const char *funcname)
 
 bool
 is_named_call_p (const_tree fndecl, const char *funcname,
-		 const gcall *call, unsigned int num_args)
+		 const gcall &call, unsigned int num_args)
 {
   gcc_assert (fndecl);
   gcc_assert (funcname);
@@ -404,7 +426,7 @@ is_named_call_p (const_tree fndecl, const char *funcname,
   if (!is_named_call_p (fndecl, funcname))
     return false;
 
-  if (gimple_call_num_args (call) != num_args)
+  if (gimple_call_num_args (&call) != num_args)
     return false;
 
   return true;
@@ -414,7 +436,7 @@ is_named_call_p (const_tree fndecl, const char *funcname,
 
 bool
 is_std_named_call_p (const_tree fndecl, const char *funcname,
-		     const gcall *call, unsigned int num_args)
+		     const gcall &call, unsigned int num_args)
 {
   gcc_assert (fndecl);
   gcc_assert (funcname);
@@ -422,39 +444,40 @@ is_std_named_call_p (const_tree fndecl, const char *funcname,
   if (!is_std_named_call_p (fndecl, funcname))
     return false;
 
-  if (gimple_call_num_args (call) != num_args)
+  if (gimple_call_num_args (&call) != num_args)
     return false;
 
   return true;
 }
 
-/* Return true if stmt is a setjmp or sigsetjmp call.  */
-
 bool
-is_setjmp_call_p (const gcall *call)
+is_cxa_throw_p (const gcall &call)
 {
-  if (is_special_named_call_p (call, "setjmp", 1)
-      || is_special_named_call_p (call, "sigsetjmp", 2))
-    /* region_model::on_setjmp requires a pointer.  */
-    if (POINTER_TYPE_P (TREE_TYPE (gimple_call_arg (call, 0))))
-      return true;
+  tree fndecl = gimple_call_fndecl (&call);
+  if (!fndecl)
+    return false;
 
-  return false;
+  return is_named_call_p (fndecl, "__cxa_throw");
 }
 
-/* Return true if stmt is a longjmp or siglongjmp call.  */
+bool
+is_cxa_rethrow_p (const gcall &call)
+{
+  tree fndecl = gimple_call_fndecl (&call);
+  if (!fndecl)
+    return false;
+
+  return is_named_call_p (fndecl, "__cxa_rethrow");
+}
 
 bool
-is_longjmp_call_p (const gcall *call)
+is_cxa_end_catch_p (const gcall &call)
 {
-  if (is_special_named_call_p (call, "longjmp", 2)
-      || is_special_named_call_p (call, "siglongjmp", 2))
-    /* exploded_node::on_longjmp requires a pointer for the initial
-       argument.  */
-    if (POINTER_TYPE_P (TREE_TYPE (gimple_call_arg (call, 0))))
-      return true;
+  tree fndecl = gimple_call_fndecl (&call);
+  if (!fndecl)
+    return false;
 
-  return false;
+  return is_named_call_p (fndecl, "__cxa_end_catch");
 }
 
 /* For a CALL that matched is_special_named_call_p or is_named_call_p for
@@ -462,9 +485,9 @@ is_longjmp_call_p (const gcall *call)
    diagnostics (stripping the leading underscores).  */
 
 const char *
-get_user_facing_name (const gcall *call)
+get_user_facing_name (const gcall &call)
 {
-  tree fndecl = gimple_call_fndecl (call);
+  tree fndecl = gimple_call_fndecl (&call);
   gcc_assert (fndecl);
 
   tree identifier = DECL_NAME (fndecl);
@@ -506,7 +529,7 @@ make_label_text (bool can_colorize, const char *fmt, ...)
 
   va_start (ap, fmt);
 
-  text_info ti (_(fmt), &ap, 0, NULL, &rich_loc);
+  text_info ti (_(fmt), &ap, 0, nullptr, &rich_loc);
   pp_format (pp.get (), &ti);
   pp_output_formatted_text (pp.get ());
 
@@ -537,7 +560,7 @@ make_label_text_n (bool can_colorize, unsigned HOST_WIDE_INT n,
 
   const char *fmt = ngettext (singular_fmt, plural_fmt, n);
 
-  text_info ti (fmt, &ap, 0, NULL, &rich_loc);
+  text_info ti (fmt, &ap, 0, nullptr, &rich_loc);
 
   pp_format (pp.get (), &ti);
   pp_output_formatted_text (pp.get ());

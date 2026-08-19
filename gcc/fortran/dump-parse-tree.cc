@@ -1,5 +1,5 @@
 /* Parse tree dumper
-   Copyright (C) 2003-2025 Free Software Foundation, Inc.
+   Copyright (C) 2003-2026 Free Software Foundation, Inc.
    Contributed by Steven Bosscher
 
 This file is part of GCC.
@@ -159,6 +159,16 @@ gfc_debug_code (gfc_code *c)
   FILE *tmp = dumpfile;
   dumpfile = stderr;
   show_code (1, c);
+  fputc ('\n', dumpfile);
+  dumpfile = tmp;
+}
+
+DEBUG_FUNCTION void
+gfc_debug_code_node (gfc_code *c)
+{
+  FILE *tmp = dumpfile;
+  dumpfile = stderr;
+  show_code_node (1, c);
   fputc ('\n', dumpfile);
   dumpfile = tmp;
 }
@@ -545,6 +555,14 @@ show_expr (gfc_expr *p)
 
     case EXPR_ARRAY:
       fputs ("(/ ", dumpfile);
+      if (p->ts.type == BT_CHARACTER
+	  && p->ts.u.cl
+	  && p->ts.u.cl->length_from_typespec
+	  && p->ts.u.cl->length)
+	{
+	  show_typespec (&p->ts);
+	  fputs (" :: ", dumpfile);
+	}
       show_constructor (p->value.constructor);
       fputs (" /)", dumpfile);
 
@@ -767,6 +785,16 @@ show_expr (gfc_expr *p)
 
       break;
 
+    case EXPR_CONDITIONAL:
+      fputc ('(', dumpfile);
+      show_expr (p->value.conditional.condition);
+      fputs (" ? ", dumpfile);
+      show_expr (p->value.conditional.true_expr);
+      fputs (" : ", dumpfile);
+      show_expr (p->value.conditional.false_expr);
+      fputc (')', dumpfile);
+      break;
+
     case EXPR_COMPCALL:
       show_compcall (p);
       break;
@@ -833,6 +861,8 @@ show_attr (symbol_attribute *attr, const char * module)
     fputs (" VALUE", dumpfile);
   if (attr->volatile_)
     fputs (" VOLATILE", dumpfile);
+  if (attr->omp_groupprivate)
+    fputs (" GROUPPRIVATE", dumpfile);
   if (attr->threadprivate)
     fputs (" THREADPRIVATE", dumpfile);
   if (attr->temporary)
@@ -910,6 +940,8 @@ show_attr (symbol_attribute *attr, const char * module)
     fputs (" CAF-TOKEN", dumpfile);
   if (attr->select_type_temporary)
     fputs (" SELECT-TYPE-TEMPORARY", dumpfile);
+  if (attr->select_rank_temporary)
+    fputs (" SELECT-RANK-TEMPORARY", dumpfile);
   if (attr->associate_var)
     fputs (" ASSOCIATE-VAR", dumpfile);
   if (attr->pdt_kind)
@@ -924,10 +956,14 @@ show_attr (symbol_attribute *attr, const char * module)
     fputs (" PDT-STRING", dumpfile);
   if (attr->omp_udr_artificial_var)
     fputs (" OMP-UDR-ARTIFICIAL-VAR", dumpfile);
+  if (attr->omp_udm_artificial_var)
+    fputs (" OMP-UDM-ARTIFICIAL-VAR", dumpfile);
   if (attr->omp_declare_target)
     fputs (" OMP-DECLARE-TARGET", dumpfile);
   if (attr->omp_declare_target_link)
     fputs (" OMP-DECLARE-TARGET-LINK", dumpfile);
+  if (attr->omp_declare_target_local)
+    fputs (" OMP-DECLARE-TARGET-LOCAL", dumpfile);
   if (attr->omp_declare_target_indirect)
     fputs (" OMP-DECLARE-TARGET-INDIRECT", dumpfile);
   if (attr->omp_device_type == OMP_DEVICE_TYPE_HOST)
@@ -980,7 +1016,7 @@ show_attr (symbol_attribute *attr, const char * module)
   if (attr->recursive)
     fputs (" RECURSIVE", dumpfile);
   if (attr->unmaskable)
-    fputs (" UNMASKABKE", dumpfile);
+    fputs (" UNMASKABLE", dumpfile);
   if (attr->masked)
     fputs (" MASKED", dumpfile);
   if (attr->contained)
@@ -999,6 +1035,64 @@ show_attr (symbol_attribute *attr, const char * module)
     fputs (" ALWAYS-EXPLICIT", dumpfile);
   if (attr->is_main_program)
     fputs (" IS-MAIN-PROGRAM", dumpfile);
+  if (attr->referenced)
+    fputs (" REFERENCED", dumpfile);
+
+  switch (attr->value_set)
+    {
+    case VALUE_UNSET:
+      break;
+    case VALUE_ARG:
+      fputs (" VALUE-SET(ARG)", dumpfile);
+      break;
+    case VALUE_INTENT_OUT:
+      fputs (" VALUE-SET(INTENT-OUT)", dumpfile);
+      break;
+    case VALUE_READ:
+      fputs (" VALUE-SET(READ)", dumpfile);
+      break;
+    case VALUE_VARDEF:
+      fputs (" VALUE-SET(VARDEF)", dumpfile);
+      break;
+    default:
+      gfc_internal_error ("Wrong value for value_set");
+    }
+
+  switch (attr->allocated)
+    {
+    case ALLOCATED_ARG:
+      fputs (" ALLOCATED(ARG)", dumpfile);
+      break;
+    case ALLOCATED_ALLOCATE_STMT:
+      fputs(" ALLOCATED(ALLOCATE-STMT)", dumpfile);
+      break;
+    case ALLOCATED_ASSIGNMENT:
+      fputs (" ALLOCATED(ASSIGNMENT)", dumpfile);
+      break;
+    default:
+      break;
+    }
+
+  switch (attr->value_used)
+    {
+    case VALUE_UNUSED:
+      break;
+    case VALUE_MAYBE_USED:
+      fputs (" VALUE-USED(MAYBE-USED)", dumpfile);
+      break;
+    case VALUE_USED:
+      fputs (" VALUE-USED(USED)", dumpfile);
+      break;
+    case VALUE_INTENT_IN:
+      fputs (" VALUE-USED(INTENT-IN)", dumpfile);
+      break;
+    case VALUE_VALUE_ARG:
+      fputs (" VALUE-USED(VALUE-ARG)", dumpfile);
+	break;
+    default:
+      gfc_internal_error ("Wrong value for value_used");
+    }
+
   if (attr->oacc_routine_nohost)
     fputs (" OACC-ROUTINE-NOHOST", dumpfile);
   if (attr->temporary)
@@ -1461,7 +1555,9 @@ show_omp_namelist (int list_type, gfc_omp_namelist *n)
   for (; n; n = n->next)
     {
       gfc_current_ns = ns_curr;
-      if (list_type == OMP_LIST_AFFINITY || list_type == OMP_LIST_DEPEND)
+      if (list_type == OMP_LIST_AFFINITY || list_type == OMP_LIST_DEPEND
+	  || list_type == OMP_LIST_MAP
+	  || list_type == OMP_LIST_TO || list_type == OMP_LIST_FROM)
 	{
 	  gfc_current_ns = n->u2.ns ? n->u2.ns : ns_curr;
 	  if (n->u2.ns != ns_iter)
@@ -1473,8 +1569,16 @@ show_omp_namelist (int list_type, gfc_omp_namelist *n)
 		    fputs ("AFFINITY (", dumpfile);
 		  else if (n->u.depend_doacross_op == OMP_DOACROSS_SINK_FIRST)
 		    fputs ("DOACROSS (", dumpfile);
-		  else
+		  else if (list_type == OMP_LIST_DEPEND)
 		    fputs ("DEPEND (", dumpfile);
+		  else if (list_type == OMP_LIST_MAP)
+		    fputs ("MAP (", dumpfile);
+		  else if (list_type == OMP_LIST_TO)
+		    fputs ("TO (", dumpfile);
+		  else if (list_type == OMP_LIST_FROM)
+		    fputs ("FROM (", dumpfile);
+		  else
+		    gcc_unreachable ();
 		}
 	      if (n->u2.ns)
 		{
@@ -1606,6 +1710,7 @@ show_omp_namelist (int list_type, gfc_omp_namelist *n)
 	    fputs ("always,present,tofrom:", dumpfile); break;
 	  case OMP_MAP_DELETE: fputs ("delete:", dumpfile); break;
 	  case OMP_MAP_RELEASE: fputs ("release:", dumpfile); break;
+	  case OMP_MAP_UNSET: fputs ("unset:", dumpfile); break;
 	  default: break;
 	  }
       else if (list_type == OMP_LIST_LINEAR && n->u.linear.old_modifier)
@@ -1722,6 +1827,8 @@ show_omp_assumes (gfc_omp_assumptions *assume)
     }
   if (assume->no_openmp)
     fputs (" NO_OPENMP", dumpfile);
+  if (assume->no_openmp_constructs)
+    fputs (" NO_OPENMP_CONSTRUCTS", dumpfile);
   if (assume->no_openmp_routines)
     fputs (" NO_OPENMP_ROUTINES", dumpfile);
   if (assume->no_parallelism)
@@ -1791,10 +1898,24 @@ show_omp_clauses (gfc_omp_clauses *omp_clauses)
       show_expr (omp_clauses->final_expr);
       fputc (')', dumpfile);
     }
-  if (omp_clauses->num_threads)
+  if (omp_clauses->num_threads_list)
     {
       fputs (" NUM_THREADS(", dumpfile);
-      show_expr (omp_clauses->num_threads);
+      if (omp_clauses->num_threads_strict)
+	fputs ("STRICT", dumpfile);
+      if (omp_clauses->num_threads_strict && omp_clauses->num_threads_dims)
+	fputc (',', dumpfile);
+      if (omp_clauses->num_threads_dims)
+	fputs ("DIMS()", dumpfile);
+      if (omp_clauses->num_threads_strict || omp_clauses->num_threads_dims)
+	fputc (':', dumpfile);
+      gfc_expr_list *nt;
+      for (nt = omp_clauses->num_threads_list; nt; nt = nt->next)
+	{
+	  show_expr (nt->expr);
+	  if (nt->next)
+	    fputs (", ", dumpfile);
+	}
       fputc (')', dumpfile);
     }
   if (omp_clauses->async)
@@ -1970,6 +2091,22 @@ show_omp_clauses (gfc_omp_clauses *omp_clauses)
     fputs (" NOWAIT", dumpfile);
   if (omp_clauses->collapse)
     fprintf (dumpfile, " COLLAPSE(%d)", omp_clauses->collapse);
+  if (omp_clauses->device_type != OMP_DEVICE_TYPE_UNSET)
+    {
+      const char *s;
+      switch (omp_clauses->device_type)
+	{
+	case OMP_DEVICE_TYPE_HOST: s = "host"; break;
+	case OMP_DEVICE_TYPE_NOHOST: s = "nohost"; break;
+	case OMP_DEVICE_TYPE_ANY: s = "any"; break;
+	case OMP_DEVICE_TYPE_UNSET:
+	default:
+	  gcc_unreachable ();
+	}
+      fputs (" DEVICE_TYPE(", dumpfile);
+      fputs (s, dumpfile);
+      fputc (')', dumpfile);
+    }
   for (list_type = 0; list_type < OMP_LIST_NUM; list_type++)
     if (omp_clauses->lists[list_type] != NULL)
       {
@@ -2076,15 +2213,29 @@ show_omp_clauses (gfc_omp_clauses *omp_clauses)
 	}
       fprintf (dumpfile, " BIND(%s)", type);
     }
-  if (omp_clauses->num_teams_upper)
+  if (omp_clauses->num_teams_list)
     {
       fputs (" NUM_TEAMS(", dumpfile);
-      if (omp_clauses->num_teams_lower)
+      if (omp_clauses->num_teams_dims)
 	{
-	  show_expr (omp_clauses->num_teams_lower);
-	  fputc (':', dumpfile);
+	  fputs ("DIMS():", dumpfile);
+	  gfc_expr_list *nt;
+	  for (nt = omp_clauses->num_teams_list; nt; nt = nt->next)
+	   {
+	     show_expr (nt->expr);
+	     if (nt->next)
+	       fputs (", ", dumpfile);
+	   }
 	}
-      show_expr (omp_clauses->num_teams_upper);
+      else
+	{
+	  show_expr (omp_clauses->num_teams_list->expr);
+	  if (omp_clauses->num_teams_list->next)
+	    {
+	      fputc (':', dumpfile);
+	      show_expr (omp_clauses->num_teams_list->next->expr);
+	    }
+	}
       fputc (')', dumpfile);
     }
   if (omp_clauses->device)
@@ -2095,10 +2246,24 @@ show_omp_clauses (gfc_omp_clauses *omp_clauses)
       show_expr (omp_clauses->device);
       fputc (')', dumpfile);
     }
-  if (omp_clauses->thread_limit)
+  if (omp_clauses->thread_limit_list)
     {
       fputs (" THREAD_LIMIT(", dumpfile);
-      show_expr (omp_clauses->thread_limit);
+      if (omp_clauses->thread_limit_strict)
+	fputs ("STRICT", dumpfile);
+      if (omp_clauses->thread_limit_strict && omp_clauses->thread_limit_dims)
+	fputc (',', dumpfile);
+      if (omp_clauses->thread_limit_dims)
+	fputs ("DIMS()", dumpfile);
+      if (omp_clauses->thread_limit_strict || omp_clauses->thread_limit_dims)
+	fputc (':', dumpfile);
+      gfc_expr_list *nt;
+      for (nt = omp_clauses->thread_limit_list; nt; nt = nt->next)
+	{
+	  show_expr (nt->expr);
+	  if (nt->next)
+	    fputs (", ", dumpfile);
+	}
       fputc (')', dumpfile);
     }
   if (omp_clauses->dist_sched_kind != OMP_SCHED_NONE)
@@ -2201,6 +2366,20 @@ show_omp_clauses (gfc_omp_clauses *omp_clauses)
     fputs (" DEPEND(source)", dumpfile);
   if (omp_clauses->doacross_source)
     fputs (" DOACROSS(source:)", dumpfile);
+  if (omp_clauses->dyn_groupprivate)
+    {
+      fputs (" DYN_GROUPPRIVATE(", dumpfile);
+      if (omp_clauses->fallback != OMP_FALLBACK_NONE)
+	fputs ("FALLBACK(", dumpfile);
+      if (omp_clauses->fallback == OMP_FALLBACK_ABORT)
+	fputs ("ABORT):", dumpfile);
+      else if (omp_clauses->fallback == OMP_FALLBACK_DEFAULT_MEM)
+	fputs ("DEFAULT_MEM):", dumpfile);
+      else if (omp_clauses->fallback == OMP_FALLBACK_NULL)
+	fputs ("NULL):", dumpfile);
+      show_expr (omp_clauses->dyn_groupprivate);
+      fputc (')', dumpfile);
+    }
   if (omp_clauses->capture)
     fputs (" CAPTURE", dumpfile);
   if (omp_clauses->depobj_update != OMP_DEPEND_UNSET)
@@ -2277,7 +2456,7 @@ show_omp_clauses (gfc_omp_clauses *omp_clauses)
     }
   if (omp_clauses->message)
     {
-      fputs (" ERROR (", dumpfile);
+      fputs (" MESSAGE (", dumpfile);
       show_expr (omp_clauses->message);
       fputc (')', dumpfile);
     }
@@ -2315,6 +2494,28 @@ show_omp_clauses (gfc_omp_clauses *omp_clauses)
       show_expr (omp_clauses->nocontext);
       fputc (')', dumpfile);
     }
+  if (omp_clauses->oacc_device_type_present)
+    {
+      const char *s;
+      switch (omp_clauses->oacc_device_type)
+	{
+	case GOMP_DEVICE_NONE: s = "all"; break;
+	case GOMP_DEVICE_HOST: s = "host"; break;
+	case GOMP_DEVICE_NVIDIA_PTX: s = "nvidia"; break;
+	case GOMP_DEVICE_GCN: s = "radeon"; break;
+	default:
+	  gcc_unreachable ();
+	}
+      fputs (" DEVICE_TYPE(", dumpfile);
+      fputs (s, dumpfile);
+      fputc (')', dumpfile);
+    }
+  if (omp_clauses->device_num_expr)
+    {
+      fputs (" DEVICE_NUM(", dumpfile);
+      show_expr (omp_clauses->device_num_expr);
+      fputc (')', dumpfile);
+    }
 }
 
 /* Show a single OpenMP or OpenACC directive node and everything underneath it
@@ -2344,6 +2545,9 @@ show_omp_node (int level, gfc_code *c)
     case EXEC_OACC_CACHE: name = "CACHE"; is_oacc = true; break;
     case EXEC_OACC_ENTER_DATA: name = "ENTER DATA"; is_oacc = true; break;
     case EXEC_OACC_EXIT_DATA: name = "EXIT DATA"; is_oacc = true; break;
+    case EXEC_OACC_INIT: name = "INIT"; is_oacc = true; break;
+    case EXEC_OACC_SHUTDOWN: name = "SHUTDOWN"; is_oacc = true; break;
+    case EXEC_OACC_SET: name = "SET"; is_oacc = true; break;
     case EXEC_OMP_ALLOCATE: name = "ALLOCATE"; break;
     case EXEC_OMP_ALLOCATORS: name = "ALLOCATORS"; break;
     case EXEC_OMP_ASSUME: name = "ASSUME"; break;
@@ -2455,6 +2659,9 @@ show_omp_node (int level, gfc_code *c)
     case EXEC_OACC_CACHE:
     case EXEC_OACC_ENTER_DATA:
     case EXEC_OACC_EXIT_DATA:
+    case EXEC_OACC_INIT:
+    case EXEC_OACC_SHUTDOWN:
+    case EXEC_OACC_SET:
     case EXEC_OMP_ALLOCATE:
     case EXEC_OMP_ALLOCATORS:
     case EXEC_OMP_ASSUME:
@@ -2607,6 +2814,20 @@ show_omp_node (int level, gfc_code *c)
     fprintf (dumpfile, " (%s)", c->ext.omp_clauses->critical_name);
 }
 
+static void
+show_sync_stat (struct sync_stat *sync_stat)
+{
+  if (sync_stat->stat)
+    {
+      fputs (" stat=", dumpfile);
+      show_expr (sync_stat->stat);
+    }
+  if (sync_stat->errmsg)
+    {
+      fputs (" errmsg=", dumpfile);
+      show_expr (sync_stat->errmsg);
+    }
+}
 
 /* Show a single code node and everything underneath it if necessary.  */
 
@@ -2755,20 +2976,27 @@ show_code_node (int level, gfc_code *c)
       fputs ("FAIL IMAGE ", dumpfile);
       break;
 
-    case EXEC_CHANGE_TEAM:
-      fputs ("CHANGE TEAM", dumpfile);
-      break;
-
     case EXEC_END_TEAM:
       fputs ("END TEAM", dumpfile);
+      show_sync_stat (&c->ext.sync_stat);
       break;
 
     case EXEC_FORM_TEAM:
-      fputs ("FORM TEAM", dumpfile);
+      fputs ("FORM TEAM ", dumpfile);
+      show_expr (c->expr1);
+      show_expr (c->expr2);
+      if (c->expr3)
+	{
+	  fputs (" NEW_INDEX", dumpfile);
+	  show_expr (c->expr3);
+	}
+      show_sync_stat (&c->ext.sync_stat);
       break;
 
     case EXEC_SYNC_TEAM:
-      fputs ("SYNC TEAM", dumpfile);
+      fputs ("SYNC TEAM ", dumpfile);
+      show_expr (c->expr1);
+      show_sync_stat (&c->ext.sync_stat);
       break;
 
     case EXEC_SYNC_ALL:
@@ -2913,6 +3141,7 @@ show_code_node (int level, gfc_code *c)
       fputs ("ENDIF", dumpfile);
       break;
 
+    case EXEC_CHANGE_TEAM:
     case EXEC_BLOCK:
       {
 	const char *blocktype, *sname = NULL;
@@ -2928,17 +3157,23 @@ show_code_node (int level, gfc_code *c)
 	    if (fcn && fcn->expr_type == EXPR_FUNCTION)
 	      sname = fcn->value.function.actual->expr->symtree->n.sym->name;
 	  }
+	else if (c->op == EXEC_CHANGE_TEAM)
+	  blocktype = "CHANGE TEAM";
 	else if (c->ext.block.assoc)
 	  blocktype = "ASSOCIATE";
 	else
 	  blocktype = "BLOCK";
 	show_indent ();
 	fprintf (dumpfile, "%s ", blocktype);
+	if (c->op == EXEC_CHANGE_TEAM)
+	  show_expr (c->expr1);
 	for (alist = c->ext.block.assoc; alist; alist = alist->next)
 	  {
 	    fprintf (dumpfile, " %s = ", sname ? sname : alist->name);
 	    show_expr (alist->target);
 	  }
+	if (c->op == EXEC_CHANGE_TEAM)
+	  show_sync_stat (&c->ext.block.sync_stat);
 
 	++show_level;
 	ns = c->ext.block.ns;
@@ -2948,8 +3183,13 @@ show_code_node (int level, gfc_code *c)
 	gfc_current_ns = saved_ns;
 	show_code (show_level, ns->code);
 	--show_level;
-	show_indent ();
-	fprintf (dumpfile, "END %s ", blocktype);
+	if (c->op != EXEC_CHANGE_TEAM)
+	  {
+	    /* A CHANGE_TEAM is terminated by a END_TEAM, which have its own
+	       stat and errmsg.  Therefore, let it print itself.  */
+	    show_indent ();
+	    fprintf (dumpfile, "END %s ", blocktype);
+	  }
 	break;
       }
 
@@ -3048,7 +3288,9 @@ show_code_node (int level, gfc_code *c)
       break;
 
     case EXEC_CRITICAL:
-      fputs ("CRITICAL\n", dumpfile);
+      fputs ("CRITICAL", dumpfile);
+      show_sync_stat (&c->ext.sync_stat);
+      fputc ('\n', dumpfile);
       show_code (level + 1, c->block->next);
       code_indent (level, 0);
       fputs ("END CRITICAL", dumpfile);
@@ -3235,6 +3477,13 @@ show_code_node (int level, gfc_code *c)
 
     case EXEC_ALLOCATE:
       fputs ("ALLOCATE ", dumpfile);
+
+      if (c->ext.alloc.ts.type != BT_UNKNOWN)
+	{
+	  show_typespec (&c->ext.alloc.ts);
+	  fputs (":: ", dumpfile);
+	}
+
       if (c->expr1)
 	{
 	  fputs (" STAT=", dumpfile);
@@ -3810,6 +4059,9 @@ show_code_node (int level, gfc_code *c)
     case EXEC_OACC_CACHE:
     case EXEC_OACC_ENTER_DATA:
     case EXEC_OACC_EXIT_DATA:
+    case EXEC_OACC_INIT:
+    case EXEC_OACC_SHUTDOWN:
+    case EXEC_OACC_SET:
     case EXEC_OMP_ALLOCATE:
     case EXEC_OMP_ALLOCATORS:
     case EXEC_OMP_ASSUME:
@@ -4031,14 +4283,27 @@ gfc_dump_parse_tree (gfc_namespace *ns, FILE *file)
   show_namespace (ns);
 }
 
-/* This part writes BIND(C) prototypes and declatations, and prototypes
-   for EXTERNAL preocedures, for use in a C programs.  */
+/* This part writes BIND(C) prototypes and declarations, and prototypes
+   for EXTERNAL procedures, for use in a C programs.  */
 
 static void write_interop_decl (gfc_symbol *);
 static void write_proc (gfc_symbol *, bool);
 static void show_external_symbol (gfc_gsymbol *, void *);
 static void write_type (gfc_symbol *sym);
 static void write_funptr_fcn (gfc_symbol *);
+
+/* Helper function determining if the characteristics of a formal argument of a
+   bind(C) procedure is such that its C prototype needs struct CFI_cdesc_t.  */
+
+static bool
+needs_CFI_cdesc (gfc_typespec *ts, gfc_array_spec *as)
+{
+  return ((as && (as->type == AS_ASSUMED_RANK
+		  || as->type == AS_ASSUMED_SHAPE
+		  || as->type == AS_DEFERRED))
+	  || (ts->type == BT_CHARACTER
+	      && (ts->deferred || ts->u.cl->length == NULL)));
+}
 
 /* Do we need to write out an #include <ISO_Fortran_binding.h> or not?  */
 
@@ -4064,7 +4329,7 @@ has_cfi_cdesc (gfc_gsymbol *gsym, void *p)
     {
       gfc_symbol *s;
       s = f->sym;
-      if (s->as && (s->as->type == AS_ASSUMED_RANK || s->as->type == AS_ASSUMED_SHAPE))
+      if (needs_CFI_cdesc (&s->ts, s->as))
 	{
 	  *data_p = true;
 	  return;
@@ -4197,7 +4462,7 @@ get_c_type_name (gfc_typespec *ts, gfc_array_spec *as, const char **pre,
   *post = "";
   *type_name = "<error>";
 
-  if (as && (as->type == AS_ASSUMED_RANK || as->type == AS_ASSUMED_SHAPE))
+  if (needs_CFI_cdesc (ts, as))
     {
       *asterisk = true;
       *post = "";
@@ -4336,6 +4601,8 @@ get_c_type_name (gfc_typespec *ts, gfc_array_spec *as, const char **pre,
 	  mpz_clear (sz);
 	  *asterisk = false;
 	}
+      else
+	*asterisk = true;
     }
   return ret;
 }
@@ -4380,10 +4647,11 @@ write_type (gfc_symbol *sym)
 {
   gfc_component *c;
 
-  /* Don't dump our iso c module, nor vtypes.  */
+  /* Don't dump types that are not interoperable, our very own ISO C Binding
+     module, or vtypes.  */
 
   if (sym->from_intmod == INTMOD_ISO_C_BINDING || sym->attr.flavor != FL_DERIVED
-      || sym->attr.vtype)
+      || sym->attr.vtype || !sym->attr.is_bind_c)
     return;
 
   fprintf (dumpfile, "typedef struct %s {\n", sym->name);
@@ -4421,7 +4689,12 @@ write_formal_arglist (gfc_symbol *sym, bool bind_c)
 {
   gfc_formal_arglist *f;
 
-  for (f = sym->formal; f != NULL; f = f->next)
+  if (sym->ts.interface)
+    f = sym->ts.interface->formal;
+  else
+    f = sym->formal;
+
+  for (; f != NULL; f = f->next)
     {
       enum type_return rok;
       const char *intent_in;
@@ -4619,6 +4892,28 @@ debug (gfc_array_ref *ar)
   FILE *tmp = dumpfile;
   dumpfile = stderr;
   show_array_ref (ar);
+  fputc ('\n', dumpfile);
+  dumpfile = tmp;
+}
+
+/* Dump OpenMP data structures.  */
+
+DEBUG_FUNCTION void
+debug (gfc_omp_namelist *n)
+{
+  FILE *tmp = dumpfile;
+  dumpfile = stderr;
+  show_omp_namelist (OMP_LIST_MAP, n);
+  fputc ('\n', dumpfile);
+  dumpfile = tmp;
+}
+
+DEBUG_FUNCTION void
+debug (gfc_omp_clauses *clauses)
+{
+  FILE *tmp = dumpfile;
+  dumpfile = stderr;
+  show_omp_clauses (clauses);
   fputc ('\n', dumpfile);
   dumpfile = tmp;
 }

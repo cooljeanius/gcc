@@ -1,5 +1,5 @@
 /* Subroutines used by or related to instruction recognition.
-   Copyright (C) 1987-2025 Free Software Foundation, Inc.
+   Copyright (C) 1987-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -25,6 +25,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "target.h"
 #include "rtl.h"
 #include "tree.h"
+#include "stmt.h"
 #include "cfghooks.h"
 #include "df.h"
 #include "memmodel.h"
@@ -94,6 +95,8 @@ bool raw_constraint_p;
    Controls the significance of (SUBREG (MEM)).  */
 
 int reload_completed;
+
+bool post_ra_split_completed;
 
 /* Nonzero after thread_prologue_and_epilogue_insns has run.  */
 int epilogue_completed;
@@ -607,7 +610,11 @@ cancel_changes (int num)
       else
 	*changes[i].loc = changes[i].old;
       if (changes[i].object && !MEM_P (changes[i].object))
-	INSN_CODE (changes[i].object) = changes[i].old_code;
+	{
+	  INSN_CODE (changes[i].object) = changes[i].old_code;
+	  if (recog_data.insn == changes[i].object)
+	    recog_data.insn = nullptr;
+	}
     }
   num_changes = num;
 }
@@ -1595,7 +1602,11 @@ general_operand (rtx op, machine_mode mode)
     {
       rtx y = XEXP (op, 0);
 
-      if (! volatile_ok && MEM_VOLATILE_P (op))
+      /* If -ffuse-ops-with-volatile-access is enabled, allow volatile
+	 memory reference.  */
+      if (!flag_fuse_ops_with_volatile_access
+	  && !volatile_ok
+	  && MEM_VOLATILE_P (op))
 	return false;
 
       /* Use the mem's mode, since it will be reloaded thus.  LRA can
@@ -2025,7 +2036,7 @@ extract_asm_operands (rtx body)
 int
 asm_noperands (const_rtx body)
 {
-  rtx asm_op = extract_asm_operands (CONST_CAST_RTX (body));
+  rtx asm_op = extract_asm_operands (const_cast<rtx> (body));
   int i, n_sets = 0;
 
   if (asm_op == NULL)
@@ -2363,7 +2374,8 @@ asm_operand_ok (rtx op, const char *constraint, const char **constraints)
 	    {
 	    case CT_REGISTER:
 	      if (!result
-		  && reg_class_for_constraint (cn) != NO_REGS
+		  && (reg_class_for_constraint (cn) != NO_REGS
+		      || constraint[0] == '{')
 		  && GET_MODE (op) != BLKmode
 		  && register_operand (op, VOIDmode))
 		result = 1;
@@ -2936,6 +2948,7 @@ preprocess_constraints (int n_operands, int n_alternatives,
 	{
 	  op_alt[i].cl = NO_REGS;
 	  op_alt[i].register_filters = 0;
+	  op_alt[i].dependent_filters = 0;
 	  op_alt[i].constraint = p;
 	  op_alt[i].matches = -1;
 	  op_alt[i].matched = -1;
@@ -3003,6 +3016,9 @@ preprocess_constraints (int n_operands, int n_alternatives,
 			  auto filter_id = get_register_filter_id (cn);
 			  if (filter_id >= 0)
 			    op_alt[i].register_filters |= 1U << filter_id;
+			  auto dep_filter_id = get_dependent_filter_id (cn);
+			  if (dep_filter_id >= 0)
+			    op_alt[i].dependent_filters |= 1U << dep_filter_id;
 			}
 		      break;
 
@@ -3125,6 +3141,29 @@ struct funny_match
 {
   int this_op, other;
 };
+
+/* For a register constraint CN with a dependent filter, return true if
+   the respective filter allows REGNO (OP) + OFFSET given the ref-operand
+   in recog_data.operand or false if it doesn't.
+   If the filter cannot be evaluated, for example when no hard reg
+   has been chosen yet, return true.  */
+
+static bool
+test_dependent_filter (constraint_num cn, rtx op, int offset,
+		       machine_mode mode)
+{
+  int id = get_dependent_filter_id (cn);
+  if (id < 0 || !REG_P (op))
+    return true;
+  int ref_opno = get_dependent_filter_ref (id);
+  if (ref_opno < 0 || ref_opno >= recog_data.n_operands)
+    return true;
+  rtx ref_op = recog_data.operand[ref_opno];
+  if (!REG_P (ref_op))
+    return true;
+  return eval_dependent_filter (id, REGNO (op) + offset, mode,
+				REGNO (ref_op), GET_MODE (ref_op));
+}
 
 bool
 constrain_operands (int strict, alternative_mask alternatives)
@@ -3304,6 +3343,13 @@ constrain_operands (int strict, alternative_mask alternatives)
 		  win = true;
 		break;
 
+	      case '{':
+		if ((REG_P (op) && HARD_REGISTER_P (op)
+		     && (int) REGNO (op) == decode_hard_reg_constraint (p))
+		    || !reload_completed)
+		  win = true;
+		break;
+
 	      default:
 		{
 		  enum constraint_num cn = lookup_constraint (p);
@@ -3320,7 +3366,10 @@ constrain_operands (int strict, alternative_mask alternatives)
 			      && reg_fits_class_p (op, cl, offset, mode)
 			      && (!filter
 				  || TEST_HARD_REG_BIT (*filter,
-							REGNO (op) + offset))))
+							REGNO (op) + offset))
+			      && (strict <= 0
+				  || test_dependent_filter (cn, op, offset,
+							    mode))))
 			win = true;
 		    }
 
@@ -3508,6 +3557,8 @@ split_insn (rtx_insn *insn)
      splitters instead of computing the proper hard register.  */
   if (reload_completed && first != last)
     {
+      auto old_post_ra_split_completed = post_ra_split_completed;
+      post_ra_split_completed = true;
       first = NEXT_INSN (first);
       for (;;)
 	{
@@ -3517,6 +3568,7 @@ split_insn (rtx_insn *insn)
 	    break;
 	  first = NEXT_INSN (first);
 	}
+      post_ra_split_completed = old_post_ra_split_completed;
     }
 
   return last;
@@ -3592,6 +3644,9 @@ split_all_insns (void)
 	}
     }
 
+  if (reload_completed)
+    post_ra_split_completed = true;
+
   default_rtl_profile ();
   if (changed)
     {
@@ -3641,6 +3696,9 @@ split_all_insns_noflow (void)
 	    split_insn (insn);
 	}
     }
+
+  if (reload_completed)
+    post_ra_split_completed = true;
 }
 
 struct peep2_insn_data
@@ -4006,6 +4064,7 @@ peep2_attempt (basic_block bb, rtx_insn *insn, int match_len, rtx_insn *attempt)
 
       CALL_INSN_FUNCTION_USAGE (new_insn)
 	= CALL_INSN_FUNCTION_USAGE (old_insn);
+      CALL_INSN_ABI_ID (new_insn) = CALL_INSN_ABI_ID (old_insn);
       SIBLING_CALL_P (new_insn) = SIBLING_CALL_P (old_insn);
 
       for (note = REG_NOTES (old_insn);

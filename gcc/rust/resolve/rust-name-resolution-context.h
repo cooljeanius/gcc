@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2025 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -16,13 +16,16 @@
 // along with GCC; see the file COPYING3.  If not see
 // <http://www.gnu.org/licenses/>.
 
-#ifndef RUST_NAME_RESOLVER_2_0_H
-#define RUST_NAME_RESOLVER_2_0_H
+#ifndef RUST_NAME_RESOLVER_2_0_CTX_H
+#define RUST_NAME_RESOLVER_2_0_CTX_H
 
 #include "optional.h"
 #include "rust-forever-stack.h"
 #include "rust-hir-map.h"
 #include "rust-rib.h"
+#include "rust-stacked-contexts.h"
+#include "rust-item.h"
+#include "rust-name-resolution.h"
 
 namespace Rust {
 namespace Resolver2_0 {
@@ -134,26 +137,341 @@ change?
 correct
 */
 
-// FIXME: Documentation
-class Usage
+struct IdentifierMode
 {
-public:
-  explicit Usage (NodeId id) : id (id) {}
+  bool is_ref;
+  bool is_mut;
 
-  // TODO: move to name-resolution-ctx.cc
-  // storing it as a key in a map
-  bool operator< (const Usage other) const { return other.id < id; }
+  IdentifierMode (bool is_ref, bool is_mut) : is_ref (is_ref), is_mut (is_mut)
+  {}
 
-  NodeId id;
+  bool operator== (const IdentifierMode &other)
+  {
+    return other.is_ref == is_ref && other.is_mut == is_mut;
+  }
+
+  bool operator!= (const IdentifierMode &other) { return !(*this == other); }
 };
 
-// FIXME: Documentation
-class Definition
+struct Binding
+{
+  enum class Kind
+  {
+    Product,
+    Or,
+  } kind;
+
+  // used to check the correctness of or-bindings
+  bool has_expected_bindings;
+
+  std::unordered_map<std::string, std::pair<location_t, IdentifierMode>> idents;
+
+  Binding (Binding::Kind kind) : kind (kind), has_expected_bindings (false) {}
+};
+
+/**
+ * Used to identify the source of a binding, and emit the correct error message.
+ */
+enum class BindingSource
+{
+  Match,
+  Let,
+  IfLet,
+  WhileLet,
+  For,
+  /* Closure param or function param */
+  Param
+};
+
+class BindingLayer
+{
+  BindingSource source;
+  std::vector<Binding> bindings;
+
+  bool bind_test (Identifier ident, Binding::Kind kind);
+
+public:
+  void push (Binding::Kind kind);
+
+  BindingLayer (BindingSource source);
+
+  /**
+   * Identifies if the identifier has been used in a product binding context.
+   * eg. `let (a, a) = test();`
+   */
+  bool is_and_bound (Identifier ident);
+
+  /**
+   * Identifies if the identifier has been used in a or context.
+   * eg. `let (a, 1) | (a, 2) = test()`
+   */
+  bool is_or_bound (Identifier ident);
+
+  void insert_ident (std::string ident, location_t locus, bool is_ref,
+		     bool is_mut);
+
+  void merge ();
+
+  BindingSource get_source () const;
+};
+
+class NameResolutionContext;
+/*
+ * Used to handle canonical paths
+ * Similar to ForeverStack, but namespace independent and more specialized
+ */
+class CanonicalPathRecord
 {
 public:
-  explicit Definition (NodeId id) : id (id) {}
+  virtual Resolver::CanonicalPath as_path (const NameResolutionContext &,
+					   Namespace ns)
+    = 0;
 
-  NodeId id;
+  virtual bool is_root () const = 0;
+
+  virtual ~CanonicalPathRecord () = default;
+};
+
+class CanonicalPathRecordWithParent : public CanonicalPathRecord
+{
+public:
+  CanonicalPathRecordWithParent (NodeId parent_node_id)
+    : parent_node_id (parent_node_id)
+  {}
+
+  NodeId get_parent () { return parent_node_id; }
+
+  bool is_root () const override final { return false; }
+
+private:
+  NodeId parent_node_id;
+};
+
+class CanonicalPathRecordCrateRoot : public CanonicalPathRecord
+{
+public:
+  CanonicalPathRecordCrateRoot (NodeId node_id, std::string seg)
+    : node_id (node_id), seg (std::move (seg))
+  {
+    rust_assert (Analysis::Mappings::get ().node_is_crate (node_id));
+    crate_num = Analysis::Mappings::get ().lookup_crate_num (node_id).value ();
+  }
+
+  Resolver::CanonicalPath as_path (const NameResolutionContext &,
+				   Namespace ns) override;
+
+  bool is_root () const override final { return true; }
+
+private:
+  NodeId node_id;
+  CrateNum crate_num;
+  std::string seg;
+};
+
+class CanonicalPathRecordNormal : public CanonicalPathRecordWithParent
+{
+public:
+  CanonicalPathRecordNormal (NodeId parent_node_id, NodeId node_id,
+			     std::string seg)
+    : CanonicalPathRecordWithParent (parent_node_id), node_id (node_id),
+      seg (std::move (seg))
+  {
+    rust_assert (!Analysis::Mappings::get ().node_is_crate (node_id));
+  }
+
+  Resolver::CanonicalPath as_path (const NameResolutionContext &,
+				   Namespace ns) override;
+
+private:
+  NodeId node_id;
+  std::string seg;
+};
+
+class CanonicalPathRecordLookup : public CanonicalPathRecord
+{
+public:
+  CanonicalPathRecordLookup (NodeId lookup_id)
+    : lookup_id (lookup_id), cache (nullptr)
+  {}
+
+  Resolver::CanonicalPath as_path (const NameResolutionContext &,
+				   Namespace ns) override;
+
+  bool is_root () const override final { return true; }
+
+private:
+  NodeId lookup_id;
+  CanonicalPathRecord *cache;
+};
+
+class CanonicalPathRecordImpl : public CanonicalPathRecordWithParent
+{
+public:
+  CanonicalPathRecordImpl (NodeId parent_node_id, NodeId impl_id,
+			   NodeId type_id)
+    : CanonicalPathRecordWithParent (parent_node_id), impl_id (impl_id),
+      type_record (type_id)
+  {}
+
+  Resolver::CanonicalPath as_path (const NameResolutionContext &,
+				   Namespace ns) override;
+
+private:
+  NodeId impl_id;
+  CanonicalPathRecordLookup type_record;
+};
+
+class CanonicalPathRecordTraitImpl : public CanonicalPathRecordWithParent
+{
+public:
+  CanonicalPathRecordTraitImpl (NodeId parent_node_id, NodeId impl_id,
+				NodeId type_id, NodeId trait_path_id)
+    : CanonicalPathRecordWithParent (parent_node_id), impl_id (impl_id),
+      type_record (type_id), trait_path_record (trait_path_id)
+  {}
+
+  Resolver::CanonicalPath as_path (const NameResolutionContext &,
+				   Namespace ns) override;
+
+private:
+  NodeId impl_id;
+  CanonicalPathRecordLookup type_record;
+  CanonicalPathRecordLookup trait_path_record;
+};
+
+class CanonicalPathCtx
+{
+public:
+  CanonicalPathCtx (const NameResolutionContext &ctx)
+    : current_record (UNKNOWN_NODEID), nr_ctx (&ctx)
+  {}
+
+  Resolver::CanonicalPath get_path (NodeId id, Namespace ns) const
+  {
+    return get_record (id).as_path (*nr_ctx, ns);
+  }
+
+  CanonicalPathRecord &get_record (NodeId id) const
+  {
+    auto it = records.find (id);
+    rust_assert (it != records.end ());
+    return *it->second;
+  }
+
+  tl::optional<CanonicalPathRecord *> get_record_opt (NodeId id) const
+  {
+    auto it = records.find (id);
+    if (it == records.end ())
+      return tl::nullopt;
+    else
+      return it->second.get ();
+  }
+
+  void insert_record (NodeId id, const Identifier &ident)
+  {
+    insert_record (id, ident.as_string ());
+  }
+
+  void insert_record (NodeId id, std::string seg)
+  {
+    rust_assert (current_record != UNKNOWN_NODEID);
+
+    auto it = records.find (id);
+    if (it == records.end ())
+      {
+	auto record
+	  = new CanonicalPathRecordNormal (current_record, id, std::move (seg));
+	bool ok
+	  = records.emplace (id, std::unique_ptr<CanonicalPathRecord> (record))
+	      .second;
+	rust_assert (ok);
+      }
+  }
+
+  template <typename F> void scope (NodeId id, const Identifier &ident, F &&f)
+  {
+    scope (id, ident.as_string (), std::forward<F> (f));
+  }
+
+  template <typename F> void scope (NodeId id, std::string seg, F &&f)
+  {
+    rust_assert (current_record != UNKNOWN_NODEID);
+
+    scope_inner (id, std::forward<F> (f), [this, id, &seg] () {
+      return new CanonicalPathRecordNormal (current_record, id,
+					    std::move (seg));
+    });
+  }
+
+  template <typename F> void scope_impl (AST::InherentImpl &impl, F &&f)
+  {
+    rust_assert (current_record != UNKNOWN_NODEID);
+
+    NodeId id = impl.get_node_id ();
+    scope_inner (id, std::forward<F> (f), [this, id, &impl] () {
+      return new CanonicalPathRecordImpl (current_record, id,
+					  impl.get_type ().get_node_id ());
+    });
+  }
+
+  template <typename F> void scope_impl (AST::TraitImpl &impl, F &&f)
+  {
+    rust_assert (current_record != UNKNOWN_NODEID);
+
+    NodeId id = impl.get_node_id ();
+    scope_inner (id, std::forward<F> (f), [this, id, &impl] () {
+      return new CanonicalPathRecordTraitImpl (
+	current_record, id, impl.get_type ().get_node_id (),
+	impl.get_trait_path ().get_node_id ());
+    });
+  }
+
+  template <typename F>
+  void scope_crate (NodeId node_id, std::string crate_name, F &&f)
+  {
+    scope_inner (node_id, std::forward<F> (f), [node_id, &crate_name] () {
+      return new CanonicalPathRecordCrateRoot (node_id, std::move (crate_name));
+    });
+  }
+
+  /** Merge another CanonicalPathCtx within this one. Intended to be used when
+   * merging crate name resolution context.
+   */
+  void merge (CanonicalPathCtx &&other)
+  {
+    records.insert (std::make_move_iterator (other.records.begin ()),
+		    std::make_move_iterator (other.records.end ()));
+  }
+
+private:
+  template <typename FCreate, typename FCallback>
+  void scope_inner (NodeId id, FCallback &&f_callback, FCreate &&f_create)
+  {
+    auto it = records.find (id);
+    if (it == records.end ())
+      {
+	CanonicalPathRecord *record = std::forward<FCreate> (f_create) ();
+	it = records.emplace (id, std::unique_ptr<CanonicalPathRecord> (record))
+	       .first;
+      }
+
+    rust_assert (it->second->is_root ()
+		 || static_cast<CanonicalPathRecordWithParent &> (*it->second)
+			.get_parent ()
+		      == current_record);
+
+    NodeId stash = it->first;
+    std::swap (stash, current_record);
+
+    std::forward<FCallback> (f_callback) ();
+
+    std::swap (stash, current_record);
+  }
+
+  std::unordered_map<NodeId, std::unique_ptr<CanonicalPathRecord>> records;
+  NodeId current_record;
+
+  const NameResolutionContext *nr_ctx;
 };
 
 // Now our resolver, which keeps track of all the `ForeverStack`s we could want
@@ -172,8 +490,8 @@ public:
   tl::expected<NodeId, DuplicateNameError> insert (Identifier name, NodeId id,
 						   Namespace ns);
 
-  tl::expected<NodeId, DuplicateNameError> insert_variant (Identifier name,
-							   NodeId id);
+  tl::expected<NodeId, DuplicateNameError>
+  insert_variant (Identifier name, NodeId id, bool is_also_value);
 
   tl::expected<NodeId, DuplicateNameError>
   insert_shadowable (Identifier name, NodeId id, Namespace ns);
@@ -206,65 +524,438 @@ public:
 	       std::function<void (void)> lambda,
 	       tl::optional<Identifier> path = {});
 
+  using Node = ForeverStackBase::Node;
+
+  std::unique_ptr<Node> root;
+  std::unique_ptr<Node> lang_prelude;
+  std::unique_ptr<Node> extern_prelude;
+
   ForeverStack<Namespace::Values> values;
   ForeverStack<Namespace::Types> types;
   ForeverStack<Namespace::Macros> macros;
   ForeverStack<Namespace::Labels> labels;
 
   Analysis::Mappings &mappings;
+  StackedContexts<BindingLayer> bindings;
 
-  // TODO: Rename
-  // TODO: Use newtype pattern for Usage and Definition
-  void map_usage (Usage usage, Definition definition);
+  CanonicalPathCtx canonical_ctx;
 
-  tl::optional<NodeId> lookup (NodeId usage) const;
-
-  template <typename S>
-  tl::optional<Rib::Definition> resolve_path (const std::vector<S> &segments,
-					      Namespace ns)
+  /**
+   * The result type for a multi-namespace call to
+   * NameResolutionContext::lookup()
+   */
+  struct NSLookup
   {
-    std::function<void (const S &, NodeId)> insert_segment_resolution
-      = [this] (const S &seg, NodeId id) {
-	  auto seg_id = unwrap_segment_node_id (seg);
-	  if (resolved_nodes.find (Usage (seg_id)) == resolved_nodes.end ())
-	    map_usage (Usage (seg_id), Definition (id));
+    NodeId id;
+    Namespace ns;
+
+    NSLookup (NodeId id, Namespace ns) : id (id), ns (ns) {}
+  };
+
+  /**
+   * These functions are mostly useful for the FinalizedNameResolutionContext
+   * and used in later passes of the pipeline. They don't need to know as much
+   * about a definition, hence why they don't use the NamespacedDefinition which
+   * returns a Rib::Definition.
+   */
+  void map_usage (Usage usage, Definition definition, Namespace ns);
+  tl::optional<NodeId> lookup (NodeId usage, Namespace ns) const;
+
+  /**
+   * The order of namespaces is important - if the usage resolves in the first
+   * namespace, then it will be returned. Collisions are not guarded against and
+   * should NOT happen. This is for looking up usages once name resolution is
+   * done and we are in later stages of the pipeline.
+   */
+  tl::optional<NSLookup> lookup (NodeId usage, Namespace ns1,
+				 Namespace ns2) const;
+  tl::optional<NSLookup> lookup (NodeId usage, Namespace ns1, Namespace ns2,
+				 Namespace ns3) const;
+
+  Resolver::CanonicalPath to_canonical_path (NodeId id, Namespace ns) const
+  {
+    return canonical_ctx.get_path (id, ns);
+  }
+
+  /**
+   * The return value when the namespace in which a definition was resolved
+   * matters
+   */
+  struct NamespacedDefinition
+  {
+    explicit NamespacedDefinition (Rib::Definition definition, Namespace ns)
+      : definition (definition), ns (ns)
+    {}
+
+    static tl::optional<NamespacedDefinition>
+    Maybe (tl::optional<Rib::Definition> definition, Namespace ns)
+    {
+      return definition.map ([ns] (Rib::Definition definition) {
+	return NamespacedDefinition (definition, ns);
+      });
+    }
+
+    Rib::Definition definition;
+    Namespace ns;
+  };
+
+  tl::optional<NamespacedDefinition>
+  resolve_path (const ResolutionPath &path, ResolutionMode mode,
+		std::vector<Error> &collect_errors, Namespace ns)
+  {
+    std::function<void (Usage, Definition, Namespace)> insert_segment_resolution
+      = [this] (Usage seg_id, Definition id, Namespace ns) {
+	  map_usage (seg_id, id, ns);
 	};
+
+    tl::optional<NamespacedDefinition> resolved = tl::nullopt;
+
     switch (ns)
       {
       case Namespace::Values:
-	return values.resolve_path (segments, insert_segment_resolution);
+	resolved = NamespacedDefinition::Maybe (
+	  resolve_path (values, path, mode, insert_segment_resolution,
+			collect_errors),
+	  ns);
+	break;
       case Namespace::Types:
-	return types.resolve_path (segments, insert_segment_resolution);
+	resolved = NamespacedDefinition::Maybe (
+	  resolve_path (types, path, mode, insert_segment_resolution,
+			collect_errors),
+	  ns);
+	break;
       case Namespace::Macros:
-	return macros.resolve_path (segments, insert_segment_resolution);
+	resolved = NamespacedDefinition::Maybe (
+	  resolve_path (macros, path, mode, insert_segment_resolution,
+			collect_errors),
+	  ns);
+	break;
       case Namespace::Labels:
-	return labels.resolve_path (segments, insert_segment_resolution);
+	resolved = NamespacedDefinition::Maybe (
+	  resolve_path (labels, path, mode, insert_segment_resolution,
+			collect_errors),
+	  ns);
+	break;
       default:
 	rust_unreachable ();
       }
+
+    // If it fails, switch to std prelude resolution if it exists
+    if (prelude && !resolved)
+      {
+	// TODO: Factor this with the above
+	switch (ns)
+	  {
+	  case Namespace::Values:
+	    return NamespacedDefinition::Maybe (
+	      resolve_path (values, path, mode, insert_segment_resolution,
+			    collect_errors, *prelude),
+	      ns);
+	  case Namespace::Types:
+	    return NamespacedDefinition::Maybe (
+	      resolve_path (types, path, mode, insert_segment_resolution,
+			    collect_errors, *prelude),
+	      ns);
+	  case Namespace::Macros:
+	    return NamespacedDefinition::Maybe (
+	      resolve_path (macros, path, mode, insert_segment_resolution,
+			    collect_errors, *prelude),
+	      ns);
+	  case Namespace::Labels:
+	    return NamespacedDefinition::Maybe (
+	      resolve_path (labels, path, mode, insert_segment_resolution,
+			    collect_errors, *prelude),
+	      ns);
+	  default:
+	    rust_unreachable ();
+	  }
+      }
+
+    return resolved;
+  }
+
+  class ResolutionBuilder
+  {
+  public:
+    ResolutionBuilder (NameResolutionContext &ctx) : ctx (&ctx) {}
+
+    template <typename S>
+    void set_path (const std::vector<S> &path_segments, NodeId node_id,
+		   bool has_opening_scope)
+    {
+      path = ResolutionPath (path_segments, node_id);
+      mode = ResolutionMode::Normal;
+      if (has_opening_scope)
+	{
+	  if (get_rust_edition () == Edition::E2015)
+	    mode = ResolutionMode::FromRoot;
+	  else
+	    mode = ResolutionMode::FromExtern;
+	}
+      has_path_set = true;
+    }
+
+    template <typename S>
+    void set_path (const std::vector<S> &path_segments, NodeId node_id,
+		   ResolutionMode mode)
+    {
+      path = ResolutionPath (path_segments, node_id);
+      this->mode = mode;
+      has_path_set = true;
+    }
+
+    void set_path (const AST::SimplePath &path)
+    {
+      set_path (path.get_segments (), path.get_node_id (),
+		path.has_opening_scope_resolution ());
+    }
+
+    void set_path (const AST::PathInExpression &path)
+    {
+      set_path (path.get_segments (), path.get_node_id (),
+		path.opening_scope_resolution ());
+    }
+
+    void set_path (const AST::TypePath &path)
+    {
+      set_path (path.get_segments (), path.get_node_id (),
+		path.has_opening_scope_resolution_op ());
+    }
+
+    void set_mode (ResolutionMode mode) { this->mode = mode; }
+
+    void add_namespaces (Namespace ns) { namespace_list.push_back (ns); }
+
+    template <typename... Args> void add_namespaces (Namespace ns, Args... rest)
+    {
+      add_namespaces (ns);
+      add_namespaces (rest...);
+    }
+
+    void set_collect_errors (tl::optional<std::vector<Error> &> collect_errors)
+    {
+      this->collect_errors = collect_errors;
+    }
+
+    tl::optional<NamespacedDefinition> resolve ()
+    {
+      rust_assert (has_path_set);
+
+      for (auto ns : namespace_list)
+	{
+	  std::vector<Error> collect_errors_inner;
+	  if (auto ret
+	      = ctx->resolve_path (path, mode, collect_errors_inner, ns))
+	    return ret;
+	  if (!collect_errors_inner.empty ())
+	    {
+	      if (collect_errors.has_value ())
+		{
+		  std::move (collect_errors_inner.begin (),
+			     collect_errors_inner.end (),
+			     std::back_inserter (collect_errors.value ()));
+		}
+	      else
+		{
+		  for (auto &e : collect_errors_inner)
+		    e.emit ();
+		}
+	    }
+	}
+
+      return tl::nullopt;
+    }
+
+  private:
+    ResolutionPath path;
+    ResolutionMode mode;
+    bool has_path_set;
+
+    std::vector<Namespace> namespace_list;
+
+    tl::optional<std::vector<Error> &> collect_errors;
+
+    NameResolutionContext *ctx;
+  };
+
+  template <typename S, typename... Args>
+  tl::optional<NamespacedDefinition>
+  resolve_path (const std::vector<S> &path_segments, ResolutionMode mode,
+		tl::optional<std::vector<Error> &> collect_errors,
+		Namespace ns_first, Args... ns_args)
+  {
+    ResolutionBuilder builder (*this);
+    builder.set_path (path_segments, UNKNOWN_NODEID, mode);
+    builder.add_namespaces (ns_first, ns_args...);
+    builder.set_collect_errors (collect_errors);
+
+    return builder.resolve ();
   }
 
   template <typename S, typename... Args>
-  tl::optional<Rib::Definition> resolve_path (const std::vector<S> &segments,
-					      Args... ns_args)
+  tl::optional<NamespacedDefinition>
+  resolve_path (const std::vector<S> &path_segments,
+		bool has_opening_scope_resolution,
+		tl::optional<std::vector<Error> &> collect_errors,
+		Namespace ns_first, Args... ns_args)
   {
-    std::initializer_list<Namespace> namespaces = {ns_args...};
+    ResolutionBuilder builder (*this);
+    builder.set_path (path_segments, UNKNOWN_NODEID,
+		      has_opening_scope_resolution);
+    builder.add_namespaces (ns_first, ns_args...);
+    builder.set_collect_errors (collect_errors);
 
-    for (auto ns : namespaces)
-      {
-	if (auto ret = resolve_path (segments, ns))
-	  return ret;
-      }
-
-    return tl::nullopt;
+    return builder.resolve ();
   }
 
+  template <typename S, typename... Args>
+  tl::optional<NamespacedDefinition>
+  resolve_path (const std::vector<S> &path_segments,
+		bool has_opening_scope_resolution, Namespace ns_first,
+		Args... ns_args)
+  {
+    ResolutionBuilder builder (*this);
+    builder.set_path (path_segments, UNKNOWN_NODEID,
+		      has_opening_scope_resolution);
+    builder.add_namespaces (ns_first, ns_args...);
+
+    return builder.resolve ();
+  }
+
+  template <typename S, typename... Args>
+  tl::optional<NamespacedDefinition>
+  resolve_path (const std::vector<S> &path_segments, ResolutionMode mode,
+		Namespace ns_first, Args... ns_args)
+  {
+    ResolutionBuilder builder (*this);
+    builder.set_path (path_segments, UNKNOWN_NODEID, mode);
+    builder.add_namespaces (ns_first, ns_args...);
+
+    return builder.resolve ();
+  }
+
+  template <typename... Args>
+  tl::optional<NamespacedDefinition> resolve_path (const AST::SimplePath &path,
+						   Args &&...args)
+  {
+    return resolve_path (path.get_segments (),
+			 path.has_opening_scope_resolution (),
+			 std::forward<Args> (args)...);
+  }
+
+  template <typename... Args>
+  tl::optional<NamespacedDefinition>
+  resolve_path (const AST::PathInExpression &path, Args &&...args)
+  {
+    return resolve_path (path.get_segments (), path.opening_scope_resolution (),
+			 std::forward<Args> (args)...);
+  }
+
+  template <typename... Args>
+  tl::optional<NamespacedDefinition> resolve_path (const AST::TypePath &path,
+						   Args &&...args)
+  {
+    return resolve_path (path.get_segments (),
+			 path.has_opening_scope_resolution_op (),
+			 std::forward<Args> (args)...);
+  }
+
+  /*
+   * Merge a name resolution context within another one at a given location.
+   *
+   * @param other The other name resolution context to merge within the current
+   * one.
+   * @param at The node id of the container were the nr context should be
+   * merged. Usually an extern crate node.
+   */
+  void merge (NameResolutionContext &other, NodeId at);
+
+// We disable this function for now as it causes regressions, but I think it
+// is important for a more proper final nameres context - need to investigate
+#if 0
+  /**
+   * We've now collected every definition and import, and errored out when
+   * necessary if multiple definitions are colliding. Do a final flattening of
+   * the name resolution context to make it easier to digest for the late name
+   * resolution and type-checker. This basically turns the `resolved_nodes`
+   * map from a linked-list-like map to a regular, flat hashmap.
+   *
+   * FIXME: The documentation is wrong, this needs to also run after all
+   * usages have been *resolved* so after Late as well!!!
+   *
+   * TODO: Should this return something like the FinalizedNameResolutionCtx?
+   * Or set it up at least? And instead of mutating the `resolved_nodes` map,
+   * create a new one for the FinalizedNameResolutionCtx?
+   * Actually, since Late uses the NRCtx directly we should mutate this. Most
+   * later passes don't look at this map. So let's go for side-effects in a
+   * void function, yipee.
+   */
+  void flatten ();
+#endif
+
+  /* If declared with #[prelude_import], the current standard library module
+   */
+  tl::optional<NodeId> prelude;
+
 private:
-  /* Map of "usage" nodes which have been resolved to a "definition" node */
-  std::map<Usage, Definition> resolved_nodes;
+  template <Namespace N>
+  bool
+  should_search_prelude (const typename ForeverStack<N>::Node *current_node,
+			 const typename ForeverStack<N>::SegIterator &iterator,
+			 const std::vector<ResolutionPath::Segment> &segments);
+
+  /**
+   * Resolve a path to its definition
+   *
+   * // TODO: Add documentation for `segments`
+   *
+   * @return a valid option with the Definition if the path is present in the
+   *         current map, an empty one otherwise.
+   */
+  template <Namespace N>
+  tl::optional<Rib::Definition>
+  resolve_path (ForeverStack<N> &stack, const ResolutionPath &path,
+		ResolutionMode mode,
+		std::function<void (Usage, Definition, Namespace)>
+		  insert_segment_resolution,
+		std::vector<Error> &collect_errors);
+
+  template <Namespace N>
+  tl::optional<Rib::Definition>
+  resolve_path (ForeverStack<N> &stack, const ResolutionPath &path,
+		ResolutionMode mode,
+		std::function<void (Usage, Definition, Namespace)>
+		  insert_segment_resolution,
+		std::vector<Error> &collect_errors, NodeId starting_point_id);
+
+  template <Namespace N>
+  tl::optional<Rib::Definition> resolve_path (
+    ForeverStack<N> &stack, const ResolutionPath &path, ResolutionMode mode,
+    std::function<void (Usage, Definition, Namespace)>
+      insert_segment_resolution,
+    std::vector<Error> &collect_errors,
+    std::reference_wrapper<typename ForeverStack<N>::Node> starting_point);
+
+  template <Namespace N>
+  tl::optional<typename ForeverStack<N>::Node &>
+  resolve_segments (ForeverStack<N> &stack,
+		    typename ForeverStack<N>::Node &starting_point,
+		    const std::vector<ResolutionPath::Segment> &segments,
+		    typename ForeverStack<N>::SegIterator iterator,
+		    std::function<void (Usage, Definition, Namespace)>
+		      insert_segment_resolution,
+		    std::vector<Error> &collect_errors);
+
+  template <Namespace N>
+  tl::optional<Rib::Definition>
+  resolve_final_segment (ForeverStack<N> &stack,
+			 typename ForeverStack<N>::Node &final_node,
+			 std::string &seg_name, bool is_lower_self);
 };
 
 } // namespace Resolver2_0
 } // namespace Rust
 
-#endif // ! RUST_NAME_RESOLVER_2_0_H
+#include "rust-name-resolution-context.hxx"
+
+#endif // ! RUST_NAME_RESOLVER_2_0_CTX_H

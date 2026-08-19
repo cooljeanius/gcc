@@ -1,6 +1,6 @@
 /* Implementation of the GETARG and IARGC g77, and
    corresponding F2003, intrinsics. 
-   Copyright (C) 2004-2025 Free Software Foundation, Inc.
+   Copyright (C) 2004-2026 Free Software Foundation, Inc.
    Contributed by Bud Davis and Janne Blomqvist.
 
 This file is part of the GNU Fortran 95 runtime library (libgfortran).
@@ -233,7 +233,7 @@ get_command_i4 (char *command, GFC_INTEGER_4 *length, GFC_INTEGER_4 *status,
 	  memcpy (&command[tot_len], argv[i], thisarg);
 	}
 
-      /* Add the legth of the argument.  */
+      /* Add the length of the argument.  */
       tot_len += arglen;
       if (i != argc - 1)
 	tot_len++;

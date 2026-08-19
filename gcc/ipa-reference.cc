@@ -1,5 +1,5 @@
 /* Callgraph based analysis of static variables.
-   Copyright (C) 2004-2025 Free Software Foundation, Inc.
+   Copyright (C) 2004-2026 Free Software Foundation, Inc.
    Contributed by Kenneth Zadeck <zadeck@naturalbridge.com>
 
 This file is part of GCC.
@@ -156,7 +156,7 @@ ipa_reference_var_uid (tree t)
 }
 
 /* Return ID used by ipa-reference bitmaps.  Create new entry if
-   T is not in map.  Set EXISTED accordinly  */
+   T is not in map.  Set EXISTED accordingly  */
 int
 ipa_reference_var_get_or_insert_uid (tree t, bool *existed)
 {
@@ -249,7 +249,7 @@ ipa_reference_get_written_global (struct cgraph_node *fn)
 }
 
 
-/* Hepler for is_proper_for_analysis.  */
+/* Helper for is_proper_for_analysis.  */
 static bool
 is_improper (symtab_node *n, void *v ATTRIBUTE_UNUSED)
 {
@@ -347,7 +347,7 @@ union_static_var_sets (bitmap &x, bitmap y)
 	     In that case, we want to make that visible explicitly.
 	     Even though bitmap_equal_p can be very expensive, it
 	     turns out to be an overall win to check this here for
-	     an LTO bootstrap of GCC itself.  Liberally extrapoliate
+	     an LTO bootstrap of GCC itself.  Liberally extrapolate
 	     that result to be applicable to all cases.  */
 	  if (bitmap_equal_p (x, all_module_statics))
 	    {
@@ -732,7 +732,7 @@ get_read_write_all_from_node (struct cgraph_node *node,
 /* Skip edges from and to nodes without ipa_reference enabled.
    Ignore not available symbols.  This leave
    them out of strongly connected components and makes them easy to skip in the
-   propagation loop bellow.  */
+   propagation loop below.  */
 
 static bool
 ignore_edge_p (cgraph_edge *e)
@@ -1070,8 +1070,8 @@ ipa_reference_write_optimization_summary (void)
   /* See what variables we are interested in.  */
   for (i = 0; i < lto_symtab_encoder_size (encoder); i++)
     {
-      symtab_node *snode = lto_symtab_encoder_deref (encoder, i);
-      varpool_node *vnode = dyn_cast <varpool_node *> (snode);
+      toplevel_node *tnode = lto_symtab_encoder_deref (encoder, i);
+      varpool_node *vnode = dyn_cast <varpool_node *> (tnode);
       int id;
 
       if (vnode
@@ -1089,8 +1089,8 @@ ipa_reference_write_optimization_summary (void)
   if (ltrans_statics_bitcount)
     for (i = 0; i < lto_symtab_encoder_size (encoder); i++)
       {
-	symtab_node *snode = lto_symtab_encoder_deref (encoder, i);
-	cgraph_node *cnode = dyn_cast <cgraph_node *> (snode);
+	toplevel_node *tnode = lto_symtab_encoder_deref (encoder, i);
+	cgraph_node *cnode = dyn_cast <cgraph_node *> (tnode);
 	if (cnode && write_node_summary_p (cnode, encoder, ltrans_statics))
 	  count++;
       }
@@ -1104,15 +1104,15 @@ ipa_reference_write_optimization_summary (void)
   if (ltrans_statics_bitcount)
     for (i = 0; i < lto_symtab_encoder_size (encoder); i++)
       {
-	symtab_node *snode = lto_symtab_encoder_deref (encoder, i);
-	cgraph_node *cnode = dyn_cast <cgraph_node *> (snode);
+	toplevel_node *tnode = lto_symtab_encoder_deref (encoder, i);
+	cgraph_node *cnode = dyn_cast <cgraph_node *> (tnode);
 	if (cnode && write_node_summary_p (cnode, encoder, ltrans_statics))
 	  {
 	    ipa_reference_optimization_summary_t info;
 	    int node_ref;
 
 	    info = get_reference_optimization_summary (cnode);
-	    node_ref = lto_symtab_encoder_encode (encoder, snode);
+	    node_ref = lto_symtab_encoder_encode (encoder, tnode);
 	    streamer_write_uhwi_stream (ob->main_stream, node_ref);
 
 	    stream_out_bitmap (ob, info->statics_read, ltrans_statics,

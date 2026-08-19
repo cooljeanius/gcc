@@ -1,5 +1,5 @@
 /* Target code for NVPTX.
-   Copyright (C) 2014-2025 Free Software Foundation, Inc.
+   Copyright (C) 2014-2026 Free Software Foundation, Inc.
    Contributed by Bernd Schmidt <bernds@codesourcery.com>
 
    This file is part of GCC.
@@ -215,11 +215,15 @@ first_ptx_version_supporting_sm (enum ptx_isa sm)
       return /* PTX_VERSION_3_0 not defined */ PTX_VERSION_3_1;
     case PTX_ISA_SM35:
       return PTX_VERSION_3_1;
+    case PTX_ISA_SM50:
+      return PTX_VERSION_4_0;
     case PTX_ISA_SM37:
     case PTX_ISA_SM52:
       return PTX_VERSION_4_1;
     case PTX_ISA_SM53:
       return PTX_VERSION_4_2;
+    case PTX_ISA_SM61:
+      return PTX_VERSION_5_0;
     case PTX_ISA_SM70:
       return PTX_VERSION_6_0;
     case PTX_ISA_SM75:
@@ -264,10 +268,14 @@ ptx_version_to_string (enum ptx_version v)
     {
     case PTX_VERSION_3_1:
       return "3.1";
+    case PTX_VERSION_4_0:
+      return "4.0";
     case PTX_VERSION_4_1:
       return "4.1";
     case PTX_VERSION_4_2:
       return "4.2";
+    case PTX_VERSION_5_0:
+      return "5.0";
     case PTX_VERSION_6_0:
       return "6.0";
     case PTX_VERSION_6_3:
@@ -290,10 +298,14 @@ ptx_version_to_number (enum ptx_version v, bool major_p)
     {
     case PTX_VERSION_3_1:
       return major_p ? 3 : 1;
+    case PTX_VERSION_4_0:
+      return major_p ? 4 : 0;
     case PTX_VERSION_4_1:
       return major_p ? 4 : 1;
     case PTX_VERSION_4_2:
       return major_p ? 4 : 2;
+    case PTX_VERSION_5_0:
+      return major_p ? 5 : 0;
     case PTX_VERSION_6_0:
       return major_p ? 6 : 0;
     case PTX_VERSION_6_3:
@@ -419,7 +431,7 @@ nvptx_option_override (void)
 }
 
 /* Return a ptx type for MODE.  If PROMOTE, then use .u32 for QImode to
-   deal with ptx ideosyncracies.  */
+   deal with ptx idiosyncrasies.  */
 
 const char *
 nvptx_ptx_type_from_mode (machine_mode mode, bool promote)
@@ -470,9 +482,7 @@ nvptx_encode_section_info (tree decl, rtx rtl, int first)
     {
       nvptx_data_area area = DATA_AREA_GENERIC;
 
-      if (TREE_CONSTANT (decl))
-	area = DATA_AREA_CONST;
-      else if (VAR_P (decl))
+      if (VAR_P (decl))
 	{
 	  if (lookup_attribute ("shared", DECL_ATTRIBUTES (decl)))
 	    {
@@ -482,7 +492,7 @@ nvptx_encode_section_info (tree decl, rtx rtl, int first)
 		       " memory is not supported", decl);
 	    }
 	  else
-	    area = TREE_READONLY (decl) ? DATA_AREA_CONST : DATA_AREA_GLOBAL;
+	    area = DATA_AREA_GLOBAL;
 	}
 
       SET_SYMBOL_DATA_AREA (XEXP (rtl, 0), area);
@@ -509,7 +519,7 @@ section_for_sym (rtx sym)
 static const char *
 section_for_decl (const_tree decl)
 {
-  return section_for_sym (XEXP (DECL_RTL (CONST_CAST (tree, decl)), 0));
+  return section_for_sym (XEXP (DECL_RTL (const_cast<tree> (decl)), 0));
 }
 
 /* Check NAME for special function names and redirect them by returning a
@@ -2041,8 +2051,7 @@ nvptx_gen_shuffle (rtx dst, rtx src, rtx idx, nvptx_shuffle_kind kind)
 	  start_sequence ();
 	  emit_insn (nvptx_gen_shuffle (dst_real, src_real, idx, kind));
 	  emit_insn (nvptx_gen_shuffle (dst_imag, src_imag, idx, kind));
-	  res = get_insns ();
-	  end_sequence ();
+	  res = end_sequence ();
 	}
 	break;
     case E_SImode:
@@ -2062,8 +2071,7 @@ nvptx_gen_shuffle (rtx dst, rtx src, rtx idx, nvptx_shuffle_kind kind)
 	emit_insn (nvptx_gen_shuffle (tmp0, tmp0, idx, kind));
 	emit_insn (nvptx_gen_shuffle (tmp1, tmp1, idx, kind));
 	emit_insn (nvptx_gen_pack (dst, tmp0, tmp1));
-	res = get_insns ();
-	end_sequence ();
+	res = end_sequence ();
       }
       break;
     case E_V2SImode:
@@ -2081,8 +2089,7 @@ nvptx_gen_shuffle (rtx dst, rtx src, rtx idx, nvptx_shuffle_kind kind)
 	emit_insn (nvptx_gen_shuffle (tmp1, tmp1, idx, kind));
 	emit_insn (gen_movsi (dst0, tmp0));
 	emit_insn (gen_movsi (dst1, tmp1));
-	res = get_insns ();
-	end_sequence ();
+	res = end_sequence ();
       }
       break;
     case E_V2DImode:
@@ -2100,8 +2107,7 @@ nvptx_gen_shuffle (rtx dst, rtx src, rtx idx, nvptx_shuffle_kind kind)
 	emit_insn (nvptx_gen_shuffle (tmp1, tmp1, idx, kind));
 	emit_insn (gen_movdi (dst0, tmp0));
 	emit_insn (gen_movdi (dst1, tmp1));
-	res = get_insns ();
-	end_sequence ();
+	res = end_sequence ();
       }
       break;
     case E_BImode:
@@ -2112,8 +2118,7 @@ nvptx_gen_shuffle (rtx dst, rtx src, rtx idx, nvptx_shuffle_kind kind)
 	emit_insn (gen_sel_truesi (tmp, src, GEN_INT (1), const0_rtx));
 	emit_insn (nvptx_gen_shuffle (tmp, tmp, idx, kind));
 	emit_insn (gen_rtx_SET (dst, gen_rtx_NE (BImode, tmp, const0_rtx)));
-	res = get_insns ();
-	end_sequence ();
+	res = end_sequence ();
       }
       break;
     case E_QImode:
@@ -2126,8 +2131,7 @@ nvptx_gen_shuffle (rtx dst, rtx src, rtx idx, nvptx_shuffle_kind kind)
 	emit_insn (nvptx_gen_shuffle (tmp, tmp, idx, kind));
 	emit_insn (gen_rtx_SET (dst, gen_rtx_fmt_e (TRUNCATE, GET_MODE (dst),
 						    tmp)));
-	res = get_insns ();
-	end_sequence ();
+	res = end_sequence ();
       }
       break;
 
@@ -2190,8 +2194,7 @@ nvptx_gen_shared_bcast (rtx reg, propagate_mask pm, unsigned rep,
 	emit_insn (nvptx_gen_shared_bcast (tmp, pm, rep, data, vector));
 	if (pm & PM_write)
 	  emit_insn (gen_rtx_SET (reg, gen_rtx_NE (BImode, tmp, const0_rtx)));
-	res = get_insns ();
-	end_sequence ();
+	res = end_sequence ();
       }
       break;
 
@@ -2227,8 +2230,7 @@ nvptx_gen_shared_bcast (rtx reg, propagate_mask pm, unsigned rep,
 	    emit_insn (res);
 	    emit_insn (gen_adddi3 (data->ptr, data->ptr,
 				   GEN_INT (GET_MODE_SIZE (GET_MODE (reg)))));
-	    res = get_insns ();
-	    end_sequence ();
+	    res = end_sequence ();
 	  }
 	else
 	  rep = 1;
@@ -2361,7 +2363,25 @@ nvptx_assemble_integer (rtx x, unsigned int size, int ARG_UNUSED (aligned_p))
     {
       gcc_checking_assert (!init_frag.active);
       /* Just use the default machinery; it's not getting used, anyway.  */
-      return default_assemble_integer (x, size, aligned_p);
+      bool ok = default_assemble_integer (x, size, aligned_p);
+      /* ..., but a few cases need special handling.  */
+      switch (GET_CODE (x))
+	{
+	case SYMBOL_REF:
+	  /* The default machinery won't work: we don't define the necessary
+	     operations; don't use them outside of this.  */
+	  gcc_checking_assert (!ok);
+	  {
+	    /* Just emit something; it's not getting used, anyway.  */
+	    const char *op = "\t.symbol_ref\t";
+	    ok = (assemble_integer_with_op (op, x), true);
+	  }
+	  break;
+
+	default:
+	  break;
+	}
+      return ok;
     }
 
   gcc_checking_assert (init_frag.active);
@@ -2462,7 +2482,7 @@ nvptx_output_ascii (FILE *, const char *str, unsigned HOST_WIDE_INT size)
    given dimension.  */
 
 static bool
-flexible_array_member_type_p (const_tree type)
+nvptx_flexible_array_member_type_p (const_tree type)
 {
   if (TREE_CODE (type) != RECORD_TYPE)
     return false;
@@ -2500,7 +2520,7 @@ nvptx_assemble_decl_begin (FILE *file, const char *name, const char *section,
   bool atype = (TREE_CODE (type) == ARRAY_TYPE)
     && (TYPE_DOMAIN (type) == NULL_TREE);
 
-  if (undefined && flexible_array_member_type_p (type))
+  if (undefined && nvptx_flexible_array_member_type_p (type))
     {
       size = 0;
       atype = true;
@@ -2597,7 +2617,7 @@ nvptx_asm_declare_constant_name (FILE *file, const char *name,
   fprintf (file, "\t");
 
   tree type = TREE_TYPE (exp);
-  nvptx_assemble_decl_begin (file, name, ".const", type, obj_size,
+  nvptx_assemble_decl_begin (file, name, ".global", type, obj_size,
 			     TYPE_ALIGN (type));
 }
 
@@ -2636,7 +2656,7 @@ nvptx_assemble_undefined_decl (FILE *file, const char *name, const_tree decl)
   if (DECL_IN_CONSTANT_POOL (decl))
     return;
 
-  /*  We support weak defintions, and hence have the right
+  /*  We support weak definitions, and hence have the right
       ASM_WEAKEN_DECL definition.  Diagnose the problem here.  */
   if (DECL_WEAK (decl))
     error_at (DECL_SOURCE_LOCATION (decl),
@@ -2951,7 +2971,7 @@ nvptx_mem_maybe_shared_p (const_rtx x)
 /* Print an operand, X, to FILE, with an optional modifier in CODE.
 
    Meaning of CODE:
-   . -- print the predicate for the instruction or an emptry string for an
+   . -- print the predicate for the instruction or an empty string for an
         unconditional one.
    # -- print a rounding mode for the instruction
 
@@ -3885,7 +3905,7 @@ nvptx_discover_pars (bb_insn_map_t *map)
    Single-Entry-Single-Exit regions.  Some of those regions will be
    trivial ones consisting of a single BB.  The blocks of a
    partitioned region might form a set of disjoint graphs -- because
-   the region encloses a differently partitoned sub region.
+   the region encloses a differently partitioned sub region.
 
    We use the linear time algorithm described in 'Finding Regions Fast:
    Single Entry Single Exit and control Regions in Linear Time'
@@ -3916,7 +3936,7 @@ nvptx_discover_pars (bb_insn_map_t *map)
    We use coloring to mark all BBs with cycle equivalency with the
    same color.  This is the output of the 'Finding Regions Fast'
    algorithm.  Notice it doesn't actually find the set of nodes within
-   a particular region, just unorderd sets of nodes that are the
+   a particular region, just unordered sets of nodes that are the
    entries and exits of SESE regions.
 
    After determining cycle equivalency, we need to find the minimal
@@ -3925,7 +3945,7 @@ nvptx_discover_pars (bb_insn_map_t *map)
    looking, and we're in the subgraph, we start coloring the color of
    the current node, and remember that node as the start of the
    current color's SESE region.  Every time we go to a new node, we
-   decrement the count of nodes with thet color.  If it reaches zero,
+   decrement the count of nodes with that color.  If it reaches zero,
    we remember that node as the end of the current color's SESE region
    and return to 'looking'.  Otherwise we color the node the current
    color.
@@ -3938,12 +3958,12 @@ typedef std::pair<basic_block, basic_block> bb_pair_t;
 typedef auto_vec<bb_pair_t> bb_pair_vec_t;
 
 /* A node in the undirected CFG.  The discriminator SECOND indicates just
-   above or just below the BB idicated by FIRST.  */
+   above or just below the BB indicated by FIRST.  */
 typedef std::pair<basic_block, int> pseudo_node_t;
 
 /* A bracket indicates an edge towards the root of the spanning tree of the
    undirected graph.  Each bracket has a color, determined
-   from the currrent set of brackets.  */
+   from the current set of brackets.  */
 struct bracket
 {
   pseudo_node_t back; /* Back target */
@@ -4581,8 +4601,7 @@ nvptx_propagate (bool is_call, basic_block block, rtx_insn *insn,
 	}
       emit_insn (gen_rtx_CLOBBER (GET_MODE (tmp), tmp));
       emit_insn (gen_rtx_CLOBBER (GET_MODE (ptr), ptr));
-      rtx cpy = get_insns ();
-      end_sequence ();
+      rtx cpy = end_sequence ();
       insn = emit_insn_after (cpy, insn);
     }
 
@@ -4883,7 +4902,7 @@ verify_neutering_labels (basic_block to, rtx_insn *vector_label,
      <possibly-broadcast-cond>
      <branch>
 
-   We currently only use differnt FROM and TO when skipping an entire
+   We currently only use different FROM and TO when skipping an entire
    loop.  We could do more if we detected superblocks.  */
 
 static void
@@ -5413,7 +5432,7 @@ populate_offload_attrs (offload_attrs *oa)
 #if WORKAROUND_PTXJIT_BUG_2
 /* Variant of pc_set that only requires JUMP_P (INSN) if STRICT.  This variant
    is needed in the nvptx target because the branches generated for
-   parititioning are NONJUMP_INSN_P, not JUMP_P.  */
+   partitioning are NONJUMP_INSN_P, not JUMP_P.  */
 
 static rtx
 nvptx_pc_set (const rtx_insn *insn, bool strict = true)
@@ -5456,7 +5475,7 @@ nvptx_condjump_label (const rtx_insn *insn, bool strict = true)
 }
 
 /* Insert a dummy ptx insn when encountering a branch to a label with no ptx
-   insn inbetween the branch and the label.  This works around a JIT bug
+   insn in between the branch and the label.  This works around a JIT bug
    observed at driver version 384.111, at -O0 for sm_50.  */
 
 static void
@@ -5508,7 +5527,7 @@ prevent_branch_around_nothing (void)
 #endif
 
 #ifdef WORKAROUND_PTXJIT_BUG_3
-/* Insert two membar.cta insns inbetween two subsequent bar.sync insns.  This
+/* Insert two membar.cta insns in between two subsequent bar.sync insns.  This
    works around a hang observed at driver version 390.48 for sm_50.  */
 
 static void
@@ -5587,8 +5606,7 @@ workaround_uninit_method_1 (void)
       if (nvptx_comment && first != NULL)
 	emit_insn (gen_comment ("Start: Added by -minit-regs=1"));
       emit_move_insn (reg, CONST0_RTX (GET_MODE (reg)));
-      rtx_insn *inits = get_insns ();
-      end_sequence ();
+      rtx_insn *inits = end_sequence ();
 
       if (dump_file && (dump_flags & TDF_DETAILS))
 	for (rtx_insn *init = inits; init != NULL; init = NEXT_INSN (init))
@@ -5644,8 +5662,7 @@ workaround_uninit_method_2 (void)
       if (nvptx_comment && first != NULL)
 	emit_insn (gen_comment ("Start: Added by -minit-regs=2:"));
       emit_move_insn (reg, CONST0_RTX (GET_MODE (reg)));
-      rtx_insn *inits = get_insns ();
-      end_sequence ();
+      rtx_insn *inits = end_sequence ();
 
       if (dump_file && (dump_flags & TDF_DETAILS))
 	for (rtx_insn *init = inits; init != NULL; init = NEXT_INSN (init))
@@ -5715,8 +5732,7 @@ workaround_uninit_method_3 (void)
 
 	      start_sequence ();
 	      emit_move_insn (reg, CONST0_RTX (GET_MODE (reg)));
-	      rtx_insn *inits = get_insns ();
-	      end_sequence ();
+	      rtx_insn *inits = end_sequence ();
 
 	      if (dump_file && (dump_flags & TDF_DETAILS))
 		for (rtx_insn *init = inits; init != NULL;
@@ -5747,8 +5763,7 @@ workaround_uninit_method_3 (void)
 	    emit_insn (gen_comment ("Start: Added by -minit-regs=3:"));
 	    emit_insn (e->insns.r);
 	    emit_insn (gen_comment ("End: Added by -minit-regs=3:"));
-	    e->insns.r = get_insns ();
-	    end_sequence ();
+	    e->insns.r = end_sequence ();
 	  }
       }
 
@@ -7145,10 +7160,10 @@ nvptx_lockfull_update (location_t loc, gimple_stmt_iterator *gsi,
   return acc_out;
 }
 
-/* Emit a sequence to update a reduction accumlator at *PTR with the
+/* Emit a sequence to update a reduction accumulator at *PTR with the
    value held in VAR using operator OP.  Return the updated value.
 
-   TODO: optimize for atomic ops and indepedent complex ops.  */
+   TODO: optimize for atomic ops and independent complex ops.  */
 
 static tree
 nvptx_reduction_update (location_t loc, gimple_stmt_iterator *gsi,
@@ -7768,9 +7783,23 @@ nvptx_asm_output_def_from_decls (FILE *stream, tree name,
       return;
     }
 
+#ifdef ACCEL_COMPILER
  emit_ptx_alias:
+#endif
 
   cgraph_node *cnode = cgraph_node::get (name);
+#ifdef ACCEL_COMPILER
+  /* For nvptx offloading, make sure to emit C++ constructor, destructor aliases [PR97106]
+
+     For some reason (yet to be analyzed), they're not 'cnode->referred_to_p ()'.
+     (..., or that's not the right approach at all;
+     <https://inbox.sourceware.org/87v7rx8lbx.fsf@euler.schwinge.ddns.net>
+     "Re: [committed][nvptx] Use .alias directive for mptx >= 6.3").  */
+  if (DECL_CXX_CONSTRUCTOR_P (name)
+      || DECL_CXX_DESTRUCTOR_P (name))
+    ;
+  else
+#endif
   if (!cnode->referred_to_p ())
     /* Prevent "Internal error: reference to deleted section".  */
     return;
@@ -7875,8 +7904,6 @@ nvptx_asm_output_def_from_decls (FILE *stream, tree name,
 #define TARGET_ASM_DECLARE_CONSTANT_NAME nvptx_asm_declare_constant_name
 #undef TARGET_USE_BLOCKS_FOR_CONSTANT_P
 #define TARGET_USE_BLOCKS_FOR_CONSTANT_P hook_bool_mode_const_rtx_true
-#undef TARGET_ASM_NEED_VAR_DECL_BEFORE_USE
-#define TARGET_ASM_NEED_VAR_DECL_BEFORE_USE true
 
 #undef TARGET_MACHINE_DEPENDENT_REORG
 #define TARGET_MACHINE_DEPENDENT_REORG nvptx_reorg

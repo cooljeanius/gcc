@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2025 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -195,7 +195,9 @@ public:
     HIR::BlockExpr *loop_block
       = ASTLoweringBlock::translate (expr.get_loop_block (), &terminated);
 
-    HIR::LoopLabel loop_label = lower_loop_label (expr.get_loop_label ());
+    tl::optional<HIR::LoopLabel> loop_label = tl::nullopt;
+    if (expr.has_loop_label ())
+      loop_label = lower_loop_label (expr.get_loop_label ());
 
     auto crate_num = mappings.get_current_crate ();
     Analysis::NodeMapping mapping (crate_num, expr.get_node_id (),
@@ -210,8 +212,6 @@ public:
   }
 
   void visit (AST::WhileLoopExpr &expr) override;
-
-  void visit (AST::ForLoopExpr &expr) override;
 
   void visit (AST::MatchExpr &expr) override;
 

@@ -1,5 +1,5 @@
 /* Translation of constants
-   Copyright (C) 2002-2025 Free Software Foundation, Inc.
+   Copyright (C) 2002-2026 Free Software Foundation, Inc.
    Contributed by Paul Brook
 
 This file is part of GCC.
@@ -35,6 +35,8 @@ along with GCC; see the file COPYING3.  If not see
 #include "target-memory.h"
 
 tree gfc_rank_cst[GFC_MAX_DIMENSIONS + 1];
+tree gfc_index_zero_node;
+tree gfc_index_one_node;
 
 /* Build a constant with given type from an int_cst.  */
 
@@ -194,7 +196,10 @@ gfc_init_constants (void)
   int n;
 
   for (n = 0; n <= GFC_MAX_DIMENSIONS; n++)
-    gfc_rank_cst[n] = build_int_cst (gfc_array_index_type, n);
+    gfc_rank_cst[n] = build_int_cst (gfc_array_dim_rank_type, n);
+
+  gfc_index_zero_node = build_zero_cst (gfc_array_index_type);
+  gfc_index_one_node = build_one_cst (gfc_array_index_type);
 }
 
 /* Converts a GMP integer into a backend tree node.  */
@@ -438,4 +443,14 @@ gfc_conv_constant (gfc_se * se, gfc_expr * expr)
      structure, too.  */
   if (expr->ts.type == BT_CHARACTER)
     se->string_length = TYPE_MAX_VALUE (TYPE_DOMAIN (TREE_TYPE (se->expr)));
+
+  if (se->want_pointer)
+    {
+      if (expr->ts.type == BT_CHARACTER)
+	gfc_conv_string_parameter (se);
+      else
+	se->expr
+	  = gfc_build_addr_expr (NULL_TREE,
+				 gfc_trans_force_lval (&se->pre, se->expr));
+    }
 }

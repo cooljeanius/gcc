@@ -1,5 +1,5 @@
 /* Linux-specific atomic operations for NDS32 Linux.
-   Copyright (C) 2012-2025 Free Software Foundation, Inc.
+   Copyright (C) 2012-2026 Free Software Foundation, Inc.
 
 This file is free software; you can redistribute it and/or modify it
 under the terms of the GNU General Public License as published by the
@@ -24,7 +24,7 @@ see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
    using the kernel helper defined below.  There is no support for
    64-bit operations yet.  */
 
-/* This function copy form NDS32 Linux-kernal. */
+/* This function copy form NDS32 Linux-kernel. */
 static inline int
 __kernel_cmpxchg (int oldval, int newval, int *mem)
 {

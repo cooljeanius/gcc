@@ -1,5 +1,5 @@
 /* Post reload partially redundant load elimination
-   Copyright (C) 2004-2025 Free Software Foundation, Inc.
+   Copyright (C) 2004-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -1372,7 +1372,7 @@ gcse_after_reload_main (rtx f ATTRIBUTE_UNUSED)
 
   if (!expr_table->is_empty ())
     {
-      /* Knowing which MEMs are transparent through a block can signifiantly
+      /* Knowing which MEMs are transparent through a block can significantly
 	 increase the number of redundant loads found.  So compute transparency
 	 information for each memory expression in the hash table.  */
       df_analyze ();

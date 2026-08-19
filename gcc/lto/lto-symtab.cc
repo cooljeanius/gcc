@@ -1,5 +1,5 @@
 /* LTO symbol table.
-   Copyright (C) 2009-2025 Free Software Foundation, Inc.
+   Copyright (C) 2009-2026 Free Software Foundation, Inc.
    Contributed by CodeSourcery, Inc.
 
 This file is part of GCC.
@@ -61,6 +61,10 @@ lto_cgraph_replace_node (struct cgraph_node *node,
     prevailing_node->mark_force_output ();
   if (node->forced_by_abi)
     prevailing_node->forced_by_abi = true;
+  prevailing_node->ref_by_asm |= node->ref_by_asm;
+  prevailing_node->must_remain_in_tu_name |= node->must_remain_in_tu_name;
+  prevailing_node->must_remain_in_tu_body |= node->must_remain_in_tu_body;
+
   if (node->address_taken)
     {
       gcc_assert (!prevailing_node->inlined_to);
@@ -95,7 +99,7 @@ lto_cgraph_replace_node (struct cgraph_node *node,
 	  e->call_stmt_cannot_inline_p = 1;
 	}
     }
-  /* Redirect incomming references.  */
+  /* Redirect incoming references.  */
   prevailing_node->clone_referring (node);
   lto_free_function_in_decl_state_for_node (node);
 
@@ -121,6 +125,9 @@ lto_varpool_replace_node (varpool_node *vnode,
     prevailing_node->force_output = true;
   if (vnode->forced_by_abi)
     prevailing_node->forced_by_abi = true;
+  prevailing_node->ref_by_asm |= vnode->ref_by_asm;
+  prevailing_node->must_remain_in_tu_name |= vnode->must_remain_in_tu_name;
+  prevailing_node->must_remain_in_tu_body |= vnode->must_remain_in_tu_body;
 
   /* Be sure we can garbage collect the initializer.  */
   if (DECL_INITIAL (vnode->decl)
@@ -176,7 +183,7 @@ lto_varpool_replace_node (varpool_node *vnode,
   vnode->remove ();
 }
 
-/* Return non-zero if we want to output waring about T1 and T2.
+/* Return non-zero if we want to output warning about T1 and T2.
    Return value is a bitmask of reasons of violation:
    Bit 0 indicates that types are not compatible.
    Bit 1 indicates that types are not compatible because of C++ ODR rule.
@@ -193,7 +200,7 @@ lto_varpool_replace_node (varpool_node *vnode,
    -fno-strict-aliasing which may be tough of as a feature rather than bug
    as it allows to implement dodgy tricks in the language runtimes.
 
-   Naturally this code can be strenghtened significantly if we could track
+   Naturally this code can be strengthened significantly if we could track
    down the language of origin.  */
 
 static int
@@ -953,11 +960,7 @@ lto_symtab_merge_symbols_1 (symtab_node *prevailing)
 	  else
 	    {
 	      DECL_INITIAL (e->decl) = error_mark_node;
-	      if (e->lto_file_data)
-		{
-		  lto_free_function_in_decl_state_for_node (e);
-		  e->lto_file_data = NULL;
-		}
+	      lto_free_function_in_decl_state_for_node (e);
 	      symtab->call_varpool_removal_hooks (dyn_cast<varpool_node *> (e));
 	    }
 	  e->remove_all_references ();
@@ -984,7 +987,7 @@ lto_symtab_merge_symbols (void)
 
       /* Do the actual merging.
 	 At this point we invalidate hash translating decls into symtab nodes
-	 because after removing one of duplicate decls the hash is not correcly
+	 because after removing one of duplicate decls the hash is not correctly
 	 updated to the other duplicate.  */
       FOR_EACH_SYMBOL (node)
 	if (lto_symtab_symbol_p (node)
@@ -1040,6 +1043,7 @@ lto_symtab_merge_symbols (void)
 		      node->analyzed = node->definition = false;
 		      node->remove_all_references ();
 		    }
+		  node->body_removed = true;
 		}
 	      DECL_EXTERNAL (node->decl) = 1;
 	    }
@@ -1085,7 +1089,7 @@ lto_symtab_merge_symbols (void)
    devirtualization.
    For this reason it is important to merge even virtual tables that have no
    associated symbol table entries.  Without doing so we lose optimization
-   oppurtunities by losing track of the vtable constructor.
+   opportunities by losing track of the vtable constructor.
    FIXME: we probably ought to introduce explicit symbol table entries for
    those before streaming.  */
 

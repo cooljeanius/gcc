@@ -1,6 +1,6 @@
 /* Subroutines used for code generation for RISC-V 'V' Extension for
    GNU compiler.
-   Copyright (C) 2022-2025 Free Software Foundation, Inc.
+   Copyright (C) 2022-2026 Free Software Foundation, Inc.
    Contributed by Juzhe Zhong (juzhe.zhong@rivai.ai), RiVAI Technologies Ltd.
 
    This file is part of GCC.
@@ -83,7 +83,7 @@ private:
   unsigned int m_inner_bytes_size;
 };
 
-extern bool valid_vec_immediate_p(rtx);
+extern bool valid_vec_immediate_p (rtx);
 
 } // namespace riscv_vector
 

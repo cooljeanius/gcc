@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2025 Free Software Foundation, Inc.
+/* Copyright (C) 2007-2026 Free Software Foundation, Inc.
    Contributed by Richard Henderson <rth@redhat.com>.
 
    This file is part of the GNU Offloading and Multi Processing Library
@@ -936,12 +936,25 @@ gomp_create_target_task (struct gomp_device_descr *devicep,
 	}
     }
 
-  task = gomp_malloc (sizeof (*task) + depend_size
-		      + sizeof (*ttask)
-		      + args_cnt * sizeof (void *)
-		      + mapnum * (sizeof (void *) + sizeof (size_t)
-				  + sizeof (unsigned short))
-		      + tgt_size);
+  size_t task_alloc_size = (sizeof (*task) + depend_size
+		       + sizeof (*ttask)
+		       + args_cnt * sizeof (void *)
+		       + mapnum * (sizeof (void *) + sizeof (size_t)
+				   + sizeof (unsigned short))
+		       + tgt_size);
+  size_t session_start_offset = 0;
+  if (devicep && devicep->session.size)
+    {
+      /* gomp_malloc always aligns to __BIGGEST_ALIGNMENT__, so, we can just
+	 round up the size to preserve that alignment...  */
+      size_t align = __BIGGEST_ALIGNMENT__ - 1;
+      task_alloc_size = (task_alloc_size + align) & ~align;
+      session_start_offset = task_alloc_size;
+
+      /* ... and reserve enough room.  */
+      task_alloc_size += devicep->session.size;
+    }
+  task = gomp_malloc (task_alloc_size);
   gomp_init_task (task, parent, gomp_icv (false));
   task->priority = 0;
   task->kind = GOMP_TASK_WAITING;
@@ -951,6 +964,14 @@ gomp_create_target_task (struct gomp_device_descr *devicep,
   ttask->devicep = devicep;
   ttask->fn = fn;
   ttask->mapnum = mapnum;
+
+  ttask->offload_session = NULL;
+  if (session_start_offset)
+    {
+      uintptr_t session_ptr = (uintptr_t) task + session_start_offset;
+      ttask->offload_session = (void *) session_ptr;
+    }
+
   memcpy (ttask->hostaddrs, hostaddrs, mapnum * sizeof (void *));
   if (args_cnt)
     {
@@ -1559,6 +1580,23 @@ gomp_barrier_handle_tasks (gomp_barrier_state_t state)
   int do_wake = 0;
 
   gomp_mutex_lock (&team->task_lock);
+  /* Avoid running tasks from next task scheduling region (PR122314).
+     N.b. we check that `team->task_count != 0` in order to avoid the
+     non-atomic read of `bar->generation` "conflicting" (in the C standard
+     sense) with the atomic write of `bar->generation` in
+     `gomp_team_barrier_wait_end`.  That conflict would otherwise be a
+     data-race and hence UB.  One alternate approach could have been to
+     atomically load `bar->generation` in `gomp_barrier_has_completed`.
+
+     When `task_count == 0` we're not going to perform tasks anyway, so the
+     problem of PR122314 is naturally avoided.  */
+  if (team->task_count != 0
+      && gomp_barrier_has_completed (state, &team->barrier))
+    {
+      gomp_mutex_unlock (&team->task_lock);
+      return;
+    }
+
   if (gomp_barrier_last_thread (state))
     {
       if (team->task_count == 0)
@@ -1685,7 +1723,13 @@ gomp_barrier_handle_tasks (gomp_barrier_state_t state)
 	      if (do_wake > new_tasks)
 		do_wake = new_tasks;
 	    }
-	  --team->task_count;
+	  /* Need to use RELEASE to sync with barrier read outside of the
+	     tasking code (See PR122356).  Only care when decrementing to zero
+	     because that's what the barrier cares about.  */
+	  if (team->task_count == 1)
+	    __atomic_store_n (&team->task_count, 0, MEMMODEL_RELEASE);
+	  else
+	    team->task_count--;
 	}
     }
 }

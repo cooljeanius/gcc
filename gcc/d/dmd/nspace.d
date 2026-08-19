@@ -36,12 +36,12 @@
  * are valid D identifier.
  *
  * See_Also:    https://github.com/dlang/dmd/pull/10031
- * Copyright:   Copyright (C) 1999-2025 by The D Language Foundation, All Rights Reserved
+ * Copyright:   Copyright (C) 1999-2026 by The D Language Foundation, All Rights Reserved
  * Authors:     $(LINK2 https://www.digitalmars.com, Walter Bright)
  * License:     $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
- * Source:      $(LINK2 https://github.com/dlang/dmd/blob/master/src/dmd/nspace.d, _nspace.d)
+ * Source:      $(LINK2 https://github.com/dlang/dmd/blob/master/compiler/src/dmd/nspace.d, _nspace.d)
  * Documentation:  https://dlang.org/phobos/dmd_nspace.html
- * Coverage:    https://codecov.io/gh/dlang/dmd/src/master/src/dmd/nspace.d
+ * Coverage:    https://codecov.io/gh/dlang/dmd/src/master/compiler/src/dmd/nspace.d
  */
 
 module dmd.nspace;
@@ -76,12 +76,6 @@ extern (C++) final class Nspace : ScopeDsymbol
         auto ns = new Nspace(loc, ident, identExp, null);
         ScopeDsymbol.syntaxCopy(ns);
         return ns;
-    }
-
-    override bool hasPointers()
-    {
-        //printf("Nspace::hasPointers() %s\n", toChars());
-        return members.foreachDsymbol( (s) { return s.hasPointers(); } ) != 0;
     }
 
     override const(char)* kind() const

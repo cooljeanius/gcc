@@ -1,5 +1,5 @@
 ;; Constraint definitions of Andes NDS32 cpu for GNU compiler
-;; Copyright (C) 2012-2025 Free Software Foundation, Inc.
+;; Copyright (C) 2012-2026 Free Software Foundation, Inc.
 ;; Contributed by Andes Technology Corporation.
 ;;
 ;; This file is part of GCC.
@@ -20,7 +20,7 @@
 
 ;; Check 16.8.7 Defining Machine-Specific Constraints for detail.
 
-;; NO contrains can be prefixed with: E F V X g i m n o p r s
+;; NO constraints can be prefixed with: E F V X g i m n o p r s
 ;; Machine-dependent integer: I J K L M N O P
 ;; Machine-dependent floating: G H
 

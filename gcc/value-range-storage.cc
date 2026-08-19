@@ -1,5 +1,5 @@
 /* Support routines for vrange storage.
-   Copyright (C) 2022-2025 Free Software Foundation, Inc.
+   Copyright (C) 2022-2026 Free Software Foundation, Inc.
    Contributed by Aldy Hernandez <aldyh@redhat.com>.
 
 This file is part of GCC.
@@ -24,6 +24,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "backend.h"
 #include "tree.h"
 #include "gimple.h"
+#include "gimplify.h"
 #include "ssa.h"
 #include "tree-pretty-print.h"
 #include "fold-const.h"
@@ -108,9 +109,9 @@ vrange_allocator::free (void *p)
 // it.
 
 vrange_storage *
-vrange_allocator::clone (const vrange &r)
+vrange_allocator::clone (const vrange &r, bool shared_p)
 {
-  return vrange_storage::alloc (*m_alloc, r);
+  return vrange_storage::alloc (*m_alloc, r, shared_p);
 }
 
 vrange_storage *
@@ -141,12 +142,13 @@ vrange_allocator::clone_undefined (tree type)
 // it.  Return NULL if R is unsupported.
 
 vrange_storage *
-vrange_storage::alloc (vrange_internal_alloc &allocator, const vrange &r)
+vrange_storage::alloc (vrange_internal_alloc &allocator, const vrange &r,
+		       bool shared_p)
 {
   if (is_a <irange> (r))
     return irange_storage::alloc (allocator, as_a <irange> (r));
   if (is_a <prange> (r))
-    return prange_storage::alloc (allocator, as_a <prange> (r));
+    return prange_storage::alloc (allocator, as_a <prange> (r), shared_p);
   if (is_a <frange> (r))
     return frange_storage::alloc (allocator, as_a <frange> (r));
   return NULL;
@@ -296,7 +298,7 @@ irange_storage::alloc (vrange_internal_alloc &allocator, const irange &r)
 // Initialize the storage with R.
 
 irange_storage::irange_storage (const irange &r)
-  : m_max_ranges (r.num_pairs ())
+  : vrange_storage (VR_IRANGE), m_max_ranges (r.num_pairs ())
 {
   m_num_ranges = m_max_ranges;
   set_irange (r);
@@ -505,15 +507,29 @@ debug (const irange_storage &storage)
 // frange_storage implementation
 //============================================================================
 
+// Return the number of bytes to allocate for an frange_storage holding R.
+
+size_t
+frange_storage::size (const frange &r)
+{
+  return sizeof (frange_storage) + (r.num_pairs () - 1) * sizeof (frange_pair);
+}
+
 // Allocate a new frange_storage object initialized to R.
 
 frange_storage *
 frange_storage::alloc (vrange_internal_alloc &allocator, const frange &r)
 {
-  size_t size = sizeof (frange_storage);
-  frange_storage *p = static_cast <frange_storage *> (allocator.alloc (size));
+  frange_storage *p
+    = static_cast <frange_storage *> (allocator.alloc (size (r)));
   new (p) frange_storage (r);
   return p;
+}
+
+frange_storage::frange_storage (const frange &r)
+  : vrange_storage (VR_FRANGE), m_max_ranges (r.num_pairs ())
+{
+  set_frange (r);
 }
 
 void
@@ -522,8 +538,9 @@ frange_storage::set_frange (const frange &r)
   gcc_checking_assert (fits_p (r));
 
   m_kind = r.m_kind;
-  m_min = r.m_min;
-  m_max = r.m_max;
+  m_num_ranges = r.m_num_ranges;
+  for (unsigned i = 0; i < r.m_num_ranges; ++i)
+    m_pairs[i] = r.m_pairs[i];
   m_pos_nan = r.m_pos_nan;
   m_neg_nan = r.m_neg_nan;
 }
@@ -552,14 +569,19 @@ frange_storage::get_frange (frange &r, tree type) const
       r.set_undefined ();
       return;
     }
+  if (m_kind == VR_VARYING)
+    {
+      r.set_varying (type);
+      return;
+    }
 
-  // We use the constructor to create the new range instead of writing
-  // out the bits into the frange directly, because the global range
-  // being read may be being inlined into a function with different
-  // restrictions as when it was originally written.  We want to make
-  // sure the resulting range is canonicalized correctly for the new
-  // consumer.
-  r = frange (type, m_min, m_max, m_kind);
+  // Rebuild piecewise, like irange_storage::get_irange().
+  r.set_undefined ();
+  for (unsigned i = 0; i < m_num_ranges; ++i)
+    {
+      frange tmp (type, m_pairs[i].min, m_pairs[i].max, m_kind);
+      r.union_ (tmp);
+    }
 
   // The constructor will set the NAN bits for HONOR_NANS, but we must
   // make sure to set the NAN sign if known.
@@ -581,9 +603,9 @@ frange_storage::equal_p (const frange &r) const
 }
 
 bool
-frange_storage::fits_p (const frange &) const
+frange_storage::fits_p (const frange &r) const
 {
-  return true;
+  return m_max_ranges >= r.num_pairs ();
 }
 
 //============================================================================
@@ -591,85 +613,252 @@ frange_storage::fits_p (const frange &) const
 //============================================================================
 
 prange_storage *
-prange_storage::alloc (vrange_internal_alloc &allocator, const prange &r)
+prange_storage::alloc (vrange_internal_alloc &allocator, const prange &r,
+		       bool shared_p)
 {
-  size_t size = sizeof (prange_storage);
-  if (!r.undefined_p ())
+  unsigned num_words;
+  prange_format (r, num_words);
+  size_t extra_size = 0;
+  if (num_words)
     {
-      unsigned prec = TYPE_PRECISION (r.type ());
-      size += trailing_wide_ints<NINTS>::extra_size (prec);
+      unsigned short precision = TYPE_PRECISION (r.type ());
+      extra_size = trailing_wide_ints<PRANGE_STORAGE_NINTS>
+		     ::extra_size (precision, num_words);
     }
+
+  size_t size = sizeof (prange_storage) + extra_size;
   prange_storage *p = static_cast <prange_storage *> (allocator.alloc (size));
   new (p) prange_storage (r);
+  if (p->m_pt && !shared_p)
+    p->m_pt = unshare_expr_without_location (p->m_pt);
+
   return p;
 }
 
 // Initialize the storage with R.
 
-prange_storage::prange_storage (const prange &r)
+prange_storage::prange_storage (const prange &r) : vrange_storage (VR_PRANGE)
 {
-  // It is the caller's responsibility to allocate enough space such
-  // that the precision fits.
-  if (r.undefined_p ())
-    // Undefined ranges do not require any extra space for trailing
-    // wide ints.
-    m_trailing_ints.set_precision (0);
-  else
-    m_trailing_ints.set_precision (TYPE_PRECISION (r.type ()));
-
+  unsigned num_words;
+  enum prange_kind kind = prange_format (r, num_words);
+  unsigned short prec = (kind == PR_UNDEFINED) ? 0 : TYPE_PRECISION (r.type ());
+  m_trailing_ints.set_precision (prec, num_words);
   set_prange (r);
+}
+
+// Return TRUE if R is exactly the nonzero set [1, MAX], which prange_storage
+// encodes compactly as PR_NONZERO.
+//
+// Compare the bounds against a fresh set_nonzero () rather than using
+// prange::operator==, because operator== also compares the bitmask and
+// points-to info, which are stored separately here, so a non-null pointer that
+// also carries e.g. an alignment bitmask still belongs in PR_NONZERO.
+
+static inline bool
+nonzero_range_p (const prange &r)
+{
+  prange nonzero (r.type ());
+  nonzero.set_nonzero (r.type ());
+  return (r.lower_bound () == nonzero.lower_bound ()
+	  && r.upper_bound () == nonzero.upper_bound ());
+}
+
+// Return the prange_kind for range R, and the number of words of storage
+// it requires in NUM_WORDS.
+
+enum prange_kind
+prange_storage::prange_format (const prange &r, unsigned &num_words)
+{
+  num_words = 0;
+  if (r.undefined_p ())
+    return PR_UNDEFINED;
+
+  if (r.varying_p ())
+    return PR_VARYING;
+
+  if (r.zero_p ())
+    return PR_ZERO;
+
+  enum prange_kind kind = PR_NONZERO;
+
+  if (!nonzero_range_p (r))
+    {
+      prange tmp (r.type ());
+      if (r.lower_bound () == tmp.lower_bound ()
+	  && r.upper_bound () == tmp.upper_bound ())
+	kind = PR_FULL;
+      else
+	{
+	  // PR_OTHER requires words of storage for the end points.
+	  kind = PR_OTHER;
+	  num_words += 2;
+	}
+    }
+
+  // Bitmasks require 2 words of storage.
+  if (!r.get_bitmask ().unknown_p ())
+    num_words += 2;
+
+  // PR_FULL must have a bitmask or points to, or it should be PR_VARYING.
+  gcc_checking_assert (kind != PR_FULL || !r.get_bitmask ().unknown_p ()
+		       || r.m_pt != NULL_TREE);
+  return kind;
 }
 
 void
 prange_storage::set_prange (const prange &r)
 {
-  if (r.undefined_p ())
-    m_kind = VR_UNDEFINED;
-  else if (r.varying_p ())
-    m_kind = VR_VARYING;
-  else
+  unsigned num_words;
+  m_kind = prange_format (r, num_words);
+  m_has_bitmask = !r.get_bitmask ().unknown_p ();
+  m_pt = r.m_pt;
+  m_points_to_p = r.m_points_to_p;
+
+  unsigned index = 0;
+
+  switch (m_kind)
     {
-      m_kind = VR_RANGE;
-      set_low (r.lower_bound ());
-      set_high (r.upper_bound ());
-      irange_bitmask bm = r.m_bitmask;
-      set_value (bm.value ());
-      set_mask (bm.mask ());
+      case PR_UNDEFINED:
+      case PR_VARYING:
+      case PR_ZERO:
+	return;
+      case PR_NONZERO:
+      case PR_FULL:
+	break;
+      case PR_OTHER:
+	set_word (index++, r.lower_bound (), r.type ());
+	set_word (index++, r.upper_bound (), r.type ());
+	break;
+      default:
+	gcc_unreachable ();
     }
+
+  if (m_has_bitmask)
+    {
+      irange_bitmask bm = r.m_bitmask;
+      set_word (index++, r.m_bitmask.value (), r.type ());
+      set_word (index++, r.m_bitmask.mask (), r.type ());
+    }
+  gcc_checking_assert (index == num_words);
 }
 
 void
 prange_storage::get_prange (prange &r, tree type) const
 {
   gcc_checking_assert (r.supports_type_p (type));
-
-  if (m_kind == VR_UNDEFINED)
-    r.set_undefined ();
-  else if (m_kind == VR_VARYING)
-    r.set_varying (type);
-  else
+  unsigned index = 0;
+  switch (m_kind)
     {
-      gcc_checking_assert (m_kind == VR_RANGE);
-      gcc_checking_assert (TYPE_PRECISION (type) == m_trailing_ints.get_precision ());
-      r.m_kind = VR_RANGE;
-      r.m_type = type;
-      r.m_min = get_low ();
-      r.m_max = get_high ();
-      r.m_bitmask = irange_bitmask (get_value (), get_mask ());
-      if (flag_checking)
-	r.verify_range ();
+      case PR_UNDEFINED:
+	r.set_undefined ();
+	return;
+
+      case PR_VARYING:
+	r.set_varying (type);
+	return;
+
+      case PR_ZERO:
+	r.set_zero (type);
+	return;
+
+      case PR_NONZERO:
+	r.set_nonzero (type);
+	break;
+
+      case PR_FULL:
+	{
+	  r.m_kind = VR_RANGE;
+	  r.m_type = type;
+	  prange tmp (type);
+	  r.m_min = tmp.lower_bound ();
+	  r.m_max = tmp.upper_bound ();
+	  break;
+	}
+
+      case PR_OTHER:
+	{
+	  gcc_checking_assert (m_kind == PR_OTHER);
+	  r.m_kind = VR_RANGE;
+	  r.m_type = type;
+	  r.m_min = get_word (index++, type);
+	  r.m_max = get_word (index++, type);
+	  break;
+	}
+      default:
+	gcc_unreachable ();
     }
+
+  if (m_has_bitmask)
+    {
+      wide_int value = get_word (index++, type);
+      wide_int mask = get_word (index++, type);
+      r.m_bitmask = irange_bitmask (value, mask);
+    }
+  else
+    r.m_bitmask.set_unknown (TYPE_PRECISION (type));
+
+  r.m_points_to_p = m_points_to_p;
+  r.m_pt = m_pt;
+
+  if (flag_checking)
+    r.verify_range ();
 }
 
 bool
 prange_storage::equal_p (const prange &r) const
 {
   if (r.undefined_p ())
-    return m_kind == VR_UNDEFINED;
+    return m_kind == PR_UNDEFINED;
 
-  prange tmp;
-  get_prange (tmp, r.type ());
-  return tmp == r;
+  unsigned index = 0;
+  switch (m_kind)
+    {
+      case PR_VARYING:
+	return r.varying_p ();
+
+      case PR_ZERO:
+	return r.zero_p ();
+
+      case PR_NONZERO:
+	if (!nonzero_range_p (r))
+	  return false;
+	break;
+
+      case PR_FULL:
+	if (r.m_min != wi::zero (TYPE_PRECISION (r.m_type))
+	    || r.m_max != wi::max_value (TYPE_PRECISION (r.m_type),
+					 TYPE_SIGN (r.m_type)))
+	  return false;
+	break;
+
+      case PR_OTHER:
+	if (r.m_min != get_word (index++, r.m_type)
+	    || r.m_max != get_word (index++, r.m_type))
+	  return false;
+	break;
+
+      default:
+	gcc_unreachable ();
+    }
+
+  if (m_has_bitmask)
+    {
+      wide_int value = get_word (index++, r.m_type);
+      wide_int mask = get_word (index++, r.m_type);
+      if (r.m_bitmask != irange_bitmask (value, mask))
+	return false;
+    }
+  else
+    if (!r.m_bitmask.unknown_p ())
+      return false;
+
+  if (m_pt != r.m_pt)
+    return false;
+  // Storage objects are only equal If they point to the same memory.
+  if (m_points_to_p != r.m_points_to_p)
+    return false;
+
+  return true;
 }
 
 bool
@@ -680,7 +869,9 @@ prange_storage::fits_p (const prange &r) const
   if (r.undefined_p ())
     return true;
 
-  return TYPE_PRECISION (r.type ()) <= m_trailing_ints.get_precision ();
+  unsigned num_words;
+  prange_format (r, num_words);
+  return num_words <= m_trailing_ints.num_elements ();
 }
 
 
@@ -691,7 +882,7 @@ vrange_storage *ggc_alloc_vrange_storage (tree type)
   return ggc_vrange_allocator.clone_varying (type);
 }
 
-vrange_storage *ggc_alloc_vrange_storage (const vrange &r)
+vrange_storage *ggc_alloc_vrange_storage (const vrange &r, bool shared_p)
 {
-  return ggc_vrange_allocator.clone (r);
+  return ggc_vrange_allocator.clone (r, shared_p);
 }

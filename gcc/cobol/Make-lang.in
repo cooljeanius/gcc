@@ -1,5 +1,5 @@
 # Top level -*- makefile -*- fragment for Cobol
-#   Copyright (C) 2021-2025 Free Software Foundation, Inc.
+#   Copyright (C) 2021-2026 Free Software Foundation, Inc.
 
 # This file is part of GCC.
 
@@ -34,11 +34,17 @@
 # - the compiler proper (eg: cc1plus)
 # - define the names for selecting the language in LANGUAGES.
 
+# Use strict warnings for this front end.
+cobol-warn = $(STRICT_WARN)
+
 GCOBOL_INSTALL_NAME := $(shell echo gcobol|sed '$(program_transform_name)')
+GCOBOLIO_INSTALL_NAME := $(shell echo gcobol-io|sed '$(program_transform_name)')
 GCOBOL_TARGET_INSTALL_NAME := $(target_noncanonical)-$(shell echo gcobol|sed '$(program_transform_name)')
 
 GCOBC_INSTALL_NAME := $(shell echo gcobc|sed '$(program_transform_name)')
 GCOBC_TARGET_INSTALL_NAME := $(target_noncanonical)-$(shell echo gcobc|sed '$(program_transform_name)')
+
+GCOBOL_HTML_FILES = $(addprefix $(build_htmldir)/gcobol/,gcobol.html gcobol-io.html)
 
 cobol: cobol1$(exeext)
 cobol.serial = cobol1$(exeext)
@@ -58,6 +64,7 @@ cobol1_OBJS =    \
  cobol/cdf.o        \
  cobol/cdf-copy.o   \
  cobol/cobol1.o     \
+ cobol/compare.o    \
  cobol/convert.o    \
  cobol/except.o     \
  cobol/genutil.o    \
@@ -65,6 +72,8 @@ cobol1_OBJS =    \
  cobol/genmath.o    \
  cobol/gengen.o     \
  cobol/lexio.o      \
+ cobol/move.o       \
+ cobol/messages.o   \
  cobol/parse.o      \
  cobol/scan.o       \
  cobol/structs.o    \
@@ -84,32 +93,9 @@ cobol1_OBJS =    \
 # on all of the libgcobol/*.h files, which might lead to the occasional
 # unnecessary compilation.  The impact of that is negligible.
 #
-# Various #includes in the files copied from gcc/libgcobol need to be modified
-# so that the .h files can be found.
 
-cobol/charmaps.cc: $(LIB_SOURCE)/charmaps.cc
+cobol/charmaps.cc cobol/valconv.cc: cobol/%.cc: $(LIB_SOURCE)/%.cc
 	cp $^ $@
-	sed -i "s|\"ec[.]h\"|\"$(LIB_SOURCE)/ec.h\"|g" $@
-	sed -i "s|\"common-defs[.]h\"|\"$(LIB_SOURCE)/common-defs.h\"|g" $@
-	sed -i "s|\"io[.]h\"|\"$(LIB_SOURCE)/io.h\"|g" $@
-	sed -i "s|\"gcobolio[.]h\"|\"$(LIB_SOURCE)/gcobolio.h\"|g" $@
-	sed -i "s|\"libgcobol[.]h\"|\"$(LIB_SOURCE)/libgcobol.h\"|g" $@
-	sed -i "s|\"gfileio[.]h\"|\"$(LIB_SOURCE)/gfileio.h\"|g" $@
-	sed -i "s|\"charmaps[.]h\"|\"$(LIB_SOURCE)/charmaps.h\"|g" $@
-	sed -i "s|\"valconv[.]h\"|\"$(LIB_SOURCE)/valconv.h\"|g" $@
-	sed -i "s|\"exceptl[.]h\"|\"$(LIB_SOURCE)/exceptl.h\"|g" $@
-
-cobol/valconv.cc: $(LIB_SOURCE)/valconv.cc
-	cp $^ $@
-	sed -i "s|\"ec[.]h\"|\"$(LIB_SOURCE)/ec.h\"|g" $@
-	sed -i "s|\"common-defs[.]h\"|\"$(LIB_SOURCE)/common-defs.h\"|g" $@
-	sed -i "s|\"io[.]h\"|\"$(LIB_SOURCE)/io.h\"|g" $@
-	sed -i "s|\"gcobolio[.]h\"|\"$(LIB_SOURCE)/gcobolio.h\"|g" $@
-	sed -i "s|\"libgcobol[.]h\"|\"$(LIB_SOURCE)/libgcobol.h\"|g" $@
-	sed -i "s|\"gfileio[.]h\"|\"$(LIB_SOURCE)/gfileio.h\"|g" $@
-	sed -i "s|\"charmaps[.]h\"|\"$(LIB_SOURCE)/charmaps.h\"|g" $@
-	sed -i "s|\"valconv[.]h\"|\"$(LIB_SOURCE)/valconv.h\"|g" $@
-	sed -i "s|\"exceptl[.]h\"|\"$(LIB_SOURCE)/exceptl.h\"|g" $@
 
 LIB_SOURCE_H=$(wildcard $(LIB_SOURCE)/*.h)
 
@@ -138,6 +124,8 @@ cobol_OBJS = \
 #
 CFLAGS-cobol/gcobolspec.o += $(DRIVER_DEFINES)
 
+CFLAGS-cobol/cobol1.o += -DLIBSUBDIR=\"$(libsubdir)\"
+
 #
 # This controls the build of the gcobol "driver"
 #
@@ -162,6 +150,7 @@ gcobol-cross$(exeext): gcobol$(exeext)
 # First, files needed for parsing:
 
 cobol/parse.cc: cobol/parse.y
+	$(BISON) --version | grep ^bison
 	$(BISON) -o $@ $(YFLAGS)				\
 		--defines=cobol/parse.h			\
 		--report-file=cobol/parser.out $<
@@ -175,11 +164,9 @@ cobol/cdf.cc: cobol/cdf.y
 FLEX_WARNING = warning, dangerous trailing context
 
 cobol/scan.cc: cobol/scan.l
-	$(FLEX) -o$@ $(LFLAGS) $< >$@~ 2>&1
+	$(FLEX) -o$@ $(LFLAGS) $< 2>$@~ || { cat $@~ >&1; exit 1; }
 	awk  '! /$(FLEX_WARNING)/ {print > "/dev/stderr"; nerr++}	\
-	     END {print "$(FLEX):", NR, "messages" > "/dev/stderr";	\
-		  exit nerr}' $@~
-	@rm $@~
+	     END {print "$(FLEX):", NR, "messages" > "/dev/stderr"}' $@~
 
 
 # To establish prerequisites for parse.o, cdf.o, and scan.o,
@@ -241,6 +228,7 @@ cobol/scan.o: cobol/scan.cc			\
 	$(srcdir)/cobol/scan_post.h		\
 	$(srcdir)/cobol/symbols.h		\
 	$(srcdir)/cobol/util.h			\
+	$(srcdir)/cobol/token_names.h		\
 	$(srcdir)/hwint.h			\
 	$(srcdir)/system.h			\
 	$(srcdir)/../include/ansidecl.h		\
@@ -257,6 +245,23 @@ cobol/scan.o: cobol/scan.cc			\
 	cobol/cdf.cc				\
 	cobol/parse.cc
 
+# As opposed to other objects, gcobc is a shell script and therefore
+# is only installed. In other words,no build step is necessary.
+# However, some tests rely on gcobc being available from the build tree.
+gcobc$(exeext): $(srcdir)/cobol/gcobc
+	cp $< $@
+
+cobol: gcobc$(exeext)
+
+# Update token names if the generator script is installed
+# (by a developer) and there's been a change. 
+$(srcdir)/cobol/token_names.h: cobol/parse.cc
+	@if [ -f $@.gen ]; then			\
+		$@.gen $(subst .cc,.h,$^)	\
+		| diff -u $@ -			\
+		| patch -t --set-time $@ ;	\
+	fi
+
 #
 # The src<foo> targets are executed if
 # ‘--enable-generated-files-in-srcdir’ was specified as a configure
@@ -272,8 +277,9 @@ cobol/scan.o: cobol/scan.cc			\
 # output, and do not require those tools to be installed.
 #
 cobol.srcextra: cobol/parse.cc cobol/cdf.cc cobol/scan.cc
-	ln -f $^ cobol/parse.h cobol/cdf.h $(srcdir)/cobol/
-
+	-for i in $^ cobol/parse.h cobol/cdf.h; do \
+	  sed -e '/^#line/s,"\(.*gcc/\)\?cobol/\([^/]*\.\([ylh]\|cc\)\)","\2",' $$i \
+	    > $(srcdir)/$$i; done
 
 # And the cobol1 front end
 
@@ -302,16 +308,14 @@ cobol.install-common: installdirs
 	    rm -f $(DESTDIR)$(bindir)/$(GCOBOL_TARGET_INSTALL_NAME)$(exeext); \
 	    rm -f $(DESTDIR)$(bindir)/$(GCOBC_TARGET_INSTALL_NAME)$(exeext); \
 	    ( cd $(DESTDIR)$(bindir) && \
-	      $(LN) $(GCOBOL_INSTALL_NAME)$(exeext) $(GCOBOL_TARGET_INSTALL_NAME)$(exeext) ); \
+	      $(LN) $(GCOBOL_INSTALL_NAME)$(exeext) $(GCOBOL_TARGET_INSTALL_NAME)$(exeext) && \
 	      $(LN) $(GCOBC_INSTALL_NAME)$(exeext) $(GCOBC_TARGET_INSTALL_NAME)$(exeext) ); \
 	  fi; \
 	fi
-	mkdir -p $(DESTDIR)$(datadir)/gcobol/udf
-	$(INSTALL_DATA) $(srcdir)/cobol/udf/*   $(DESTDIR)$(datadir)/gcobol/udf/
 
 cobol.install-man: installdirs
 	$(INSTALL_DATA) $(srcdir)/cobol/gcobol.1 $(DESTDIR)$(man1dir)/$(GCOBOL_INSTALL_NAME)$(man1ext)
-	$(INSTALL_DATA) $(srcdir)/cobol/gcobol.3 $(DESTDIR)$(man3dir)/
+	$(INSTALL_DATA) $(srcdir)/cobol/gcobol.3 $(DESTDIR)$(man3dir)/$(GCOBOLIO_INSTALL_NAME)$(man3ext)
 
 cobol.install-info:
 
@@ -321,8 +325,8 @@ cobol.install-pdf: installdirs gcobol.pdf gcobol-io.pdf
 
 cobol.install-plugin:
 
-cobol.install-html: installdirs gcobol.html gcobol-io.html
-	$(INSTALL_DATA) gcobol.html gcobol-io.html $(DESTDIR)$(htmldir)/
+cobol.install-html: installdirs $(GCOBOL_HTML_FILES)
+	$(INSTALL_DATA) $(GCOBOL_HTML_FILES) $(DESTDIR)$(htmldir)/
 
 cobol.info:
 cobol.srcinfo:
@@ -335,20 +339,22 @@ cobol.srcpdf: gcobol.pdf gcobol-io.pdf
 	ln $^ $(srcdir)/cobol/
 
 gcobol.pdf: $(srcdir)/cobol/gcobol.1
-	groff -mdoc -T pdf  $^ > $@~
+	groff -mdoc -t -T pdf  $^ > $@~
 	@mv $@~ $@
 gcobol-io.pdf: $(srcdir)/cobol/gcobol.3
 	groff -mdoc -T pdf  $^ > $@~
 	@mv $@~ $@
 
-cobol.html: gcobol.html gcobol-io.html
-cobol.srchtml: gcobol.html gcobol-io.html
+cobol.html: $(GCOBOL_HTML_FILES)
+cobol.srchtml: $(GCOBOL_HTML_FILES)
 	ln $^ $(srcdir)/cobol/
 
-gcobol.html: $(srcdir)/cobol/gcobol.1
+$(build_htmldir)/gcobol/gcobol.html: $(srcdir)/cobol/gcobol.1
+	$(mkinstalldirs) $(build_htmldir)/gcobol
 	mandoc -T html $^ > $@~
 	@mv $@~ $@
-gcobol-io.html: $(srcdir)/cobol/gcobol.3
+$(build_htmldir)/gcobol/gcobol-io.html: $(srcdir)/cobol/gcobol.3
+	$(mkinstalldirs) $(build_htmldir)/gcobol
 	mandoc -T html $^ > $@~
 	@mv $@~ $@
 
@@ -358,17 +364,23 @@ cobol.uninstall:
 	rm -rf 	$(DESTDIR)$(bindir)/$(GCOBOL_INSTALL_NAME)$(exeext)	\
 		$(DESTDIR)$(bindir)/$(GCOBC_INSTALL_NAME)		\
 		$(DESTDIR)$(datadir)/gcobol/				\
-		$(DESTDIR)$(man1dir)/$(GCOBOL_INSTALL_NAME).1		\
-		$(DESTDIR)$(man3dir)/gcobol.3
+		$(DESTDIR)$(man1dir)/$(GCOBOL_INSTALL_NAME)$(man1ext)	\
+		$(DESTDIR)$(man3dir)/$(GCOBOLIO_INSTALL_NAME)$(man3ext)
 
 cobol.man:
 cobol.srcman:
 
 cobol.mostlyclean:
 
-cobol.clean:
+gcobol.clean:
+# This is intended for non-general use.  It is a last-ditch effort to flush
+# out all object files and executable code for gcobol and libgcobol, causing 
+# a complete rebuild of all executable code.
 	rm -fr gcobol cobol1 cobol/*		\
 	../*/libgcobol/*
+
+cobol.clean:
+	rm -fr gcobol cobol1 cobol/*
 
 cobol.distclean:
 
@@ -391,3 +403,4 @@ cobol.stagefeedback: stagefeedback-start
 selftest-cobol:
 
 lang_checks += check-cobol
+

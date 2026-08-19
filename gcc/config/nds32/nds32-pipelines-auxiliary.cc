@@ -1,6 +1,6 @@
 /* Auxiliary functions for pipeline descriptions pattern of Andes
    NDS32 cpu for GNU compiler
-   Copyright (C) 2012-2025 Free Software Foundation, Inc.
+   Copyright (C) 2012-2026 Free Software Foundation, Inc.
    Contributed by Andes Technology Corporation.
 
    This file is part of GCC.
@@ -288,7 +288,7 @@ extract_nth_access_reg (rtx_insn *insn, int index)
     }
 }
 
-/* Determine if the latency is occured when the consumer PBSADA_INSN uses the
+/* Determine if the latency is occurred when the consumer PBSADA_INSN uses the
    value of DEF_REG in its Ra or Rb fields.  */
 bool
 pbsada_insn_ra_rb_dep_reg_p (rtx pbsada_insn, rtx def_reg)
@@ -306,7 +306,7 @@ pbsada_insn_ra_rb_dep_reg_p (rtx pbsada_insn, rtx def_reg)
   return false;
 }
 
-/* Determine if the latency is occured when the consumer PBSADA_INSN uses the
+/* Determine if the latency is occurred when the consumer PBSADA_INSN uses the
    value of DEF_REG in its Rt field.  */
 bool
 pbsada_insn_rt_dep_reg_p (rtx pbsada_insn, rtx def_reg)

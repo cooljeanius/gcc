@@ -1,5 +1,5 @@
 /* Local definitions for the decNumber C Library.
-   Copyright (C) 2007-2025 Free Software Foundation, Inc.
+   Copyright (C) 2007-2026 Free Software Foundation, Inc.
    Contributed by IBM Corporation.  Author Mike Cowlishaw.
 
    This file is part of GCC.
@@ -173,7 +173,7 @@ see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
 
 
   /* ---------------------------------------------------------------- */
-  /* Definitions for arbitary-precision modules (only valid after     */
+  /* Definitions for arbitrary-precision modules (only valid after     */
   /* decNumber.h has been included)				      */
   /* ---------------------------------------------------------------- */
 

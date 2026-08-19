@@ -1,10 +1,10 @@
 #                                               -*- Autoconf -*-
 # Process this file with autoconf to produce a configure script.
 
-AC_INIT(cpplib, [ ], gcc-bugs@gcc.gnu.org, cpplib)
+AC_INIT(cpplib, [ ], https://gcc.gnu.org/bugs/, cpplib)
 AC_CONFIG_SRCDIR(ucnid.h)
 AC_CONFIG_MACRO_DIR(../config)
-AC_CANONICAL_SYSTEM
+AC_CANONICAL_TARGET
 
 # Checks for programs.
 AC_PROG_MAKE_SET
@@ -81,7 +81,7 @@ define(libcpp_UNLOCKED_FUNCS, clearerr_unlocked feof_unlocked dnl
   fileno_unlocked fprintf_unlocked fputc_unlocked fputs_unlocked dnl
   fread_unlocked fwrite_unlocked getchar_unlocked getc_unlocked dnl
   putchar_unlocked putc_unlocked)
-AC_CHECK_FUNCS(libcpp_UNLOCKED_FUNCS)
+AC_CHECK_FUNCS(libcpp_UNLOCKED_FUNCS setlocale)
 AC_CHECK_DECLS([abort, asprintf, basename(char *), errno, getopt, vasprintf])
 AC_CHECK_DECLS(m4_split(m4_normalize(libcpp_UNLOCKED_FUNCS)))
 
@@ -92,11 +92,11 @@ AM_LANGINFO_CODESET
 ZW_GNU_GETTEXT_SISTER_DIR
 
 AC_CACHE_CHECK(for uchar, gcc_cv_type_uchar,
-[AC_TRY_COMPILE([
+[AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[
 #include <sys/types.h>
-],
-[if ((uchar *)0) return 0;
- if (sizeof(uchar)) return 0;],
+]],
+[[if ((uchar *)0) return 0;
+ if (sizeof(uchar)) return 0;]])],
 ac_cv_type_uchar=yes, ac_cv_type_uchar=no)])
 if test $ac_cv_type_uchar = yes; then
   AC_DEFINE(HAVE_UCHAR, 1,
@@ -172,7 +172,7 @@ do
 	esac
 done
 IFS="$ac_save_IFS"
-                
+
 if test x$ac_checking != x ; then
   AC_DEFINE(CHECKING_P, 1,
 [Define to 1 if you want more run-time sanity checks.])
@@ -197,10 +197,34 @@ fi
 
 case $target in
   i?86-* | x86_64-*)
-    AC_TRY_COMPILE([], [asm ("pshufb %xmm0, %xmm1")],
+    AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[]], [[asm ("pshufb %xmm0, %xmm1")]])],
       [AC_DEFINE([HAVE_SSSE3], [1],
 		 [Define to 1 if you can assemble SSSE3 insns.])])
 esac
+
+# The AArch64 SVE2 lexer needs a compiler that understands arm_sve.h and the
+# +sve2 target attribute, an assembler that accepts SVE2 insns, and a way to
+# ask the kernel whether the CPU has them.  The test compiles only on an
+# AArch64 host, so it needs no separate host check.
+AC_CACHE_CHECK([whether the AArch64 SVE2 lexer can be built],
+	       [libcpp_cv_have_sve2],
+[AC_LINK_IFELSE([AC_LANG_PROGRAM(
+[[#include <arm_sve.h>
+#include <sys/auxv.h>
+static __attribute__ ((target ("+sve2"))) int
+f (const unsigned char *p)
+{
+  svbool_t pg = svwhilele_b8_u64 ((unsigned long) p, (unsigned long) p);
+  svuint8_t v = svld1_u8 (pg, p);
+  svbool_t m = svmatch_u8 (pg, v, svreinterpret_u8_u32 (svdup_n_u32 (10)));
+  return svcntp_b8 (pg, svbrkb_b_z (pg, m)) + svcntb ();
+}]],
+[[return getauxval (AT_HWCAP2) ? f ((const unsigned char *) "") : 0;]])],
+  [libcpp_cv_have_sve2=yes], [libcpp_cv_have_sve2=no])])
+if test $libcpp_cv_have_sve2 = yes; then
+  AC_DEFINE([HAVE_SVE2], [1],
+	    [Define to 1 if the AArch64 SVE2 lexer can be built.])
+fi
 
 # Enable --enable-host-shared.
 AC_ARG_ENABLE(host-shared,

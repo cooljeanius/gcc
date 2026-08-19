@@ -1,6 +1,6 @@
 // { dg-do compile { target c++11 } }
 
-// Copyright (C) 2010-2025 Free Software Foundation, Inc.
+// Copyright (C) 2010-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -88,6 +88,9 @@ namespace __gnu_test
       }
   };
 }
+// { dg-warning "float_denorm_style' is deprecated" "" { target c++23 } 67 }
+// { dg-warning "has_denorm' is deprecated" "" { target c++23 } 68 }
+// { dg-warning "has_denorm_loss' is deprecated" "" { target c++23 } 70 }
 
 int main()
 {

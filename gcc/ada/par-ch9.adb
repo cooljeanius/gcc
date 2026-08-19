@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2025, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -221,7 +221,7 @@ package body Ch9 is
                Set_Interface_List (Task_Node, New_List);
 
                loop
-                  Append (P_Qualified_Simple_Name, Interface_List (Task_Node));
+                  Append (P_Subtype_Name, Interface_List (Task_Node));
                   exit when Token /= Tok_And;
                   Scan; --  past AND
                end loop;
@@ -557,8 +557,7 @@ package body Ch9 is
             Set_Interface_List (Protected_Node, New_List);
 
             loop
-               Append (P_Qualified_Simple_Name,
-                 Interface_List (Protected_Node));
+               Append (P_Subtype_Name, Interface_List (Protected_Node));
 
                exit when Token /= Tok_And;
                Scan; --  past AND
@@ -751,7 +750,7 @@ package body Ch9 is
                Set_Must_Not_Override (Decl, Not_Overriding);
 
             elsif Token in Tok_Function | Tok_Procedure then
-               Decl := P_Subprogram (Pf_Decl_Pexp);
+               Decl := P_Subprogram (Pf_Decl_Expf);
 
                Set_Must_Override     (Specification (Decl), Is_Overriding);
                Set_Must_Not_Override (Specification (Decl), Not_Overriding);
@@ -791,7 +790,7 @@ package body Ch9 is
             when Tok_Function
                | Tok_Procedure
             =>
-               Result := P_Subprogram (Pf_Decl_Pexp);
+               Result := P_Subprogram (Pf_Decl_Expf);
                exit;
 
             when Tok_Identifier =>
@@ -879,7 +878,7 @@ package body Ch9 is
                  or else
                Token = Tok_Not or else Bad_Spelling_Of (Tok_Not)
          then
-            Append (P_Subprogram (Pf_Decl_Pbod_Pexp), Item_List);
+            Append (P_Subprogram (Pf_Decl_Pbod_Expf), Item_List);
 
          elsif Token = Tok_Pragma or else Bad_Spelling_Of (Tok_Pragma) then
             P_Pragmas_Opt (Item_List);

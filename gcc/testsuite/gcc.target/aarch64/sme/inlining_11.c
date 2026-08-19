@@ -3,6 +3,8 @@
 #include <arm_neon.h>
 #include <arm_sme.h>
 
+#pragma GCC target "+sve"
+
 uint8x16_t *neon;
 svint64_t *sve;
 int64_t *ptr;
@@ -16,9 +18,9 @@ call_vadd ()
 }
 
 inline void __attribute__((always_inline))
-call_vbsl () // { dg-error "inlining failed" }
+call_vhadd () // { dg-error "inlining failed" }
 {
-  neon[0] = vbslq_u8 (neon[1], neon[2], neon[3]);
+  neon[0] = vhaddq_u8 (neon[1], neon[2]);
 }
 
 inline void __attribute__((always_inline))
@@ -49,7 +51,7 @@ void
 sc_caller () [[arm::inout("za"), arm::streaming]]
 {
   call_vadd ();
-  call_vbsl ();
+  call_vhadd ();
   call_svadd ();
   call_svld1_gather ();
   call_svzero ();
