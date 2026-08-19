@@ -10,8 +10,12 @@ updates:
     directory: "/"  # Location of package manifests
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
   - package-ecosystem: "gomod"
     directory: "/libgo/go"
     directory: "/libgo/go/cmd"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
